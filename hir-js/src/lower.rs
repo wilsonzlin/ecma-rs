@@ -524,7 +524,8 @@ pub fn lower_file_with_diagnostics_with_cancellation(
 
   let mut span_map = SpanMap::new();
   let mut defs = Vec::with_capacity(descriptors.len());
-  let mut pending_types = Vec::new();
+  let mut types = BTreeMap::new();
+  let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
   let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
@@ -590,7 +591,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     span_map.add_def(desc.span, def_id);
 
     let body_id = body.map(|b| b.id);
-    let def_data = DefData {
+    let mut def_data = DefData {
       id: def_id,
       name: desc.name,
       path: def_path,
@@ -606,7 +607,32 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     };
 
     if let Some(type_source) = desc.type_source {
-      pending_types.push((def_id, type_source));
+      match type_source {
+        TypeSource::Namespace(ns) => {
+          let span = ns.loc.to_diagnostics_range_with_note().0;
+          pending_namespaces.push((def_id, span));
+          types.entry(def_id).or_default();
+        }
+        TypeSource::Module(module) => {
+          let span = module.loc.to_diagnostics_range_with_note().0;
+          pending_namespaces.push((def_id, span));
+          types.entry(def_id).or_default();
+        }
+        other => {
+          let arenas = types.entry(def_id).or_default();
+          let mut type_lowerer =
+            TypeLowerer::new(def_id, arenas, &mut names, &mut span_map, &mut ctx);
+          def_data.type_info = Some(match other {
+            TypeSource::TypeAlias(alias) => type_lowerer.lower_type_alias(alias),
+            TypeSource::Interface(intf) => type_lowerer.lower_interface(intf),
+            TypeSource::Class(class) => type_lowerer.lower_class_decl(class),
+            TypeSource::ClassExpr(class) => type_lowerer.lower_class_expr(class),
+            TypeSource::AmbientClass(class) => type_lowerer.lower_ambient_class(class),
+            TypeSource::Enum(en) => type_lowerer.lower_enum(en),
+            TypeSource::Namespace(_) | TypeSource::Module(_) => unreachable!("handled above"),
+          });
+        }
+      }
     }
 
     if let Some(body) = body {
@@ -616,6 +642,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
         &desc.source,
         &def_lookup,
         &mut names,
+        &mut types,
         &mut span_map,
         &mut ctx,
       )
@@ -641,6 +668,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     root_body_id,
     &def_lookup,
     &mut names,
+    &mut types,
     &mut span_map,
     &mut ctx,
   )));
@@ -651,38 +679,6 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     .map(|(idx, def)| (def.id, idx))
     .collect();
 
-  let mut types = BTreeMap::new();
-  let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
-  for (def_id, source) in pending_types {
-    ctx.check_cancelled();
-    let mut type_lowerer = TypeLowerer::new(def_id, &mut names, &mut span_map, &mut ctx);
-    let type_info = match source {
-      TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),
-      TypeSource::Interface(intf) => Some(type_lowerer.lower_interface(intf)),
-      TypeSource::Class(class) => Some(type_lowerer.lower_class_decl(class)),
-      TypeSource::ClassExpr(class) => Some(type_lowerer.lower_class_expr(class)),
-      TypeSource::AmbientClass(class) => Some(type_lowerer.lower_ambient_class(class)),
-      TypeSource::Enum(en) => Some(type_lowerer.lower_enum(en)),
-      TypeSource::Namespace(ns) => {
-        let span = ns.loc.to_diagnostics_range_with_note().0;
-        pending_namespaces.push((def_id, span));
-        None
-      }
-      TypeSource::Module(module) => {
-        let span = module.loc.to_diagnostics_range_with_note().0;
-        pending_namespaces.push((def_id, span));
-        None
-      }
-    };
-    if let Some(info) = type_info {
-      if let Some(idx) = id_to_index.get(&def_id) {
-        if let Some(def) = defs.get_mut(*idx) {
-          def.type_info = Some(info);
-        }
-      }
-    }
-    types.insert(def_id, type_lowerer.finish());
-  }
   for (def_id, span) in pending_namespaces {
     ctx.check_cancelled();
     if let Some(idx) = id_to_index.get(&def_id) {
@@ -775,6 +771,7 @@ fn lower_root_body(
   body_id: BodyId,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Body {
@@ -786,6 +783,7 @@ fn lower_root_body(
     BodyKind::TopLevel,
     def_lookup,
     names,
+    types,
     span_map,
   );
   for stmt in ast.stx.body.iter() {
@@ -800,6 +798,7 @@ fn lower_body_from_source(
   source: &DefSource,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
@@ -811,6 +810,7 @@ fn lower_body_from_source(
       false,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
@@ -821,6 +821,7 @@ fn lower_body_from_source(
       true,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
@@ -831,6 +832,7 @@ fn lower_body_from_source(
       false,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
@@ -840,6 +842,7 @@ fn lower_body_from_source(
       &class.stx.members,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     )),
@@ -849,13 +852,14 @@ fn lower_body_from_source(
       &class.stx.members,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     )),
     DefSource::ClassField(member) => match &member.stx.val {
-      ClassOrObjVal::Prop(Some(init)) => {
-        lower_field_initializer_body(owner, body_id, init, def_lookup, names, span_map, ctx)
-      }
+      ClassOrObjVal::Prop(Some(init)) => lower_field_initializer_body(
+        owner, body_id, init, def_lookup, names, types, span_map, ctx,
+      ),
       _ => None,
     },
     DefSource::Method(method) => lower_function_body(
@@ -865,6 +869,7 @@ fn lower_body_from_source(
       false,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
@@ -877,6 +882,7 @@ fn lower_body_from_source(
         BodyKind::Class,
         def_lookup,
         names,
+        types,
         span_map,
       );
       for stmt in block.stx.body.iter() {
@@ -892,6 +898,7 @@ fn lower_body_from_source(
       false,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
@@ -902,11 +909,12 @@ fn lower_body_from_source(
       false,
       def_lookup,
       names,
+      types,
       span_map,
       ctx,
     ),
     DefSource::Var(decl, kind) => lower_var_body(
-      owner, body_id, decl, *kind, def_lookup, names, span_map, ctx,
+      owner, body_id, decl, *kind, def_lookup, names, types, span_map, ctx,
     ),
     DefSource::ExportDefaultExpr(expr) => {
       let span = ctx.to_range(expr.loc);
@@ -917,6 +925,7 @@ fn lower_body_from_source(
         BodyKind::TopLevel,
         def_lookup,
         names,
+        types,
         span_map,
       );
       let expr_id = lower_expr(&expr.stx.expression, &mut builder, ctx);
@@ -933,6 +942,7 @@ fn lower_body_from_source(
         BodyKind::TopLevel,
         def_lookup,
         names,
+        types,
         span_map,
       );
       let expr_id = lower_expr(&assign.stx.expression, &mut builder, ctx);
@@ -952,6 +962,7 @@ fn lower_var_body(
   kind: VarDeclKind,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
@@ -963,6 +974,7 @@ fn lower_var_body(
     BodyKind::Initializer,
     def_lookup,
     names,
+    types,
     span_map,
   );
   let pat_id = lower_pat(&decl.pattern.stx.pat, &mut builder, ctx);
@@ -987,6 +999,7 @@ fn lower_field_initializer_body(
   init: &Node<AstExpr>,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
@@ -998,6 +1011,7 @@ fn lower_field_initializer_body(
     BodyKind::Initializer,
     def_lookup,
     names,
+    types,
     span_map,
   );
   let expr_id = lower_expr(init, &mut builder, ctx);
@@ -1013,6 +1027,7 @@ fn lower_function_body(
   is_arrow: bool,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
@@ -1024,6 +1039,7 @@ fn lower_function_body(
     BodyKind::Function,
     def_lookup,
     names,
+    types,
     span_map,
   );
   let mut params = Vec::new();
@@ -1073,6 +1089,7 @@ fn lower_class_body(
   members: &[Node<parse_js::ast::class_or_object::ClassMember>],
   def_lookup: &DefLookup,
   names: &mut NameInterner,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Body {
@@ -1095,6 +1112,7 @@ fn lower_class_body(
     BodyKind::Class,
     def_lookup,
     names,
+    types,
     span_map,
   );
   for member in members {
@@ -1600,15 +1618,29 @@ fn lower_expr(
     AstExpr::LitTemplate(tmpl) => {
       ExprKind::Template(lower_template_literal(&tmpl.stx.parts, builder, ctx))
     }
-    AstExpr::TypeAssertion(assert) => ExprKind::TypeAssertion {
-      expr: lower_expr(&assert.stx.expression, builder, ctx),
-      const_assertion: assert.stx.const_assertion,
-    },
+    AstExpr::TypeAssertion(assert) => {
+      let expr = lower_expr(&assert.stx.expression, builder, ctx);
+      let type_annotation = if assert.stx.const_assertion {
+        None
+      } else {
+        assert
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|annotation| builder.lower_type_expr(annotation, ctx))
+      };
+      ExprKind::TypeAssertion {
+        expr,
+        const_assertion: assert.stx.const_assertion,
+        type_annotation,
+      }
+    }
     AstExpr::NonNullAssertion(nn) => ExprKind::NonNull {
       expr: lower_expr(&nn.stx.expression, builder, ctx),
     },
     AstExpr::SatisfiesExpr(sat) => ExprKind::Satisfies {
       expr: lower_expr(&sat.stx.expression, builder, ctx),
+      type_annotation: builder.lower_type_expr(&sat.stx.type_annotation, ctx),
     },
     AstExpr::Import(import_expr) => {
       let arg = lower_expr(&import_expr.stx.module, builder, ctx);
@@ -2015,6 +2047,7 @@ struct BodyBuilder<'a> {
   function: Option<FunctionData>,
   def_lookup: &'a DefLookup,
   names: &'a mut NameInterner,
+  types: &'a mut crate::hir::TypeArenasByDef,
   span_map: &'a mut SpanMap,
 }
 
@@ -2026,6 +2059,7 @@ impl<'a> BodyBuilder<'a> {
     kind: BodyKind,
     def_lookup: &'a DefLookup,
     names: &'a mut NameInterner,
+    types: &'a mut crate::hir::TypeArenasByDef,
     span_map: &'a mut SpanMap,
   ) -> Self {
     Self {
@@ -2040,6 +2074,7 @@ impl<'a> BodyBuilder<'a> {
       function: None,
       def_lookup,
       names,
+      types,
       span_map,
     }
   }
@@ -2088,6 +2123,17 @@ impl<'a> BodyBuilder<'a> {
 
   fn intern_name(&mut self, name: &str) -> NameId {
     self.names.intern(name)
+  }
+
+  fn lower_type_expr(
+    &mut self,
+    expr: &Node<parse_js::ast::type_expr::TypeExpr>,
+    ctx: &mut LoweringContext,
+  ) -> crate::ids::TypeExprId {
+    let owner = self.owner;
+    let arenas = self.types.entry(owner).or_default();
+    let mut lowerer = TypeLowerer::new(owner, arenas, &mut *self.names, &mut *self.span_map, ctx);
+    lowerer.lower_type_expr(expr)
   }
 }
 

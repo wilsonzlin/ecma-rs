@@ -60,9 +60,7 @@ use parse_js::token::TT;
 use std::collections::{HashMap, HashSet};
 
 pub(crate) struct TypeLowerer<'a> {
-  pub type_exprs: Vec<HirTypeExpr>,
-  pub type_members: Vec<HirTypeMember>,
-  pub type_params: Vec<TypeParam>,
+  arenas: &'a mut TypeArenas,
   owner: DefId,
   names: &'a mut NameInterner,
   span_map: &'a mut SpanMap,
@@ -72,26 +70,17 @@ pub(crate) struct TypeLowerer<'a> {
 impl<'a> TypeLowerer<'a> {
   pub fn new(
     owner: DefId,
+    arenas: &'a mut TypeArenas,
     names: &'a mut NameInterner,
     span_map: &'a mut SpanMap,
     ctx: &'a mut LoweringContext,
   ) -> Self {
     Self {
-      type_exprs: Vec::new(),
-      type_members: Vec::new(),
-      type_params: Vec::new(),
+      arenas,
       owner,
       names,
       span_map,
       ctx,
-    }
-  }
-
-  pub fn finish(self) -> TypeArenas {
-    TypeArenas {
-      type_exprs: self.type_exprs,
-      type_members: self.type_members,
-      type_params: self.type_params,
     }
   }
 
@@ -314,23 +303,23 @@ impl<'a> TypeLowerer<'a> {
   }
 
   fn alloc_type_expr(&mut self, span: TextRange, kind: TypeExprKind) -> TypeExprId {
-    let id = TypeExprId(self.type_exprs.len() as u32);
-    self.type_exprs.push(HirTypeExpr { span, kind });
+    let id = TypeExprId(self.arenas.type_exprs.len() as u32);
+    self.arenas.type_exprs.push(HirTypeExpr { span, kind });
     self.span_map.add_type_expr(span, self.owner, id);
     id
   }
 
   fn alloc_type_member(&mut self, span: TextRange, kind: TypeMemberKind) -> TypeMemberId {
-    let id = TypeMemberId(self.type_members.len() as u32);
-    self.type_members.push(HirTypeMember { span, kind });
+    let id = TypeMemberId(self.arenas.type_members.len() as u32);
+    self.arenas.type_members.push(HirTypeMember { span, kind });
     self.span_map.add_type_member(span, self.owner, id);
     id
   }
 
   fn alloc_type_param(&mut self, param: TypeParam) -> TypeParamId {
-    let id = TypeParamId(self.type_params.len() as u32);
+    let id = TypeParamId(self.arenas.type_params.len() as u32);
     let span = param.span;
-    self.type_params.push(param);
+    self.arenas.type_params.push(param);
     self.span_map.add_type_param(span, self.owner, id);
     id
   }
@@ -937,8 +926,8 @@ impl<'a> TypeLowerer<'a> {
       .collect();
 
     lowered.sort_by(|a, b| {
-      let a_member = &self.type_members[a.0 as usize];
-      let b_member = &self.type_members[b.0 as usize];
+      let a_member = &self.arenas.type_members[a.0 as usize];
+      let b_member = &self.arenas.type_members[b.0 as usize];
       self
         .member_sort_key(a_member)
         .cmp(&self.member_sort_key(b_member))
@@ -1191,8 +1180,8 @@ impl<'a> TypeLowerer<'a> {
     keyed.sort_by(|(ka, ida), (kb, idb)| {
       ka.cmp(kb)
         .then_with(|| {
-          let a_span = self.type_exprs[ida.0 as usize].span;
-          let b_span = self.type_exprs[idb.0 as usize].span;
+          let a_span = self.arenas.type_exprs[ida.0 as usize].span;
+          let b_span = self.arenas.type_exprs[idb.0 as usize].span;
           a_span
             .start
             .cmp(&b_span.start)
@@ -1211,7 +1200,7 @@ impl<'a> TypeLowerer<'a> {
     out: &mut Vec<TypeExprId>,
   ) {
     for &member in members {
-      if let Some(inner) = nested(&self.type_exprs[member.0 as usize].kind) {
+      if let Some(inner) = nested(&self.arenas.type_exprs[member.0 as usize].kind) {
         self.flatten_type_members(inner, nested, out);
       } else {
         out.push(member);
@@ -1230,7 +1219,7 @@ impl<'a> TypeLowerer<'a> {
     }
 
     if !in_progress.insert(id) {
-      let expr = &self.type_exprs[id.0 as usize];
+      let expr = &self.arenas.type_exprs[id.0 as usize];
       return TypeSortKey::Cycle {
         discriminant: self.type_kind_discriminant(&expr.kind),
         span_start: expr.span.start,
@@ -1238,7 +1227,7 @@ impl<'a> TypeLowerer<'a> {
       };
     }
 
-    let expr = &self.type_exprs[id.0 as usize];
+    let expr = &self.arenas.type_exprs[id.0 as usize];
     let key = match &expr.kind {
       TypeExprKind::Any => TypeSortKey::Primitive("any"),
       TypeExprKind::Unknown => TypeSortKey::Primitive("unknown"),
@@ -1418,7 +1407,7 @@ impl<'a> TypeLowerer<'a> {
     cache: &mut HashMap<TypeExprId, TypeSortKey>,
     in_progress: &mut HashSet<TypeExprId>,
   ) -> TypeParamKey {
-    let param = &self.type_params[id.0 as usize];
+    let param = &self.arenas.type_params[id.0 as usize];
     TypeParamKey {
       name: self.name_id_to_string(param.name),
       constraint: param
@@ -1473,7 +1462,7 @@ impl<'a> TypeLowerer<'a> {
     cache: &mut HashMap<TypeExprId, TypeSortKey>,
     in_progress: &mut HashSet<TypeExprId>,
   ) -> TypeMemberKey {
-    let member = &self.type_members[id.0 as usize];
+    let member = &self.arenas.type_members[id.0 as usize];
     match &member.kind {
       TypeMemberKind::Property(prop) => TypeMemberKey::Property {
         readonly: prop.readonly,
@@ -1523,7 +1512,9 @@ impl<'a> TypeLowerer<'a> {
         name: self.property_name_key(&setter.name),
         parameter: self.fn_param_sort_key(&setter.parameter, cache, in_progress),
       },
-      TypeMemberKind::Mapped(mapped) => TypeMemberKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress)),
+      TypeMemberKind::Mapped(mapped) => {
+        TypeMemberKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress))
+      }
     }
   }
 

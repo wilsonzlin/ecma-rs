@@ -680,12 +680,14 @@ pub enum ExprKind {
   TypeAssertion {
     expr: ExprId,
     const_assertion: bool,
+    type_annotation: Option<TypeExprId>,
   },
   NonNull {
     expr: ExprId,
   },
   Satisfies {
     expr: ExprId,
+    type_annotation: TypeExprId,
   },
   ImportCall {
     argument: ExprId,

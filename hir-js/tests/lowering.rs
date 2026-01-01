@@ -15,6 +15,8 @@ use hir_js::ImportKind;
 use hir_js::ObjectKey;
 use hir_js::ObjectProperty;
 use hir_js::StmtKind;
+use hir_js::TypeExprKind;
+use hir_js::TypeName;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -1658,6 +1660,224 @@ fn lowers_new_expressions() {
     .expect("call expression");
   assert!(call.is_new);
   assert_eq!(call.args.len(), 1);
+}
+
+#[test]
+fn lowers_type_assertion_type_annotation() {
+  let result = lower_from_source_with_kind(
+    FileKind::Ts,
+    "const x = value as Foo; const y = value as const;",
+  )
+  .expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+
+  let mut assertions: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::TypeAssertion {
+        const_assertion,
+        type_annotation,
+        ..
+      } => Some((expr.span.start, *const_assertion, *type_annotation)),
+      _ => None,
+    })
+    .collect();
+  assertions.sort_by_key(|(start, _, _)| *start);
+  assert_eq!(assertions.len(), 2);
+
+  let (_, first_const, first_type) = assertions[0];
+  assert!(!first_const);
+  let first_type = first_type.expect("type annotation for `as Foo`");
+
+  let arenas = result
+    .type_arenas(body.owner)
+    .expect("type arenas present for root body");
+  let first_ty = &arenas.type_exprs[first_type.0 as usize];
+  match &first_ty.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id), Some("Foo")),
+      other => panic!("expected Foo type ref, got {other:?}"),
+    },
+    other => panic!("expected type ref, got {other:?}"),
+  }
+
+  let mapped_span = result.hir.span_map.type_expr_span(body.owner, first_type);
+  assert_eq!(mapped_span, Some(first_ty.span));
+
+  let (_, second_const, second_type) = assertions[1];
+  assert!(second_const);
+  assert!(second_type.is_none());
+}
+
+#[test]
+fn lowers_satisfies_type_annotation() {
+  let result =
+    lower_from_source_with_kind(FileKind::Ts, "const x = ({a:1} satisfies Foo);").expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+
+  let (type_expr, type_annotation) = body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::Satisfies {
+        expr,
+        type_annotation,
+      } => Some((*expr, *type_annotation)),
+      _ => None,
+    })
+    .expect("satisfies expression");
+  let _ = type_expr;
+
+  let arenas = result
+    .type_arenas(body.owner)
+    .expect("type arenas present for root body");
+  let ty = &arenas.type_exprs[type_annotation.0 as usize];
+  match &ty.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id), Some("Foo")),
+      other => panic!("expected Foo type ref, got {other:?}"),
+    },
+    other => panic!("expected type ref, got {other:?}"),
+  }
+}
+
+#[test]
+fn type_expr_ids_are_scoped_to_enclosing_body_owner() {
+  let result = lower_from_source_with_kind(
+    FileKind::Ts,
+    "function f() { value as Foo; ({a:1} satisfies Foo); value as const; }",
+  )
+  .expect("lower");
+
+  let func_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some("f"))
+    .expect("function def");
+  let body_id = func_def.body.expect("function body id");
+  let body = result.body(body_id).expect("function body");
+  assert_eq!(body.owner, func_def.id);
+
+  let arenas = result
+    .type_arenas(func_def.id)
+    .expect("type arenas present for function body owner");
+
+  let mut assertions: Vec<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match &expr.kind {
+      ExprKind::TypeAssertion {
+        const_assertion,
+        type_annotation,
+        ..
+      } => Some((expr.span.start, *const_assertion, *type_annotation)),
+      _ => None,
+    })
+    .collect();
+  assertions.sort_by_key(|(start, _, _)| *start);
+  assert_eq!(assertions.len(), 2);
+
+  let (_, first_const, first_type) = assertions[0];
+  assert!(!first_const);
+  let first_type = first_type.expect("type annotation for `as Foo`");
+  let first_ty = &arenas.type_exprs[first_type.0 as usize];
+  match &first_ty.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id), Some("Foo")),
+      other => panic!("expected Foo type ref, got {other:?}"),
+    },
+    other => panic!("expected type ref, got {other:?}"),
+  }
+  assert_eq!(
+    result.hir.span_map.type_expr_at_offset(first_ty.span.start),
+    Some((func_def.id, first_type))
+  );
+
+  let (_, second_const, second_type) = assertions[1];
+  assert!(second_const);
+  assert!(second_type.is_none());
+
+  let satisfies = body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::Satisfies {
+        type_annotation, ..
+      } => Some(*type_annotation),
+      _ => None,
+    })
+    .expect("satisfies expression");
+
+  let sat_ty = &arenas.type_exprs[satisfies.0 as usize];
+  match &sat_ty.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id), Some("Foo")),
+      other => panic!("expected Foo type ref, got {other:?}"),
+    },
+    other => panic!("expected type ref, got {other:?}"),
+  }
+  assert_eq!(
+    result.hir.span_map.type_expr_at_offset(sat_ty.span.start),
+    Some((func_def.id, satisfies))
+  );
+}
+
+#[test]
+fn type_expr_ids_do_not_shift_across_unrelated_body_insertions() {
+  let base = lower_from_source_with_kind(
+    FileKind::Ts,
+    "function f() { value as Foo; }\nfunction g() {}",
+  )
+  .expect("lower base");
+  let variant = lower_from_source_with_kind(
+    FileKind::Ts,
+    "function g() {}\nconst inserted = 0;\nfunction f() { value as Foo; }",
+  )
+  .expect("lower variant");
+
+  let base_f = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Function && base.names.resolve(def.name) == Some("f"))
+    .expect("base f");
+  let variant_f = variant
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Function && variant.names.resolve(def.name) == Some("f"))
+    .expect("variant f");
+
+  assert_eq!(base_f.id, variant_f.id);
+
+  let base_body = base
+    .body(base_f.body.expect("base f body"))
+    .expect("base body");
+  let variant_body = variant
+    .body(variant_f.body.expect("variant f body"))
+    .expect("variant body");
+
+  let base_ty = base_body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::TypeAssertion {
+        type_annotation, ..
+      } => *type_annotation,
+      _ => None,
+    })
+    .expect("base type assertion");
+  let variant_ty = variant_body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::TypeAssertion {
+        type_annotation, ..
+      } => *type_annotation,
+      _ => None,
+    })
+    .expect("variant type assertion");
+
+  assert_eq!(base_ty, variant_ty);
 }
 
 proptest! {

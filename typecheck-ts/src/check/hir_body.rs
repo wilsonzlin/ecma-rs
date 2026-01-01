@@ -3456,7 +3456,7 @@ impl<'a> BindingCollector<'a> {
       }
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
-      | ExprKind::Satisfies { expr } => self.visit_expr(*expr),
+      | ExprKind::Satisfies { expr, .. } => self.visit_expr(*expr),
       ExprKind::ImportCall {
         argument,
         attributes,
@@ -4313,7 +4313,7 @@ impl<'a> FlowBodyChecker<'a> {
         );
         nonnull
       }
-      ExprKind::Satisfies { expr } => {
+      ExprKind::Satisfies { expr, .. } => {
         let prev = self.widen_object_literals;
         self.widen_object_literals = false;
         let ty = self.eval_expr(*expr, env).0;
@@ -4796,7 +4796,7 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Member(mem) => self.assignment_target_root_expr(mem.object),
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
-      | ExprKind::Satisfies { expr }
+      | ExprKind::Satisfies { expr, .. }
       | ExprKind::Await { expr }
       | ExprKind::Yield {
         expr: Some(expr), ..
@@ -5030,7 +5030,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
-      | ExprKind::Satisfies { expr } => self.assignment_expr_info(*expr, env),
+      | ExprKind::Satisfies { expr, .. } => self.assignment_expr_info(*expr, env),
       _ => (prim.unknown, None, false),
     }
   }
@@ -5394,7 +5394,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
-      | ExprKind::Satisfies { expr } => {
+      | ExprKind::Satisfies { expr, .. } => {
         self.write_assign_target_expr(*expr, value_ty, env, mode);
       }
       _ => {}

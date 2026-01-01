@@ -561,7 +561,7 @@ impl<'a> FlowBindingsBuilder<'a> {
           self.process_expr(span.expr, lexical_scopes);
         }
       }
-      ExprKind::Await { expr } | ExprKind::NonNull { expr } | ExprKind::Satisfies { expr } => {
+      ExprKind::Await { expr } | ExprKind::NonNull { expr } | ExprKind::Satisfies { expr, .. } => {
         self.process_expr(*expr, lexical_scopes);
       }
       ExprKind::Yield { expr, .. } => {
