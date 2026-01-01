@@ -25,6 +25,8 @@ Comparison with esbuild, run on [common libraries](../bench).
 - Deterministic identifier renaming (module exports preserved).
 - Emits minified output via `emit-js` (minimal whitespace + ASI-safe statement
   separation).
+- Supports ES2022 arbitrary module namespace identifiers (string literal
+  import/export names and aliases).
 
 ## Limitations
 
@@ -102,7 +104,6 @@ const min = minify("global", src);
 - Replacing if statements with conditional and logical expressions.
 - Returning an explicit error on illegal code e.g. multiple declarations/exports with identical names.
 - Much more inline, high level, and usage documentation.
-- Support import and export string names e.g. `import { "a-b" as "c-d" } from "x"`.
 - Simplify pattern parsing and minification.
 - Micro-optimisations:
   - Unwrap string literal computed members, then identifier or number string members.

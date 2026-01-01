@@ -106,6 +106,17 @@ fn test_module_export_bindings_preserved() {
 }
 
 #[test]
+fn preserves_string_import_aliases() {
+  // Use direct `eval` to disable renaming so we can assert the raw output
+  // contains the string literal names/aliases.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"eval("x");import { "a-b" as "c-d" } from "x";"#,
+  );
+  assert_eq!(result, r#"eval("x");import{"a-b"as"c-d"}from"x";"#);
+}
+
+#[test]
 fn export_list_marks_local_binding_as_used() {
   let result = minified(TopLevelMode::Module, "const long=1;export { long as b };");
   assert_eq!(result, "const a=1;export{a as b};");
