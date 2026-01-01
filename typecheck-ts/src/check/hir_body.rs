@@ -2101,6 +2101,7 @@ impl<'a> Checker<'a> {
   fn jsx_children_prop_type(&mut self, children: &[JsxElemChild]) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
     let mut collected = Vec::new();
+    let mut spread = false;
     for child in children {
       match child {
         JsxElemChild::Text(text) => {
@@ -2114,6 +2115,7 @@ impl<'a> Checker<'a> {
           }
           let expr_ty = self.check_expr(&expr.stx.value);
           let ty = if expr.stx.spread {
+            spread = true;
             self.spread_element_type(expr_ty)
           } else {
             expr_ty
@@ -2129,8 +2131,14 @@ impl<'a> Checker<'a> {
     }
     if collected.is_empty() {
       None
+    } else if spread || collected.len() > 1 {
+      let ty = self.store.union(collected);
+      Some(self.store.intern_type(TypeKind::Array {
+        ty,
+        readonly: false,
+      }))
     } else {
-      Some(self.store.union(collected))
+      Some(collected[0])
     }
   }
 

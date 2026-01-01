@@ -336,6 +336,33 @@ fn jsx_spread_children_are_checked_against_children_prop() {
 }
 
 #[test]
+fn multiple_jsx_children_become_array() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+const ok = <div>hi</div>;
+const bad = <div>{"a"}{"b"}</div>;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics
+      .iter()
+      .filter(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str())
+      .count(),
+    1,
+    "expected exactly one type mismatch diagnostic for multiple children, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn intrinsic_namespaced_and_hyphenated_tags_are_not_value_identifiers() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
