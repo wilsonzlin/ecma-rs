@@ -215,18 +215,21 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
   depth_limit: usize,
+  max_template_strings: usize,
 }
 
 impl<'a, E: TypeExpander> std::fmt::Debug for TypeEvaluator<'a, E> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("TypeEvaluator")
       .field("depth_limit", &self.depth_limit)
+      .field("max_template_strings", &self.max_template_strings)
       .finish()
   }
 }
 
 impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   const DEFAULT_DEPTH_LIMIT: usize = 64;
+  const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
 
   pub fn new(store: Arc<TypeStore>, expander: &'a E) -> Self {
     Self::with_caches(
@@ -248,11 +251,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
       depth_limit: Self::DEFAULT_DEPTH_LIMIT,
+      max_template_strings: Self::DEFAULT_MAX_TEMPLATE_STRINGS,
     }
   }
 
   pub fn with_depth_limit(mut self, limit: usize) -> Self {
     self.depth_limit = limit;
+    self
+  }
+
+  pub fn with_max_template_strings(mut self, limit: usize) -> Self {
+    self.max_template_strings = limit;
     self
   }
 
@@ -1114,10 +1123,24 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) -> Option<Vec<String>> {
     let mut acc = vec![tpl.head.clone()];
     for span in tpl.spans.iter() {
+      if acc.is_empty() {
+        break;
+      }
       let atom_strings = self.template_atom_strings(span.ty, subst, depth + 1)?;
+      if atom_strings.is_empty() {
+        acc.clear();
+        break;
+      }
+      match acc.len().checked_mul(atom_strings.len()) {
+        Some(product) if product <= self.max_template_strings => {}
+        _ => return None,
+      }
       let mut next = Vec::new();
       for base in &acc {
         for atom in &atom_strings {
+          if next.len() >= self.max_template_strings {
+            return None;
+          }
           let mut new = base.clone();
           new.push_str(atom);
           new.push_str(&span.literal);
@@ -1125,6 +1148,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
       }
       acc = next;
+    }
+    if acc.len() > self.max_template_strings {
+      return None;
     }
     acc.sort();
     acc.dedup();
@@ -1150,6 +1176,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             return None;
           };
           out.append(&mut vals);
+          if out.len() > self.max_template_strings {
+            return None;
+          }
         }
         Some(out)
       }

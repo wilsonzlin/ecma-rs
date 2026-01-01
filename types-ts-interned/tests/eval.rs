@@ -179,7 +179,7 @@ fn template_literal_distributes_over_union_parts() {
   }));
 
   let default_expander = MockExpander::default();
-  let mut eval = evaluator(store.clone(), &default_expander);
+  let mut eval = evaluator(store.clone(), &default_expander).with_max_template_strings(2);
   let result = eval.evaluate(tpl);
   let TypeKind::Union(members) = store.type_kind(result) else {
     panic!("expected union, got {:?}", store.type_kind(result));
@@ -194,6 +194,44 @@ fn template_literal_distributes_over_union_parts() {
   assert!(strings.contains(&"fooxbar".to_string()));
   assert!(strings.contains(&"fooybar".to_string()));
   assert_eq!(strings.len(), 2);
+}
+
+#[test]
+fn template_literal_expansion_bails_out_on_blowup() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let union1 = store.union(vec![
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("a"))),
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("b"))),
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("c"))),
+  ]);
+  let union2 = store.union(vec![
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("x"))),
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("y"))),
+    store.intern_type(TypeKind::StringLiteral(store.intern_name("z"))),
+  ]);
+
+  // 3×3 = 9 possible strings; with a low limit, we should bail out and widen to
+  // `string` rather than enumerating the full cross-product.
+  let tpl = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "".into(),
+    spans: vec![
+      TemplateChunk {
+        literal: "".into(),
+        ty: union1,
+      },
+      TemplateChunk {
+        literal: "".into(),
+        ty: union2,
+      },
+    ],
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander).with_max_template_strings(4);
+  let result = eval.evaluate(tpl);
+  assert_eq!(result, primitives.string);
 }
 
 #[test]
