@@ -4,6 +4,7 @@ use anyhow::anyhow;
 use anyhow::bail;
 #[cfg(feature = "with-node")]
 use anyhow::Context;
+use crate::diagnostic_norm::normalize_type_string;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -87,6 +88,12 @@ impl TscDiagnostics {
     });
 
     if let Some(type_facts) = self.type_facts.as_mut() {
+      for export in &mut type_facts.exports {
+        export.type_str = normalize_type_string(&export.type_str);
+      }
+      for marker in &mut type_facts.markers {
+        marker.type_str = normalize_type_string(&marker.type_str);
+      }
       type_facts
         .exports
         .sort_by(|a, b| (&a.file, &a.name, &a.type_str).cmp(&(&b.file, &b.name, &b.type_str)));
