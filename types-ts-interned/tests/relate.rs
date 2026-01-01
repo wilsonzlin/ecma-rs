@@ -695,6 +695,75 @@ fn number_indexer_does_not_satisfy_string_indexer() {
 }
 
 #[test]
+fn relation_uses_merged_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src_first_readonly = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![
+        Indexer {
+          key_type: primitives.string,
+          value_type: primitives.number,
+          readonly: true,
+        },
+        Indexer {
+          key_type: primitives.string,
+          value_type: primitives.number,
+          readonly: false,
+        },
+      ],
+    },
+  );
+  let src_first_mutable = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![
+        Indexer {
+          key_type: primitives.string,
+          value_type: primitives.number,
+          readonly: false,
+        },
+        Indexer {
+          key_type: primitives.string,
+          value_type: primitives.number,
+          readonly: true,
+        },
+      ],
+    },
+  );
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  let a = ctx.is_assignable(src_first_readonly, dst);
+  let b = ctx.is_assignable(src_first_mutable, dst);
+  assert_eq!(a, b, "assignability must not depend on indexer insertion order");
+  assert!(
+    !a,
+    "a readonly + mutable indexer intersection should canonicalize to readonly"
+  );
+}
+
+#[test]
 fn no_unchecked_indexed_access_makes_indexers_optional() {
   let store = TypeStore::with_options(TypeOptions {
     no_unchecked_indexed_access: true,

@@ -281,6 +281,41 @@ fn shape_canonicalization_declared_on_merge_is_order_independent() {
 }
 
 #[test]
+fn duplicate_string_indexers_are_merged() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape = Shape {
+    properties: vec![],
+    call_signatures: vec![],
+    construct_signatures: vec![],
+    indexers: vec![
+      Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      },
+      Indexer {
+        key_type: primitives.string,
+        value_type: primitives.string,
+        readonly: true,
+      },
+    ],
+  };
+
+  let shape_id = store.intern_shape(shape);
+  let merged = store.shape(shape_id);
+  assert_eq!(merged.indexers.len(), 1);
+  let indexer = &merged.indexers[0];
+  assert_eq!(indexer.key_type, primitives.string);
+  assert_eq!(
+    indexer.value_type,
+    store.intersection(vec![primitives.number, primitives.string])
+  );
+  assert!(indexer.readonly);
+}
+
+#[test]
 fn canon_is_idempotent_on_nested_unions() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
@@ -357,7 +392,7 @@ fn canon_is_idempotent_for_new_variants() {
 }
 
 #[test]
-fn shape_indexer_readonly_ordering_is_deterministic() {
+fn shape_indexer_readonly_merge_is_deterministic() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
@@ -390,18 +425,11 @@ fn shape_indexer_readonly_ordering_is_deterministic() {
   assert_eq!(id_a, id_b);
   assert_eq!(
     store.shape(id_a).indexers,
-    vec![
-      Indexer {
-        key_type: primitives.string,
-        value_type: primitives.number,
-        readonly: false,
-      },
-      Indexer {
-        key_type: primitives.string,
-        value_type: primitives.number,
-        readonly: true,
-      },
-    ]
+    vec![Indexer {
+      key_type: primitives.string,
+      value_type: primitives.number,
+      readonly: true,
+    }]
   );
 }
 

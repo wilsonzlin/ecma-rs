@@ -562,6 +562,24 @@ impl TypeStore {
         .then_with(|| a.readonly.cmp(&b.readonly))
     });
 
+    // Merge duplicate index signatures deterministically. Shapes should contain
+    // at most one effective indexer per key type (string/number/symbol). When
+    // multiple indexers share a key type, their value types combine via
+    // intersection (all constraints must be satisfied) and the merged indexer
+    // becomes readonly if any constituent is readonly.
+    let mut merged_indexers: Vec<Indexer> = Vec::with_capacity(shape.indexers.len());
+    for idx in shape.indexers.drain(..) {
+      if let Some(last) = merged_indexers.last_mut() {
+        if last.key_type == idx.key_type {
+          last.value_type = self.intersection(vec![last.value_type, idx.value_type]);
+          last.readonly = last.readonly || idx.readonly;
+          continue;
+        }
+      }
+      merged_indexers.push(idx);
+    }
+    shape.indexers = merged_indexers;
+
     self.insert_shape_direct(shape)
   }
 
