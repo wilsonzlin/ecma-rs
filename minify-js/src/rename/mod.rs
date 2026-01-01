@@ -143,7 +143,10 @@ impl<'a> SymbolCollector<'a> {
 
 impl SymbolCollectorVisitor<'_> {
   fn enter_export_list_stmt_node(&mut self, node: &mut ExportListStmtNode) {
-    self.inner.export_list_from_stack.push(node.stx.from.is_some());
+    self
+      .inner
+      .export_list_from_stack
+      .push(node.stx.from.is_some());
   }
 
   fn exit_export_list_stmt_node(&mut self, _node: &mut ExportListStmtNode) {

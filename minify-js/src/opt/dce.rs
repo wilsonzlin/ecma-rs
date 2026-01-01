@@ -1,8 +1,8 @@
 use super::side_effects::is_side_effect_free_expr;
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
-use ahash::HashSet;
 use crate::rename::ExportNameSymbol;
+use ahash::HashSet;
 use derive_visitor::{Drive, Visitor};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::IdExpr;

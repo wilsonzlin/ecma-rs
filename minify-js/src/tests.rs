@@ -113,7 +113,10 @@ fn export_list_marks_local_binding_as_used() {
 
 #[test]
 fn export_list_string_alias_marks_local_binding_as_used() {
-  let result = minified(TopLevelMode::Module, "const long=1;export { long as \"a-b\" };");
+  let result = minified(
+    TopLevelMode::Module,
+    "const long=1;export { long as \"a-b\" };",
+  );
   assert_eq!(result, "const a=1;export{a as\"a-b\"};");
 }
 
@@ -125,7 +128,10 @@ fn export_list_preserves_exported_name_when_local_is_renamed() {
 
 #[test]
 fn export_star_alias_is_not_renamed() {
-  let result = minified(TopLevelMode::Module, "const ns=1;export * as ns from \"mod\";");
+  let result = minified(
+    TopLevelMode::Module,
+    "const ns=1;export * as ns from \"mod\";",
+  );
   assert_eq!(result, "export*as ns from\"mod\";");
 }
 
