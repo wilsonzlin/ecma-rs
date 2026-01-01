@@ -9122,6 +9122,7 @@ impl ProgramState {
   ) -> Result<(), FatalError> {
     self.check_cancelled()?;
     let unknown = self.interned_unknown();
+    let interned_store = self.interned_store.as_ref().cloned();
     fn record_pat(
       state: &ProgramState,
       pat_id: HirPatId,
@@ -9308,6 +9309,57 @@ impl ProgramState {
           unknown,
           &mut seen_names,
         );
+      }
+      if parent_result.pat_types.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
+        // If we're checking a nested body while the parent is still being checked, `check_body`
+        // returns an empty result to break cycles. Seed parameter bindings directly from the
+        // owning function's annotations so initializer bodies can still resolve captured params.
+        if let Some(owner) = self.owner_of_body(parent) {
+          if let Some(DefData {
+            kind: DefKind::Function(func),
+            ..
+          }) = self.def_data.get(&owner)
+          {
+            if let Some(store) = interned_store.as_ref() {
+              let mut convert_cache = HashMap::new();
+              for param in func.params.iter() {
+                if param.name.starts_with("<pattern") {
+                  continue;
+                }
+                let mapped = if let Some(annot) = param.typ {
+                  store.canon(convert_type_for_display(annot, self, store, &mut convert_cache))
+                } else {
+                  store.primitive_ids().unknown
+                };
+                bindings
+                  .entry(param.name.clone())
+                  .and_modify(|existing| {
+                    let existing_unknown = !store.contains_type_id(*existing)
+                      || matches!(store.type_kind(*existing), tti::TypeKind::Unknown);
+                    if existing_unknown {
+                      *existing = mapped;
+                    }
+                  })
+                  .or_insert(mapped);
+              }
+            } else {
+              for param in func.params.iter() {
+                if param.name.starts_with("<pattern") {
+                  continue;
+                }
+                let ty = param.typ.unwrap_or(unknown);
+                bindings
+                  .entry(param.name.clone())
+                  .and_modify(|existing| {
+                    if *existing == unknown {
+                      *existing = ty;
+                    }
+                  })
+                  .or_insert(ty);
+              }
+            }
+          }
+        }
       }
       current = self.body_parents.get(&parent).copied();
     }
@@ -12010,10 +12062,12 @@ impl ProgramState {
             }
             self.def_types.entry(def).or_insert(annotated);
           }
+          let mut skip_implicit_any = false;
           let mut inferred = if let Some(t) = annotated {
             t
           } else if let Some(init) = init {
             if self.checking_bodies.contains(&init.body) {
+              skip_implicit_any = true;
               self.builtin.unknown
             } else {
               self.body_results.remove(&init.body);
@@ -12116,6 +12170,7 @@ impl ProgramState {
             }
           }
           if self.compiler_options.no_implicit_any
+            && !skip_implicit_any
             && annotated.is_none()
             && inferred == self.builtin.unknown
           {

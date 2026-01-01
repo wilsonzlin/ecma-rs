@@ -5980,10 +5980,10 @@ impl<'a> FlowBodyChecker<'a> {
           ) {
             (Some(binding), Some(prop)) => {
               let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
-              env
-                .get_path(&key)
-                .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
-            }
+             env
+               .get_path(&key)
+               .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
+             }
             _ => self.member_type(obj_ty_for_member, mem),
           };
           if mem.optional {
@@ -6352,6 +6352,11 @@ impl<'a> FlowBodyChecker<'a> {
     let _ = self.eval_expr(call.callee, env);
     let callee_base = self.expand_ref(self.expr_types[call.callee.0 as usize]);
     self.expr_types[call.callee.0 as usize] = callee_base;
+    let (callee_non_nullish, _) = if call.optional {
+      narrow_non_nullish(callee_base, &self.store)
+    } else {
+      (callee_base, prim.never)
+    };
     let mut arg_bases = Vec::new();
     for arg in call.args.iter() {
       let _ = self.eval_expr(arg.expr, env);
@@ -6360,10 +6365,19 @@ impl<'a> FlowBodyChecker<'a> {
       arg_bases.push(expanded);
     }
 
-    let this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
+    if call.optional && callee_non_nullish == prim.never {
+      return prim.never;
+    }
+
+    let mut this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
       ExprKind::Member(MemberExpr { object, .. }) => Some(self.expr_types[object.0 as usize]),
       _ => None,
     };
+    if call.optional {
+      if let Some(this_arg_ty) = this_arg.as_mut() {
+        *this_arg_ty = narrow_non_nullish(*this_arg_ty, &self.store).0;
+      }
+    }
 
     let span = Span::new(
       self.file,
@@ -6376,7 +6390,7 @@ impl<'a> FlowBodyChecker<'a> {
       resolve_construct(
         &self.store,
         &self.relate,
-        callee_base,
+        callee_non_nullish,
         &arg_bases,
         None,
         None,
@@ -6387,7 +6401,7 @@ impl<'a> FlowBodyChecker<'a> {
       resolve_call(
         &self.store,
         &self.relate,
-        callee_base,
+        callee_non_nullish,
         &arg_bases,
         this_arg,
         None,

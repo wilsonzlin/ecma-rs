@@ -1011,34 +1011,37 @@ pub mod body_check {
             .map(|ty| crate::check::widen::widen_literal(ctx.store.as_ref(), *ty))
             .collect();
         }
-        if matches!(meta.kind, HirBodyKind::Function) {
-          let mut flow_diagnostics = flow_result.diagnostics;
-          if !flow_diagnostics.is_empty() {
-            let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
-            let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
-              (
-                diag.code.as_str().to_string(),
-                diag.primary.file,
-                diag.primary.range,
-                diag.message.clone(),
-              )
-            };
-            for diag in result.diagnostics.iter() {
-              seen.insert(diag_key(diag));
+        let mut flow_diagnostics = flow_result.diagnostics;
+        if !flow_diagnostics.is_empty() {
+          let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
+          let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
+            (
+              diag.code.as_str().to_string(),
+              diag.primary.file,
+              diag.primary.range,
+              diag.message.clone(),
+            )
+          };
+          for diag in result.diagnostics.iter() {
+            seen.insert(diag_key(diag));
+          }
+          flow_diagnostics.sort_by(|a, b| {
+            a.primary
+              .file
+              .cmp(&b.primary.file)
+              .then(a.primary.range.start.cmp(&b.primary.range.start))
+              .then(a.primary.range.end.cmp(&b.primary.range.end))
+              .then(a.code.cmp(&b.code))
+              .then(a.message.cmp(&b.message))
+          });
+          for diag in flow_diagnostics.into_iter() {
+            if matches!(meta.kind, HirBodyKind::TopLevel)
+              && diag.code.as_str() == codes::USE_BEFORE_ASSIGNMENT.as_str()
+            {
+              continue;
             }
-            flow_diagnostics.sort_by(|a, b| {
-              a.primary
-                .file
-                .cmp(&b.primary.file)
-                .then(a.primary.range.start.cmp(&b.primary.range.start))
-                .then(a.primary.range.end.cmp(&b.primary.range.end))
-                .then(a.code.cmp(&b.code))
-                .then(a.message.cmp(&b.message))
-            });
-            for diag in flow_diagnostics.into_iter() {
-              if seen.insert(diag_key(&diag)) {
-                result.diagnostics.push(diag);
-              }
+            if seen.insert(diag_key(&diag)) {
+              result.diagnostics.push(diag);
             }
           }
         }
