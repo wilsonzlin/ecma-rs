@@ -206,9 +206,9 @@ fn lowers_template_literal_and_indexed_access_types() {
   let tmpl = &tmpl_arenas.type_exprs[tmpl_expr.0 as usize];
   match &tmpl.kind {
     TypeExprKind::TemplateLiteral(tmpl) => {
-      assert!(tmpl.head.contains("start"));
+      assert_eq!(tmpl.head, "start");
       assert_eq!(tmpl.spans.len(), 1);
-      assert!(tmpl.spans[0].literal.contains("end"));
+      assert_eq!(tmpl.spans[0].literal, "end");
     }
     other => panic!("expected template literal, got {other:?}"),
   }
@@ -1501,13 +1501,6 @@ fn union_member_indexed_access_index_literals<'a>(
     .collect()
 }
 
-fn normalize_template_literal_head(head: &str) -> String {
-  let head = head.strip_prefix('`').unwrap_or(head);
-  let head = head.strip_suffix("${").unwrap_or(head);
-  let head = head.strip_suffix('`').unwrap_or(head);
-  head.to_string()
-}
-
 fn union_member_template_literal_heads(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
@@ -1529,7 +1522,7 @@ fn union_member_template_literal_heads(result: &hir_js::LowerResult, alias: &str
       }
 
       match member_kind {
-        TypeExprKind::TemplateLiteral(tmpl) => normalize_template_literal_head(&tmpl.head),
+        TypeExprKind::TemplateLiteral(tmpl) => tmpl.head.clone(),
         other => panic!("expected template literal member, got {other:?}"),
       }
     })
@@ -1674,7 +1667,7 @@ fn intersection_member_template_literal_heads(
       }
 
       match member_kind {
-        TypeExprKind::TemplateLiteral(tmpl) => normalize_template_literal_head(&tmpl.head),
+        TypeExprKind::TemplateLiteral(tmpl) => tmpl.head.clone(),
         other => panic!("expected template literal member, got {other:?}"),
       }
     })
