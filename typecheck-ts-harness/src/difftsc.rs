@@ -352,47 +352,43 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
 
   let normalization = NormalizationOptions::with_span_tolerance(args.span_tolerance);
   let tsc_pool = tsc_pool.as_ref();
-  let mut results_with_ids: Vec<(String, CaseReport)> = pool.install(|| {
+  // `collect_tests` sorts by case name and Rayon preserves order for indexed
+  // parallel iterators collected into a `Vec`, so we can keep output
+  // deterministically ordered without an explicit post-pass sort.
+  let results: Vec<CaseReport> = pool.install(|| {
     tests
       .par_iter()
       .map(|test| {
         let test_id = format!("{suite_name}/{}", test.name);
         let expectation = expectations.lookup(&test_id);
         if expectation.expectation.kind == ExpectationKind::Skip {
-          return (
-            test_id,
-            CaseReport {
-              name: test.name.clone(),
-              status: CaseStatus::Skipped,
-              harness_options: None,
-              tsc_options: None,
-              expected: None,
-              actual: None,
-              diff: None,
-              expected_types: None,
-              actual_types: None,
-              type_diff: None,
-              report: None,
-              notes: vec!["skipped by manifest".to_string()],
-            },
-          );
+          return CaseReport {
+            name: test.name.clone(),
+            status: CaseStatus::Skipped,
+            harness_options: None,
+            tsc_options: None,
+            expected: None,
+            actual: None,
+            diff: None,
+            expected_types: None,
+            actual_types: None,
+            type_diff: None,
+            report: None,
+            notes: vec!["skipped by manifest".to_string()],
+          };
         }
 
-        let report = run_single_test(test, &args, tsc_pool, &baselines_root, &normalization);
-
-        (test_id, report)
+        run_single_test(test, &args, tsc_pool, &baselines_root, &normalization)
       })
       .collect()
   });
 
-  results_with_ids.sort_by(|a, b| a.0.cmp(&b.0));
-
   let mut expected_mismatches = 0usize;
   let mut unexpected_mismatches = 0usize;
   let mut flaky_mismatches = 0usize;
-  let mut results = Vec::with_capacity(results_with_ids.len());
-  for (test_id, report) in results_with_ids {
+  for report in &results {
     if matches!(report.status, CaseStatus::Mismatch) {
+      let test_id = format!("{suite_name}/{}", report.name);
       let expectation = expectations.lookup(&test_id);
       if expectation.expectation.kind == ExpectationKind::Flaky {
         flaky_mismatches += 1;
@@ -402,7 +398,6 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
         unexpected_mismatches += 1;
       }
     }
-    results.push(report);
   }
 
   let summary = summarize(&results);
@@ -425,7 +420,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
       &mut handle,
       &JsonReport {
         summary: summary.clone(),
-        results: results.clone(),
+        results,
       },
     )
     .context("serialize JSON output")?;
@@ -1758,6 +1753,7 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
     return Err(anyhow!(message));
   }
 
+  tests.sort_by(|a, b| a.name.cmp(&b.name));
   Ok(tests)
 }
 
