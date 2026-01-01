@@ -2,6 +2,7 @@ use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::eval::EvaluatorCacheStats;
 use crate::eval::EvaluatorCaches;
 use crate::eval::ExpandedType;
+use crate::eval::ConditionalAssignability;
 use crate::eval::TypeEvaluator;
 use crate::eval::TypeExpander as EvalTypeExpander;
 use crate::shape::Indexer;
@@ -41,6 +42,11 @@ bitflags! {
   pub struct RelationMode: u8 {
     const NONE = 0;
     const BIVARIANT_PARAMS = 1 << 0;
+    /// Skip normalization (`RelateCtx::normalize_type`) in [`RelateCtx::assignable`].
+    ///
+    /// This exists to break potential relate <-> evaluate cycles when
+    /// conditional type evaluation needs to ask the relation engine whether the
+    /// evaluated `check` type is assignable to the evaluated `extends` type.
     const SKIP_NORMALIZE = 1 << 1;
   }
 }
@@ -1983,8 +1989,12 @@ impl<'a> RelateCtx<'a> {
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
-    let mut evaluator =
-      TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone());
+    let mut evaluator = TypeEvaluator::with_caches(
+      self.store.clone(),
+      &adapter,
+      self.normalizer_caches.clone(),
+    )
+    .with_conditional_assignability(self);
     evaluator.evaluate(ty)
   }
 
@@ -2418,6 +2428,12 @@ impl<'a> RelateCtx<'a> {
       .hooks
       .expander
       .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, args))
+  }
+}
+
+impl<'a> ConditionalAssignability for RelateCtx<'a> {
+  fn is_assignable_for_conditional(&self, src: TypeId, dst: TypeId) -> bool {
+    self.is_assignable_no_normalize(src, dst)
   }
 }
 

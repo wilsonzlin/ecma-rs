@@ -31,6 +31,10 @@ pub trait TypeExpander {
   fn expand(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<ExpandedType>;
 }
 
+pub(crate) trait ConditionalAssignability {
+  fn is_assignable_for_conditional(&self, src: TypeId, dst: TypeId) -> bool;
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 struct Substitution {
   bindings: Vec<(TypeParamId, TypeId)>,
@@ -212,6 +216,8 @@ impl EvaluatorCaches {
 pub struct TypeEvaluator<'a, E: TypeExpander> {
   store: Arc<TypeStore>,
   expander: &'a E,
+  conditional_assignability: Option<&'a dyn ConditionalAssignability>,
+  default_conditional_assignability: RelateCtx<'static>,
   caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
@@ -245,15 +251,27 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   pub fn with_caches(store: Arc<TypeStore>, expander: &'a E, caches: EvaluatorCaches) -> Self {
+    let default_conditional_assignability: RelateCtx<'static> =
+      RelateCtx::new(store.clone(), store.options());
     Self {
       store,
       expander,
+      conditional_assignability: None,
+      default_conditional_assignability,
       caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
       depth_limit: Self::DEFAULT_DEPTH_LIMIT,
       max_template_strings: Self::DEFAULT_MAX_TEMPLATE_STRINGS,
     }
+  }
+
+  pub(crate) fn with_conditional_assignability(
+    mut self,
+    provider: &'a dyn ConditionalAssignability,
+  ) -> Self {
+    self.conditional_assignability = Some(provider);
+    self
   }
 
   pub fn with_depth_limit(mut self, limit: usize) -> Self {
@@ -528,8 +546,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
     }
 
-    let relate = RelateCtx::new(self.store.clone(), self.store.options());
-    let branch = if relate.is_assignable_no_normalize(check_eval, extends_eval) {
+    let assignable = match self.conditional_assignability {
+      Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
+      None => self
+        .default_conditional_assignability
+        .is_assignable_for_conditional(check_eval, extends_eval),
+    };
+
+    let branch = if assignable {
       true_ty
     } else {
       false_ty

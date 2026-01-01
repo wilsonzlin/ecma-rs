@@ -736,6 +736,82 @@ fn derived_types_are_normalized_during_relation() {
 }
 
 #[test]
+fn conditional_normalization_uses_relation_ctx_hooks() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let private_prop = Property {
+    key: PropKey::String(store.intern_name("x")),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: Some(Accessibility::Private),
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  };
+
+  let public_prop = Property {
+    key: PropKey::String(store.intern_name("y")),
+    data: PropData {
+      ty: primitives.string,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  };
+
+  let check_obj = object_type(
+    &store,
+    Shape {
+      properties: vec![private_prop.clone(), public_prop],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let extends_obj = object_type(
+    &store,
+    Shape {
+      properties: vec![private_prop],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  assert_ne!(check_obj, extends_obj);
+
+  let conditional = store.intern_type(TypeKind::Conditional {
+    check: check_obj,
+    extends: extends_obj,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  // Without the hook, private members are incompatible, so the conditional
+  // reduces to the false branch.
+  let ctx_default = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx_default.is_assignable(primitives.boolean, conditional));
+  assert!(!ctx_default.is_assignable(primitives.number, conditional));
+
+  // With the hook enabled, private members are treated as same-origin, so the
+  // conditional reduces to the true branch.
+  let hook = RelateHooks {
+    expander: None,
+    is_same_origin_private_member: Some(&|_, _| true),
+  };
+  let ctx_hook = RelateCtx::with_hooks(store.clone(), default_options(), hook);
+  assert!(ctx_hook.is_assignable(primitives.number, conditional));
+  assert!(!ctx_hook.is_assignable(primitives.boolean, conditional));
+}
+
+#[test]
 fn cyclic_reference_terminates() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

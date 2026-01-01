@@ -146,9 +146,9 @@ fn conditional_uses_structural_assignability() {
     distributive: false,
   });
 
-  let default_expander = MockExpander::default();
-  let mut eval = evaluator(store.clone(), &default_expander);
-  let result = eval.evaluate(cond);
+  assert_ne!(src_ty, dst_ty);
+
+  let result = store.evaluate(cond);
   assert_eq!(result, primitives.boolean);
 }
 
