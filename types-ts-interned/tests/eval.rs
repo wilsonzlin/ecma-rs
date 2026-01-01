@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey,
-  Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
-  TypeExpander, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
+  Accessibility, DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, Param,
+  PropData, PropKey, Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem,
+  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -1159,6 +1159,170 @@ fn conditional_respects_no_unchecked_indexed_access_option() {
     distributive: false,
   });
   assert_eq!(unchecked_store.evaluate(cond), prim.number);
+}
+
+#[test]
+fn conditional_respects_method_bivariance_under_strict_function_types() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let num_or_str = store.union(vec![primitives.number, primitives.string]);
+
+  let fn_narrow = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: primitives.number,
+        optional: false,
+        rest: false,
+      }],
+      primitives.void,
+    ))],
+  });
+  let fn_wide = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: num_or_str,
+        optional: false,
+        rest: false,
+      }],
+      primitives.void,
+    ))],
+  });
+
+  let method_name = store.intern_name("method");
+  let make_object = |is_method: bool, ty: TypeId| {
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(method_name),
+          data: PropData {
+            ty,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    })))
+  };
+
+  // Methods are checked bivariantly even under `strictFunctionTypes`.
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_object(true, fn_narrow),
+    extends: make_object(true, fn_wide),
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), primitives.number);
+
+  // Non-method properties should obey strict function parameter variance.
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_object(false, fn_narrow),
+    extends: make_object(false, fn_wide),
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), primitives.boolean);
+}
+
+#[test]
+fn conditional_respects_private_member_origin_by_default() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let private_key = store.intern_name("x");
+  let extra_key = store.intern_name("y");
+
+  let make_src = |declared_on: DefId| {
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![
+          Property {
+            key: PropKey::String(private_key),
+            data: PropData {
+              ty: primitives.number,
+              optional: false,
+              readonly: false,
+              accessibility: Some(Accessibility::Private),
+              is_method: false,
+              origin: None,
+              declared_on: Some(declared_on),
+            },
+          },
+          Property {
+            key: PropKey::String(extra_key),
+            data: PropData {
+              ty: primitives.string,
+              optional: false,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          },
+        ],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    })))
+  };
+
+  let make_dst = |declared_on: DefId| {
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(private_key),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: Some(Accessibility::Private),
+            is_method: false,
+            origin: None,
+            declared_on: Some(declared_on),
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    })))
+  };
+
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  // Same-origin private members are compatible by default.
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_src(DefId(1)),
+    extends: make_dst(DefId(1)),
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), true_ty);
+
+  // Different-origin private members are incompatible without a hook.
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_src(DefId(1)),
+    extends: make_dst(DefId(2)),
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), false_ty);
 }
 
 #[test]
