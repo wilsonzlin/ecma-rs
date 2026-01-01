@@ -1,4 +1,4 @@
-use crate::{Diagnostic, TopLevelMode};
+use crate::{ts_lower, Diagnostic, TopLevelMode};
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, Span};
 use parse_js::ast::class_or_object::{
@@ -17,9 +17,10 @@ use parse_js::ast::stmt::decl::{
 };
 use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{EnumDecl, ImportEqualsDecl, ImportEqualsRhs};
+use parse_js::ast::ts_stmt::{EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
+use std::collections::HashSet;
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
@@ -27,6 +28,9 @@ struct StripContext<'a> {
   file: FileId,
   top_level_mode: TopLevelMode,
   source: &'a str,
+  top_level_value_bindings: HashSet<String>,
+  top_level_module_exports: HashSet<String>,
+  emitted_export_var: HashSet<String>,
   diagnostics: Vec<Diagnostic>,
 }
 
@@ -86,10 +90,19 @@ pub fn erase_types(
   source: &str,
   top_level: &mut Node<TopLevel>,
 ) -> Result<(), Vec<Diagnostic>> {
+  let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
+  let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
+    collect_top_level_module_exports(source, &top_level.stx.body)
+  } else {
+    HashSet::new()
+  };
   let mut ctx = StripContext {
     file,
     top_level_mode,
     source,
+    top_level_value_bindings,
+    top_level_module_exports,
+    emitted_export_var: HashSet::new(),
     diagnostics: Vec::new(),
   };
   strip_stmts(&mut ctx, &mut top_level.stx.body, true);
@@ -103,38 +116,74 @@ pub fn erase_types(
 fn strip_stmts(ctx: &mut StripContext<'_>, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
   let mut new_stmts = Vec::with_capacity(stmts.len());
   for stmt in stmts.drain(..) {
-    if let Some(stripped) = strip_stmt(ctx, stmt, is_top_level) {
-      new_stmts.push(stripped);
-    }
+    new_stmts.extend(strip_stmt(ctx, stmt, is_top_level));
   }
   *stmts = new_stmts;
 }
 
-fn strip_stmt(
+fn empty_stmt(loc: Loc) -> Node<Stmt> {
+  Node::new(loc, Stmt::Empty(Node::new(loc, EmptyStmt {})))
+}
+
+fn strip_stmt_required(
   ctx: &mut StripContext<'_>,
-  stmt: Node<Stmt>,
+  mut stmt: Node<Stmt>,
+  is_top_level: bool,
+) -> Node<Stmt> {
+  let loc = stmt.loc;
+  let assoc = std::mem::take(&mut stmt.assoc);
+  let mut lowered = strip_stmt(ctx, stmt, is_top_level);
+  match lowered.len() {
+    0 => new_node(loc, assoc, *empty_stmt(loc).stx),
+    1 => lowered.pop().unwrap(),
+    _ => new_node(
+      loc,
+      assoc,
+      Stmt::Block(Node::new(loc, BlockStmt { body: lowered })),
+    ),
+  }
+}
+
+fn strip_stmt_optional(
+  ctx: &mut StripContext<'_>,
+  mut stmt: Node<Stmt>,
   is_top_level: bool,
 ) -> Option<Node<Stmt>> {
+  let loc = stmt.loc;
+  let assoc = std::mem::take(&mut stmt.assoc);
+  let mut lowered = strip_stmt(ctx, stmt, is_top_level);
+  match lowered.len() {
+    0 => None,
+    1 => lowered.pop(),
+    _ => Some(new_node(
+      loc,
+      assoc,
+      Stmt::Block(Node::new(loc, BlockStmt { body: lowered })),
+    )),
+  }
+}
+
+fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) -> Vec<Node<Stmt>> {
   let loc = stmt.loc;
   let assoc = stmt.assoc;
   match *stmt.stx {
     Stmt::Block(block) => {
       let mut block = block;
       strip_stmts(ctx, &mut block.stx.body, false);
-      Some(new_node(loc, assoc, Stmt::Block(block)))
+      vec![new_node(loc, assoc, Stmt::Block(block))]
     }
     Stmt::Expr(expr_stmt) => {
       let mut expr_stmt = expr_stmt;
       expr_stmt.stx.expr = strip_expr(ctx, expr_stmt.stx.expr);
-      Some(new_node(loc, assoc, Stmt::Expr(expr_stmt)))
+      vec![new_node(loc, assoc, Stmt::Expr(expr_stmt))]
     }
     Stmt::If(mut if_stmt) => {
       if_stmt.stx.test = strip_expr(ctx, if_stmt.stx.test);
-      if_stmt.stx.consequent = strip_stmt(ctx, if_stmt.stx.consequent, false)?;
+      if_stmt.stx.consequent = strip_stmt_required(ctx, if_stmt.stx.consequent, false);
       if let Some(alt) = if_stmt.stx.alternate.take() {
-        if_stmt.stx.alternate = strip_stmt(ctx, alt, false);
+        if_stmt.stx.alternate = strip_stmt_optional(ctx, alt, false);
       }
-      Some(new_node(loc, assoc, Stmt::If(if_stmt)))
+      vec![new_node(loc, assoc, Stmt::If(if_stmt))]
     }
     Stmt::ForTriple(mut for_stmt) => {
       match &mut for_stmt.stx.init {
@@ -152,29 +201,29 @@ fn strip_stmt(
         for_stmt.stx.post = Some(strip_expr(ctx, post));
       }
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      Some(new_node(loc, assoc, Stmt::ForTriple(for_stmt)))
+      vec![new_node(loc, assoc, Stmt::ForTriple(for_stmt))]
     }
     Stmt::ForIn(mut for_stmt) => {
       strip_for_in_of_lhs(ctx, &mut for_stmt.stx.lhs);
       for_stmt.stx.rhs = strip_expr(ctx, for_stmt.stx.rhs);
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      Some(new_node(loc, assoc, Stmt::ForIn(for_stmt)))
+      vec![new_node(loc, assoc, Stmt::ForIn(for_stmt))]
     }
     Stmt::ForOf(mut for_stmt) => {
       strip_for_in_of_lhs(ctx, &mut for_stmt.stx.lhs);
       for_stmt.stx.rhs = strip_expr(ctx, for_stmt.stx.rhs);
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      Some(new_node(loc, assoc, Stmt::ForOf(for_stmt)))
+      vec![new_node(loc, assoc, Stmt::ForOf(for_stmt))]
     }
     Stmt::While(mut while_stmt) => {
       while_stmt.stx.condition = strip_expr(ctx, while_stmt.stx.condition);
-      while_stmt.stx.body = strip_stmt(ctx, while_stmt.stx.body, false)?;
-      Some(new_node(loc, assoc, Stmt::While(while_stmt)))
+      while_stmt.stx.body = strip_stmt_required(ctx, while_stmt.stx.body, false);
+      vec![new_node(loc, assoc, Stmt::While(while_stmt))]
     }
     Stmt::DoWhile(mut do_stmt) => {
-      do_stmt.stx.body = strip_stmt(ctx, do_stmt.stx.body, false)?;
+      do_stmt.stx.body = strip_stmt_required(ctx, do_stmt.stx.body, false);
       do_stmt.stx.condition = strip_expr(ctx, do_stmt.stx.condition);
-      Some(new_node(loc, assoc, Stmt::DoWhile(do_stmt)))
+      vec![new_node(loc, assoc, Stmt::DoWhile(do_stmt))]
     }
     Stmt::Switch(mut switch_stmt) => {
       switch_stmt.stx.test = strip_expr(ctx, switch_stmt.stx.test);
@@ -183,7 +232,7 @@ fn strip_stmt(
         new_branches.push(strip_switch_branch(ctx, branch));
       }
       switch_stmt.stx.branches = new_branches;
-      Some(new_node(loc, assoc, Stmt::Switch(switch_stmt)))
+      vec![new_node(loc, assoc, Stmt::Switch(switch_stmt))]
     }
     Stmt::Try(mut try_stmt) => {
       try_stmt.stx.wrapped = strip_block(ctx, try_stmt.stx.wrapped);
@@ -193,41 +242,41 @@ fn strip_stmt(
       if let Some(finally) = try_stmt.stx.finally.take() {
         try_stmt.stx.finally = Some(strip_block(ctx, finally));
       }
-      Some(new_node(loc, assoc, Stmt::Try(try_stmt)))
+      vec![new_node(loc, assoc, Stmt::Try(try_stmt))]
     }
     Stmt::Throw(mut throw_stmt) => {
       throw_stmt.stx.value = strip_expr(ctx, throw_stmt.stx.value);
-      Some(new_node(loc, assoc, Stmt::Throw(throw_stmt)))
+      vec![new_node(loc, assoc, Stmt::Throw(throw_stmt))]
     }
     Stmt::Return(mut ret_stmt) => {
       if let Some(value) = ret_stmt.stx.value.take() {
         ret_stmt.stx.value = Some(strip_expr(ctx, value));
       }
-      Some(new_node(loc, assoc, Stmt::Return(ret_stmt)))
+      vec![new_node(loc, assoc, Stmt::Return(ret_stmt))]
     }
     Stmt::Break(_) | Stmt::Continue(_) | Stmt::Debugger(_) | Stmt::Empty(_) => {
-      Some(new_node(loc, assoc, *stmt.stx))
+      vec![new_node(loc, assoc, *stmt.stx)]
     }
     Stmt::With(mut with_stmt) => {
       with_stmt.stx.object = strip_expr(ctx, with_stmt.stx.object);
-      with_stmt.stx.body = strip_stmt(ctx, with_stmt.stx.body, false)?;
-      Some(new_node(loc, assoc, Stmt::With(with_stmt)))
+      with_stmt.stx.body = strip_stmt_required(ctx, with_stmt.stx.body, false);
+      vec![new_node(loc, assoc, Stmt::With(with_stmt))]
     }
     Stmt::Label(mut label_stmt) => {
-      label_stmt.stx.statement = strip_stmt(ctx, label_stmt.stx.statement, false)?;
-      Some(new_node(loc, assoc, Stmt::Label(label_stmt)))
+      label_stmt.stx.statement = strip_stmt_required(ctx, label_stmt.stx.statement, false);
+      vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
     }
     Stmt::VarDecl(mut decl) => {
       strip_var_decl(ctx, &mut decl.stx);
-      Some(new_node(loc, assoc, Stmt::VarDecl(decl)))
+      vec![new_node(loc, assoc, Stmt::VarDecl(decl))]
     }
-    Stmt::FunctionDecl(func_decl) => strip_func_decl(ctx, func_decl, loc, assoc),
-    Stmt::ClassDecl(class_decl) => strip_class_decl(ctx, class_decl, loc, assoc),
-    Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc),
-    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc),
+    Stmt::FunctionDecl(func_decl) => strip_func_decl(ctx, func_decl, loc, assoc).into_iter().collect(),
+    Stmt::ClassDecl(class_decl) => strip_class_decl(ctx, class_decl, loc, assoc).into_iter().collect(),
+    Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc).into_iter().collect(),
+    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc).into_iter().collect(),
     Stmt::ExportDefaultExpr(mut expr) => {
       expr.stx.expression = strip_expr(ctx, expr.stx.expression);
-      Some(new_node(loc, assoc, Stmt::ExportDefaultExpr(expr)))
+      vec![new_node(loc, assoc, Stmt::ExportDefaultExpr(expr))]
     }
     Stmt::InterfaceDecl(_)
     | Stmt::TypeAliasDecl(_)
@@ -237,30 +286,94 @@ fn strip_stmt(
     | Stmt::AmbientVarDecl(_)
     | Stmt::AmbientFunctionDecl(_)
     | Stmt::AmbientClassDecl(_)
-    | Stmt::GlobalDecl(_) => None,
-    Stmt::EnumDecl(decl) => strip_enum_decl(ctx, decl, loc, assoc),
-    Stmt::NamespaceDecl(decl) => {
-      if decl.stx.declare {
-        None
-      } else {
-        unsupported_ts(ctx, loc, "namespaces with runtime bodies are not supported");
-        None
-      }
-    }
-    Stmt::ModuleDecl(decl) => {
-      if decl.stx.declare {
-        None
-      } else {
-        unsupported_ts(ctx, loc, "modules with runtime bodies are not supported");
-        None
-      }
-    }
-    Stmt::ImportEqualsDecl(decl) => lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level),
+    | Stmt::GlobalDecl(_) => vec![],
+    Stmt::EnumDecl(decl) => strip_enum_decl(ctx, decl, loc, assoc, is_top_level, None),
+    Stmt::NamespaceDecl(decl) => strip_namespace_decl(ctx, decl, loc, assoc, is_top_level, None),
+    Stmt::ModuleDecl(decl) => strip_module_decl(ctx, decl, loc, assoc, is_top_level, None),
+    Stmt::ImportEqualsDecl(decl) => lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level).into_iter().collect(),
     Stmt::ExportAssignmentDecl(decl) => {
       let expr = strip_expr(ctx, decl.stx.expression);
-      lower_export_assignment(ctx, loc, assoc, expr, is_top_level)
+      lower_export_assignment(ctx, loc, assoc, expr, is_top_level).into_iter().collect()
     }
   }
+}
+
+fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
+  let mut names = HashSet::new();
+  for stmt in stmts {
+    match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(func) => {
+        if func.stx.function.stx.body.is_some() {
+          if let Some(name) = func.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            names.insert(name);
+          }
+        }
+      }
+      Stmt::ClassDecl(class) => {
+        if !class.stx.declare {
+          if let Some(name) = class.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            names.insert(name);
+          }
+        }
+      }
+      Stmt::EnumDecl(enum_decl) => {
+        if !enum_decl.stx.declare && !enum_decl.stx.const_ {
+          names.insert(enum_decl.stx.name.clone());
+        }
+      }
+      _ => {}
+    }
+  }
+  names
+}
+
+fn collect_top_level_module_exports(source: &str, stmts: &[Node<Stmt>]) -> HashSet<String> {
+  let mut names = HashSet::new();
+  for stmt in stmts {
+    match stmt.stx.as_ref() {
+      Stmt::VarDecl(decl) if decl.stx.export => {
+        for declarator in &decl.stx.declarators {
+          let mut bindings = Vec::new();
+          collect_pat_binding_names(&declarator.pattern.stx.pat, &mut bindings);
+          names.extend(bindings);
+        }
+      }
+      Stmt::FunctionDecl(func) if func.stx.export && !func.stx.export_default => {
+        if func.stx.function.stx.body.is_some() {
+          if let Some(name) = func.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            names.insert(name);
+          }
+        }
+      }
+      Stmt::ClassDecl(class) if class.stx.export && !class.stx.export_default => {
+        if !class.stx.declare {
+          if let Some(name) = class.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            names.insert(name);
+          }
+        }
+      }
+      Stmt::ExportList(export_stmt) if !export_stmt.stx.type_only => match &export_stmt.stx.names {
+        ExportNames::Specific(entries) => {
+          for entry in entries {
+            if !entry.stx.type_only {
+              names.insert(entry.stx.alias.stx.name.clone());
+            }
+          }
+        }
+        ExportNames::All(Some(alias)) => {
+          names.insert(alias.stx.name.clone());
+        }
+        ExportNames::All(None) => {}
+      },
+      Stmt::ImportEqualsDecl(decl) if decl.stx.export => {
+        if !import_equals_is_type_only_in_source(source, stmt.loc) {
+          names.insert(decl.stx.name.clone());
+        }
+      }
+      _ => {}
+    }
+  }
+  names
 }
 
 fn trim_leading_trivia(mut text: &str) -> &str {
@@ -288,8 +401,8 @@ fn trim_leading_trivia(mut text: &str) -> &str {
   }
 }
 
-fn import_equals_is_type_only(ctx: &StripContext<'_>, loc: Loc) -> bool {
-  let Some(slice) = ctx.source.get(loc.0..loc.1) else {
+fn import_equals_is_type_only_in_source(source: &str, loc: Loc) -> bool {
+  let Some(slice) = source.get(loc.0..loc.1) else {
     return false;
   };
   let mut view = trim_leading_trivia(slice);
@@ -305,6 +418,10 @@ fn import_equals_is_type_only(ctx: &StripContext<'_>, loc: Loc) -> bool {
     return next.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_');
   }
   false
+}
+
+fn import_equals_is_type_only(ctx: &StripContext<'_>, loc: Loc) -> bool {
+  import_equals_is_type_only_in_source(ctx.source, loc)
 }
 
 fn lower_import_equals_decl(
@@ -579,18 +696,417 @@ fn strip_export_list(
   Some(new_node(loc, assoc, Stmt::ExportList(export_stmt)))
 }
 
+fn is_template_literal_without_substitutions(expr: &Node<Expr>) -> bool {
+  let Expr::LitTemplate(tpl) = expr.stx.as_ref() else {
+    return false;
+  };
+  tpl
+    .stx
+    .parts
+    .iter()
+    .all(|part| matches!(part, LitTemplatePart::String(_)))
+}
+
+fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
+  match expr.stx.as_ref() {
+    Expr::LitNum(num) => Some(num.stx.value.0),
+    Expr::Unary(unary) if unary.stx.operator == OperatorName::UnaryNegation => {
+      eval_number_expr(&unary.stx.argument).map(|v| -v)
+    }
+    Expr::Unary(unary) if unary.stx.operator == OperatorName::UnaryPlus => {
+      eval_number_expr(&unary.stx.argument)
+    }
+    _ => None,
+  }
+}
+
+fn enum_assign_stmt(loc: Loc, enum_ident: &str, member: &str, value: Node<Expr>) -> Node<Stmt> {
+  ts_lower::member_assignment_stmt(
+    loc,
+    ts_lower::id(loc, enum_ident),
+    ts_lower::MemberKey::Name(member.to_string()),
+    value,
+  )
+}
+
+fn enum_reverse_mapping_stmt(
+  loc: Loc,
+  enum_ident: &str,
+  member: &str,
+  value: Node<Expr>,
+) -> Node<Stmt> {
+  let enum_obj = ts_lower::id(loc, enum_ident);
+  let name_assign = ts_lower::assign_expr(
+    loc,
+    ts_lower::member_expr(
+      loc,
+      ts_lower::id(loc, enum_ident),
+      ts_lower::MemberKey::Name(member.to_string()),
+    ),
+    value,
+  );
+  let reverse_left =
+    ts_lower::member_expr(loc, enum_obj, ts_lower::MemberKey::Expr(name_assign));
+  ts_lower::expr_stmt(
+    loc,
+    ts_lower::assign_expr(loc, reverse_left, ts_lower::string(loc, member.to_string())),
+  )
+}
+
+fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> Node<Expr> {
+  match parent_namespace {
+    None => ts_lower::binary_expr(
+      loc,
+      OperatorName::LogicalOr,
+      ts_lower::id(loc, enum_name),
+      ts_lower::assign_expr(loc, ts_lower::id(loc, enum_name), ts_lower::empty_object(loc)),
+    ),
+    Some(namespace_param) => {
+      let prop_read = ts_lower::member_expr(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(enum_name.to_string()),
+      );
+      let prop_write = ts_lower::member_expr(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(enum_name.to_string()),
+      );
+      let prop_or = ts_lower::binary_expr(
+        loc,
+        OperatorName::LogicalOr,
+        prop_read,
+        ts_lower::assign_expr(loc, prop_write, ts_lower::empty_object(loc)),
+      );
+      ts_lower::assign_expr(loc, ts_lower::id(loc, enum_name), prop_or)
+    }
+  }
+}
+
 fn strip_enum_decl(
   ctx: &mut StripContext<'_>,
   decl: Node<EnumDecl>,
   loc: Loc,
   _assoc: NodeAssocData,
-) -> Option<Node<Stmt>> {
+  is_top_level: bool,
+  parent_namespace: Option<&str>,
+) -> Vec<Node<Stmt>> {
   if decl.stx.declare || decl.stx.const_ {
-    None
-  } else {
-    unsupported_ts(ctx, loc, "runtime enums are not supported in JS erasure");
-    None
+    return vec![];
   }
+
+  let enum_name = decl.stx.name.clone();
+  let should_export_var = parent_namespace.is_none()
+    && is_top_level
+    && matches!(ctx.top_level_mode, TopLevelMode::Module)
+    && decl.stx.export
+    && !ctx.top_level_module_exports.contains(&enum_name)
+    && ctx.emitted_export_var.insert(enum_name.clone());
+
+  let mut out = Vec::new();
+  out.push(ts_lower::var_decl_stmt(
+    loc,
+    enum_name.clone(),
+    None,
+    should_export_var,
+    VarDeclMode::Var,
+  ));
+
+  let mut body = Vec::with_capacity(decl.stx.members.len());
+  let mut next_auto: Option<f64> = Some(0.0);
+  let mut last_numeric_member: Option<String> = None;
+  for member in decl.stx.members {
+    let member_name = member.stx.name.clone();
+    let initializer = member.stx.initializer.map(|expr| strip_expr(ctx, expr));
+    let is_string = initializer
+      .as_ref()
+      .is_some_and(|expr| matches!(expr.stx.as_ref(), Expr::LitStr(_)) || is_template_literal_without_substitutions(expr));
+
+    if is_string {
+      let initializer = initializer.expect("string members must have initializer");
+      body.push(enum_assign_stmt(loc, &enum_name, &member_name, initializer));
+      next_auto = None;
+      last_numeric_member = None;
+      continue;
+    }
+
+    let value_expr = match initializer {
+      Some(expr) => {
+        next_auto = eval_number_expr(&expr).map(|v| v + 1.0);
+        expr
+      }
+      None => match (next_auto, last_numeric_member.as_ref()) {
+        (Some(value), _) => {
+          next_auto = Some(value + 1.0);
+          ts_lower::number(loc, value)
+        }
+        (None, Some(prev)) => ts_lower::binary_expr(
+          loc,
+          OperatorName::Addition,
+          ts_lower::member_expr(
+            loc,
+            ts_lower::id(loc, enum_name.clone()),
+            ts_lower::MemberKey::Name(prev.to_string()),
+          ),
+          ts_lower::number(loc, 1.0),
+        ),
+        (None, None) => {
+          next_auto = Some(1.0);
+          ts_lower::number(loc, 0.0)
+        }
+      },
+    };
+
+    body.push(enum_reverse_mapping_stmt(
+      loc,
+      &enum_name,
+      &member_name,
+      value_expr,
+    ));
+    last_numeric_member = Some(member_name);
+  }
+
+  let arg = enum_iife_arg(loc, &enum_name, parent_namespace);
+  out.push(ts_lower::iife_stmt(loc, enum_name, arg, body));
+  out
+}
+
+fn namespace_iife_arg(loc: Loc, name: &str, parent_namespace: Option<&str>) -> Node<Expr> {
+  match parent_namespace {
+    None => ts_lower::binary_expr(
+      loc,
+      OperatorName::LogicalOr,
+      ts_lower::id(loc, name),
+      ts_lower::assign_expr(loc, ts_lower::id(loc, name), ts_lower::empty_object(loc)),
+    ),
+    Some(namespace_param) => {
+      let prop_read = ts_lower::member_expr(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(name.to_string()),
+      );
+      let prop_write = ts_lower::member_expr(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(name.to_string()),
+      );
+      let prop_or = ts_lower::binary_expr(
+        loc,
+        OperatorName::LogicalOr,
+        prop_read,
+        ts_lower::assign_expr(loc, prop_write, ts_lower::empty_object(loc)),
+      );
+      ts_lower::assign_expr(loc, ts_lower::id(loc, name), prop_or)
+    }
+  }
+}
+
+fn namespace_export_assignments(loc: Loc, namespace_param: &str, names: &[String]) -> Vec<Node<Stmt>> {
+  names
+    .iter()
+    .map(|name| {
+      ts_lower::member_assignment_stmt(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(name.clone()),
+        ts_lower::id(loc, name.clone()),
+      )
+    })
+    .collect()
+}
+
+fn collect_pat_binding_names(pat: &Node<Pat>, out: &mut Vec<String>) {
+  match pat.stx.as_ref() {
+    Pat::Id(id) => out.push(id.stx.name.clone()),
+    Pat::Arr(arr) => {
+      for elem in arr.stx.elements.iter().flatten() {
+        collect_pat_binding_names(&elem.target, out);
+      }
+      if let Some(rest) = &arr.stx.rest {
+        collect_pat_binding_names(rest, out);
+      }
+    }
+    Pat::Obj(obj) => {
+      for prop in &obj.stx.properties {
+        collect_pat_binding_names(&prop.stx.target, out);
+      }
+      if let Some(rest) = &obj.stx.rest {
+        collect_pat_binding_names(rest, out);
+      }
+    }
+    Pat::AssignTarget(_) => {}
+  }
+}
+
+fn strip_namespace_body_stmt(
+  ctx: &mut StripContext<'_>,
+  stmt: Node<Stmt>,
+  namespace_param: &str,
+) -> Vec<Node<Stmt>> {
+  let loc = stmt.loc;
+  let assoc = stmt.assoc;
+  match *stmt.stx {
+    Stmt::VarDecl(mut decl) if decl.stx.export => {
+      decl.stx.export = false;
+      strip_var_decl(ctx, &mut decl.stx);
+      let mut names = Vec::new();
+      for declarator in &decl.stx.declarators {
+        collect_pat_binding_names(&declarator.pattern.stx.pat, &mut names);
+      }
+      let mut out = Vec::with_capacity(1 + names.len());
+      out.push(new_node(loc, assoc, Stmt::VarDecl(decl)));
+      out.extend(namespace_export_assignments(loc, namespace_param, &names));
+      out
+    }
+    Stmt::FunctionDecl(mut func_decl) if func_decl.stx.export => {
+      func_decl.stx.export = false;
+      func_decl.stx.export_default = false;
+      if !strip_func(ctx, &mut func_decl.stx.function.stx) {
+        return vec![];
+      }
+      let Some(name) = func_decl
+        .stx
+        .name
+        .as_ref()
+        .map(|name| name.stx.name.clone())
+      else {
+        unsupported_ts(ctx, loc, "exported functions in namespaces must have names");
+        return vec![];
+      };
+      let mut out = Vec::new();
+      out.push(new_node(loc, assoc, Stmt::FunctionDecl(func_decl)));
+      out.extend(namespace_export_assignments(loc, namespace_param, &[name]));
+      out
+    }
+    Stmt::ClassDecl(mut class_decl) if class_decl.stx.export => {
+      if class_decl.stx.declare {
+        return vec![];
+      }
+      class_decl.stx.export = false;
+      class_decl.stx.export_default = false;
+      let Some(name) = class_decl
+        .stx
+        .name
+        .as_ref()
+        .map(|name| name.stx.name.clone())
+      else {
+        unsupported_ts(ctx, loc, "exported classes in namespaces must have names");
+        return vec![];
+      };
+      let mut out = Vec::new();
+      if let Some(stmt) = strip_class_decl(ctx, class_decl, loc, assoc) {
+        out.push(stmt);
+        out.extend(namespace_export_assignments(loc, namespace_param, &[name]));
+      }
+      out
+    }
+    Stmt::EnumDecl(decl) if decl.stx.export => strip_enum_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
+    Stmt::NamespaceDecl(decl) if decl.stx.export => strip_namespace_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
+    Stmt::ModuleDecl(decl) if decl.stx.export => strip_module_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
+    // ES module exports do not make sense inside runtime namespaces.
+    Stmt::ExportList(_) | Stmt::ExportDefaultExpr(_) => {
+      unsupported_ts(ctx, loc, "export statements are not supported inside runtime namespaces");
+      vec![]
+    }
+    other => strip_stmt(ctx, Node { loc, assoc, stx: Box::new(other) }, false),
+  }
+}
+
+fn strip_namespace_body(ctx: &mut StripContext<'_>, body: NamespaceBody, namespace_param: &str) -> Vec<Node<Stmt>> {
+  match body {
+    NamespaceBody::Block(stmts) => stmts
+      .into_iter()
+      .flat_map(|stmt| strip_namespace_body_stmt(ctx, stmt, namespace_param))
+      .collect(),
+    NamespaceBody::Namespace(inner) => {
+      let inner = *inner;
+      let inner_loc = inner.loc;
+      strip_namespace_decl(
+        ctx,
+        inner,
+        inner_loc,
+        NodeAssocData::default(),
+        false,
+        Some(namespace_param),
+      )
+    }
+  }
+}
+
+fn strip_namespace_decl(
+  ctx: &mut StripContext<'_>,
+  decl: Node<NamespaceDecl>,
+  loc: Loc,
+  _assoc: NodeAssocData,
+  is_top_level: bool,
+  parent_namespace: Option<&str>,
+) -> Vec<Node<Stmt>> {
+  if decl.stx.declare {
+    return vec![];
+  }
+
+  let namespace_name = decl.stx.name.clone();
+  let mut out = Vec::new();
+
+  let should_export_var = parent_namespace.is_none()
+    && is_top_level
+    && matches!(ctx.top_level_mode, TopLevelMode::Module)
+    && decl.stx.export
+    && !ctx.top_level_module_exports.contains(&namespace_name)
+    && ctx.emitted_export_var.insert(namespace_name.clone());
+
+  let has_top_level_value_binding = parent_namespace.is_none()
+    && is_top_level
+    && ctx.top_level_value_bindings.contains(&namespace_name);
+  let needs_var_decl =
+    parent_namespace.is_some() || !is_top_level || should_export_var || !has_top_level_value_binding;
+  if needs_var_decl {
+    out.push(ts_lower::var_decl_stmt(
+      loc,
+      namespace_name.clone(),
+      None,
+      should_export_var,
+      VarDeclMode::Var,
+    ));
+  }
+
+  let body = strip_namespace_body(ctx, decl.stx.body, &namespace_name);
+  let arg = namespace_iife_arg(loc, &namespace_name, parent_namespace);
+  out.push(ts_lower::iife_stmt(loc, namespace_name, arg, body));
+  out
+}
+
+fn strip_module_decl(
+  ctx: &mut StripContext<'_>,
+  decl: Node<ModuleDecl>,
+  loc: Loc,
+  assoc: NodeAssocData,
+  is_top_level: bool,
+  parent_namespace: Option<&str>,
+) -> Vec<Node<Stmt>> {
+  if decl.stx.declare {
+    return vec![];
+  }
+  let Some(body) = decl.stx.body else {
+    // Ambient modules may omit bodies; they are type-only.
+    return vec![];
+  };
+  let ModuleName::Identifier(name) = decl.stx.name else {
+    // String modules are used for module augmentation and have no runtime
+    // representation, even when not marked `declare`.
+    return vec![];
+  };
+
+  let ns_decl = Node::new(
+    decl.loc,
+    NamespaceDecl {
+      export: decl.stx.export,
+      declare: false,
+      name,
+      body: NamespaceBody::Block(body),
+    },
+  );
+  strip_namespace_decl(ctx, ns_decl, loc, assoc, is_top_level, parent_namespace)
 }
 
 fn strip_switch_branch(

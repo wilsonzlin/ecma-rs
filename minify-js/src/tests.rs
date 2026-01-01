@@ -318,3 +318,71 @@ fn drops_type_only_import_equals() {
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert!(parsed.stx.body.is_empty());
 }
+
+#[test]
+fn lowers_runtime_enums_to_parseable_js() {
+  let src = r#"
+    export enum Num { A, B = 5, C }
+    export enum Str { A = "a", B = `b` }
+    export declare enum Gone { A }
+  "#;
+  let (code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert!(!code.contains("Gone"));
+  assert_eq!(parsed.stx.body.len(), 4);
+
+  let first = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected enum var decl, got {other:?}"),
+  };
+  assert!(first.stx.export);
+
+  let third = match parsed.stx.body[2].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected enum var decl, got {other:?}"),
+  };
+  assert!(third.stx.export);
+}
+
+#[test]
+fn lowers_runtime_namespaces_to_parseable_js() {
+  let src = r#"
+    export namespace NS {
+      export const x: number = 1;
+      export function get() { return x; }
+      export namespace Inner {
+        export const y = 2;
+      }
+    }
+    export declare namespace Gone { export const z: number; }
+  "#;
+  let (code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert!(!code.contains("Gone"));
+  assert_eq!(parsed.stx.body.len(), 2);
+  let decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected namespace var decl, got {other:?}"),
+  };
+  assert!(decl.stx.export);
+}
+
+#[test]
+fn lowers_runtime_modules_to_parseable_js() {
+  let src = r#"
+    module Mod {
+      export const x = 1;
+    }
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+}
+
+#[test]
+fn minifies_ts_enums_and_namespaces_deterministically() {
+  let src = r#"
+    export enum E { A, B }
+    export namespace N { export const x = 1; }
+  "#;
+  let first = minified(TopLevelMode::Module, src);
+  let second = minified(TopLevelMode::Module, src);
+  assert_eq!(first, second);
+}
