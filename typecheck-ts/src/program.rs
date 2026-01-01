@@ -9327,7 +9327,12 @@ impl ProgramState {
                   continue;
                 }
                 let mapped = if let Some(annot) = param.typ {
-                  store.canon(convert_type_for_display(annot, self, store, &mut convert_cache))
+                  store.canon(convert_type_for_display(
+                    annot,
+                    self,
+                    store,
+                    &mut convert_cache,
+                  ))
                 } else {
                   store.primitive_ids().unknown
                 };

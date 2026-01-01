@@ -2409,7 +2409,10 @@ impl<'a> Checker<'a> {
   }
 
   fn jsx_apply_library_managed_attributes(&mut self, component: TypeId, props: TypeId) -> TypeId {
-    if matches!(self.store.type_kind(props), TypeKind::Any | TypeKind::Unknown) {
+    if matches!(
+      self.store.type_kind(props),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
       return props;
     }
     let Some(def) = self.jsx_library_managed_attributes_def_id() else {
@@ -2458,7 +2461,10 @@ impl<'a> Checker<'a> {
     self.jsx_collect_children_attribute_keys(attrs_ty, &mut candidates, &mut seen);
     candidates.sort();
     candidates.dedup();
-    let selected = candidates.into_iter().next().map(|name| self.store.intern_name(name));
+    let selected = candidates
+      .into_iter()
+      .next()
+      .map(|name| self.store.intern_name(name));
     self.jsx_element_attributes_prop_name = Some(selected);
     selected
   }
@@ -6120,10 +6126,10 @@ impl<'a> FlowBodyChecker<'a> {
           ) {
             (Some(binding), Some(prop)) => {
               let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
-             env
-               .get_path(&key)
-               .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
-             }
+              env
+                .get_path(&key)
+                .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
+            }
             _ => self.member_type(obj_ty_for_member, mem),
           };
           if mem.optional {

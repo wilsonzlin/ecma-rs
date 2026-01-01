@@ -641,7 +641,9 @@ declare const inst: FooInstance;
 const ok = <Foo x={1} ref={inst} key="k" />;
 const bad = <Foo x={1} ref={123} />;
 "#;
-  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
 
@@ -687,7 +689,9 @@ declare const Foo: { new (): FooInstance };
 const ok = <Foo x={1} />;
 const bad = <Foo y={1} />;
 "#;
-  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
 
@@ -729,7 +733,9 @@ function Foo(props: { x: number }): JSX.Element { return null as any; }
 const ok = <Foo x={1} managed="yes" />;
 const bad = <Foo x={1} managed={123} />;
 "#;
-  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
 

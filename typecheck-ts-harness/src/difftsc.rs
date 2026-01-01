@@ -1822,7 +1822,8 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 
   let mut diagnostics = diagnostics.clone();
   diagnostics.canonicalize_for_baseline();
-  let file = fs::File::create(path).with_context(|| format!("write baseline at {}", path.display()))?;
+  let file =
+    fs::File::create(path).with_context(|| format!("write baseline at {}", path.display()))?;
   let mut writer = BufWriter::new(file);
   serde_json::to_writer_pretty(&mut writer, &diagnostics)?;
   writeln!(writer)?;
