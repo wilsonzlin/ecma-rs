@@ -2942,7 +2942,21 @@ impl ProgramTypeResolver {
       };
       let symbol = self.semantics.resolve_export(*module, segment, ns)?;
       if is_last {
-        return self.pick_decl(symbol, final_ns);
+        if let Some(def) = self.pick_decl(symbol, final_ns) {
+          return Some(def);
+        }
+        if final_ns.contains(sem_ts::Namespace::VALUE) {
+          if let sem_ts::SymbolOrigin::Import { from, imported } =
+            &self.semantics.symbols().symbol(symbol).origin
+          {
+            if imported == "*" {
+              if let sem_ts::ModuleRef::File(dep_file) = from {
+                return self.module_namespace_defs.get(&FileId(dep_file.0)).copied();
+              }
+            }
+          }
+        }
+        return None;
       }
       *module = self.import_origin_file(symbol)?;
     }
@@ -5502,7 +5516,80 @@ impl ProgramState {
     let mut convert_cache = HashMap::new();
     for (file, namespace_def) in module_namespace_entries.into_iter() {
       let mut shape = tti::Shape::new();
-      if let Some(file_state) = self.files.get(&file) {
+      let sem_exports = self
+        .semantics
+        .as_ref()
+        .and_then(|semantics| semantics.exports_of_opt(sem_ts::FileId(file.0)));
+      if let (Some(semantics), Some(exports)) = (self.semantics.as_deref(), sem_exports) {
+        let symbols = semantics.symbols();
+        for (name, group) in exports.iter() {
+          if name == "default" {
+            continue;
+          }
+          let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) else {
+            continue;
+          };
+
+          let mut best_def: Option<(u8, DefId)> = None;
+          for decl_id in semantics.symbol_decls(symbol, sem_ts::Namespace::VALUE) {
+            let decl = symbols.decl(*decl_id);
+            let Some(def) = self.map_decl_to_program_def(decl, sem_ts::Namespace::VALUE) else {
+              continue;
+            };
+            let pri = self.def_priority(def, sem_ts::Namespace::VALUE);
+            if pri == u8::MAX {
+              continue;
+            }
+            best_def = match best_def {
+              Some((best_pri, best)) if best_pri < pri || (best_pri == pri && best < def) => {
+                Some((best_pri, best))
+              }
+              _ => Some((pri, def)),
+            };
+          }
+
+          let ty = if let Some((_, def)) = best_def {
+            def_types.get(&def).copied().unwrap_or(unknown)
+          } else if let sem_ts::SymbolOrigin::Import { from, imported } =
+            &symbols.symbol(symbol).origin
+          {
+            if imported == "*" {
+              match from {
+                sem_ts::ModuleRef::File(dep_file) => self
+                  .module_namespace_defs
+                  .get(&FileId(dep_file.0))
+                  .copied()
+                  .map(|dep_def| {
+                    store.canon(store.intern_type(tti::TypeKind::Ref {
+                      def: tti::DefId(dep_def.0),
+                      args: Vec::new(),
+                    }))
+                  })
+                  .unwrap_or(unknown),
+                _ => unknown,
+              }
+            } else {
+              unknown
+            }
+          } else {
+            unknown
+          };
+
+          let key = PropKey::String(store.intern_name(name.clone()));
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty,
+              optional: false,
+              readonly: true,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+      } else if let Some(file_state) = self.files.get(&file) {
         for (name, entry) in file_state.exports.iter() {
           let is_value_export = self
             .semantics

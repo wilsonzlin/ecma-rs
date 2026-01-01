@@ -631,6 +631,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
                 args: Vec::new(),
               });
             }
+          } else if let Some(def) = self.resolve_import_typeof_qualifier(import, names) {
+            return self.store.intern_type(TypeKind::Ref {
+              def: self.map_value_def(def),
+              args: Vec::new(),
+            });
           }
         }
         if let Some(def) = self.resolve_value_name(&name, names, None) {
@@ -1271,6 +1276,55 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self
       .module_namespace_defs
       .and_then(|defs| defs.get(&target_file).copied())
+  }
+
+  fn resolve_import_typeof_qualifier(
+    &self,
+    import: &hir_js::hir::TypeImportName,
+    names: &hir_js::NameInterner,
+  ) -> Option<DefId> {
+    let sem = self.semantics?;
+    let module = import.module.as_ref()?;
+    let qualifier_ids = import.qualifier.as_ref()?;
+    if qualifier_ids.is_empty() {
+      return None;
+    }
+    let from_key = self.file_key.as_ref()?;
+    let host = self.host?;
+    let target_key = host.resolve(from_key, module)?;
+    let mut current_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+
+    let mut segments = Vec::with_capacity(qualifier_ids.len());
+    for id in qualifier_ids.iter() {
+      segments.push(names.resolve(*id)?.to_string());
+    }
+
+    for (idx, segment) in segments.iter().enumerate() {
+      let is_last = idx + 1 == segments.len();
+      let ns = if is_last {
+        Namespace::VALUE
+      } else {
+        Namespace::NAMESPACE
+      };
+      let symbol = sem.resolve_export(current_file, segment, ns)?;
+      if is_last {
+        if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE) {
+          return Some(def);
+        }
+        if let SymbolOrigin::Import { from, imported } = &sem.symbols().symbol(symbol).origin {
+          if imported == "*" {
+            if let ModuleRef::File(from_file) = from {
+              return self
+                .module_namespace_defs
+                .and_then(|defs| defs.get(from_file).copied());
+            }
+          }
+        }
+        return None;
+      }
+      current_file = self.symbol_target_file(sem, symbol)?;
+    }
+    None
   }
 
   fn resolve_named_in_namespace(&self, name: &str, file: FileId, ns: Namespace) -> Option<DefId> {
