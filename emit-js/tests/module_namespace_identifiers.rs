@@ -61,10 +61,7 @@ fn import_type_alias_can_be_string_literal() {
 
 #[test]
 fn export_type_alias_can_be_string_literal() {
-  roundtrip(
-    "export type { a as \"a-b\" };",
-    "export type{a as\"a-b\"};",
-  );
+  roundtrip("export type { a as \"a-b\" };", "export type{a as\"a-b\"};");
 }
 
 #[test]
