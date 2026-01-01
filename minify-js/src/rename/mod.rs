@@ -7,7 +7,10 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
 use parse_js::ast::stmt::ExportListStmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::lex::KEYWORDS_MAPPING;
+use parse_js::parse::expr::pat::{is_valid_pattern_identifier, ParsePatternRules};
+use parse_js::Dialect;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};
 use semantic_js::js::{JsSemantics, ScopeId, ScopeKind, SymbolId, TopLevelMode};
 
@@ -337,7 +340,12 @@ impl NameGenerator {
 }
 
 fn reserved_names() -> HashSet<String> {
-  KEYWORDS_MAPPING.values().map(|s| s.to_string()).collect()
+  let mut names: HashSet<String> = KEYWORDS_MAPPING.values().map(|s| s.to_string()).collect();
+  // These are reserved words in JavaScript and cannot be used as binding identifiers.
+  names.insert("true".to_string());
+  names.insert("false".to_string());
+  names.insert("null".to_string());
+  names
 }
 
 pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, String> {
@@ -510,9 +518,8 @@ impl<'a> ApplyVisitor<'a> {
 impl<'a> ApplyVisitor<'a> {
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
     let sym = resolved_symbol(&node.assoc);
-    let len = node.stx.name.len();
-    let start = node.loc.0.saturating_sub(len);
-    let end = start + len;
+    let start = node.loc.0;
+    let end = start + node.stx.name.len();
     self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
@@ -521,17 +528,15 @@ impl<'a> ApplyVisitor<'a> {
       return;
     }
     let sym = resolved_symbol(&node.assoc);
-    let len = node.stx.name.len();
-    let start = node.loc.0.saturating_sub(len);
-    let end = start + len;
+    let start = node.loc.0;
+    let end = start + node.stx.name.len();
     self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
   fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
     let sym = declared_symbol(&node.assoc);
-    let len = node.stx.name.len();
     let start = node.loc.0;
-    let end = start + len;
+    let end = start + node.stx.name.len();
     self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
@@ -542,8 +547,13 @@ impl<'a> ApplyVisitor<'a> {
     let Some(new_name) = self.renames.get(&sym) else {
       return;
     };
-    let alias = &node.stx.alias.stx.name;
-    let replacement = if alias == new_name {
+    let alias_raw = &node.stx.alias.stx.name;
+    let alias = if is_module_binding_identifier_token(alias_raw) {
+      alias_raw.clone()
+    } else {
+      js_string_literal(alias_raw)
+    };
+    let replacement = if alias_raw == new_name {
       new_name.clone()
     } else {
       format!("{} as {}", new_name, alias)
@@ -585,4 +595,81 @@ pub fn rewrite_source(source: &str, replacements: &mut Vec<Replacement>) -> Stri
   }
   out.push_str(&source[cur..]);
   out
+}
+
+fn js_string_literal(value: &str) -> String {
+  let mut out = String::with_capacity(value.len() + 2);
+  out.push('"');
+  for ch in value.chars() {
+    match ch {
+      '"' => out.push_str("\\\""),
+      '\\' => out.push_str("\\\\"),
+      '\n' => out.push_str("\\n"),
+      '\r' => out.push_str("\\r"),
+      '\t' => out.push_str("\\t"),
+      '\u{0008}' => out.push_str("\\b"),
+      '\u{000C}' => out.push_str("\\f"),
+      // Line separators must be escaped in string literals.
+      '\u{2028}' => out.push_str("\\u2028"),
+      '\u{2029}' => out.push_str("\\u2029"),
+      c if c.is_control() => {
+        use std::fmt::Write;
+        let _ = write!(out, "\\x{:02x}", c as u32);
+      }
+      c => out.push(c),
+    }
+  }
+  out.push('"');
+  out
+}
+
+fn is_module_binding_identifier_token(name: &str) -> bool {
+  let mut lexer = Lexer::new(name);
+  let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Ts);
+  if token.loc.0 != 0 || token.loc.1 != name.len() {
+    return false;
+  }
+  is_valid_pattern_identifier(
+    token.typ,
+    ParsePatternRules {
+      await_allowed: false,
+      yield_allowed: true,
+    },
+  )
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use diagnostics::FileId;
+  use parse_js::{parse_with_options, ParseOptions, SourceType};
+  use semantic_js::js::bind_js;
+
+  #[test]
+  fn reserved_names_excludes_boolean_and_null_literals() {
+    let names = reserved_names();
+    assert!(names.contains("true"));
+    assert!(names.contains("false"));
+    assert!(names.contains("null"));
+  }
+
+  #[test]
+  fn rewrite_source_uses_node_locs_for_identifier_replacements() {
+    let source = "const foo=1;";
+    let mut ast = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Js,
+        source_type: SourceType::Module,
+      },
+    )
+    .expect("parse");
+    let (sem, _) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+    let usage = collect_usages(&mut ast, &sem, TopLevelMode::Module);
+    let renames = assign_names(&sem, &usage);
+
+    let mut replacements = apply_renames(&mut ast, &renames);
+    let rewritten = rewrite_source(source, &mut replacements);
+    assert_eq!(rewritten, "const a=1;");
+  }
 }
