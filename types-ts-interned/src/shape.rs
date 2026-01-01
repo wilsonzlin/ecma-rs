@@ -39,10 +39,10 @@ pub enum PropKey {
 }
 
 impl PropKey {
-  pub(crate) fn cmp_with(
+  pub(crate) fn cmp_with<'a>(
     &self,
     other: &Self,
-    resolve_name: &impl Fn(NameId) -> String,
+    resolve_name: &impl Fn(NameId) -> &'a str,
   ) -> std::cmp::Ordering {
     use PropKey::*;
     let discr = self.discriminant().cmp(&other.discriminant());
@@ -50,7 +50,7 @@ impl PropKey {
       return discr;
     }
     match (self, other) {
-      (String(a), String(b)) | (Symbol(a), Symbol(b)) => resolve_name(*a).cmp(&resolve_name(*b)),
+      (String(a), String(b)) | (Symbol(a), Symbol(b)) => resolve_name(*a).cmp(resolve_name(*b)),
       (Number(a), Number(b)) => a.cmp(b),
       _ => std::cmp::Ordering::Equal,
     }

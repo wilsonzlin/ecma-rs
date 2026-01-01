@@ -2503,7 +2503,7 @@ impl<'a> RelateCtx<'a> {
   fn find_property<'b>(&self, shape: &'b Shape, key: &PropKey) -> Option<&'b Property> {
     shape
       .properties
-      .binary_search_by(|p| p.key.cmp_with(key, &|id| self.store.name(id)))
+      .binary_search_by(|p| self.store.compare_prop_keys(&p.key, key))
       .ok()
       .map(|idx| &shape.properties[idx])
   }

@@ -92,13 +92,7 @@ impl Key {
       return discr;
     }
     match (self, other) {
-      (Key::Literal(a), Key::Literal(b)) => match (a, b) {
-        (PropKey::String(a), PropKey::String(b)) | (PropKey::Symbol(a), PropKey::Symbol(b)) => {
-          store.name(*a).cmp(&store.name(*b))
-        }
-        (PropKey::Number(a), PropKey::Number(b)) => a.cmp(b),
-        _ => Ordering::Equal,
-      },
+      (Key::Literal(a), Key::Literal(b)) => store.compare_prop_keys(a, b),
       _ => Ordering::Equal,
     }
   }

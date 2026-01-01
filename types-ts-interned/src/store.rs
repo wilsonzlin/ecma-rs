@@ -424,7 +424,7 @@ impl TypeStore {
 
   pub fn name(&self, id: NameId) -> String {
     let guard = self.names.read();
-    guard.name(id).to_owned()
+    guard.name(id).to_string()
   }
 
   pub fn intern_name(&self, name: impl Into<String>) -> NameId {
@@ -500,7 +500,7 @@ impl TypeStore {
       let names = self.names.read();
       shape
         .properties
-        .sort_by(|a, b| a.key.cmp_with(&b.key, &|id| names.name(id).to_owned()));
+        .sort_by(|a, b| a.key.cmp_with(&b.key, &|id| names.name(id)));
     }
     // Merge duplicate property keys deterministically by intersecting their
     // types, requiring presence if any declaration is required, propagating
@@ -591,7 +591,7 @@ impl TypeStore {
   /// names. This mirrors the ordering used when canonicalizing shapes.
   pub fn compare_prop_keys(&self, a: &crate::PropKey, b: &crate::PropKey) -> Ordering {
     let names = self.names.read();
-    a.cmp_with(b, &|id| names.name(id).to_owned())
+    a.cmp_with(b, &|id| names.name(id))
   }
 
   /// Deterministically compare two signatures using the same ordering applied
@@ -826,7 +826,10 @@ impl TypeStore {
     let ord = match (a_kind, b_kind) {
       (TypeKind::BooleanLiteral(a), TypeKind::BooleanLiteral(b)) => a.cmp(&b),
       (TypeKind::NumberLiteral(a), TypeKind::NumberLiteral(b)) => a.cmp(&b),
-      (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => self.name(a).cmp(&self.name(b)),
+      (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => {
+        let names = self.names.read();
+        names.name(a).cmp(names.name(b))
+      }
       (TypeKind::BigIntLiteral(a), TypeKind::BigIntLiteral(b)) => a.cmp(&b),
       (TypeKind::Union(a), TypeKind::Union(b)) => {
         self.composite_cmp(CompositeKind::Union(&a), CompositeKind::Union(&b))
@@ -1026,7 +1029,10 @@ impl TypeStore {
 
   fn compare_param_names(&self, a: Option<NameId>, b: Option<NameId>) -> Ordering {
     match (a, b) {
-      (Some(a), Some(b)) => self.name(a).cmp(&self.name(b)),
+      (Some(a), Some(b)) => {
+        let names = self.names.read();
+        names.name(a).cmp(names.name(b))
+      }
       (None, None) => Ordering::Equal,
       (Some(_), None) => Ordering::Greater,
       (None, Some(_)) => Ordering::Less,
@@ -1107,7 +1113,7 @@ impl TypeStore {
 
   fn compare_props(&self, a: &Property, b: &Property) -> Ordering {
     let names = self.names.read();
-    let ord = a.key.cmp_with(&b.key, &|id| names.name(id).to_owned());
+    let ord = a.key.cmp_with(&b.key, &|id| names.name(id));
     if ord != Ordering::Equal {
       return ord;
     }
