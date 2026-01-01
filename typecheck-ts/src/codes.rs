@@ -417,6 +417,20 @@ pub const JSX_UNKNOWN_INTRINSIC_ELEMENT: Code = Code::new(
   &[],
 );
 
+/// TC3003: JSX is enabled but required `JSX.*` namespace typings cannot be
+/// resolved.
+///
+/// - Primary span: the JSX element span that required missing typings.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const JSX_NAMESPACE_MISSING: Code = Code::new(
+  "TC3003",
+  "missing JSX namespace typings",
+  "JSX element span when JSX namespace types cannot be resolved",
+  &["primary: JSX element span"],
+  &[],
+);
+
 /// HOST0001: Host environment failed to provide required input.
 ///
 /// - Primary span: zero-length placeholder when no source span is available.

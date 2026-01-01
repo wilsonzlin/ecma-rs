@@ -630,6 +630,7 @@ pub fn check_body_with_expander(
     jsx_mode,
     jsx_element_ty: None,
     jsx_intrinsic_elements_ty: None,
+    jsx_namespace_missing_reported: false,
     expr_types,
     pat_types,
     expr_spans,
@@ -726,6 +727,7 @@ struct Checker<'a> {
   jsx_mode: Option<JsxMode>,
   jsx_element_ty: Option<TypeId>,
   jsx_intrinsic_elements_ty: Option<TypeId>,
+  jsx_namespace_missing_reported: bool,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -1669,7 +1671,7 @@ impl<'a> Checker<'a> {
       return prim.unknown;
     }
 
-    let element_ty = self.jsx_element_type();
+    let element_ty = self.jsx_element_type(elem.loc);
     let mut props_ty = prim.unknown;
 
     match &elem.stx.name {
@@ -1683,7 +1685,7 @@ impl<'a> Checker<'a> {
           .as_ref()
           .map(|ns| format!("{ns}:{}", name.stx.name));
         let tag = tag_buf.as_deref().unwrap_or_else(|| name.stx.name.as_str());
-        let intrinsic_elements = self.jsx_intrinsic_elements_type();
+        let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
         if intrinsic_elements != prim.unknown {
           let found = self.member_type(intrinsic_elements, tag);
           if found == prim.unknown {
@@ -1701,7 +1703,7 @@ impl<'a> Checker<'a> {
       Some(JsxElemName::Id(id)) => {
         let name = id.stx.name.as_str();
         if name.contains(':') || name.contains('-') {
-          let intrinsic_elements = self.jsx_intrinsic_elements_type();
+          let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
           if intrinsic_elements != prim.unknown {
             let found = self.member_type(intrinsic_elements, name);
             if found == prim.unknown {
@@ -1739,7 +1741,7 @@ impl<'a> Checker<'a> {
             tag.push('.');
             tag.push_str(segment);
           }
-          let intrinsic_elements = self.jsx_intrinsic_elements_type();
+          let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
           if intrinsic_elements != prim.unknown {
             let found = self.member_type(intrinsic_elements, &tag);
             if found == prim.unknown {
@@ -1898,26 +1900,41 @@ impl<'a> Checker<'a> {
     })))
   }
 
-  fn jsx_element_type(&mut self) -> TypeId {
+  fn report_jsx_namespace_missing(&mut self, loc: Loc) {
+    if self.jsx_namespace_missing_reported {
+      return;
+    }
+    self.jsx_namespace_missing_reported = true;
+    self.diagnostics.push(codes::JSX_NAMESPACE_MISSING.error(
+      "missing JSX namespace typings",
+      Span::new(self.file, loc_to_range(self.file, loc)),
+    ));
+  }
+
+  fn jsx_element_type(&mut self, loc: Loc) -> TypeId {
     if let Some(ty) = self.jsx_element_ty {
       return ty;
     }
     let prim = self.store.primitive_ids();
-    let ty = self
-      .resolve_type_ref(&["JSX", "Element"])
-      .unwrap_or(prim.unknown);
+    let resolved = self.resolve_type_ref(&["JSX", "Element"]);
+    if resolved.is_none() {
+      self.report_jsx_namespace_missing(loc);
+    }
+    let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_element_ty = Some(ty);
     ty
   }
 
-  fn jsx_intrinsic_elements_type(&mut self) -> TypeId {
+  fn jsx_intrinsic_elements_type(&mut self, loc: Loc) -> TypeId {
     if let Some(ty) = self.jsx_intrinsic_elements_ty {
       return ty;
     }
     let prim = self.store.primitive_ids();
-    let ty = self
-      .resolve_type_ref(&["JSX", "IntrinsicElements"])
-      .unwrap_or(prim.unknown);
+    let resolved = self.resolve_type_ref(&["JSX", "IntrinsicElements"]);
+    if resolved.is_none() {
+      self.report_jsx_namespace_missing(loc);
+    }
+    let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_intrinsic_elements_ty = Some(ty);
     ty
   }
