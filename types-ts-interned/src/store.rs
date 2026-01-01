@@ -545,9 +545,11 @@ impl TypeStore {
     shape.construct_signatures.dedup();
     shape
       .indexers
-      .sort_by(|a, b| match self.type_cmp(a.key_type, b.key_type) {
-        Ordering::Equal => self.type_cmp(a.value_type, b.value_type),
-        other => other,
+      .sort_by(|a, b| {
+        self
+          .type_cmp(a.key_type, b.key_type)
+          .then_with(|| self.type_cmp(a.value_type, b.value_type))
+          .then_with(|| a.readonly.cmp(&b.readonly))
       });
 
     self.insert_shape_direct(shape)
@@ -793,7 +795,7 @@ impl TypeStore {
     if discr != Ordering::Equal {
       return discr;
     }
-    match (a_kind, b_kind) {
+    let ord = match (a_kind, b_kind) {
       (TypeKind::BooleanLiteral(a), TypeKind::BooleanLiteral(b)) => a.cmp(&b),
       (TypeKind::NumberLiteral(a), TypeKind::NumberLiteral(b)) => a.cmp(&b),
       (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => self.name(a).cmp(&self.name(b)),
@@ -814,20 +816,7 @@ impl TypeStore {
         )
       }
       (TypeKind::Callable { overloads: a }, TypeKind::Callable { overloads: b }) => {
-        let mut idx = 0;
-        loop {
-          let Some(left) = a.get(idx) else {
-            return a.len().cmp(&b.len());
-          };
-          let Some(right) = b.get(idx) else {
-            return a.len().cmp(&b.len());
-          };
-          let ord = self.signature_cmp(*left, *right);
-          if ord != Ordering::Equal {
-            return ord;
-          }
-          idx += 1;
-        }
+        self.compare_signature_slices(&a, &b)
       }
       (
         TypeKind::Ref {
@@ -860,10 +849,10 @@ impl TypeStore {
         let mut idx = 0;
         loop {
           let Some(a_elem) = a.get(idx) else {
-            return a.len().cmp(&b.len());
+            break a.len().cmp(&b.len());
           };
           let Some(b_elem) = b.get(idx) else {
-            return a.len().cmp(&b.len());
+            break a.len().cmp(&b.len());
           };
           let ord = self
             .type_cmp(a_elem.ty, b_elem.ty)
@@ -871,7 +860,7 @@ impl TypeStore {
             .then_with(|| a_elem.rest.cmp(&b_elem.rest))
             .then_with(|| a_elem.readonly.cmp(&b_elem.readonly));
           if ord != Ordering::Equal {
-            return ord;
+            break ord;
           }
           idx += 1;
         }
@@ -967,7 +956,8 @@ impl TypeStore {
         .then_with(|| self.type_cmp(a_i, b_i)),
       (TypeKind::KeyOf(a), TypeKind::KeyOf(b)) => self.type_cmp(a, b),
       _ => Ordering::Equal,
-    }
+    };
+    ord.then_with(|| a.0.cmp(&b.0))
   }
 
   fn signature_cmp(&self, a: SignatureId, b: SignatureId) -> Ordering {

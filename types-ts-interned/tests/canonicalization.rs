@@ -1,6 +1,8 @@
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use types_ts_interned::Accessibility;
+use types_ts_interned::Indexer;
+use types_ts_interned::ObjectType;
 use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
@@ -298,4 +300,109 @@ fn canon_is_idempotent_for_new_variants() {
 
   let this_ty = store.intern_type(TypeKind::This);
   assert_eq!(this_ty, store.canon(store.canon(this_ty)));
+}
+
+#[test]
+fn shape_indexer_readonly_ordering_is_deterministic() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let mut shape_a = Shape::new();
+  shape_a.indexers.push(Indexer {
+    key_type: primitives.string,
+    value_type: primitives.number,
+    readonly: false,
+  });
+  shape_a.indexers.push(Indexer {
+    key_type: primitives.string,
+    value_type: primitives.number,
+    readonly: true,
+  });
+  let id_a = store.intern_shape(shape_a);
+
+  let mut shape_b = Shape::new();
+  shape_b.indexers.push(Indexer {
+    key_type: primitives.string,
+    value_type: primitives.number,
+    readonly: true,
+  });
+  shape_b.indexers.push(Indexer {
+    key_type: primitives.string,
+    value_type: primitives.number,
+    readonly: false,
+  });
+  let id_b = store.intern_shape(shape_b);
+
+  assert_eq!(id_a, id_b);
+  assert_eq!(
+    store.shape(id_a).indexers,
+    vec![
+      Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      },
+      Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: true,
+      },
+    ]
+  );
+}
+
+#[test]
+fn union_canonicalization_is_deterministic_when_type_cmp_collides() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let name = store.intern_name("x");
+
+  let mut shape_a = Shape::new();
+  shape_a.properties.push(Property {
+    key: PropKey::String(name),
+    data: PropData {
+      ty: primitives.string,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: Some(1),
+      declared_on: None,
+    },
+  });
+  let mut shape_b = Shape::new();
+  shape_b.properties.push(Property {
+    key: PropKey::String(name),
+    data: PropData {
+      ty: primitives.string,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: Some(2),
+      declared_on: None,
+    },
+  });
+
+  let ty_a = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(shape_a),
+  })));
+  let ty_b = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(shape_b),
+  })));
+
+  assert_ne!(ty_a, ty_b);
+
+  let union_ab = store.union(vec![ty_a, ty_b]);
+  let union_ba = store.union(vec![ty_b, ty_a]);
+  assert_eq!(union_ab, union_ba);
+
+  let members = match store.type_kind(union_ab) {
+    TypeKind::Union(members) => members,
+    other => panic!("expected union, got {:?}", other),
+  };
+
+  let mut expected = vec![ty_a, ty_b];
+  expected.sort();
+  assert_eq!(members, expected);
 }
