@@ -165,7 +165,11 @@ fn default_libs_resolve_global_types() {
   let file_id = program
     .file_id(&FileKey::new(fixture.name.clone()))
     .expect("file id");
-  let defs = program.definitions_in_file(file_id);
+  let defs: Vec<_> = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .filter(|def| program.def_name(*def).is_some())
+    .collect();
   assert!(
     !defs.is_empty(),
     "expected definitions for {}, found none",
