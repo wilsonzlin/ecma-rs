@@ -2355,11 +2355,18 @@ impl<'a> RelateCtx<'a> {
       (Accessibility::Public, Accessibility::Public) => true,
       (Accessibility::Public, _) | (_, Accessibility::Public) => false,
       (a, b) if a != b => false,
-      _ => self
-        .hooks
-        .is_same_origin_private_member
-        .map(|cb| cb(src, dst))
-        .unwrap_or(false),
+      _ => {
+        if let Some(cb) = self.hooks.is_same_origin_private_member {
+          return cb(src, dst);
+        }
+        match (src.data.declared_on, dst.data.declared_on) {
+          (Some(left), Some(right)) if left == right => true,
+          _ => match (src.data.origin, dst.data.origin) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+          },
+        }
+      }
     }
   }
 

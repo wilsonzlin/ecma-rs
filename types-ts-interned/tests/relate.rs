@@ -602,6 +602,57 @@ fn private_member_hook() {
 }
 
 #[test]
+fn private_members_with_same_origin_are_compatible_by_default() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let private_prop_src = Property {
+    key: PropKey::String(store.intern_name("p")),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: Some(Accessibility::Private),
+      is_method: false,
+      origin: Some(1),
+      declared_on: Some(DefId(1)),
+    },
+  };
+  let private_prop_dst = Property {
+    key: PropKey::String(store.intern_name("p")),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: Some(Accessibility::Private),
+      is_method: false,
+      origin: Some(1),
+      declared_on: Some(DefId(1)),
+    },
+  };
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![private_prop_src],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![private_prop_dst],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx.is_assignable(src, dst));
+}
+
+#[test]
 fn protected_members_require_same_origin() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
