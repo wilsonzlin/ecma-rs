@@ -2,7 +2,7 @@ use crate::{ts_lower, Diagnostic, TopLevelMode};
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, Span};
 use parse_js::ast::class_or_object::{
-  ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType,
+  ClassMember, ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::jsx::*;
 use parse_js::ast::expr::lit::LitNullExpr;
@@ -22,6 +22,7 @@ use parse_js::ast::ts_stmt::{
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
+use parse_js::token::TT;
 use std::collections::{HashMap, HashSet};
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
@@ -1088,7 +1089,33 @@ fn rewrite_enum_member_refs(
           }
         }
         ObjMemberType::Rest { val } => self.rewrite_expr(val),
-        ObjMemberType::Shorthand { .. } => {}
+        ObjMemberType::Shorthand { id } => {
+          if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) {
+            let loc = id.loc;
+            let member_name = id.stx.name.clone();
+            let key = ClassOrObjKey::Direct(Node::new(
+              loc,
+              ClassOrObjMemberDirectKey {
+                key: member_name.clone(),
+                tt: TT::Identifier,
+              },
+            ));
+            let mut value = Node::new(
+              loc,
+              Expr::Id(Node::new(
+                loc,
+                IdExpr {
+                  name: member_name.clone(),
+                },
+              )),
+            );
+            self.replace_with_member_access(&mut value, member_name);
+            member.stx.typ = ObjMemberType::Valued {
+              key,
+              val: ClassOrObjVal::Prop(Some(value)),
+            };
+          }
+        }
       }
     }
 
