@@ -1,1 +1,9 @@
 /bench/_input/*.js linguist-vendored
+
+# Keep line endings stable across platforms so `cargo fmt --all --check` output
+# is reproducible (especially for Windows contributors).
+*.rs text eol=lf
+*.toml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.md text eol=lf
