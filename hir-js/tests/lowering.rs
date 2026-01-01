@@ -6,6 +6,7 @@ use hir_js::lower_from_source_with_kind;
 use hir_js::BodyId;
 use hir_js::BodyKind;
 use hir_js::DefKind;
+use hir_js::DefTypeInfo;
 use hir_js::ExportDefaultValue;
 use hir_js::ExportKind;
 use hir_js::ExprId;
@@ -1602,6 +1603,83 @@ fn namespace_members_have_parent_and_export_flag() {
     interface.is_exported,
     "I should be marked exported from Inner namespace"
   );
+}
+
+#[test]
+fn namespace_type_info_members_exclude_nested_function_locals() {
+  let source =
+    r#"export namespace NS { export function f(){ const x = 1; function g(){} } export const y = 2; }"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} {kind:?} definition"))
+  };
+
+  let ns = find_def(DefKind::Namespace, "NS");
+  let f = find_def(DefKind::Function, "f");
+  let y = find_def(DefKind::Var, "y");
+  let x = find_def(DefKind::Var, "x");
+  let g = find_def(DefKind::Function, "g");
+
+  let members = match ns.type_info.as_ref() {
+    Some(DefTypeInfo::Namespace { members }) => members,
+    other => panic!("expected namespace type info, got {other:?}"),
+  };
+
+  assert!(members.contains(&f.id), "NS members should include exported function f");
+  assert!(members.contains(&y.id), "NS members should include exported const y");
+  assert!(
+    !members.contains(&x.id),
+    "NS members should not include nested function local x"
+  );
+  assert!(
+    !members.contains(&g.id),
+    "NS members should not include nested function local g"
+  );
+
+  assert_eq!(f.parent, Some(ns.id), "f should be a direct namespace member");
+  assert_eq!(y.parent, Some(ns.id), "y should be a direct namespace member");
+  assert_eq!(x.parent, Some(f.id), "x should be scoped to function f");
+  assert_eq!(g.parent, Some(f.id), "g should be scoped to function f");
+}
+
+#[test]
+fn module_type_info_members_exclude_nested_function_locals() {
+  let source = r#"declare module "m" { export function f(){ const x=1 } }"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} {kind:?} definition"))
+  };
+
+  let module = find_def(DefKind::Module, "\"m\"");
+  let f = find_def(DefKind::Function, "f");
+  let x = find_def(DefKind::Var, "x");
+
+  let members = match module.type_info.as_ref() {
+    Some(DefTypeInfo::Namespace { members }) => members,
+    other => panic!("expected module namespace type info, got {other:?}"),
+  };
+
+  assert!(
+    members.contains(&f.id),
+    "module \"m\" members should include exported function f"
+  );
+  assert!(
+    !members.contains(&x.id),
+    "module \"m\" members should not include nested function local x"
+  );
+
+  assert_eq!(f.parent, Some(module.id), "f should be a direct module member");
+  assert_eq!(x.parent, Some(f.id), "x should be scoped to function f");
 }
 
 #[test]

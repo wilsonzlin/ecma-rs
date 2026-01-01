@@ -209,8 +209,8 @@ enum TypeSource<'a> {
   ClassExpr(&'a Node<parse_js::ast::expr::ClassExpr>),
   AmbientClass(&'a Node<AmbientClassDecl>),
   Enum(&'a Node<EnumDecl>),
-  Namespace(&'a Node<NamespaceDecl>),
-  Module(&'a Node<ModuleDecl>),
+  Namespace,
+  Module,
 }
 
 #[derive(Debug)]
@@ -527,7 +527,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
   let mut span_map = SpanMap::new();
   let mut defs = Vec::with_capacity(descriptors.len());
   let mut types = BTreeMap::new();
-  let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
+  let mut pending_namespaces: Vec<DefId> = Vec::new();
   let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
@@ -610,14 +610,12 @@ pub fn lower_file_with_diagnostics_with_cancellation(
 
     if let Some(type_source) = desc.type_source {
       match type_source {
-        TypeSource::Namespace(ns) => {
-          let span = ns.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
+        TypeSource::Namespace => {
+          pending_namespaces.push(def_id);
           types.entry(def_id).or_default();
         }
-        TypeSource::Module(module) => {
-          let span = module.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
+        TypeSource::Module => {
+          pending_namespaces.push(def_id);
           types.entry(def_id).or_default();
         }
         other => {
@@ -631,7 +629,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
             TypeSource::ClassExpr(class) => type_lowerer.lower_class_expr(class),
             TypeSource::AmbientClass(class) => type_lowerer.lower_ambient_class(class),
             TypeSource::Enum(en) => type_lowerer.lower_enum(en),
-            TypeSource::Namespace(_) | TypeSource::Module(_) => unreachable!("handled above"),
+            TypeSource::Namespace | TypeSource::Module => unreachable!("handled above"),
           });
         }
       }
@@ -681,10 +679,10 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     .map(|(idx, def)| (def.id, idx))
     .collect();
 
-  for (def_id, span) in pending_namespaces {
+  for def_id in pending_namespaces {
     ctx.check_cancelled();
     if let Some(idx) = id_to_index.get(&def_id) {
-      let members = collect_namespace_members(def_id, span, &defs);
+      let members = collect_namespace_members(def_id, &defs);
       if let Some(def) = defs.get_mut(*idx) {
         def.type_info = Some(DefTypeInfo::Namespace { members });
       }
@@ -740,18 +738,14 @@ pub fn lower_file(file: FileId, file_kind: FileKind, ast: &Node<TopLevel>) -> Lo
   lower_file_with_diagnostics(file, file_kind, ast).0
 }
 
-fn collect_namespace_members(def_id: DefId, span: TextRange, defs: &[DefData]) -> Vec<DefId> {
+fn collect_namespace_members(def_id: DefId, defs: &[DefData]) -> Vec<DefId> {
   let mut members: Vec<DefId> = defs
     .iter()
-    .filter(|def| def.id != def_id && span_contains(span, def.span))
+    .filter(|def| def.parent == Some(def_id))
     .map(|def| def.id)
     .collect();
   members.sort();
   members
-}
-
-fn span_contains(container: TextRange, inner: TextRange) -> bool {
-  inner.start >= container.start && inner.end <= container.end
 }
 
 fn empty_body(owner: DefId, kind: BodyKind, span: TextRange) -> Body {
@@ -2366,7 +2360,7 @@ fn collect_stmt<'a>(
       desc.parent = parent;
       desc.node = Some(module_raw);
       desc.is_exported = exported;
-      desc.type_source = Some(TypeSource::Module(module));
+      desc.type_source = Some(TypeSource::Module);
       descriptors.push(desc);
       if module.stx.export {
         if module_item {
@@ -2401,9 +2395,6 @@ fn collect_stmt<'a>(
         let members_exported_by_default =
           decl_ambient || matches!(module.stx.name, ModuleName::String(_));
         for desc in descriptors.iter_mut().skip(body_start) {
-          if desc.parent.is_none() {
-            desc.parent = Some(module_raw);
-          }
           // Ambient modules export their declarations without `export` modifiers.
           if desc.parent == Some(module_raw) && members_exported_by_default {
             desc.is_exported = true;
@@ -2918,6 +2909,7 @@ fn collect_class_members<'a>(
         } else {
           DefKind::Method
         };
+        let method_raw = RawNode::from(method);
         let mut desc = DefDescriptor::new(
           kind,
           name_id,
@@ -2931,7 +2923,6 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        let method_raw = RawNode::from(method);
         ctx.with_parent(Some(method_raw), |ctx| {
           collect_func_params(
             &method.stx.func,
@@ -2955,6 +2946,7 @@ fn collect_class_members<'a>(
       }
       ClassOrObjVal::Getter(getter) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let getter_raw = RawNode::from(getter);
         let mut desc = DefDescriptor::new(
           DefKind::Method,
           name_id,
@@ -2968,7 +2960,6 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        let getter_raw = RawNode::from(getter);
         ctx.with_parent(Some(getter_raw), |ctx| {
           collect_func_params(
             &getter.stx.func,
@@ -2992,6 +2983,7 @@ fn collect_class_members<'a>(
       }
       ClassOrObjVal::Setter(setter) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let setter_raw = RawNode::from(setter);
         let mut desc = DefDescriptor::new(
           DefKind::Method,
           name_id,
@@ -3005,7 +2997,6 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        let setter_raw = RawNode::from(setter);
         ctx.with_parent(Some(setter_raw), |ctx| {
           collect_func_params(
             &setter.stx.func,
@@ -3059,6 +3050,7 @@ fn collect_class_members<'a>(
       ClassOrObjVal::StaticBlock(block) => {
         let name_id = names.intern("<static_block>");
         let name_text = names.resolve(name_id).unwrap().to_string();
+        let block_raw = RawNode::from(block);
         let mut desc = DefDescriptor::new(
           DefKind::Method,
           name_id,
@@ -3072,7 +3064,6 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = true;
         descriptors.push(desc);
-        let block_raw = RawNode::from(block);
         ctx.with_parent(Some(block_raw), |ctx| {
           for stmt in block.stx.body.iter() {
             collect_stmt(
@@ -3125,9 +3116,8 @@ fn collect_namespace<'a>(
   // Nested namespaces (e.g. `namespace A.B {}`) are implicitly exported from
   // their containing namespace or module.
   desc.is_exported = ns.stx.export || parent.is_some();
-  desc.type_source = Some(TypeSource::Namespace(ns));
+  desc.type_source = Some(TypeSource::Namespace);
   descriptors.push(desc);
-  let body_start = descriptors.len();
   ctx.with_parent(Some(ns_raw), |ctx| match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
       for st in stmts.iter() {
@@ -3158,11 +3148,6 @@ fn collect_namespace<'a>(
       );
     }
   });
-  for desc in descriptors.iter_mut().skip(body_start) {
-    if desc.parent.is_none() {
-      desc.parent = Some(ns_raw);
-    }
-  }
 }
 
 fn collect_var_decl<'a>(
