@@ -1,0 +1,15 @@
+{
+  "$t": "Import",
+  "attributes": null,
+  "default": null,
+  "module": "mod",
+  "names": {
+    "All": {
+      "pat": {
+        "$t": "Id",
+        "name": "ns-name"
+      }
+    }
+  },
+  "type_only": true
+}

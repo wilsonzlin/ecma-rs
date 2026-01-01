@@ -176,7 +176,16 @@ impl<'a> Parser<'a> {
       None
     } else if self.consume_if(TT::Asterisk).is_match() {
       self.require(TT::KeywordAs)?;
-      let alias = self.id_pat_decl(ctx)?;
+      let alias = if self.peek().typ == TT::LiteralString {
+        // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
+        let t = self.peek();
+        let name = self.lit_str_val()?;
+        Node::new(t.loc, IdPat { name })
+          .into_wrapped()
+          .wrap(|pat| PatDecl { pat })
+      } else {
+        self.id_pat_decl(ctx)?
+      };
       Some(ImportNames::All(alias))
     } else if self.peek().typ == TT::BraceOpen {
       self.require(TT::BraceOpen)?;
@@ -495,5 +504,19 @@ impl<'a> Parser<'a> {
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
     Ok(stmt)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::{parse_with_options, Dialect, ParseOptions, SourceType};
+
+  #[test]
+  fn import_default_named_specifier_requires_alias() {
+    let opts = ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    };
+    assert!(parse_with_options("import { default } from \"mod\";", opts).is_err());
   }
 }

@@ -44,6 +44,14 @@ fn export_star_alias_can_be_string_literal() {
 }
 
 #[test]
+fn import_star_alias_can_be_string_literal() {
+  roundtrip(
+    "import * as \"ns-name\" from \"mod\";",
+    "import*as\"ns-name\"from\"mod\";",
+  );
+}
+
+#[test]
 fn import_alias_can_be_string_literal() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",
@@ -72,6 +80,14 @@ fn import_type_alias_can_be_string_literal() {
   roundtrip(
     "import type { \"a-b\" as \"c-d\" } from \"x\";",
     "import type{\"a-b\"as\"c-d\"}from\"x\";",
+  );
+}
+
+#[test]
+fn import_type_star_alias_can_be_string_literal() {
+  roundtrip(
+    "import type * as \"ns-name\" from \"mod\";",
+    "import type*as\"ns-name\"from\"mod\";",
   );
 }
 

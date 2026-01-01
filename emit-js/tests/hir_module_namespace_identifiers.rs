@@ -47,6 +47,14 @@ fn hir_emits_string_literal_export_star_alias() {
 }
 
 #[test]
+fn hir_emits_string_literal_namespace_import_alias() {
+  roundtrip(
+    "import * as \"ns-name\" from \"mod\";",
+    "import*as\"ns-name\"from\"mod\";",
+  );
+}
+
+#[test]
 fn hir_emits_string_literal_import_alias() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",

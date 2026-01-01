@@ -711,7 +711,12 @@ fn emit_import_names(em: &mut Emitter, names: &ImportNames) -> EmitResult {
     ImportNames::All(alias) => {
       em.write_punct("*");
       em.write_keyword("as");
-      emit_pat_decl(em, alias)
+      if let Some(name) = pat_decl_ident_name(alias) {
+        emit_module_binding_identifier_or_string_literal(em, name);
+        Ok(())
+      } else {
+        emit_pat_decl(em, alias)
+      }
     }
     ImportNames::Specific(list) => {
       em.write_punct("{");

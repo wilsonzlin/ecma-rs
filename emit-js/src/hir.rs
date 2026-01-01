@@ -262,7 +262,7 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
     }
     em.write_punct("*");
     em.write_keyword("as");
-    em.write_identifier(ctx.name(ns.local));
+    emit_module_binding_identifier_or_string_literal(em, ctx.name(ns.local));
     wrote = true;
   }
   if !named_specifiers.is_empty() {
