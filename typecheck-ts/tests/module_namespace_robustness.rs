@@ -25,7 +25,10 @@ fn snapshot_roundtrip_preserves_export_star_as_namespace() {
   let ns_entry = exports.get("ns").expect("ns export preserved in snapshot");
   let ns_ty = ns_entry.type_id.expect("type for ns export");
 
-  assert_eq!(restored.display_type(ns_ty).to_string(), "{ readonly value: number }");
+  assert_eq!(
+    restored.display_type(ns_ty).to_string(),
+    "{ readonly value: number }"
+  );
 }
 
 #[test]
@@ -76,4 +79,3 @@ fn export_star_as_namespace_is_cycle_safe() {
     "namespace exports should render to a non-empty type"
   );
 }
-
