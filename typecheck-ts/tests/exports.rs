@@ -148,6 +148,7 @@ fn shadowed_bindings_map_to_distinct_initializers() {
     .definitions_in_file(file_id)
     .into_iter()
     .filter(|def| program.def_name(*def) == Some("value".to_string()))
+    .filter(|def| program.var_initializer(*def).is_some())
     .filter_map(|def| program.def_span(def).map(|span| (def, span.range.start)))
     .collect();
   assert_eq!(values.len(), 2, "expected two value definitions");

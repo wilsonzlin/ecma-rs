@@ -4178,11 +4178,45 @@ impl ProgramState {
     if ns.contains(sem_ts::Namespace::VALUE) {
       return match &data.kind {
         DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
-        DefKind::Var(var) if var.body.0 != u32::MAX => 1,
+        DefKind::Var(var) => {
+          let (hir_kind, hir_parent) = self
+            .hir_lowered
+            .get(&data.file)
+            .and_then(|lowered| {
+              lowered
+                .def(def)
+                .map(|hir_def| (hir_def.path.kind, hir_def.parent))
+            })
+            .unwrap_or((HirDefKind::Unknown, None));
+          if matches!(hir_kind, HirDefKind::VarDeclarator) {
+            return 6;
+          }
+
+          let has_initializer = if matches!(hir_kind, HirDefKind::Var) {
+            hir_parent
+              .and_then(|parent| {
+                self
+                  .hir_lowered
+                  .get(&data.file)
+                  .and_then(|lowered| lowered.def(parent))
+              })
+              .is_some_and(|parent_def| {
+                matches!(parent_def.path.kind, HirDefKind::VarDeclarator)
+                  && parent_def.body.is_some()
+              })
+          } else {
+            false
+          };
+
+          if has_initializer || var.body.0 != u32::MAX {
+            1
+          } else {
+            4
+          }
+        }
         DefKind::Namespace(_) | DefKind::Module(_) => 2,
         DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
-        DefKind::Var(_) => 4,
-        DefKind::VarDeclarator(_) => 5,
+        DefKind::VarDeclarator(_) => u8::MAX,
         DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }
@@ -4606,17 +4640,10 @@ impl ProgramState {
       let value_def = self
         .def_data
         .iter()
-        .find_map(|(id, data)| match &data.kind {
-          DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_)
-            if data.file == file && data.name == name =>
-          {
-            Some(*id)
-          }
-          DefKind::Var(var) if data.file == file && data.name == name && var.body.0 != u32::MAX => {
-            Some(*id)
-          }
-          _ => None,
-        });
+        .filter(|(_, data)| data.file == file && data.name == name)
+        .map(|(id, _)| *id)
+        .filter(|id| self.def_priority(*id, sem_ts::Namespace::VALUE) != u8::MAX)
+        .min_by_key(|id| (self.def_priority(*id, sem_ts::Namespace::VALUE), id.0));
       if let (Some(ns_def), Some(val_def)) = (ns_def, value_def) {
         let mut val_interned = self
           .def_types
@@ -6432,7 +6459,7 @@ impl ProgramState {
           });
       }
 
-      if data.export {
+      if data.export && !is_var_declarator {
         let export_name = if def.is_default_export {
           "default".to_string()
         } else {
@@ -11618,31 +11645,6 @@ impl ProgramState {
           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
           let annotated_raw = declared_ann.or(var.typ);
           let annotated = annotated_raw;
-          if std::env::var("DEBUG_VAR_DECL").is_ok() {
-            let describe = |ty: Option<TypeId>, state: &ProgramState| -> String {
-              let Some(ty) = ty else {
-                return "<none>".to_string();
-              };
-              if let Some(store) = state.interned_store.as_ref() {
-                if store.contains_type_id(ty) {
-                  return format!("interned {:?} ({:?})", store.type_kind(store.canon(ty)), ty);
-                }
-              }
-              if state.type_store.contains_id(ty) {
-                return format!("legacy {:?} ({:?})", state.type_store.kind(ty), ty);
-              }
-              format!("untracked ({:?})", ty)
-            };
-            eprintln!(
-              "DEBUG_VAR_DECL {} def {:?} span {:?} declared={} var_typ={} annotated={}",
-              def_data.name,
-              def,
-              def_data.span,
-              describe(declared_ann, self),
-              describe(var.typ, self),
-              describe(annotated_raw, self)
-            );
-          }
           if let Some(annotated) = annotated {
             if let Some(store) = self.interned_store.as_ref() {
               if store.contains_type_id(annotated) {
