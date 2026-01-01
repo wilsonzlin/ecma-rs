@@ -480,10 +480,10 @@ fn drops_type_only_import_equals() {
 #[test]
 fn lowers_runtime_enums_to_parseable_js() {
   let src = r#"
-    export enum Num { A, B = 5, C }
-    export enum Str { A = "a", B = `b` }
-    export declare enum Gone { A }
-  "#;
+     export enum Num { A, B = 5, C }
+     export enum Str { A = "a", B = `b` }
+     export declare enum Gone { A }
+   "#;
   let (code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert!(!code.contains("Gone"));
   assert_eq!(parsed.stx.body.len(), 4);
@@ -502,10 +502,67 @@ fn lowers_runtime_enums_to_parseable_js() {
 }
 
 #[test]
+fn lowers_const_enums_to_runtime_js() {
+  let src = r#"const enum E { A = 1, B = A } const x = E.B;"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 3);
+  let enum_var = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected enum var decl, got {other:?}"),
+  };
+  assert_eq!(enum_var.stx.mode, VarDeclMode::Var);
+  let name = enum_var
+    .stx
+    .declarators
+    .first()
+    .expect("enum declarator")
+    .pattern
+    .stx
+    .pat
+    .stx
+    .as_ref();
+  match name {
+    parse_js::ast::expr::pat::Pat::Id(id) => assert_eq!(id.stx.name, "E"),
+    other => panic!("expected identifier pattern, got {other:?}"),
+  };
+  assert!(matches!(parsed.stx.body[1].stx.as_ref(), Stmt::Expr(_)));
+  let x_decl = match parsed.stx.body[2].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected x var decl, got {other:?}"),
+  };
+  let initializer = x_decl
+    .stx
+    .declarators
+    .first()
+    .and_then(|decl| decl.initializer.as_ref())
+    .expect("initializer should exist");
+  match initializer.stx.as_ref() {
+    Expr::Member(member) => {
+      assert_eq!(member.stx.right, "B");
+      match member.stx.left.stx.as_ref() {
+        Expr::Id(id) => assert_eq!(id.stx.name, "E"),
+        other => panic!("expected enum identifier, got {other:?}"),
+      }
+    }
+    other => panic!("expected enum member reference, got {other:?}"),
+  }
+}
+
+#[test]
 fn lowers_runtime_namespaces_to_parseable_js() {
   let src = r#"
-    export namespace NS {
-      export const x: number = 1;
+     export namespace NS {
+       export const x: number = 1;
       export function get() { return x; }
       export namespace Inner {
         export const y = 2;

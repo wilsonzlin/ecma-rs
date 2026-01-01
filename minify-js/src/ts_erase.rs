@@ -332,7 +332,7 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
         }
       }
       Stmt::EnumDecl(enum_decl) => {
-        if !enum_decl.stx.declare && !enum_decl.stx.const_ {
+        if !enum_decl.stx.declare {
           names.insert(enum_decl.stx.name.clone());
         }
       }
@@ -1591,7 +1591,7 @@ fn strip_enum_decl(
   is_top_level: bool,
   parent_namespace: Option<&str>,
 ) -> Vec<Node<Stmt>> {
-  if decl.stx.declare || decl.stx.const_ {
+  if decl.stx.declare {
     return vec![];
   }
 
