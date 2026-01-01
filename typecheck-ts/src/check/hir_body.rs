@@ -1596,8 +1596,24 @@ impl<'a> Checker<'a> {
       AstExpr::ComputedMember(mem) => {
         let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.object);
-        let _ = self.check_expr(&mem.stx.member);
-        let mut ty = self.member_type(obj_ty, "<computed>");
+        let key_ty = self.check_expr(&mem.stx.member);
+
+        let literal_key = match mem.stx.member.stx.as_ref() {
+          AstExpr::LitStr(s) => Some(s.stx.value.clone()),
+          AstExpr::LitNum(n) => Some(n.stx.value.0.to_string()),
+          AstExpr::LitBigInt(v) => Some(v.stx.value.clone()),
+          _ => match self.store.type_kind(key_ty) {
+            TypeKind::StringLiteral(id) => Some(self.store.name(id).to_string()),
+            TypeKind::NumberLiteral(num) => Some(num.0.to_string()),
+            _ => None,
+          },
+        };
+
+        let mut ty = if let Some(key) = literal_key {
+          self.member_type(obj_ty, &key)
+        } else {
+          self.member_type_for_index_key(obj_ty, key_ty)
+        };
         if self.relate.options.no_unchecked_indexed_access {
           ty = self.store.union(vec![ty, prim.undefined]);
         }
@@ -2161,11 +2177,26 @@ impl<'a> Checker<'a> {
         if prop == "call" && !shape.call_signatures.is_empty() {
           return self.build_call_method_type(shape.call_signatures.clone());
         }
-        shape
-          .indexers
-          .first()
-          .map(|idx| idx.value_type)
-          .unwrap_or(prim.unknown)
+        let key = if let Some(idx) = parse_canonical_index_str(prop) {
+          PropKey::Number(idx)
+        } else {
+          PropKey::String(self.store.intern_name(prop))
+        };
+        let mut matches = Vec::new();
+        for idxer in shape.indexers.iter() {
+          if crate::type_queries::indexer_accepts_key(&key, idxer.key_type, &self.store) {
+            matches.push(idxer.value_type);
+          }
+        }
+        if matches.is_empty() {
+          prim.unknown
+        } else if matches.len() == 1 {
+          matches[0]
+        } else {
+          matches.sort_by(|a, b| self.store.type_cmp(*a, *b));
+          matches.dedup();
+          self.store.union(matches)
+        }
       }
       TypeKind::Union(members) => {
         let mut collected = Vec::new();
@@ -2200,6 +2231,150 @@ impl<'a> Checker<'a> {
       TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
       _ => prim.unknown,
     }
+  }
+
+  fn member_type_for_index_key(&mut self, obj: TypeId, key_ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let key_ty = self.store.canon(key_ty);
+
+    match self.store.type_kind(key_ty) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(obj, member));
+        }
+        return self.store.union(collected);
+      }
+      TypeKind::Intersection(members) => {
+        // Keep this conservative: treat intersections of key types similarly to unions.
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(obj, member));
+        }
+        return self.store.union(collected);
+      }
+      _ => {}
+    }
+
+    match self.store.type_kind(obj) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(member, key_ty));
+        }
+        self.store.union(collected)
+      }
+      TypeKind::Intersection(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(member, key_ty));
+        }
+        self.store.intersection(collected)
+      }
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.member_type_for_index_key(expanded, key_ty))
+        .unwrap_or(prim.unknown),
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        let mut matches = Vec::new();
+        for idx in shape.indexers.iter() {
+          if self.indexer_key_matches(idx.key_type, key_ty) {
+            matches.push(idx.value_type);
+          }
+        }
+        if matches.is_empty() {
+          prim.unknown
+        } else if matches.len() == 1 {
+          matches[0]
+        } else {
+          matches.sort_by(|a, b| self.store.type_cmp(*a, *b));
+          matches.dedup();
+          self.store.union(matches)
+        }
+      }
+      TypeKind::Array { ty, .. } => {
+        if self.relate.is_assignable(key_ty, prim.number) {
+          ty
+        } else {
+          prim.unknown
+        }
+      }
+      TypeKind::Tuple(elems) => match self.store.type_kind(key_ty) {
+        TypeKind::NumberLiteral(num) => {
+          let raw = num.0;
+          if raw.fract() != 0.0 || raw < 0.0 {
+            return prim.unknown;
+          }
+          let idx = raw as usize;
+          if let Some(elem) = elems.get(idx) {
+            let mut ty = elem.ty;
+            if elem.optional && !self.relate.options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            ty
+          } else {
+            prim.undefined
+          }
+        }
+        _ => {
+          if !self.relate.is_assignable(key_ty, prim.number) {
+            return prim.unknown;
+          }
+          let mut members = Vec::new();
+          for elem in elems {
+            let mut ty = elem.ty;
+            if elem.optional && !self.relate.options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            members.push(ty);
+          }
+          self.store.union(members)
+        }
+      },
+      _ => prim.unknown,
+    }
+  }
+
+  fn indexer_key_matches(&self, indexer_key: TypeId, key_ty: TypeId) -> bool {
+    let prim = self.store.primitive_ids();
+    let key_ty = self.store.canon(key_ty);
+
+    let dummy_name = self.store.intern_name("<index>");
+    let mut candidates = Vec::new();
+
+    match self.store.type_kind(key_ty) {
+      TypeKind::String | TypeKind::StringLiteral(_) => {
+        candidates.push(PropKey::String(dummy_name));
+      }
+      TypeKind::Number | TypeKind::NumberLiteral(_) => {
+        candidates.push(PropKey::Number(0));
+      }
+      TypeKind::Symbol | TypeKind::UniqueSymbol => {
+        candidates.push(PropKey::Symbol(dummy_name));
+      }
+      TypeKind::Any => {
+        candidates.push(PropKey::String(dummy_name));
+        candidates.push(PropKey::Number(0));
+        candidates.push(PropKey::Symbol(dummy_name));
+      }
+      _ => {
+        if self.relate.is_assignable(key_ty, prim.string) {
+          candidates.push(PropKey::String(dummy_name));
+        }
+        if self.relate.is_assignable(key_ty, prim.number) {
+          candidates.push(PropKey::Number(0));
+        }
+        if self.relate.is_assignable(key_ty, prim.symbol) {
+          candidates.push(PropKey::Symbol(dummy_name));
+        }
+      }
+    }
+
+    candidates.into_iter().any(|key| {
+      crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store)
+    })
   }
 
   fn build_call_method_type(&self, sigs: Vec<SignatureId>) -> TypeId {
@@ -3466,6 +3641,22 @@ fn body_range(body: &Body) -> TextRange {
 fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   let (range, _) = loc.to_diagnostics_range_with_note();
   TextRange::new(range.start, range.end)
+}
+
+fn parse_canonical_index_str(s: &str) -> Option<i64> {
+  if s == "0" {
+    return Some(0);
+  }
+  let bytes = s.as_bytes();
+  let first = *bytes.first()?;
+  if first == b'0' {
+    return None;
+  }
+  if bytes.iter().all(|c| c.is_ascii_digit()) {
+    s.parse().ok()
+  } else {
+    None
+  }
 }
 
 /// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
@@ -6342,22 +6533,53 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn indexer_key_matches(&self, indexer_key: TypeId, key_ty: TypeId) -> bool {
-    if self.relate.is_assignable(key_ty, indexer_key) {
-      return true;
+    let prim = self.store.primitive_ids();
+    let key_ty = self.store.canon(key_ty);
+
+    // Index signatures are keyed by JS property keys: string, number, and symbol.
+    // For computed member access, model key matching in terms of those key kinds
+    // rather than generic type assignability (which can be overly permissive for
+    // intersection key types).
+    let dummy_name = self.store.intern_name("<index>");
+
+    let mut candidates = Vec::new();
+    match self.store.type_kind(key_ty) {
+      TypeKind::String | TypeKind::StringLiteral(_) => {
+        candidates.push(PropKey::String(dummy_name));
+      }
+      TypeKind::Number | TypeKind::NumberLiteral(_) => {
+        candidates.push(PropKey::Number(0));
+      }
+      TypeKind::Symbol | TypeKind::UniqueSymbol => {
+        candidates.push(PropKey::Symbol(dummy_name));
+      }
+      TypeKind::Any => {
+        candidates.push(PropKey::String(dummy_name));
+        candidates.push(PropKey::Number(0));
+        candidates.push(PropKey::Symbol(dummy_name));
+      }
+      _ => {
+        // Fall back to probing key kinds via assignability for non-primitive key
+        // types (e.g. type parameters).
+        if self.relate.is_assignable(key_ty, prim.string) {
+          candidates.push(PropKey::String(dummy_name));
+        }
+        if self.relate.is_assignable(key_ty, prim.number) {
+          candidates.push(PropKey::Number(0));
+        }
+        if self.relate.is_assignable(key_ty, prim.symbol) {
+          candidates.push(PropKey::Symbol(dummy_name));
+        }
+      }
     }
 
-    match self.store.type_kind(indexer_key) {
-      TypeKind::String | TypeKind::StringLiteral(_) => {
-        matches!(
-          self.store.type_kind(key_ty),
-          TypeKind::Number | TypeKind::NumberLiteral(_)
-        )
-      }
-      TypeKind::Union(members) | TypeKind::Intersection(members) => members
-        .iter()
-        .any(|member| self.indexer_key_matches(*member, key_ty)),
-      _ => false,
+    if candidates.is_empty() {
+      return false;
     }
+
+    candidates.into_iter().any(|key| {
+      crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store)
+    })
   }
 
   fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
@@ -6409,11 +6631,26 @@ impl<'a> FlowBodyChecker<'a> {
         if key == "call" && !shape.call_signatures.is_empty() {
           return Some(self.build_call_method_type(shape.call_signatures.clone()));
         }
-        shape
-          .indexers
-          .first()
-          .map(|idx| idx.value_type)
-          .or(Some(prim.unknown))
+        let key_prop = if let Some(idx) = parse_canonical_index_str(key) {
+          PropKey::Number(idx)
+        } else {
+          PropKey::String(self.store.intern_name(key))
+        };
+        let mut matches = Vec::new();
+        for idxer in shape.indexers.iter() {
+          if crate::type_queries::indexer_accepts_key(&key_prop, idxer.key_type, &self.store) {
+            matches.push(idxer.value_type);
+          }
+        }
+        if matches.is_empty() {
+          Some(prim.unknown)
+        } else if matches.len() == 1 {
+          Some(matches[0])
+        } else {
+          matches.sort_by(|a, b| self.store.type_cmp(*a, *b));
+          matches.dedup();
+          Some(self.store.union(matches))
+        }
       }
       TypeKind::Array { .. } if key == "length" => Some(prim.number),
       TypeKind::Array { ty, .. } => Some(ty),
