@@ -25,6 +25,7 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use typecheck_ts::Program;
 use walkdir::WalkDir;
@@ -1252,7 +1253,7 @@ fn format_export_fact(fact: &NormalizedExportType) -> String {
   format!("{}::{} ({})", fact.file, fact.name, fact.type_str)
 }
 
-fn format_marker_fact(fact: &NormalizedMarkerType, files: &HashMap<String, String>) -> String {
+fn format_marker_fact(fact: &NormalizedMarkerType, files: &HashMap<String, Arc<str>>) -> String {
   let file = fact.file.clone();
   if let Some((line, col)) = fact
     .line
@@ -1269,16 +1270,16 @@ fn format_marker_fact(fact: &NormalizedMarkerType, files: &HashMap<String, Strin
 fn build_file_map(
   files: &[VirtualFile],
   normalization: &NormalizationOptions,
-) -> HashMap<String, String> {
+) -> HashMap<String, Arc<str>> {
   let mut map = HashMap::new();
   for file in files {
     let normalized = normalize_path_for_compare(&file.name, normalization);
-    map.insert(normalized, file.content.to_string());
+    map.insert(normalized, Arc::clone(&file.content));
   }
   map
 }
 
-fn render_pair(report: &mut String, pair: &MismatchPair, files: &HashMap<String, String>) {
+fn render_pair(report: &mut String, pair: &MismatchPair, files: &HashMap<String, Arc<str>>) {
   writeln!(
     report,
     "- expected: {}",
@@ -1319,7 +1320,7 @@ fn render_pair(report: &mut String, pair: &MismatchPair, files: &HashMap<String,
 fn render_single_diag(
   report: &mut String,
   diag: &NormalizedDiagnostic,
-  files: &HashMap<String, String>,
+  files: &HashMap<String, Arc<str>>,
 ) {
   writeln!(report, "- {}", format_location(diag, files)).ok();
   if let Some(context) = render_context(diag, files) {
@@ -1330,7 +1331,7 @@ fn render_single_diag(
   }
 }
 
-fn format_location(diag: &NormalizedDiagnostic, files: &HashMap<String, String>) -> String {
+fn format_location(diag: &NormalizedDiagnostic, files: &HashMap<String, Arc<str>>) -> String {
   let code = diag
     .code
     .as_ref()
@@ -1351,7 +1352,7 @@ fn format_location(diag: &NormalizedDiagnostic, files: &HashMap<String, String>)
   }
 }
 
-fn render_context(diag: &NormalizedDiagnostic, files: &HashMap<String, String>) -> Option<String> {
+fn render_context(diag: &NormalizedDiagnostic, files: &HashMap<String, Arc<str>>) -> Option<String> {
   let file = diag.file.as_ref()?;
   let content = files.get(file)?;
   let lines = collect_lines(content);
@@ -1389,7 +1390,7 @@ fn render_context(diag: &NormalizedDiagnostic, files: &HashMap<String, String>) 
 
 fn line_info(
   diag: &NormalizedDiagnostic,
-  files: &HashMap<String, String>,
+  files: &HashMap<String, Arc<str>>,
 ) -> Option<(String, (usize, usize), (usize, usize))> {
   let file = diag.file.as_ref()?;
   let content = files.get(file)?;
@@ -1480,7 +1481,7 @@ fn offset_to_line_col(content: &str, offset: usize) -> (usize, usize) {
 
 fn marker_line_col(
   marker: &NormalizedMarkerType,
-  files: &HashMap<String, String>,
+  files: &HashMap<String, Arc<str>>,
 ) -> Option<(usize, usize)> {
   let content = files.get(&marker.file)?;
   Some(offset_to_line_col(content, marker.offset as usize))
