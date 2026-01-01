@@ -66,7 +66,10 @@ fn export_alias_can_be_default_keyword() {
 
 #[test]
 fn reexport_default_name_does_not_require_as() {
-  roundtrip("export { default } from \"mod\";", "export{default}from\"mod\";");
+  roundtrip(
+    "export { default } from \"mod\";",
+    "export{default}from\"mod\";",
+  );
 }
 
 #[test]

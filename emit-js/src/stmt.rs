@@ -815,7 +815,9 @@ fn emit_export_name(em: &mut Emitter, name: &Node<ExportName>) -> EmitResult {
   // - exported names that are not valid pattern identifiers (`export { while as ... }`)
   let alias_required = match &name.exportable {
     ModuleExportImportName::Str(_) => true,
-    ModuleExportImportName::Ident(name) => name != "default" && !is_module_binding_identifier_token(name),
+    ModuleExportImportName::Ident(name) => {
+      name != "default" && !is_module_binding_identifier_token(name)
+    }
   };
   if alias_required || name.alias.stx.name != name.exportable.as_str() {
     em.write_keyword("as");

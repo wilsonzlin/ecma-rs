@@ -69,7 +69,10 @@ fn hir_emits_default_export_alias() {
 
 #[test]
 fn hir_keeps_reexport_default_shorthand() {
-  roundtrip("export { default } from \"mod\";", "export{default}from\"mod\";");
+  roundtrip(
+    "export { default } from \"mod\";",
+    "export{default}from\"mod\";",
+  );
 }
 
 #[test]
