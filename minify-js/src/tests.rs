@@ -198,6 +198,19 @@ fn preserves_default_export_in_reexports() {
 }
 
 #[test]
+fn preserves_named_default_import_specifier() {
+  // Use direct `eval` to disable renaming so we can assert on the raw output.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"eval("x");import { default as foo } from "x";export default foo;"#,
+  );
+  assert_eq!(
+    result,
+    r#"eval("x");import{default as foo}from"x";export default foo;"#
+  );
+}
+
+#[test]
 fn preserves_default_as_named_reexport() {
   let result = minified(
     TopLevelMode::Module,
