@@ -217,13 +217,14 @@ pub const USE_BEFORE_ASSIGNMENT: Code = Code::new(
 
 /// TC1001: Module specifier could not be resolved.
 ///
-/// - Primary span: the import/export module specifier.
+/// - Primary span: the module specifier in an import/export statement or a
+///   type-only `import("...")` / `typeof import("...")` reference.
 /// - Labels: primary only.
 /// - Notes: none.
 pub const UNRESOLVED_MODULE: Code = Code::new(
   "TC1001",
   "unresolved module specifier",
-  "module specifier in the import/export statement",
+  "module specifier in an import/export statement or type-only import() reference",
   &["primary: module specifier span"],
   &[],
 );
