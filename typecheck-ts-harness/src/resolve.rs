@@ -97,18 +97,26 @@ fn resolve_non_relative(
   let mut types_specifier: Option<String> = None;
   let mut types_specifier_checked = false;
   let mut dir = virtual_parent_dir(from_name);
+  let mut package_dir =
+    String::with_capacity(dir.len() + 2 + "node_modules".len() + package_name.len() + subpath.len());
+  let mut types_base = String::with_capacity(
+    dir.len() + 2 + "node_modules/@types".len() + specifier.len() + subpath.len(),
+  );
   loop {
-    let package_dir = virtual_join3(&dir, "node_modules", package_name);
+    virtual_join3_into(&mut package_dir, &dir, "node_modules", package_name);
+    let package_dir_len = package_dir.len();
     if let Some(exports_subpath) = exports_subpath.as_deref() {
       if let Some(found) = resolve_via_exports(files, &package_dir, exports_subpath, 0) {
         return Some(found);
       }
-      let entry = virtual_join(&package_dir, subpath);
+      package_dir.push('/');
+      package_dir.push_str(subpath);
       let found = if subpath_needs_normalization(subpath) {
-        resolve_as_file_or_directory(files, &entry)
+        resolve_as_file_or_directory(files, &package_dir)
       } else {
-        resolve_as_file_or_directory_normalized(files, &entry, 0)
+        resolve_as_file_or_directory_normalized(files, &package_dir, 0)
       };
+      package_dir.truncate(package_dir_len);
       if let Some(found) = found {
         return Some(found);
       }
@@ -121,7 +129,7 @@ fn resolve_non_relative(
       types_specifier_checked = true;
     }
     if let Some(types_specifier) = types_specifier.as_deref() {
-      let types_base = virtual_join3(&dir, "node_modules/@types", types_specifier);
+      virtual_join3_into(&mut types_base, &dir, "node_modules/@types", types_specifier);
       if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
         return Some(found);
       }
@@ -142,8 +150,10 @@ fn resolve_imports_specifier(
 ) -> Option<FileKey> {
   let from_name = files.name_for_key(from)?;
   let mut dir = virtual_parent_dir(from_name);
+  let mut package_json_path = String::with_capacity(dir.len() + 1 + "package.json".len());
   loop {
-    if let Some(found) = resolve_imports_in_dir(files, &dir, specifier) {
+    virtual_join_into(&mut package_json_path, &dir, "package.json");
+    if let Some(found) = resolve_imports_in_dir(files, &dir, &package_json_path, specifier) {
       return Some(found);
     }
 
@@ -155,9 +165,13 @@ fn resolve_imports_specifier(
   None
 }
 
-fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) -> Option<FileKey> {
-  let package_json = virtual_join(dir, "package.json");
-  let package_key = files.resolve(&package_json)?;
+fn resolve_imports_in_dir(
+  files: &HarnessFileSet,
+  dir: &str,
+  package_json: &str,
+  specifier: &str,
+) -> Option<FileKey> {
+  let package_key = files.resolve(package_json)?;
   let parsed = files.package_json(&package_key)?;
   let imports = parsed.get("imports")?.as_object()?;
 
@@ -597,18 +611,33 @@ fn virtual_join(base: &str, segment: &str) -> String {
   }
 }
 
-fn virtual_join3(base: &str, segment: &str, tail: &str) -> String {
-  let mut joined = String::with_capacity(base.len() + segment.len() + tail.len() + 2);
-  joined.push_str(base);
+fn virtual_join_into(out: &mut String, base: &str, segment: &str) {
+  out.clear();
+  out.reserve(base.len() + segment.len() + 1);
+  if base == "/" {
+    out.push('/');
+    out.push_str(segment);
+  } else {
+    out.push_str(base);
+    if !base.ends_with('/') {
+      out.push('/');
+    }
+    out.push_str(segment);
+  }
+}
+
+fn virtual_join3_into(out: &mut String, base: &str, segment: &str, tail: &str) {
+  out.clear();
+  out.reserve(base.len() + segment.len() + tail.len() + 2);
+  out.push_str(base);
   if base != "/" && !base.ends_with('/') {
-    joined.push('/');
+    out.push('/');
   }
-  joined.push_str(segment);
-  if !joined.ends_with('/') {
-    joined.push('/');
+  out.push_str(segment);
+  if !out.ends_with('/') {
+    out.push('/');
   }
-  joined.push_str(tail);
-  joined
+  out.push_str(tail);
 }
 
 fn types_fallback_specifier(specifier: &str) -> Option<String> {
