@@ -626,7 +626,7 @@ impl TypeLowerer {
         if let Some(id) = self.lookup_type_param(name) {
           if !type_args.is_empty() {
             self.push_diag(
-              reference.loc,
+              outer_loc,
               &codes::UNRESOLVED_TYPE_REFERENCE,
               format!("type parameter '{}' cannot accept type arguments", name),
             );
@@ -638,7 +638,7 @@ impl TypeLowerer {
           return resolved;
         }
         self.push_diag(
-          reference.loc,
+          outer_loc,
           &codes::UNRESOLVED_TYPE_REFERENCE,
           format!("unresolved type '{}'", name),
         );
@@ -665,7 +665,7 @@ impl TypeLowerer {
       }
       TypeEntityName::Import(_) => {
         self.push_diag(
-          reference.loc,
+          outer_loc,
           &codes::UNRESOLVED_TYPE_REFERENCE,
           "import expressions in type references are not supported",
         );
