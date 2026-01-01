@@ -6965,6 +6965,16 @@ impl ProgramState {
       stack.push((child, range));
     }
 
+    // Keep the body parent graph consistent with the query-side computation used
+    // by `db::body_parents_in_file`. The salsa query includes additional edges
+    // (e.g. getter/setter bodies and synthesized initializer bodies) and is the
+    // canonical implementation. Overwrite any locally inferred edges for this
+    // file so nested checks can reliably seed outer bindings.
+    let parents = db::body_parents_in_file(&self.typecheck_db, file);
+    for (child, parent) in parents.iter() {
+      self.body_parents.insert(*child, *parent);
+    }
+
     self.next_body = self
       .body_map
       .keys()

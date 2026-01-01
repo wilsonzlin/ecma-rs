@@ -5190,24 +5190,32 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
-        let base_obj_ty = if mem.optional {
+        let (obj_non_nullish, obj_nullish) = if mem.optional {
           // Optional chaining short-circuits on `null` / `undefined`, so the
           // property lookup is performed only on the non-nullish portion of the
           // base type. Doing the lookup on the full union would introduce
           // `unknown` from the nullish branches (and `unknown | T` collapses to
           // `unknown`).
-          let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
-          non_nullish
+          narrow_non_nullish(obj_ty, &self.store)
         } else {
-          obj_ty
+          (obj_ty, prim.never)
         };
-        if let ObjectKey::Computed(expr) = &mem.property {
-          let _ = self.eval_expr(*expr, env);
-        }
-        let prop_ty = if mem.optional && base_obj_ty == prim.never {
+
+        if mem.optional && obj_non_nullish == prim.never {
+          // Optional chaining (`x?.y`) short-circuits on a nullish base; if
+          // the base is always nullish, the whole expression is `undefined`
+          // and the property expression is not evaluated.
           prim.undefined
         } else {
-          match (
+          if let ObjectKey::Computed(expr) = &mem.property {
+            let _ = self.eval_expr(*expr, env);
+          }
+          let obj_ty_for_member = if mem.optional {
+            obj_non_nullish
+          } else {
+            obj_ty
+          };
+          let prop_ty = match (
             self.ident_binding(mem.object),
             self.member_property_name(&mem.property),
           ) {
@@ -5215,21 +5223,24 @@ impl<'a> FlowBodyChecker<'a> {
               let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
               env
                 .get_path(&key)
-                .unwrap_or_else(|| self.member_type(base_obj_ty, mem))
+                .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
             }
-            _ => self.member_type(base_obj_ty, mem),
-          }
-        };
-        if mem.optional {
-          if let Some(name) = self.optional_chain_root(mem.object) {
-            let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
-            if non_nullish != prim.never {
-              facts.truthy.insert(FlowKey::root(name), non_nullish);
+            _ => self.member_type(obj_ty_for_member, mem),
+          };
+          if mem.optional {
+            if let Some(name) = self.optional_chain_root(mem.object) {
+              if obj_non_nullish != prim.never {
+                facts.truthy.insert(FlowKey::root(name), obj_non_nullish);
+              }
             }
+            if obj_nullish != prim.never {
+              self.store.union(vec![prop_ty, prim.undefined])
+            } else {
+              prop_ty
+            }
+          } else {
+            prop_ty
           }
-          self.store.union(vec![prop_ty, prim.undefined])
-        } else {
-          prop_ty
         }
       }
       ExprKind::Conditional {
