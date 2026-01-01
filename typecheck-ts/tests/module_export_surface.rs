@@ -91,4 +91,3 @@ fn export_as_namespace_injects_global_binding() {
     "expected OnlyNS global binding from export as namespace"
   );
 }
-
