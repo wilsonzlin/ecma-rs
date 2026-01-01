@@ -84,7 +84,7 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
         .iter()
         .any(|span| export.span.start >= span.start && export.span.end <= span.end)
     })
-    .filter_map(|export| map_export_from_lower(export, &resolve_name))
+    .filter_map(|export| map_export_from_lower(export, lowered, &resolve_name))
     .collect();
   let module_kind = if imports.is_empty()
     && import_equals.is_empty()
@@ -214,6 +214,7 @@ fn map_import_from_lower(
 
 fn map_export_from_lower(
   export: &Export,
+  lowered: &LowerResult,
   resolve_name: &impl Fn(hir_js::NameId) -> String,
 ) -> Option<sem_ts::Export> {
   match &export.kind {
@@ -253,10 +254,20 @@ fn map_export_from_lower(
       alias_span: all.alias.as_ref().map(|a| a.span),
     })),
     HirExportKind::Default(_) => None,
-    HirExportKind::Assignment(_) => Some(sem_ts::Export::ExportAssignment {
-      expr: String::new(),
-      span: export.span,
-    }),
+    HirExportKind::Assignment(assign) => {
+      let expr = lowered
+        .body(assign.body)
+        .and_then(|body| body.exprs.get(assign.expr.0 as usize))
+        .and_then(|expr| match &expr.kind {
+          hir_js::ExprKind::Ident(name_id) => Some(resolve_name(*name_id)),
+          _ => None,
+        })
+        .unwrap_or_default();
+      Some(sem_ts::Export::ExportAssignment {
+        expr,
+        span: export.span,
+      })
+    }
     HirExportKind::AsNamespace(_) => None,
   }
 }
