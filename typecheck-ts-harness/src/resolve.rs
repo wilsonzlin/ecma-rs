@@ -64,28 +64,27 @@ fn resolve_non_relative(
   let from_name = files.name_for_key(from)?;
   let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
   let subpath = package_rest.trim_start_matches('/');
-  let has_subpath = !subpath.is_empty();
+  let exports_subpath = (!subpath.is_empty()).then(|| format!("./{subpath}"));
+  let types_specifier = types_fallback_specifier(specifier);
   let mut dir = virtual_parent_dir(from_name);
   loop {
-    let package_dir = virtual_join(&virtual_join(&dir, "node_modules"), package_name);
-    if has_subpath {
-      if let Some(found) = resolve_via_exports(files, &package_dir, &format!("./{subpath}"), 0) {
+    let node_modules_dir = virtual_join(&dir, "node_modules");
+    let package_dir = virtual_join(&node_modules_dir, package_name);
+    if let Some(exports_subpath) = exports_subpath.as_deref() {
+      if let Some(found) = resolve_via_exports(files, &package_dir, exports_subpath, 0) {
         return Some(found);
       }
       let entry = virtual_join(&package_dir, subpath);
       if let Some(found) = resolve_as_file_or_directory(files, &entry) {
         return Some(found);
       }
-    } else if let Some(found) = resolve_as_file_or_directory(files, &package_dir) {
+    } else if let Some(found) = resolve_as_file_or_directory_normalized(files, &package_dir, 0) {
       return Some(found);
     }
 
-    if let Some(types_specifier) = types_fallback_specifier(specifier) {
-      let types_base = virtual_join(
-        &virtual_join(&virtual_join(&dir, "node_modules"), "@types"),
-        &types_specifier,
-      );
-      if let Some(found) = resolve_as_file_or_directory(files, &types_base) {
+    if let Some(types_specifier) = types_specifier.as_deref() {
+      let types_base = virtual_join(&virtual_join(&node_modules_dir, "@types"), types_specifier);
+      if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
         return Some(found);
       }
     }
