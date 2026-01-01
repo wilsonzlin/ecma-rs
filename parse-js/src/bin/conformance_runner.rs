@@ -676,11 +676,31 @@ fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Vec<SerializableDiagnost
 
 fn main() {
   let options = parse_args();
-  let test_dir = Path::new("tests/TypeScript/tests/cases/conformance");
+  let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("tests/TypeScript/tests/cases/conformance");
+
+  if !test_dir.is_dir() {
+    eprintln!(
+      "TypeScript conformance suite not found at {}.\n\n\
+If you are running from the workspace root:\n  git submodule update --init --recursive --depth=1 parse-js/tests/TypeScript\n\n\
+If you are running from the parse-js crate directory:\n  git submodule update --init --recursive --depth=1 tests/TypeScript\n",
+      test_dir.display()
+    );
+    std::process::exit(1);
+  }
 
   println!("🔍 Discovering TypeScript conformance tests...");
-  let mut tests = discover_tests(test_dir);
+  let mut tests = discover_tests(test_dir.as_path());
   tests.sort();
+
+  if tests.is_empty() {
+    eprintln!(
+      "No TypeScript conformance tests discovered under {}.\n\
+Ensure the TypeScript submodule is checked out:\n  git submodule update --init --recursive --depth=1 parse-js/tests/TypeScript\n",
+      test_dir.display()
+    );
+    std::process::exit(1);
+  }
 
   if let Some(filter) = &options.filter {
     tests.retain(|path| normalize_path(path).contains(filter));
@@ -757,7 +777,7 @@ fn main() {
     if !result.passed() {
       if let Some(parent) = result.path.parent() {
         let category = parent
-          .strip_prefix(test_dir)
+          .strip_prefix(test_dir.as_path())
           .unwrap_or(parent)
           .to_string_lossy()
           .to_string();

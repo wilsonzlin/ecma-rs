@@ -1,6 +1,8 @@
 ## parse-js
 
-`parse-js` provides the parser that powers the rest of this workspace. The TypeScript conformance harness depends on the official TypeScript repository as a git submodule.
+`parse-js` provides the parser that powers the rest of this workspace. The
+TypeScript conformance runners depend on the official TypeScript repository as a
+git submodule.
 
 To run the conformance suite locally you must first initialize the submodule:
 
@@ -8,4 +10,12 @@ To run the conformance suite locally you must first initialize the submodule:
 git submodule update --init --recursive --depth=1 parse-js/tests/TypeScript
 ```
 
-If the `tests/TypeScript` directory is missing or empty, the conformance runner will exit with a helpful error explaining how to populate it.
+The parser conformance runner lives in `parse-js` behind the
+`conformance-runner` feature:
+
+```bash
+cargo run -p parse-js --features conformance-runner --bin conformance_runner
+```
+
+If the `parse-js/tests/TypeScript` directory is missing or empty, the conformance
+runner exits with setup instructions.
