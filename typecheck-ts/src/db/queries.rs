@@ -1420,12 +1420,25 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
   }
   for arenas in lowered.types.values() {
     for ty in arenas.type_exprs.iter() {
-      if let hir_js::TypeExprKind::TypeRef(type_ref) = &ty.kind {
-        if let hir_js::TypeName::Import(import) = &type_ref.name {
-          if let Some(module) = &import.module {
-            specs.push((Arc::from(module.clone()), ty.span));
+      match &ty.kind {
+        hir_js::TypeExprKind::TypeRef(type_ref) => {
+          if let hir_js::TypeName::Import(import) = &type_ref.name {
+            if let Some(module) = &import.module {
+              specs.push((Arc::from(module.clone()), ty.span));
+            }
           }
         }
+        hir_js::TypeExprKind::TypeQuery(name) => {
+          if let hir_js::TypeName::Import(import) = name {
+            if let Some(module) = &import.module {
+              specs.push((Arc::from(module.clone()), ty.span));
+            }
+          }
+        }
+        hir_js::TypeExprKind::Import(import) => {
+          specs.push((Arc::from(import.module.clone()), ty.span));
+        }
+        _ => {}
       }
     }
   }
