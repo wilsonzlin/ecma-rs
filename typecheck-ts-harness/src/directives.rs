@@ -256,16 +256,6 @@ impl HarnessOptions {
     opts
   }
 
-  /// Serialize options for the Node-based `tsc` wrapper.
-  pub fn to_env_json(&self) -> Option<String> {
-    let map = self.to_tsc_options_map();
-    if map.is_empty() {
-      None
-    } else {
-      serde_json::to_string(&map).ok()
-    }
-  }
-
   pub(crate) fn to_tsc_options_map(&self) -> Map<String, Value> {
     let mut map = Map::new();
     apply_default_tsc_options(&mut map);
