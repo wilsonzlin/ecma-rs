@@ -435,8 +435,7 @@ impl TscRunner {
       .as_mut()
       .context("tsc runner process missing")?;
 
-    let line = serde_json::to_string(request)?;
-    runner.stdin.write_all(line.as_bytes())?;
+    serde_json::to_writer(&mut runner.stdin, request)?;
     runner.stdin.write_all(b"\n")?;
     runner.stdin.flush()?;
 
