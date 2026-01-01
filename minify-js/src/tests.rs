@@ -171,6 +171,15 @@ fn export_star_string_alias_is_preserved() {
 }
 
 #[test]
+fn export_star_default_alias_is_preserved() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const ns=1;export * as default from \"mod\";",
+  );
+  assert_eq!(result, "export*as default from\"mod\";");
+}
+
+#[test]
 fn reexport_does_not_keep_or_rename_same_named_locals() {
   let result = minified(
     TopLevelMode::Module,
