@@ -1214,28 +1214,43 @@ fn render_full_report(
 }
 
 fn sort_pairs(pairs: &mut Vec<MismatchPair>) {
-  pairs.sort_by(|a, b| {
-    (
-      a.expected.file.as_deref().unwrap_or(""),
-      a.expected.start,
-      a.expected.end,
-      code_key(&a.expected),
-    )
-      .cmp(&(
-        b.expected.file.as_deref().unwrap_or(""),
-        b.expected.start,
-        b.expected.end,
-        code_key(&b.expected),
-      ))
-  });
-}
+  fn compare_codes(
+    a: &Option<crate::diagnostic_norm::DiagnosticCode>,
+    b: &Option<crate::diagnostic_norm::DiagnosticCode>,
+  ) -> std::cmp::Ordering {
+    match (a, b) {
+      (None, None) => std::cmp::Ordering::Equal,
+      (None, Some(_)) => std::cmp::Ordering::Greater,
+      (Some(_), None) => std::cmp::Ordering::Less,
+      (
+        Some(crate::diagnostic_norm::DiagnosticCode::Rust(a)),
+        Some(crate::diagnostic_norm::DiagnosticCode::Rust(b)),
+      ) => a.cmp(b),
+      (
+        Some(crate::diagnostic_norm::DiagnosticCode::Tsc(a)),
+        Some(crate::diagnostic_norm::DiagnosticCode::Tsc(b)),
+      ) => a.cmp(b),
+      (
+        Some(crate::diagnostic_norm::DiagnosticCode::Rust(_)),
+        Some(crate::diagnostic_norm::DiagnosticCode::Tsc(_)),
+      ) => std::cmp::Ordering::Less,
+      (
+        Some(crate::diagnostic_norm::DiagnosticCode::Tsc(_)),
+        Some(crate::diagnostic_norm::DiagnosticCode::Rust(_)),
+      ) => std::cmp::Ordering::Greater,
+    }
+  }
 
-fn code_key(diag: &NormalizedDiagnostic) -> String {
-  diag
-    .code
-    .as_ref()
-    .map(diagnostic_code_display)
-    .unwrap_or_default()
+  pairs.sort_by(|a, b| {
+    a.expected
+      .file
+      .as_deref()
+      .unwrap_or("")
+      .cmp(b.expected.file.as_deref().unwrap_or(""))
+      .then_with(|| a.expected.start.cmp(&b.expected.start))
+      .then_with(|| a.expected.end.cmp(&b.expected.end))
+      .then_with(|| compare_codes(&a.expected.code, &b.expected.code))
+  });
 }
 
 fn format_export_fact(fact: &NormalizedExportType) -> String {
