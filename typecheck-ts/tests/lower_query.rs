@@ -21,7 +21,10 @@ fn lower_query_uses_cache_across_program_checks() {
 
   let entry = FileKey::new("index.ts");
   let dep = FileKey::new("dep.ts");
-  host.insert(entry.clone(), "import { value } from \"./dep\";\nexport const total = value;");
+  host.insert(
+    entry.clone(),
+    "import { value } from \"./dep\";\nexport const total = value;",
+  );
   host.insert(dep.clone(), "export const value = 1;");
 
   let program = Program::new(host, vec![entry]);
@@ -29,7 +32,10 @@ fn lower_query_uses_cache_across_program_checks() {
   reset_lower_call_count();
 
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "expected no diagnostics, got {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
 
   let after_first = lower_call_count();
   assert!(
@@ -49,4 +55,3 @@ fn lower_query_uses_cache_across_program_checks() {
     "second `Program::check()` should reuse cached salsa lowering results"
   );
 }
-

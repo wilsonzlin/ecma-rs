@@ -24,4 +24,3 @@ pub fn reset_lower_call_count() {
 pub(crate) fn record_lower_call() {
   LOWER_CALLS.with(|calls| calls.set(calls.get() + 1));
 }
-
