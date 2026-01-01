@@ -240,6 +240,19 @@ fn formats_unicode_identifier_property() {
 }
 
 #[test]
+fn formats_empty_object_and_object_keyword_distinctly() {
+  let store = TypeStore::new();
+
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  assert_eq!(format!("{}", store.display(empty_object)), "{}");
+
+  let shape_id = store.intern_shape(Shape::new());
+  let obj_id = store.intern_object(ObjectType { shape: shape_id });
+  let object_keyword = store.intern_type(TypeKind::Object(obj_id));
+  assert_eq!(format!("{}", store.display(object_keyword)), "object");
+}
+
+#[test]
 fn formats_new_type_variants() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

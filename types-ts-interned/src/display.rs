@@ -222,6 +222,13 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Object(obj) => {
         let object = self.store.object(obj);
         let shape = self.store.shape(object.shape);
+        if shape.properties.is_empty()
+          && shape.call_signatures.is_empty()
+          && shape.construct_signatures.is_empty()
+          && shape.indexers.is_empty()
+        {
+          return write!(f, "object");
+        }
         write!(f, "{{")?;
         let mut first = true;
         for prop in shape.properties.iter() {
