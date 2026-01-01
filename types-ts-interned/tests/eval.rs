@@ -860,6 +860,99 @@ fn conditional_respects_strict_null_checks_option() {
 }
 
 #[test]
+fn conditional_respects_strict_function_types_option() {
+  let strict_store = TypeStore::new();
+  let strict_primitives = strict_store.primitive_ids();
+
+  let strict_wide_param =
+    strict_store.union(vec![strict_primitives.number, strict_primitives.string]);
+  let strict_narrow_param = strict_primitives.number;
+
+  let strict_narrow_fn = strict_store.intern_type(TypeKind::Callable {
+    overloads: vec![strict_store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: strict_narrow_param,
+        optional: false,
+        rest: false,
+      }],
+      strict_primitives.number,
+    ))],
+  });
+  let strict_wide_fn = strict_store.intern_type(TypeKind::Callable {
+    overloads: vec![strict_store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: strict_wide_param,
+        optional: false,
+        rest: false,
+      }],
+      strict_primitives.number,
+    ))],
+  });
+
+  // With `strict_function_types` enabled by default, a function requiring a
+  // narrower parameter is not assignable to one requiring a wider parameter.
+  let strict_conditional = strict_store.intern_type(TypeKind::Conditional {
+    check: strict_narrow_fn,
+    extends: strict_wide_fn,
+    true_ty: strict_primitives.number,
+    false_ty: strict_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(
+    strict_store.evaluate(strict_conditional),
+    strict_primitives.boolean
+  );
+
+  let loose_store = TypeStore::with_options(TypeOptions {
+    strict_function_types: false,
+    ..TypeOptions::default()
+  });
+  let loose_primitives = loose_store.primitive_ids();
+
+  let wide_param = loose_store.union(vec![loose_primitives.number, loose_primitives.string]);
+  let narrow_param = loose_primitives.number;
+
+  let narrow_fn = loose_store.intern_type(TypeKind::Callable {
+    overloads: vec![loose_store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: narrow_param,
+        optional: false,
+        rest: false,
+      }],
+      loose_primitives.number,
+    ))],
+  });
+  let wide_fn = loose_store.intern_type(TypeKind::Callable {
+    overloads: vec![loose_store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: wide_param,
+        optional: false,
+        rest: false,
+      }],
+      loose_primitives.number,
+    ))],
+  });
+
+  // When `strict_function_types` is disabled, parameter types become bivariant
+  // and the conditional reduces to the true branch.
+  let loose_conditional = loose_store.intern_type(TypeKind::Conditional {
+    check: narrow_fn,
+    extends: wide_fn,
+    true_ty: loose_primitives.number,
+    false_ty: loose_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(
+    loose_store.evaluate(loose_conditional),
+    loose_primitives.number
+  );
+}
+
+#[test]
 fn conditional_uses_tuple_vs_array_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
