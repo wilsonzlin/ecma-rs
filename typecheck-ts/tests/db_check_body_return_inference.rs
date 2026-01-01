@@ -25,4 +25,3 @@ fn db_check_body_infers_unannotated_function_return() {
     "expected inferred return type for f() to be number (or literal 1), got {rendered}"
   );
 }
-
