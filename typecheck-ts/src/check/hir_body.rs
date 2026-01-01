@@ -2197,7 +2197,23 @@ impl<'a> Checker<'a> {
                   })
                   .map(|props_ty| self.member_type(props_ty, &key_string))
                   .unwrap_or(prim.unknown);
-                self.check_expr_with_expected(&expr.stx.value, expected_ty)
+                let value_ty = self.check_expr_with_expected(&expr.stx.value, expected_ty);
+                if expected_ty != prim.unknown
+                  && !matches!(
+                    self.store.type_kind(expected_ty),
+                    TypeKind::Any | TypeKind::Unknown
+                  )
+                {
+                  if let AstExpr::LitObj(obj) = expr.stx.value.stx.as_ref() {
+                    if self.has_excess_properties(obj, expected_ty) {
+                      self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                        "excess property",
+                        Span::new(self.file, loc_to_range(self.file, obj.loc)),
+                      ));
+                    }
+                  }
+                }
+                value_ty
               }
             }
             Some(JsxAttrVal::Element(elem)) => self.check_jsx_elem(elem),
@@ -2329,6 +2345,22 @@ impl<'a> Checker<'a> {
           } else {
             self.check_expr_with_expected(&expr.stx.value, expected_child_ty)
           };
+          if !expr.stx.spread
+            && expected_child_ty != prim.unknown
+            && !matches!(
+              self.store.type_kind(expected_child_ty),
+              TypeKind::Any | TypeKind::Unknown
+            )
+          {
+            if let AstExpr::LitObj(obj) = expr.stx.value.stx.as_ref() {
+              if self.has_excess_properties(obj, expected_child_ty) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span::new(self.file, loc_to_range(self.file, obj.loc)),
+                ));
+              }
+            }
+          }
           let ty = if expr.stx.spread {
             spread = true;
             self.spread_element_type(expr_ty)

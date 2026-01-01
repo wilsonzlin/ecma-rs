@@ -862,6 +862,92 @@ fn intrinsic_excess_props_are_reported() {
 }
 
 #[test]
+fn component_attribute_object_literal_excess_props_are_reported() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(props: { style?: { foo: number } }): JSX.Element { return null as any; }
+const ok = <Foo style={{ foo: 1 }} />;
+const bad = <Foo style={{ foo: 1, bar: 2 }} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected excess property diagnostic, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn component_children_object_literal_excess_props_are_reported() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(props: { children?: { foo: number } }): JSX.Element { return null as any; }
+const ok = <Foo>{({ foo: 1 })}</Foo>;
+const bad = <Foo>{({ foo: 1, bar: 2 })}</Foo>;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected excess property diagnostic, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn component_without_props_param_allows_empty_props() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
