@@ -25,6 +25,8 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 #[cfg(feature = "with-node")]
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "with-node")]
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -465,11 +467,37 @@ impl Drop for TscRunner {
 }
 
 #[cfg(feature = "with-node")]
+fn command_succeeds_with_timeout(mut command: std::process::Command, timeout: Duration) -> bool {
+  command.stdin(std::process::Stdio::null());
+  command.stdout(std::process::Stdio::null());
+  command.stderr(std::process::Stdio::null());
+  let mut child = match command.spawn() {
+    Ok(child) => child,
+    Err(_) => return false,
+  };
+
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) => return status.success(),
+      Ok(None) => {
+        if Instant::now() >= deadline {
+          let _ = child.kill();
+          let _ = child.wait();
+          return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+      Err(_) => return false,
+    }
+  }
+}
+
+#[cfg(feature = "with-node")]
 pub fn node_available(node_path: &Path) -> bool {
-  let output = std::process::Command::new(node_path)
-    .arg("--version")
-    .output();
-  matches!(output, Ok(out) if out.status.success())
+  let mut command = std::process::Command::new(node_path);
+  command.arg("--version");
+  command_succeeds_with_timeout(command, Duration::from_secs(2))
 }
 
 #[cfg(feature = "with-node")]
@@ -480,8 +508,9 @@ pub fn typescript_available(node_path: &Path) -> bool {
   if !probe.exists() {
     return false;
   }
-  let output = std::process::Command::new(node_path).arg(probe).output();
-  matches!(output, Ok(out) if out.status.success())
+  let mut command = std::process::Command::new(node_path);
+  command.arg(probe);
+  command_succeeds_with_timeout(command, Duration::from_secs(2))
 }
 
 #[cfg(not(feature = "with-node"))]
