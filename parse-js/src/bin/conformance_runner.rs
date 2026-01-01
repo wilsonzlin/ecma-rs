@@ -385,7 +385,9 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
   };
   base_result.directives = directives;
   for vf in &mut virtual_files {
-    vf.name = normalize_virtual_path(&vf.name);
+    if vf.name.contains('\\') {
+      vf.name = normalize_virtual_path(&vf.name);
+    }
   }
   virtual_files.sort_by(|a, b| a.name.cmp(&b.name));
 
