@@ -124,6 +124,14 @@ fn hir_emits_named_import_of_default_with_string_literal_alias() {
 }
 
 #[test]
+fn hir_emits_string_named_default_import_exported_as_default() {
+  roundtrip(
+    r#"import { default as "a-b" } from "mod";export { "a-b" as default };"#,
+    r#"import{default as"a-b"}from"mod";export{"a-b"as default};"#,
+  );
+}
+
+#[test]
 fn hir_emits_string_literal_import_alias() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",

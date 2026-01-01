@@ -129,6 +129,14 @@ fn import_type_named_default_can_have_string_literal_alias() {
 }
 
 #[test]
+fn string_named_default_import_can_be_exported_as_default() {
+  roundtrip(
+    r#"import { default as "a-b" } from "mod";export { "a-b" as default };"#,
+    r#"import{default as"a-b"}from"mod";export{"a-b"as default};"#,
+  );
+}
+
+#[test]
 fn import_alias_can_be_string_literal() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",
