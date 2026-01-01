@@ -249,22 +249,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     if self.is_cancelled() {
       return (TsProgramSemantics::empty(), Vec::new());
     }
-    let module_exports = self
+    let module_exports: BTreeMap<FileId, ExportMap> = self
       .modules
       .iter()
       .map(|(id, m)| (*id, m.exports.clone()))
       .collect();
-    let module_symbols = self
+    let module_symbols: BTreeMap<FileId, SymbolGroups> = self
       .modules
       .iter()
       .map(|(id, m)| (*id, m.symbols.clone()))
       .collect();
-    let ambient_module_symbols = self
+    let ambient_module_symbols: BTreeMap<String, SymbolGroups> = self
       .ambient_modules
       .iter()
       .map(|(name, m)| (name.clone(), m.symbols.clone()))
       .collect();
-    let ambient_module_exports = self
+    let ambient_module_exports: BTreeMap<String, ExportMap> = self
       .ambient_modules
       .iter()
       .map(|(name, m)| (name.clone(), m.exports.clone()))
@@ -292,18 +292,41 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       return (TsProgramSemantics::empty(), Vec::new());
     }
     let mut def_to_symbol = BTreeMap::new();
-    for sym in self.symbols.symbols.values() {
+    let add_group_to_def_to_symbol =
+      |group: &SymbolGroup, def_to_symbol: &mut BTreeMap<(DefId, Namespace), SymbolId>| {
+      for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
+        if let Some(symbol) = group.symbol_for(ns, &self.symbols) {
+          for decl_id in self.symbols.symbol(symbol).decls_for(ns) {
+            let decl = self.symbols.decl(*decl_id);
+            def_to_symbol.entry((decl.def_id, ns)).or_insert(symbol);
+          }
+        }
+      }
+    };
+    // Ensure stable precedence when a declaration is reachable via multiple
+    // owners (e.g. script/global declarations that appear in both module and
+    // global maps). Prefer global symbols, then ambient modules, then per-module
+    // symbols. Later inserts must not overwrite earlier ones.
+    for group in global_symbols.values() {
       if self.is_cancelled() {
         return (TsProgramSemantics::empty(), Vec::new());
       }
-      for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
-        if !sym.namespaces.contains(ns) {
-          continue;
-        }
-        for decl_id in sym.decls_for(ns).iter().copied() {
-          let decl = self.symbols.decl(decl_id);
-          def_to_symbol.entry((decl.def_id, ns)).or_insert(sym.id);
-        }
+      add_group_to_def_to_symbol(group, &mut def_to_symbol);
+    }
+    for module in ambient_module_symbols.values() {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
+      for group in module.values() {
+        add_group_to_def_to_symbol(group, &mut def_to_symbol);
+      }
+    }
+    for module in module_symbols.values() {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
+      for group in module.values() {
+        add_group_to_def_to_symbol(group, &mut def_to_symbol);
       }
     }
 

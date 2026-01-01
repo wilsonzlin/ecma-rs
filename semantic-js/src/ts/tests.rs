@@ -1,5 +1,6 @@
 use super::*;
 use crate::assoc::{js, ts};
+use crate::hash::stable_hash;
 use crate::ts::from_hir_js::lower_to_ts_hir;
 use crate::ts::locals::{bind_ts_locals, map_module_scope_locals_to_program};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
@@ -55,6 +56,10 @@ fn positions(source: &str, needle: &str) -> Vec<u32> {
     start = pos + needle.len();
   }
   positions
+}
+
+fn stable_symbol_id(owner: &SymbolOwner, name: &str, namespaces: Namespace) -> SymbolId {
+  SymbolId(stable_hash(&(owner, name, namespaces.bits())))
 }
 
 fn export_snapshot(
@@ -752,6 +757,77 @@ fn enum_namespace_merge_in_both_orders() {
   assert_eq!(
     enum_first_sym, namespace_first_sym,
     "merged symbol ID should be stable across declaration order"
+  );
+}
+
+#[test]
+fn symbol_for_def_prefers_merged_symbol_for_function_namespace_merge() {
+  let name = "Foo";
+  let file = (0u32..1024)
+    .map(|n| FileId(2000 + n))
+    .find(|file| {
+      let owner = SymbolOwner::Module(*file);
+      let orphan = stable_symbol_id(&owner, name, Namespace::VALUE);
+      let merged = stable_symbol_id(&owner, name, Namespace::VALUE | Namespace::NAMESPACE);
+      orphan < merged
+    })
+    .expect("expected a file id that reproduces orphan symbol ordering");
+
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, name, DeclKind::Function, Exported::Named));
+  hir
+    .decls
+    .push(mk_decl(1, name, DeclKind::Namespace, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let group = semantics.exports_of(file).get(name).expect("exported symbol");
+  let merged_sym = match &group.kind {
+    SymbolGroupKind::Merged(sym) => *sym,
+    other => panic!("expected merged symbol group, got {:?}", other),
+  };
+  assert_eq!(
+    semantics.symbol_for_def(DefId(0), Namespace::VALUE),
+    Some(merged_sym)
+  );
+
+  let orphan_sym = stable_symbol_id(&SymbolOwner::Module(file), name, Namespace::VALUE);
+  assert_ne!(orphan_sym, merged_sym);
+  assert!(symbols.symbols.contains_key(&orphan_sym));
+  assert!(
+    orphan_sym < merged_sym,
+    "expected orphan symbol to sort before merged symbol to reproduce old bug"
+  );
+}
+
+#[test]
+fn symbol_for_def_prefers_merged_symbol_for_class_namespace_merge() {
+  let name = "Foo";
+  let file = FileId(4000);
+
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, name, DeclKind::Class, Exported::Named));
+  hir
+    .decls
+    .push(mk_decl(1, name, DeclKind::Namespace, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let merged_sym = assert_merged_value_type_namespace(&semantics, file, name);
+  assert_eq!(
+    semantics.symbol_for_def(DefId(0), Namespace::VALUE),
+    Some(merged_sym)
   );
 }
 
