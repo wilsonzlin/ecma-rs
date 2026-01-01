@@ -1344,14 +1344,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     );
   }
 
-  let mut roots: Vec<_> = db
-    .roots_input()
-    .roots(db)
-    .iter()
-    .filter_map(|f| file_id_from_key(db, f))
-    .map(|id| sem_ts::FileId(id.0))
-    .collect();
-  roots.extend(db.lib_files().into_iter().map(|id| sem_ts::FileId(id.0)));
+  let mut roots: Vec<_> = files.iter().map(|id| sem_ts::FileId(id.0)).collect();
   roots.sort();
   roots.dedup();
   let resolver = DbResolver { db };
