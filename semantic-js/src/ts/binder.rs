@@ -1021,7 +1021,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   ) {
     let namespaces = Namespace::VALUE | Namespace::NAMESPACE | Namespace::TYPE;
     let decl_id = self.symbols.alloc_decl(
-      state.file_id,
+      export.span.file,
       export.name.clone(),
       DeclKind::ImportBinding,
       namespaces,

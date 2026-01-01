@@ -1608,6 +1608,76 @@ fn export_as_namespace_conflict_reports_diagnostic() {
 }
 
 #[test]
+fn ambient_module_export_as_namespace_fragments_preserve_decl_files() {
+  let file_a = FileId(200);
+  let file_b = FileId(201);
+
+  let mut a = HirFile::module(file_a);
+  a.file_kind = FileKind::Dts;
+  a.ambient_modules.push(AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: Vec::new(),
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: vec![ExportAsNamespace {
+      name: "Foo".to_string(),
+      span: span(0),
+    }],
+    ambient_modules: Vec::new(),
+  });
+
+  let mut b = HirFile::module(file_b);
+  b.file_kind = FileKind::Dts;
+  b.ambient_modules.push(AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: Vec::new(),
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: vec![ExportAsNamespace {
+      name: "Foo".to_string(),
+      span: span(0),
+    }],
+    ambient_modules: Vec::new(),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file_a, file_b], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+
+  assert!(semantics.global_symbols().contains_key("Foo"));
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1006");
+  assert_eq!(diag.primary.range, span(0));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.range, span(0));
+  assert_ne!(diag.primary.file, diag.labels[0].span.file);
+  assert!(
+    [diag.primary.file, diag.labels[0].span.file].contains(&file_a)
+      && [diag.primary.file, diag.labels[0].span.file].contains(&file_b),
+    "expected conflict spans to reference both files"
+  );
+
+  let symbols = semantics.symbols();
+  let group = semantics.global_symbols().get("Foo").unwrap();
+  let sym = group
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("global symbol should have value namespace");
+  let decls = semantics.symbol_decls(sym, Namespace::VALUE);
+  assert_eq!(decls.len(), 2, "expected decls from both ambient fragments");
+  let mut decl_files: Vec<_> = decls.iter().map(|decl| symbols.decl(*decl).file).collect();
+  decl_files.sort();
+  assert_eq!(decl_files, vec![file_a, file_b]);
+}
+
+#[test]
 fn ambient_module_fragments_merge_exports() {
   let file = FileId(96);
   let mut hir = HirFile::module(file);
