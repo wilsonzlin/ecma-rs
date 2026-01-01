@@ -288,6 +288,10 @@ impl<'p> HirSourceToInst<'p> {
       } => self.compile_if_stmt(span, *test, *consequent, *alternate),
       StmtKind::Var(decl) => self.compile_var_decl(decl),
       StmtKind::While { test, body } => self.compile_while_stmt(*test, *body, span),
+      StmtKind::Debugger => Err(unsupported_syntax_range(
+        stmt.span,
+        "debugger statements are not supported",
+      )),
       StmtKind::Empty => Ok(()),
       StmtKind::Decl(_) => Ok(()),
       StmtKind::With { .. } => Err(unsupported_syntax_range(

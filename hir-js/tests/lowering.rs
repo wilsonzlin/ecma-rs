@@ -2719,6 +2719,24 @@ fn lowers_using_declarations() {
   assert_eq!(kinds, vec![VarDeclKind::Using, VarDeclKind::AwaitUsing]);
 }
 
+#[test]
+fn lowers_debugger_statement() {
+  let source = "debugger;";
+  let result = lower_from_source_with_kind(FileKind::Js, source).expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+  let debugger_stmts: Vec<_> = body
+    .root_stmts
+    .iter()
+    .copied()
+    .filter(|stmt_id| matches!(body.stmts[stmt_id.0 as usize].kind, StmtKind::Debugger))
+    .collect();
+  assert_eq!(debugger_stmts.len(), 1, "expected a single debugger statement");
+  let stmt_id = debugger_stmts[0];
+  let stmt = &body.stmts[stmt_id.0 as usize];
+  assert!(matches!(stmt.kind, StmtKind::Debugger));
+  assert_eq!(stmt.span, TextRange::new(0, source.len() as u32));
+}
+
 proptest! {
   #[test]
   fn lowering_is_deterministic(sample in proptest::sample::select(vec![

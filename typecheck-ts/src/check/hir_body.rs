@@ -3796,7 +3796,7 @@ impl<'a> BindingCollector<'a> {
         }
       }
       StmtKind::Throw(expr) => self.visit_expr(*expr),
-      StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Empty => {}
+      StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Debugger | StmtKind::Empty => {}
       StmtKind::Var(decl) => self.visit_var_decl(decl),
       StmtKind::Labeled { body, .. } => self.visit_stmt(*body),
       StmtKind::With { object, body } => {

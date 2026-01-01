@@ -1048,6 +1048,7 @@ pub enum StmtKind {
     object: ExprId,
     body: StmtId,
   },
+  Debugger,
   Empty,
 }
 

@@ -1711,7 +1711,8 @@ fn lower_stmt(
       let label = ct.stx.label.as_ref().map(|l| builder.intern_name(l));
       StmtKind::Continue(label)
     }
-    AstStmt::Empty(_) | AstStmt::Debugger(_) => StmtKind::Empty,
+    AstStmt::Empty(_) => StmtKind::Empty,
+    AstStmt::Debugger(_) => StmtKind::Debugger,
     _ => StmtKind::Empty,
   };
 

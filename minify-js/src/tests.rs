@@ -443,6 +443,17 @@ fn hir_minify_preserves_decorators() {
   .expect("minified output should parse as JavaScript");
 }
 
+#[cfg(feature = "emit-minify")]
+#[test]
+fn hir_emitter_preserves_debugger_statement() {
+  let (output, backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    "debugger;",
+  );
+  assert_eq!(backend, EmitBackend::Hir);
+  assert_eq!(output, "debugger;");
+}
+
 #[test]
 fn readme_example_is_parseable() {
   let code = "const main = () => { let my_first_variable = 1; };";

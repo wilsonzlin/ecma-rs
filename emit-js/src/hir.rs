@@ -1251,6 +1251,10 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       em.write_punct(")");
       emit_stmt_as_body(em, ctx, body, *inner)?;
     }
+    StmtKind::Debugger => {
+      em.write_keyword("debugger");
+      em.write_semicolon();
+    }
     StmtKind::Empty => {}
   }
   Ok(())

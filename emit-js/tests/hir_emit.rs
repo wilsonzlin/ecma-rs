@@ -93,6 +93,10 @@ fn roundtrip_matrix() {
       "export default class Defaulted extends Foo{static{}}",
     ),
     (
+      FileKind::Js,
+      "debugger;",
+    ),
+    (
       FileKind::Jsx,
       "const el=<Foo.Bar a=\"b\" b={x} {...props}>{}{x}<span>t</span>{...items}<></></Foo.Bar>;",
     ),
@@ -291,7 +295,7 @@ fn visit_stmt(body: &Body, stmt_id: hir_js::StmtId, visited: &mut HashSet<hir_js
       }
     }
     StmtKind::Throw(expr) => visit_expr(body, *expr, visited),
-    StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Empty => {}
+    StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Debugger | StmtKind::Empty => {}
     StmtKind::Var(decl) => visit_var_decl(body, decl, visited),
     StmtKind::Labeled { body: inner, .. } => visit_stmt(body, *inner, visited),
     StmtKind::With {
