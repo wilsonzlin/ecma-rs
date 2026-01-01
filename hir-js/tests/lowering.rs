@@ -2730,7 +2730,11 @@ fn lowers_debugger_statement() {
     .copied()
     .filter(|stmt_id| matches!(body.stmts[stmt_id.0 as usize].kind, StmtKind::Debugger))
     .collect();
-  assert_eq!(debugger_stmts.len(), 1, "expected a single debugger statement");
+  assert_eq!(
+    debugger_stmts.len(),
+    1,
+    "expected a single debugger statement"
+  );
   let stmt_id = debugger_stmts[0];
   let stmt = &body.stmts[stmt_id.0 as usize];
   assert!(matches!(stmt.kind, StmtKind::Debugger));
