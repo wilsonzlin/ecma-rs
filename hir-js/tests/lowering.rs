@@ -14,6 +14,9 @@ use hir_js::ExprId;
 use hir_js::ExprKind;
 use hir_js::FileKind;
 use hir_js::ImportKind;
+use hir_js::JsxAttr;
+use hir_js::JsxAttrValue;
+use hir_js::JsxChild;
 use hir_js::ObjectKey;
 use hir_js::ObjectProperty;
 use hir_js::StmtKind;
@@ -2278,6 +2281,92 @@ fn parses_jsx_and_tsx_file_kinds() {
 }
 
 #[test]
+fn lowers_full_jsx_element_trees() {
+  let source = r#"const el = <div id="x">{value}<span/>text</div>;"#;
+  let result = lower_from_source_with_kind(FileKind::Tsx, source).expect("lower tsx");
+
+  let body = result.body(result.root_body()).expect("root body");
+
+  let (div_id, div) = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match &expr.kind {
+      ExprKind::Jsx(element) => match element.name.as_ref() {
+        Some(hir_js::JsxElementName::Name(name))
+          if name.namespace.is_none() && name.name == "div" =>
+        {
+          Some((ExprId(idx as u32), element))
+        }
+        _ => None,
+      },
+      _ => None,
+    })
+    .expect("div jsx element");
+
+  assert_eq!(div.attributes.len(), 1, "div should have one attribute");
+  match &div.attributes[0] {
+    JsxAttr::Named { name, value } => {
+      assert_eq!(name.namespace.as_deref(), None);
+      assert_eq!(name.name, "id");
+      match value {
+        Some(JsxAttrValue::Text(text)) => assert_eq!(text, "x"),
+        other => panic!("expected id attribute text value, got {other:?}"),
+      }
+    }
+    other => panic!("expected named attribute, got {other:?}"),
+  }
+
+  assert_eq!(div.children.len(), 3, "div should have 3 children");
+  let value_expr = match &div.children[0] {
+    JsxChild::Expr(container) => container.expr.expect("jsx expr child should have payload"),
+    other => panic!("expected expr child, got {other:?}"),
+  };
+  assert!(
+    value_expr.0 < div_id.0,
+    "JSX child expressions should be lowered before the parent element"
+  );
+  match &body.exprs[value_expr.0 as usize].kind {
+    ExprKind::Ident(name) => assert_eq!(result.names.resolve(*name), Some("value")),
+    other => panic!("expected value identifier expr, got {other:?}"),
+  }
+
+  let span_elem = match &div.children[1] {
+    JsxChild::Element(expr) => *expr,
+    other => panic!("expected element child, got {other:?}"),
+  };
+  assert!(
+    span_elem.0 < div_id.0,
+    "nested JSX elements should be lowered before the parent element"
+  );
+  match &body.exprs[span_elem.0 as usize].kind {
+    ExprKind::Jsx(span) => match span.name.as_ref() {
+      Some(hir_js::JsxElementName::Name(name)) => {
+        assert_eq!(name.namespace.as_deref(), None);
+        assert_eq!(name.name, "span");
+      }
+      other => panic!("expected span intrinsic tag name, got {other:?}"),
+    },
+    other => panic!("expected nested span jsx element, got {other:?}"),
+  }
+
+  match &div.children[2] {
+    JsxChild::Text(text) => assert_eq!(text, "text"),
+    other => panic!("expected text child, got {other:?}"),
+  }
+
+  // Ensure nested JSX elements are allocated as expressions in the body.
+  assert!(
+    body
+      .exprs
+      .iter()
+      .enumerate()
+      .any(|(idx, expr)| idx as u32 != div_id.0 && matches!(expr.kind, ExprKind::Jsx(_))),
+    "expected nested JSX element expr ids to be allocated"
+  );
+}
+
+#[test]
 fn lowers_jsx_inner_expressions() {
   let source = "const bar = 1; const props = {}; const el = <div foo={bar} {...props}>{bar}</div>;";
   let result = lower_from_source_with_kind(FileKind::Tsx, source).expect("lower");
@@ -2324,13 +2413,13 @@ fn lowers_nested_jsx_elements_as_children() {
 
   match parent_jsx.name.as_ref() {
     Some(hir_js::JsxElementName::Name(name)) => {
-      assert_eq!(name.namespace, None);
+      assert_eq!(name.namespace.as_deref(), None);
       assert_eq!(name.name, "div");
     }
     other => panic!("unexpected parent JSX name: {other:?}"),
   }
 
-  let child_elem = parent_jsx
+  let child_elem = *parent_jsx
     .children
     .iter()
     .find_map(|child| match child {
@@ -2338,9 +2427,14 @@ fn lowers_nested_jsx_elements_as_children() {
       _ => None,
     })
     .expect("expected nested JSX element child");
-  match child_elem.name.as_ref() {
+  let child_expr = &body.exprs[child_elem.0 as usize];
+  assert_eq!(child_expr.span, child_range);
+  let ExprKind::Jsx(child_jsx) = &child_expr.kind else {
+    panic!("expected child JSX element expression");
+  };
+  match child_jsx.name.as_ref() {
     Some(hir_js::JsxElementName::Name(name)) => {
-      assert_eq!(name.namespace, None);
+      assert_eq!(name.namespace.as_deref(), None);
       assert_eq!(name.name, "span");
     }
     other => panic!("unexpected child JSX name: {other:?}"),
@@ -2356,14 +2450,8 @@ fn lowers_nested_jsx_elements_as_children() {
     child_expr_idx < parent_expr_idx,
     "child JSX expression should be lowered before parent"
   );
-  if let ExprKind::Jsx(child_jsx) = &child_expr.kind {
-    assert_eq!(
-      child_jsx, child_elem,
-      "child JSX expression should match embedded JSX child"
-    );
-  } else {
-    panic!("expected child JSX element kind");
-  }
+  assert_eq!(ExprId(child_expr_idx as u32), child_elem);
+  assert!(matches!(child_expr.kind, ExprKind::Jsx(_)));
 }
 
 #[test]

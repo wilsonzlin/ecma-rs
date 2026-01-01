@@ -578,11 +578,43 @@ impl<'a> FlowBindingsBuilder<'a> {
           self.process_expr(*attrs, lexical_scopes);
         }
       }
+      ExprKind::Jsx(elem) => {
+        for attr in elem.attributes.iter() {
+          match attr {
+            hir_js::JsxAttr::Named { value, .. } => {
+              if let Some(value) = value {
+                match value {
+                  hir_js::JsxAttrValue::Expression(container) => {
+                    if let Some(expr) = container.expr {
+                      self.process_expr(expr, lexical_scopes);
+                    }
+                  }
+                  hir_js::JsxAttrValue::Element(expr) => {
+                    self.process_expr(*expr, lexical_scopes);
+                  }
+                  hir_js::JsxAttrValue::Text(_) => {}
+                }
+              }
+            }
+            hir_js::JsxAttr::Spread { expr } => self.process_expr(*expr, lexical_scopes),
+          }
+        }
+        for child in elem.children.iter() {
+          match child {
+            hir_js::JsxChild::Text(_) => {}
+            hir_js::JsxChild::Expr(container) => {
+              if let Some(expr) = container.expr {
+                self.process_expr(expr, lexical_scopes);
+              }
+            }
+            hir_js::JsxChild::Element(expr) => self.process_expr(*expr, lexical_scopes),
+          }
+        }
+      }
       ExprKind::This
       | ExprKind::Super
       | ExprKind::Literal(_)
       | ExprKind::Missing
-      | ExprKind::Jsx(_)
       | ExprKind::NewTarget
       | ExprKind::ImportMeta => {}
     }

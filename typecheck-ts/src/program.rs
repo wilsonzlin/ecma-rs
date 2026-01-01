@@ -9782,22 +9782,9 @@ impl ProgramState {
           hir_js::JsxElementName::Name(_) => {}
         }
       }
-
-      for attr in &element.attributes {
-        match attr {
-          hir_js::JsxAttr::Named {
-            value: Some(hir_js::JsxAttrValue::Element(child)),
-            ..
-          } => collect_jsx_root_names(child, lowered, names),
-          _ => {}
-        }
-      }
-
-      for child in &element.children {
-        if let hir_js::JsxChild::Element(element) = child {
-          collect_jsx_root_names(element, lowered, names);
-        }
-      }
+      // Nested JSX elements are lowered as separate `ExprKind::Jsx` expressions,
+      // so they will be visited by the outer `body.exprs` scan that calls this
+      // helper.
     }
 
     let needed_root_names: HashSet<String> = match self.local_semantics.get(&file) {

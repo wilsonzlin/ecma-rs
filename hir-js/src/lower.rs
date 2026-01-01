@@ -2512,11 +2512,10 @@ fn lower_jsx_elem_as_expr(
   elem: &Node<jsx::JsxElem>,
   builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
-) -> JsxElement {
+) -> ExprId {
   let lowered = lower_jsx_elem(elem, builder, ctx);
-  let kind = ExprKind::Jsx(lowered.clone());
-  builder.alloc_expr(ctx.to_range(elem.loc), kind);
-  lowered
+  let kind = ExprKind::Jsx(lowered);
+  builder.alloc_expr(ctx.to_range(elem.loc), kind)
 }
 fn lower_pat(
   pat: &Node<AstPat>,

@@ -1150,7 +1150,7 @@ pub enum JsxAttr {
 pub enum JsxAttrValue {
   Expression(JsxExprContainer),
   Text(String),
-  Element(JsxElement),
+  Element(ExprId),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1161,7 +1161,7 @@ pub struct JsxExprContainer {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsxChild {
-  Element(JsxElement),
+  Element(ExprId),
   Expr(JsxExprContainer),
   Text(String),
 }

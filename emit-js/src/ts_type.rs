@@ -779,7 +779,6 @@ impl<'a> TypeEmitter<'a> {
     // `parse-js` stores template literal type chunks as cooked text. Rebuild
     // the full `...${T}...` syntax while escaping chunk content so it roundtrips.
     self.em.write_raw_byte(b'`');
-
     let mut buf = Vec::new();
     emit_template_literal_segment(&mut buf, &template.head);
     self

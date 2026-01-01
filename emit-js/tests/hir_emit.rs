@@ -505,13 +505,13 @@ fn visit_jsx_attr_value(body: &Body, value: &JsxAttrValue, visited: &mut HashSet
   match value {
     JsxAttrValue::Text(_) => {}
     JsxAttrValue::Expression(expr) => visit_jsx_expr_container(body, expr, visited),
-    JsxAttrValue::Element(elem) => visit_jsx_elem(body, elem, visited),
+    JsxAttrValue::Element(elem) => visit_expr(body, *elem, visited),
   }
 }
 
 fn visit_jsx_child(body: &Body, child: &JsxChild, visited: &mut HashSet<hir_js::ExprId>) {
   match child {
-    JsxChild::Element(elem) => visit_jsx_elem(body, elem, visited),
+    JsxChild::Element(elem) => visit_expr(body, *elem, visited),
     JsxChild::Expr(expr) => visit_jsx_expr_container(body, expr, visited),
     JsxChild::Text(_) => {}
   }

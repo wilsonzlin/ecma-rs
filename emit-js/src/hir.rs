@@ -679,6 +679,18 @@ fn emit_class_member_key(
   Ok(())
 }
 
+fn emit_jsx_expr(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  expr: ExprId,
+) -> EmitResult {
+  match &ctx.expr(body, expr).kind {
+    ExprKind::Jsx(elem) => emit_jsx_elem(em, ctx, body, elem),
+    _ => Err(EmitError::unsupported("expected jsx element expression")),
+  }
+}
+
 fn emit_jsx_elem(
   em: &mut Emitter,
   ctx: &HirContext<'_>,
@@ -779,7 +791,7 @@ fn emit_jsx_attr_value(
   match value {
     JsxAttrValue::Text(text) => crate::jsx::escape_jsx_string_literal(em, text),
     JsxAttrValue::Expression(expr) => emit_jsx_expr_container(em, ctx, body, expr),
-    JsxAttrValue::Element(elem) => emit_jsx_elem(em, ctx, body, elem),
+    JsxAttrValue::Element(expr) => emit_jsx_expr(em, ctx, body, *expr),
   }
 }
 
@@ -826,8 +838,8 @@ fn emit_jsx_children(
         }
         crate::jsx::escape_jsx_child_text(em, &combined)?;
       }
-      JsxChild::Element(elem) => {
-        emit_jsx_elem(em, ctx, body, elem)?;
+      JsxChild::Element(expr) => {
+        emit_jsx_expr(em, ctx, body, *expr)?;
         idx += 1;
       }
       JsxChild::Expr(expr) => {

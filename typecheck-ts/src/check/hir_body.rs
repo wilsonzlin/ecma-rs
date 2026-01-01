@@ -4760,6 +4760,39 @@ impl<'a> BindingCollector<'a> {
           self.visit_expr(*attrs);
         }
       }
+      ExprKind::Jsx(elem) => {
+        for attr in elem.attributes.iter() {
+          match attr {
+            hir_js::JsxAttr::Named { value, .. } => {
+              if let Some(value) = value {
+                match value {
+                  hir_js::JsxAttrValue::Expression(container) => {
+                    if let Some(expr) = container.expr {
+                      self.visit_expr(expr);
+                    }
+                  }
+                  hir_js::JsxAttrValue::Element(expr) => {
+                    self.visit_expr(*expr);
+                  }
+                  hir_js::JsxAttrValue::Text(_) => {}
+                }
+              }
+            }
+            hir_js::JsxAttr::Spread { expr } => self.visit_expr(*expr),
+          }
+        }
+        for child in elem.children.iter() {
+          match child {
+            hir_js::JsxChild::Text(_) => {}
+            hir_js::JsxChild::Expr(container) => {
+              if let Some(expr) = container.expr {
+                self.visit_expr(expr);
+              }
+            }
+            hir_js::JsxChild::Element(expr) => self.visit_expr(*expr),
+          }
+        }
+      }
       ExprKind::Literal(_)
       | ExprKind::Missing
       | ExprKind::This
@@ -4767,8 +4800,7 @@ impl<'a> BindingCollector<'a> {
       | ExprKind::FunctionExpr { .. }
       | ExprKind::ClassExpr { .. }
       | ExprKind::ImportMeta
-      | ExprKind::NewTarget
-      | ExprKind::Jsx(_) => {}
+      | ExprKind::NewTarget => {}
     }
   }
 
@@ -5660,6 +5692,44 @@ impl<'a> FlowBodyChecker<'a> {
         let ty = self.eval_expr(*expr, env).0;
         self.widen_object_literals = prev;
         ty
+      }
+      ExprKind::Jsx(elem) => {
+        for attr in elem.attributes.iter() {
+          match attr {
+            hir_js::JsxAttr::Named { value, .. } => {
+              if let Some(value) = value {
+                match value {
+                  hir_js::JsxAttrValue::Expression(container) => {
+                    if let Some(expr) = container.expr {
+                      let _ = self.eval_expr(expr, env);
+                    }
+                  }
+                  hir_js::JsxAttrValue::Element(expr) => {
+                    let _ = self.eval_expr(*expr, env);
+                  }
+                  hir_js::JsxAttrValue::Text(_) => {}
+                }
+              }
+            }
+            hir_js::JsxAttr::Spread { expr } => {
+              let _ = self.eval_expr(*expr, env);
+            }
+          }
+        }
+        for child in elem.children.iter() {
+          match child {
+            hir_js::JsxChild::Text(_) => {}
+            hir_js::JsxChild::Expr(container) => {
+              if let Some(expr) = container.expr {
+                let _ = self.eval_expr(expr, env);
+              }
+            }
+            hir_js::JsxChild::Element(expr) => {
+              let _ = self.eval_expr(*expr, env);
+            }
+          }
+        }
+        prim.unknown
       }
       _ => prim.unknown,
     };
