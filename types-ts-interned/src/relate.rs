@@ -1221,6 +1221,12 @@ impl<'a> RelateCtx<'a> {
 
   fn assignable_special(&self, src: &TypeKind, dst: &TypeKind) -> Option<bool> {
     let opts = &self.options;
+    if !opts.strict_null_checks
+      && (matches!(src, TypeKind::Null | TypeKind::Undefined)
+        || matches!(dst, TypeKind::Null | TypeKind::Undefined))
+    {
+      return Some(true);
+    }
     match (src, dst) {
       (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => Some(a == b),
       // Unresolved type parameters are treated conservatively as `unknown` to
@@ -1249,22 +1255,30 @@ impl<'a> RelateCtx<'a> {
           Some(!matches!(src, TypeKind::Null | TypeKind::Undefined))
         }
       }
-      (TypeKind::Null, _)
-      | (TypeKind::Undefined, _)
-      | (_, TypeKind::Null)
-      | (_, TypeKind::Undefined) => {
-        if !opts.strict_null_checks {
-          Some(true)
-        } else {
-          match (src, dst) {
-            (TypeKind::Null, TypeKind::Null) => Some(true),
-            (TypeKind::Undefined, TypeKind::Undefined) => Some(true),
-            (TypeKind::Undefined, TypeKind::Void) => Some(true),
-            (TypeKind::Null, TypeKind::Any | TypeKind::Unknown) => Some(true),
-            (TypeKind::Undefined, TypeKind::Any | TypeKind::Unknown) => Some(true),
-            _ => Some(false),
-          }
-        }
+      (TypeKind::Null, TypeKind::Null) => Some(true),
+      (TypeKind::Undefined, TypeKind::Undefined) => Some(true),
+      (
+        TypeKind::Null | TypeKind::Undefined,
+        TypeKind::Union(_)
+        | TypeKind::Intersection(_)
+        | TypeKind::Ref { .. }
+        | TypeKind::IndexedAccess { .. }
+        | TypeKind::Conditional { .. }
+        | TypeKind::Mapped(_)
+        | TypeKind::KeyOf(_),
+      ) => None,
+      (
+        TypeKind::Union(_)
+        | TypeKind::Intersection(_)
+        | TypeKind::Ref { .. }
+        | TypeKind::IndexedAccess { .. }
+        | TypeKind::Conditional { .. }
+        | TypeKind::Mapped(_)
+        | TypeKind::KeyOf(_),
+        TypeKind::Null | TypeKind::Undefined,
+      ) => None,
+      (TypeKind::Null | TypeKind::Undefined, _) | (_, TypeKind::Null | TypeKind::Undefined) => {
+        Some(false)
       }
       (TypeKind::BooleanLiteral(_), TypeKind::Boolean) => Some(true),
       (TypeKind::NumberLiteral(_), TypeKind::Number) => Some(true),

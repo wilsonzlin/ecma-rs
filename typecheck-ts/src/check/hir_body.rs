@@ -2251,8 +2251,11 @@ impl<'a> Checker<'a> {
 
     let args = [actual_props.ty];
     let contextual_return_ty = contextual_return.then_some(element_ty);
+    let valid_return_ty =
+      contextual_return_ty.map(|el_ty| self.store.union(vec![el_ty, prim.null]));
     let mut filtered_props: Vec<TypeId> = Vec::new();
     let mut all_props: Vec<TypeId> = Vec::new();
+    let mut saw_valid_return = false;
     for sig_id in sigs.iter().copied() {
       let sig = self.store.signature(sig_id);
       let mut props_ty = sig.params.first().map(|p| p.ty).unwrap_or(empty_props);
@@ -2291,8 +2294,15 @@ impl<'a> Checker<'a> {
         }
       }
       all_props.push(props_ty);
-      if contextual_return_ty.is_some() && self.relate.is_assignable(ret_ty, element_ty) {
-        filtered_props.push(props_ty);
+      if let Some(valid_return) = valid_return_ty {
+        let return_ok = matches!(
+          self.store.type_kind(ret_ty),
+          TypeKind::Any | TypeKind::Unknown
+        ) || self.relate.is_assignable(ret_ty, valid_return);
+        if return_ok {
+          saw_valid_return = true;
+          filtered_props.push(props_ty);
+        }
       }
     }
     if enforce_element_class && all_props.is_empty() {
@@ -2307,6 +2317,19 @@ impl<'a> Checker<'a> {
             "expected JSX.ElementClass {}, got component type {}",
             TypeDisplay::new(self.store.as_ref(), class_ty),
             TypeDisplay::new(self.store.as_ref(), component_ty)
+          )),
+      );
+      return;
+    }
+    if valid_return_ty.is_some() && !saw_valid_return {
+      let expected = valid_return_ty.expect("return type computed");
+      self.diagnostics.push(
+        codes::NO_OVERLOAD
+          .error("JSX component return type is not a valid JSX element", span)
+          .with_note(format!(
+            "expected return type assignable to {}, got component type {}",
+            TypeDisplay::new(self.store.as_ref(), expected),
+            TypeDisplay::new(self.store.as_ref(), component_ty),
           )),
       );
       return;

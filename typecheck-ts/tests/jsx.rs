@@ -502,6 +502,50 @@ const bad = <Foo x={1} />;
 }
 
 #[test]
+fn component_return_type_must_be_valid_jsx_element() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element { readonly __tag: "jsx" }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(): string { return "hi"; }
+function Bar(): JSX.Element | null { return null; }
+const ok = <Bar />;
+const bad = <Foo />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::NO_OVERLOAD.as_str(),
+    "expected NO_OVERLOAD, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn element_children_attribute_controls_children_prop_name() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;

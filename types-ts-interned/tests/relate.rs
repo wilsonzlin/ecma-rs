@@ -111,6 +111,20 @@ fn nullish_assignable_to_empty_object_without_strict_null_checks() {
 }
 
 #[test]
+fn null_assignable_to_union_target_with_null_member() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: Vec::new(),
+  });
+  let union = store.union(vec![ref_ty, primitives.null]);
+  assert!(ctx.is_assignable(primitives.null, union));
+}
+
+#[test]
 fn array_and_tuple_assignable_to_object_keyword() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
