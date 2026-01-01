@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey,
-  Property, Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId,
-  TypeKind, TypeParamId, TypeStore,
+  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property,
+  Param, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
+  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -205,6 +205,114 @@ fn conditional_uses_structural_assignability() {
 
   let result = store.evaluate(cond);
   assert_eq!(result, primitives.boolean);
+}
+
+#[test]
+fn conditional_uses_structural_assignability_for_arrays() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let check = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let elem_union = store.union(vec![primitives.number, primitives.string]);
+  let extends = store.intern_type(TypeKind::Array {
+    ty: elem_union,
+    readonly: false,
+  });
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check,
+    extends,
+    true_ty: primitives.boolean,
+    false_ty: primitives.never,
+    distributive: false,
+  });
+
+  assert_eq!(store.evaluate(cond), primitives.boolean);
+}
+
+#[test]
+fn conditional_uses_structural_assignability_for_tuples() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let check = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  let elem_union = store.union(vec![primitives.number, primitives.string]);
+  let extends = store.intern_type(TypeKind::Array {
+    ty: elem_union,
+    readonly: false,
+  });
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check,
+    extends,
+    true_ty: primitives.boolean,
+    false_ty: primitives.never,
+    distributive: false,
+  });
+
+  assert_eq!(store.evaluate(cond), primitives.boolean);
+}
+
+#[test]
+fn conditional_uses_structural_assignability_for_callables() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let union = store.union(vec![primitives.number, primitives.string]);
+
+  let wide_sig = store.intern_signature(Signature::new(
+    vec![Param {
+      name: None,
+      ty: union,
+      optional: false,
+      rest: false,
+    }],
+    primitives.number,
+  ));
+  let check = store.intern_type(TypeKind::Callable {
+    overloads: vec![wide_sig],
+  });
+
+  let narrow_sig = store.intern_signature(Signature::new(
+    vec![Param {
+      name: None,
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+    }],
+    primitives.number,
+  ));
+  let extends = store.intern_type(TypeKind::Callable {
+    overloads: vec![narrow_sig],
+  });
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check,
+    extends,
+    true_ty: primitives.boolean,
+    false_ty: primitives.never,
+    distributive: false,
+  });
+
+  // With strict function types enabled by default, (x: number | string) => number is
+  // assignable to (x: number) => number.
+  assert_eq!(store.evaluate(cond), primitives.boolean);
 }
 
 #[test]
