@@ -261,8 +261,7 @@ fn split_virtual_files(
           let content = current_content.join("\n");
           let kind = detect_file_kind(&name);
           let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-          let module =
-            module_directive || contains_import_export(&content, cancel).unwrap_or(false);
+          let module = module_directive || contains_import_export(&content, cancel)?;
           files.push(VirtualFile {
             name,
             content,
@@ -288,7 +287,7 @@ fn split_virtual_files(
   }
   let kind = detect_file_kind(&final_name);
   let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-  let module = module_directive || contains_import_export(&content, cancel).unwrap_or(false);
+  let module = module_directive || contains_import_export(&content, cancel)?;
   files.push(VirtualFile {
     name: final_name,
     content,
