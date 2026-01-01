@@ -9457,10 +9457,9 @@ impl ProgramState {
     // include value bindings for imported/global components referenced only
     // from JSX (e.g. `<Foo />` or `<Foo.Bar />`).
     //
-    // NOTE: `parse-js` may classify some non-identifier tag names as identifier
-    // names based on capitalization alone (e.g. `Svg:Path`, `My-Tag`). Treat tag
-    // names containing `:` or `-` as intrinsic elements and avoid seeding them
-    // as value identifiers.
+    // NOTE: JSX tag names containing `:` (namespaced) or `-` (custom elements)
+    // should always be treated as intrinsic elements and must not be seeded as
+    // value identifiers, regardless of capitalization.
     fn collect_jsx_root_names(
       element: &hir_js::JsxElement,
       lowered: &hir_js::LowerResult,

@@ -56,8 +56,12 @@ pub enum JsxElemChild {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxElem {
-  // When an element name starts with a lowercase ASCII character, it's a built-in component like '<div>' or '<span>'.
-  // For easier differentiation, we use IdentifierExpr for user-defined components as they are references to symbols and built-in components are not.
+  // JSX distinguishes intrinsic elements (e.g. `<div>`, `<my-tag>`, `<Svg:Path>`) from
+  // value-based component references (e.g. `<Foo>`, `<Foo.Bar>`) primarily by capitalization.
+  //
+  // Additionally, namespaced (`:`) and hyphenated (`-`) tag names are always treated as
+  // intrinsic, regardless of capitalization.
+  //
   // https://reactjs.org/docs/jsx-in-depth.html#user-defined-components-must-be-capitalized
   pub name: Option<JsxElemName>, // None if fragment
   pub attributes: Vec<JsxAttr>,  // Always empty if fragment
