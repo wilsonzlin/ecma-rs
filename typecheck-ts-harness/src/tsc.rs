@@ -20,6 +20,11 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+#[cfg(feature = "with-node")]
+use std::sync::atomic::Ordering;
+#[cfg(feature = "with-node")]
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,9 +172,44 @@ pub struct TypeAtFact {
 }
 
 #[cfg(feature = "with-node")]
+#[derive(Clone, Debug)]
+pub(crate) struct TscKillSwitch {
+  child: Arc<Mutex<Option<std::process::Child>>>,
+}
+
+#[cfg(feature = "with-node")]
+impl TscKillSwitch {
+  pub(crate) fn new() -> Self {
+    Self {
+      child: Arc::new(Mutex::new(None)),
+    }
+  }
+
+  pub(crate) fn kill(&self) {
+    let mut guard = self.child.lock().unwrap();
+    let Some(child) = guard.as_mut() else {
+      return;
+    };
+    let _ = child.kill();
+  }
+}
+
+#[cfg(not(feature = "with-node"))]
+#[derive(Clone, Debug, Default)]
+pub(crate) struct TscKillSwitch;
+
+#[cfg(not(feature = "with-node"))]
+impl TscKillSwitch {
+  pub(crate) fn new() -> Self {
+    Self
+  }
+
+  pub(crate) fn kill(&self) {}
+}
+
+#[cfg(feature = "with-node")]
 #[derive(Debug)]
 struct RunnerProcess {
-  child: std::process::Child,
   stdin: BufWriter<std::process::ChildStdin>,
   stdout: BufReader<std::process::ChildStdout>,
 }
@@ -178,14 +218,20 @@ struct RunnerProcess {
 #[derive(Debug)]
 pub struct TscRunner {
   node_path: PathBuf,
+  kill_switch: TscKillSwitch,
   process: Option<RunnerProcess>,
 }
 
 #[cfg(feature = "with-node")]
 impl TscRunner {
   pub fn new(node_path: PathBuf) -> anyhow::Result<Self> {
+    Self::with_kill_switch(node_path, TscKillSwitch::new())
+  }
+
+  pub(crate) fn with_kill_switch(node_path: PathBuf, kill_switch: TscKillSwitch) -> anyhow::Result<Self> {
     let mut runner = Self {
       node_path,
+      kill_switch,
       process: None,
     };
     runner.spawn()?;
@@ -195,6 +241,20 @@ impl TscRunner {
   pub fn check(&mut self, request: TscRequest) -> anyhow::Result<TscDiagnostics> {
     self.ensure_running()?;
 
+    let cancel = AtomicBool::new(false);
+    self.check_inner(request, &cancel)
+  }
+
+  pub(crate) fn check_cancellable(
+    &mut self,
+    request: TscRequest,
+    cancel: &AtomicBool,
+  ) -> anyhow::Result<TscDiagnostics> {
+    self.ensure_running()?;
+    self.check_inner(request, cancel)
+  }
+
+  fn check_inner(&mut self, request: TscRequest, cancel: &AtomicBool) -> anyhow::Result<TscDiagnostics> {
     let mut attempts = 0;
     loop {
       attempts += 1;
@@ -206,7 +266,7 @@ impl TscRunner {
           return Ok(diags);
         }
         Err(err) => {
-          if attempts >= 2 {
+          if cancel.load(Ordering::Relaxed) || attempts >= 2 {
             return Err(err);
           }
           self.spawn()?;
@@ -216,9 +276,12 @@ impl TscRunner {
   }
 
   fn ensure_running(&mut self) -> anyhow::Result<()> {
-    if let Some(process) = self.process.as_mut() {
-      if process.child.try_wait()?.is_none() {
-        return Ok(());
+    if self.process.is_some() {
+      let mut child_guard = self.kill_switch.child.lock().unwrap();
+      if let Some(child) = child_guard.as_mut() {
+        if child.try_wait()?.is_none() {
+          return Ok(());
+        }
       }
     }
 
@@ -226,11 +289,13 @@ impl TscRunner {
   }
 
   fn spawn(&mut self) -> anyhow::Result<()> {
-    if let Some(mut existing) = self.process.take() {
-      if existing.child.try_wait().ok().flatten().is_none() {
-        let _ = existing.child.kill();
+    let _ = self.process.take();
+    let mut child_guard = self.kill_switch.child.lock().unwrap();
+    if let Some(mut child) = child_guard.take() {
+      if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
       }
-      let _ = existing.child.wait();
+      let _ = child.wait();
     }
 
     let runner_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -258,8 +323,11 @@ impl TscRunner {
       .take()
       .context("failed to open stdout for tsc runner")?;
 
+    {
+      let mut child_guard = self.kill_switch.child.lock().unwrap();
+      *child_guard = Some(spawned);
+    }
     self.process = Some(RunnerProcess {
-      child: spawned,
       stdin: BufWriter::new(stdin),
       stdout: BufReader::new(stdout),
     });
@@ -305,11 +373,13 @@ impl TscRunner {
 #[cfg(feature = "with-node")]
 impl Drop for TscRunner {
   fn drop(&mut self) {
-    if let Some(mut process) = self.process.take() {
-      if process.child.try_wait().ok().flatten().is_none() {
-        let _ = process.child.kill();
+    let _ = self.process.take();
+    let mut child_guard = self.kill_switch.child.lock().unwrap();
+    if let Some(mut child) = child_guard.take() {
+      if child.try_wait().ok().flatten().is_none() {
+        let _ = child.kill();
       }
-      let _ = process.child.wait();
+      let _ = child.wait();
     }
   }
 }
@@ -344,10 +414,22 @@ impl TscRunner {
     Ok(Self)
   }
 
+  pub(crate) fn with_kill_switch(_node_path: PathBuf, _kill_switch: TscKillSwitch) -> anyhow::Result<Self> {
+    Ok(Self)
+  }
+
   pub fn check(&mut self, _request: TscRequest) -> anyhow::Result<TscDiagnostics> {
     Err(anyhow!(
       "tsc runner skipped: built without `with-node` feature"
     ))
+  }
+
+  pub(crate) fn check_cancellable(
+    &mut self,
+    request: TscRequest,
+    _cancel: &AtomicBool,
+  ) -> anyhow::Result<TscDiagnostics> {
+    self.check(request)
   }
 }
 

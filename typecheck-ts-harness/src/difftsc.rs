@@ -6,8 +6,8 @@ use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{
-  build_tsc_request, is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet,
-  HarnessHost, TscRunnerPool,
+  build_tsc_request, is_source_root, run_rust, EngineStatus, HarnessFileSet, HarnessHost,
+  TscRunnerPool,
 };
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TypeAtFact, TypeFacts, TypeQuery,
@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::time::{Duration, Instant};
 use typecheck_ts::Program;
 use walkdir::WalkDir;
 
@@ -321,7 +321,6 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
   }
 
   let jobs = args.jobs.max(1);
-  let tsc_limiter = Arc::new(ConcurrencyLimiter::new(jobs));
   let pool = ThreadPoolBuilder::new()
     .num_threads(jobs)
     .build()
@@ -344,10 +343,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
       eprintln!("difftsc skipped: {hint}");
       return Ok(CommandStatus::Skipped);
     }
-    Some(TscRunnerPool::new(
-      args.node.clone(),
-      Arc::clone(&tsc_limiter),
-    ))
+    Some(TscRunnerPool::new(args.node.clone(), jobs))
   } else {
     None
   };
@@ -553,7 +549,10 @@ fn run_single_test(
     };
 
     let request = build_tsc_request(&file_set, &tsc_options, false);
-    match pool.run_request(request) {
+    // `difftsc` is primarily a developer tool, but keep a reasonable upper
+    // bound so a wedged Node process does not hang the whole run forever.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    match pool.run_request(request, deadline) {
       Ok(diags) => Some(diags),
       Err(err) => {
         return CaseReport {
@@ -568,7 +567,7 @@ fn run_single_test(
           actual_types: None,
           type_diff: None,
           report: None,
-          notes: vec![err],
+          notes: vec![err.to_string()],
         };
       }
     }

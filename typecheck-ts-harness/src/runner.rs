@@ -9,17 +9,18 @@ use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
 use crate::resolve::resolve_module_specifier;
 use crate::tsc::{
-  node_available, typescript_available, TscDiagnostics, TscRequest, TscRunner,
+  node_available, typescript_available, TscDiagnostics, TscKillSwitch, TscRequest, TscRunner,
   TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{read_utf8_file, FailOn, Result, VirtualFile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
@@ -492,11 +493,8 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   }
 
   let job_count = opts.jobs.max(1);
-  let tsc_limiter = Arc::new(ConcurrencyLimiter::new(job_count));
-  let tsc_pool = Arc::new(TscRunnerPool::new(
-    opts.node_path.clone(),
-    tsc_limiter.clone(),
-  ));
+  let timeout_manager = Arc::new(TimeoutManager::new());
+  let tsc_pool = Arc::new(TscRunnerPool::new(opts.node_path.clone(), job_count));
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -513,6 +511,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
             planned.case.clone(),
             compare_mode,
             tsc_pool.clone(),
+            timeout_manager.clone(),
             tsc_available,
             &snapshot_store,
             &opts,
@@ -593,6 +592,27 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
   }
 }
 
+fn build_timeout_result(case: &TestCase, timeout: Duration) -> TestResult {
+  let tsc_options = case.options.to_tsc_options_map();
+  TestResult {
+    id: case.id.clone(),
+    path: case.path.display().to_string(),
+    outcome: TestOutcome::Timeout,
+    duration_ms: timeout.as_millis(),
+    rust_ms: None,
+    tsc_ms: None,
+    diff_ms: None,
+    rust: EngineDiagnostics::skipped(None),
+    tsc: EngineDiagnostics::skipped(None),
+    options: build_test_options(&case.options, &tsc_options),
+    query_stats: None,
+    notes: case.notes.clone(),
+    detail: None,
+    expectation: None,
+    mismatched: false,
+  }
+}
+
 fn apply_expectation(result: TestResult, expectation: &AppliedExpectation) -> TestResult {
   let mismatched = result.outcome != TestOutcome::Match;
   let expected = expectation.matches(mismatched);
@@ -630,63 +650,176 @@ fn resolve_compare_mode(
   }
 }
 
+struct TimeoutManager {
+  inner: Arc<TimeoutManagerInner>,
+  thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+struct TimeoutManagerInner {
+  state: Mutex<TimeoutManagerState>,
+  cv: Condvar,
+}
+
+struct TimeoutManagerState {
+  active: HashMap<String, TimeoutEntry>,
+  shutdown: bool,
+}
+
+struct TimeoutEntry {
+  deadline: Instant,
+  program: Option<Arc<Program>>,
+  cancelled: bool,
+}
+
+struct TimeoutGuard {
+  test_id: String,
+  deadline: Instant,
+  inner: Arc<TimeoutManagerInner>,
+}
+
+impl TimeoutManager {
+  fn new() -> Self {
+    let inner = Arc::new(TimeoutManagerInner {
+      state: Mutex::new(TimeoutManagerState {
+        active: HashMap::new(),
+        shutdown: false,
+      }),
+      cv: Condvar::new(),
+    });
+    let thread_inner = Arc::clone(&inner);
+    let handle = std::thread::spawn(move || timeout_thread(thread_inner));
+    Self {
+      inner,
+      thread: Mutex::new(Some(handle)),
+    }
+  }
+
+  fn register(&self, test_id: String, deadline: Instant) -> TimeoutGuard {
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.insert(
+      test_id.clone(),
+      TimeoutEntry {
+        deadline,
+        program: None,
+        cancelled: false,
+      },
+    );
+    self.inner.cv.notify_one();
+    TimeoutGuard {
+      test_id,
+      deadline,
+      inner: Arc::clone(&self.inner),
+    }
+  }
+}
+
+impl Drop for TimeoutManager {
+  fn drop(&mut self) {
+    {
+      let mut state = self.inner.state.lock().unwrap();
+      state.shutdown = true;
+      self.inner.cv.notify_one();
+    }
+    if let Some(handle) = self.thread.lock().unwrap().take() {
+      let _ = handle.join();
+    }
+  }
+}
+
+impl TimeoutGuard {
+  fn set_program(&self, program: Arc<Program>) {
+    let mut state = self.inner.state.lock().unwrap();
+    let Some(entry) = state.active.get_mut(&self.test_id) else {
+      return;
+    };
+
+    entry.program = Some(Arc::clone(&program));
+    if entry.cancelled || Instant::now() >= self.deadline {
+      entry.cancelled = true;
+      program.cancel();
+    }
+
+    self.inner.cv.notify_one();
+  }
+}
+
+impl Drop for TimeoutGuard {
+  fn drop(&mut self) {
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.remove(&self.test_id);
+    self.inner.cv.notify_one();
+  }
+}
+
+fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
+  let mut guard = inner.state.lock().unwrap();
+  loop {
+    if guard.shutdown {
+      return;
+    }
+
+    let now = Instant::now();
+    let mut next_deadline: Option<Instant> = None;
+
+    for entry in guard.active.values_mut() {
+      if entry.cancelled {
+        continue;
+      }
+
+      if now >= entry.deadline {
+        entry.cancelled = true;
+        if let Some(program) = entry.program.as_ref() {
+          program.cancel();
+        }
+        continue;
+      }
+
+      next_deadline = match next_deadline {
+        Some(existing) => Some(existing.min(entry.deadline)),
+        None => Some(entry.deadline),
+      };
+    }
+
+    if let Some(deadline) = next_deadline {
+      let wait_for = deadline
+        .checked_duration_since(now)
+        .unwrap_or_else(|| Duration::from_millis(0));
+      let (new_guard, _) = inner.cv.wait_timeout(guard, wait_for).unwrap();
+      guard = new_guard;
+    } else {
+      guard = inner.cv.wait(guard).unwrap();
+    }
+  }
+}
+
 fn run_single_case(
   case: TestCase,
   compare_mode: CompareMode,
   tsc_pool: Arc<TscRunnerPool>,
+  timeout_manager: Arc<TimeoutManager>,
   tsc_available: bool,
   snapshots: &SnapshotStore,
   opts: &ConformanceOptions,
 ) -> TestResult {
-  let (tx, rx) = mpsc::channel();
   let span = info_span!("test_case", test_id = %case.id);
   let _enter = span.enter();
-  let span_for_thread = span.clone();
-  let cloned_tsc_pool = tsc_pool.clone();
-  let cloned_snapshots = snapshots.clone();
-  let timeout_id = case.id.clone();
-  let timeout_path = case.path.display().to_string();
-  let timeout_notes = case.notes.clone();
-  let timeout_options = build_test_options(&case.options, &case.options.to_tsc_options_map());
-  let timeout = opts.timeout;
-  let span_tolerance = opts.span_tolerance;
-  let update_snapshots = opts.update_snapshots;
-  let collect_query_stats = opts.profile;
-  std::thread::spawn(move || {
-    let _entered = span_for_thread.enter();
-    let result = execute_case(
-      case,
-      compare_mode,
-      cloned_tsc_pool,
-      tsc_available,
-      cloned_snapshots,
-      span_tolerance,
-      update_snapshots,
-      collect_query_stats,
-    );
-    let _ = tx.send(result);
-  });
-
-  match rx.recv_timeout(timeout) {
-    Ok(result) => result,
-    Err(_) => TestResult {
-      id: timeout_id,
-      path: timeout_path,
-      outcome: TestOutcome::Timeout,
-      duration_ms: timeout.as_millis(),
-      rust_ms: None,
-      tsc_ms: None,
-      diff_ms: None,
-      rust: EngineDiagnostics::skipped(None),
-      tsc: EngineDiagnostics::skipped(None),
-      options: timeout_options,
-      query_stats: None,
-      notes: timeout_notes,
-      detail: None,
-      expectation: None,
-      mismatched: true,
-    },
-  }
+  let total_start = Instant::now();
+  let deadline = total_start + opts.timeout;
+  let timeout_guard = timeout_manager.register(case.id.clone(), deadline);
+  execute_case(
+    case,
+    compare_mode,
+    tsc_pool,
+    tsc_available,
+    snapshots.clone(),
+    opts.span_tolerance,
+    opts.update_snapshots,
+    opts.profile,
+    total_start,
+    opts.timeout,
+    deadline,
+    timeout_guard,
+  )
 }
 
 fn execute_case(
@@ -698,18 +831,32 @@ fn execute_case(
   span_tolerance: u32,
   update_snapshots: bool,
   collect_query_stats: bool,
+  total_start: Instant,
+  timeout: Duration,
+  deadline: Instant,
+  timeout_guard: TimeoutGuard,
 ) -> TestResult {
-  let total_start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
-    std::thread::sleep(delay);
+    if sleep_with_deadline(delay, deadline) {
+      return build_timeout_result(&case, timeout);
+    }
   }
   let notes = case.notes.clone();
   let file_set = HarnessFileSet::new(&case.deduped_files);
   let harness_options = case.options.clone();
 
   let rust_start = Instant::now();
-  let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
+  let compiler_options = harness_options.to_compiler_options();
+  let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
+  let roots = file_set.root_keys();
+  let program = Arc::new(Program::new(host, roots));
+  timeout_guard.set_program(Arc::clone(&program));
+  let (rust, query_stats) =
+    run_rust_with_profile(&program, &file_set, collect_query_stats);
   let rust_ms = rust_start.elapsed().as_millis();
+  if Instant::now() >= deadline {
+    return build_timeout_result(&case, timeout);
+  }
   let tsc_options = harness_options.to_tsc_options_map();
   let options = build_test_options(&harness_options, &tsc_options);
 
@@ -719,23 +866,34 @@ fn execute_case(
   // invoke tsc, we reset this clock after tsc completes so `diff_ms` does not
   // include `tsc_ms`.
   let mut diff_start = Instant::now();
-  let mut run_live_tsc = |unavailable: &str| {
-    if tsc_available {
-      let tsc_start = Instant::now();
-      let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
-      tsc_ms = Some(tsc_start.elapsed().as_millis());
-      diff_start = Instant::now();
-      tsc_raw = raw;
-      diag
-    } else {
-      EngineDiagnostics::crashed(unavailable)
+  let mut run_live_tsc = |unavailable: &str| -> Option<EngineDiagnostics> {
+    if !tsc_available {
+      return Some(EngineDiagnostics::crashed(unavailable));
+    }
+
+    let tsc_start = Instant::now();
+    match run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options, deadline) {
+      TscRunResult::Completed { diagnostics, raw } => {
+        tsc_ms = Some(tsc_start.elapsed().as_millis());
+        diff_start = Instant::now();
+        tsc_raw = raw;
+        Some(diagnostics)
+      }
+      TscRunResult::Timeout => None,
     }
   };
+
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
-    CompareMode::Tsc => run_live_tsc("tsc unavailable"),
+    CompareMode::Tsc => match run_live_tsc("tsc unavailable") {
+      Some(diag) => diag,
+      None => return build_timeout_result(&case, timeout),
+    },
     CompareMode::Snapshot if update_snapshots => {
-      run_live_tsc("tsc unavailable for snapshot update")
+      match run_live_tsc("tsc unavailable for snapshot update") {
+        Some(diag) => diag,
+        None => return build_timeout_result(&case, timeout),
+      }
     }
     CompareMode::Snapshot => match snapshots.load(&case.id) {
       Ok(snapshot) => {
@@ -752,6 +910,10 @@ fn execute_case(
     CompareMode::Auto => unreachable!("compare mode should be resolved before execution"),
   };
 
+  if Instant::now() >= deadline {
+    return build_timeout_result(&case, timeout);
+  }
+
   if update_snapshots && tsc.status == EngineStatus::Ok {
     if let Some(raw) = tsc_raw.as_ref() {
       let _ = snapshots.save(&case.id, raw);
@@ -760,6 +922,9 @@ fn execute_case(
 
   let (outcome, detail) = compute_outcome(compare_mode, &rust, &tsc, span_tolerance);
   let diff_ms = diff_start.elapsed().as_millis();
+  if Instant::now() >= deadline {
+    return build_timeout_result(&case, timeout);
+  }
 
   TestResult {
     id: case.id,
@@ -781,18 +946,18 @@ fn execute_case(
 }
 
 pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
-  run_rust_with_profile(file_set, options, false).0
-}
-
-fn run_rust_with_profile(
-  file_set: &HarnessFileSet,
-  options: &HarnessOptions,
-  collect_profile: bool,
-) -> (EngineDiagnostics, Option<QueryStats>) {
   let compiler_options = options.to_compiler_options();
   let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_keys();
   let program = Program::new(host, roots);
+  run_rust_with_profile(&program, file_set, false).0
+}
+
+fn run_rust_with_profile(
+  program: &Program,
+  file_set: &HarnessFileSet,
+  collect_profile: bool,
+) -> (EngineDiagnostics, Option<QueryStats>) {
   let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
   let stats = (collect_profile && result.is_ok()).then(|| program.query_stats());
   let diagnostics = match result {
@@ -842,23 +1007,63 @@ fn harness_sleep_for_case(id: &str) -> Option<Duration> {
   None
 }
 
+fn sleep_with_deadline(delay: Duration, deadline: Instant) -> bool {
+  let end = Instant::now() + delay;
+  loop {
+    let now = Instant::now();
+    if now >= deadline {
+      return true;
+    }
+    if now >= end {
+      return false;
+    }
+
+    let next = std::cmp::min(deadline, end);
+    let remaining = next
+      .checked_duration_since(now)
+      .unwrap_or_else(|| Duration::from_millis(0));
+    let step = std::cmp::min(remaining, Duration::from_millis(10));
+    if step.is_zero() {
+      std::thread::yield_now();
+    } else {
+      std::thread::sleep(step);
+    }
+  }
+}
+
+enum TscRunResult {
+  Completed {
+    diagnostics: EngineDiagnostics,
+    raw: Option<TscDiagnostics>,
+  },
+  Timeout,
+}
+
 fn run_tsc_with_raw(
   pool: &TscRunnerPool,
   file_set: &HarnessFileSet,
   options: &Map<String, Value>,
-) -> (EngineDiagnostics, Option<TscDiagnostics>) {
-  match pool.run(file_set, options) {
+  deadline: Instant,
+) -> TscRunResult {
+  match pool.run(file_set, options, deadline) {
     Ok(diags) => match &diags.crash {
-      Some(crash) => (
-        EngineDiagnostics::crashed(crash.message.clone()),
-        Some(diags),
-      ),
+      Some(crash) => TscRunResult::Completed {
+        diagnostics: EngineDiagnostics::crashed(crash.message.clone()),
+        raw: Some(diags),
+      },
       None => {
         let normalized = normalize_tsc_diagnostics(&diags.diagnostics);
-        (EngineDiagnostics::ok(normalized), Some(diags))
+        TscRunResult::Completed {
+          diagnostics: EngineDiagnostics::ok(normalized),
+          raw: Some(diags),
+        }
       }
     },
-    Err(err) => (EngineDiagnostics::crashed(err), None),
+    Err(TscPoolError::Timeout) => TscRunResult::Timeout,
+    Err(TscPoolError::Crashed(err)) => TscRunResult::Completed {
+      diagnostics: EngineDiagnostics::crashed(err),
+      raw: None,
+    },
   }
 }
 
@@ -1097,17 +1302,49 @@ impl Host for HarnessHost {
 }
 
 pub(crate) struct TscRunnerPool {
-  node_path: PathBuf,
-  limiter: Arc<ConcurrencyLimiter>,
-  runners: Mutex<Vec<TscRunner>>,
+  workers: Vec<TscWorker>,
+  availability: Arc<TscWorkerAvailability>,
+  threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
 impl TscRunnerPool {
-  pub(crate) fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
+  pub(crate) fn new(node_path: PathBuf, worker_count: usize) -> Self {
+    let worker_count = worker_count.max(1);
+    let availability = Arc::new(TscWorkerAvailability::new(worker_count));
+    let mut workers = Vec::with_capacity(worker_count);
+    let mut threads = Vec::with_capacity(worker_count);
+
+    for worker_idx in 0..worker_count {
+      let (tx, rx) = mpsc::channel();
+      let cancel = Arc::new(AtomicBool::new(false));
+      let kill_switch = TscKillSwitch::new();
+      let thread_availability = Arc::clone(&availability);
+      let thread_cancel = Arc::clone(&cancel);
+      let thread_kill_switch = kill_switch.clone();
+      let thread_node = node_path.clone();
+
+      threads.push(std::thread::spawn(move || {
+        tsc_worker_loop(
+          worker_idx,
+          thread_node,
+          thread_kill_switch,
+          thread_cancel,
+          thread_availability,
+          rx,
+        )
+      }));
+
+      workers.push(TscWorker {
+        tx,
+        cancel,
+        kill_switch,
+      });
+    }
+
     Self {
-      node_path,
-      limiter,
-      runners: Mutex::new(Vec::new()),
+      workers,
+      availability,
+      threads: Mutex::new(threads),
     }
   }
 
@@ -1115,45 +1352,188 @@ impl TscRunnerPool {
     &self,
     file_set: &HarnessFileSet,
     options: &Map<String, Value>,
-  ) -> std::result::Result<TscDiagnostics, String> {
+    deadline: Instant,
+  ) -> std::result::Result<TscDiagnostics, TscPoolError> {
     let request = build_tsc_request(file_set, options, true);
-    self.run_request(request)
+    self.run_request(request, deadline)
   }
 
   pub(crate) fn run_request(
     &self,
     request: TscRequest,
-  ) -> std::result::Result<TscDiagnostics, String> {
-    let _permit = self.limiter.acquire();
-    let mut runner = self.checkout().map_err(|err| err.to_string())?;
-    match runner.check(request) {
-      Ok(diags) => {
-        self.release(runner);
-        Ok(diags)
+    deadline: Instant,
+  ) -> std::result::Result<TscDiagnostics, TscPoolError> {
+    let Some(worker_idx) = self.availability.checkout(deadline) else {
+      return Err(TscPoolError::Timeout);
+    };
+
+    if Instant::now() >= deadline {
+      self.availability.release(worker_idx);
+      return Err(TscPoolError::Timeout);
+    }
+
+    let (reply_tx, reply_rx) = mpsc::channel();
+    self.workers[worker_idx].cancel.store(false, Ordering::Relaxed);
+    if self.workers[worker_idx]
+      .tx
+      .send(TscWorkerCommand::Run { request, reply: reply_tx })
+      .is_err()
+    {
+      self.availability.release(worker_idx);
+      return Err(TscPoolError::Crashed("tsc worker unavailable".to_string()));
+    }
+
+    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+      self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+      self.workers[worker_idx].kill_switch.kill();
+      return Err(TscPoolError::Timeout);
+    };
+
+    match reply_rx.recv_timeout(remaining) {
+      Ok(Ok(diags)) => Ok(diags),
+      Ok(Err(err)) => Err(TscPoolError::Crashed(err)),
+      Err(mpsc::RecvTimeoutError::Timeout) => {
+        self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+        self.workers[worker_idx].kill_switch.kill();
+        Err(TscPoolError::Timeout)
       }
-      Err(err) => {
-        // Don't return broken runners back to the pool; `TscRunner::check` only errors when the
-        // runner crashed or otherwise failed unexpectedly (not on normal type errors).
-        Err(err.to_string())
+      Err(mpsc::RecvTimeoutError::Disconnected) => {
+        self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+        self.workers[worker_idx].kill_switch.kill();
+        Err(TscPoolError::Crashed("tsc worker disconnected".to_string()))
+      }
+    }
+  }
+}
+
+impl Drop for TscRunnerPool {
+  fn drop(&mut self) {
+    for worker in &self.workers {
+      worker.cancel.store(true, Ordering::Relaxed);
+      worker.kill_switch.kill();
+      let _ = worker.tx.send(TscWorkerCommand::Shutdown);
+    }
+
+    let mut threads = self.threads.lock().unwrap();
+    for thread in threads.drain(..) {
+      let _ = thread.join();
+    }
+  }
+}
+
+#[derive(Debug)]
+pub(crate) enum TscPoolError {
+  Timeout,
+  Crashed(String),
+}
+
+impl std::fmt::Display for TscPoolError {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    match self {
+      TscPoolError::Timeout => write!(f, "tsc request timed out"),
+      TscPoolError::Crashed(err) => write!(f, "{err}"),
+    }
+  }
+}
+
+struct TscWorker {
+  tx: mpsc::Sender<TscWorkerCommand>,
+  cancel: Arc<AtomicBool>,
+  kill_switch: TscKillSwitch,
+}
+
+enum TscWorkerCommand {
+  Run {
+    request: TscRequest,
+    reply: mpsc::Sender<std::result::Result<TscDiagnostics, String>>,
+  },
+  Shutdown,
+}
+
+struct TscWorkerAvailability {
+  queue: Mutex<VecDeque<usize>>,
+  cv: Condvar,
+}
+
+impl TscWorkerAvailability {
+  fn new(worker_count: usize) -> Self {
+    let mut queue = VecDeque::with_capacity(worker_count);
+    for idx in 0..worker_count {
+      queue.push_back(idx);
+    }
+    Self {
+      queue: Mutex::new(queue),
+      cv: Condvar::new(),
+    }
+  }
+
+  fn checkout(&self, deadline: Instant) -> Option<usize> {
+    let mut guard = self.queue.lock().unwrap();
+    loop {
+      if let Some(idx) = guard.pop_front() {
+        return Some(idx);
+      }
+
+      let now = Instant::now();
+      let remaining = deadline.checked_duration_since(now)?;
+      let (next_guard, wait) = self.cv.wait_timeout(guard, remaining).unwrap();
+      guard = next_guard;
+      if wait.timed_out() {
+        return None;
       }
     }
   }
 
-  fn checkout(&self) -> anyhow::Result<TscRunner> {
-    // Avoid holding the mutex while spawning Node. This prevents other threads from being blocked
-    // when returning an existing runner to the pool.
-    let runner = {
-      let mut runners = self.runners.lock().unwrap();
-      runners.pop()
-    };
-    runner
-      .map(Ok)
-      .unwrap_or_else(|| TscRunner::new(self.node_path.clone()))
+  fn release(&self, worker_idx: usize) {
+    let mut guard = self.queue.lock().unwrap();
+    guard.push_back(worker_idx);
+    self.cv.notify_one();
   }
+}
 
-  fn release(&self, runner: TscRunner) {
-    let mut runners = self.runners.lock().unwrap();
-    runners.push(runner);
+fn tsc_worker_loop(
+  worker_idx: usize,
+  node_path: PathBuf,
+  kill_switch: TscKillSwitch,
+  cancel: Arc<AtomicBool>,
+  availability: Arc<TscWorkerAvailability>,
+  rx: mpsc::Receiver<TscWorkerCommand>,
+) {
+  let mut runner: Option<TscRunner> = None;
+
+  for command in rx {
+    match command {
+      TscWorkerCommand::Run { request, reply } => {
+        cancel.store(false, Ordering::Relaxed);
+        let outcome = if let Some(runner) = runner.as_mut() {
+          run_tsc_request(runner, request, &cancel)
+        } else {
+          match TscRunner::with_kill_switch(node_path.clone(), kill_switch.clone()) {
+            Ok(mut created) => {
+              let outcome = run_tsc_request(&mut created, request, &cancel);
+              runner = Some(created);
+              outcome
+            }
+            Err(err) => Err(err.to_string()),
+          }
+        };
+        let _ = reply.send(outcome);
+        availability.release(worker_idx);
+      }
+      TscWorkerCommand::Shutdown => return,
+    }
+  }
+}
+
+fn run_tsc_request(
+  runner: &mut TscRunner,
+  request: TscRequest,
+  cancel: &AtomicBool,
+) -> std::result::Result<TscDiagnostics, String> {
+  match std::panic::catch_unwind(AssertUnwindSafe(|| runner.check_cancellable(request, cancel))) {
+    Ok(Ok(diags)) => Ok(diags),
+    Ok(Err(err)) => Err(err.to_string()),
+    Err(_) => Err("tsc runner panicked".to_string()),
   }
 }
 
@@ -1189,55 +1569,6 @@ pub(crate) fn build_tsc_request(
 #[derive(Clone)]
 struct SnapshotStore {
   base: PathBuf,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct ConcurrencyLimiter {
-  inner: Arc<LimiterInner>,
-}
-
-#[derive(Debug)]
-struct LimiterInner {
-  max: usize,
-  active: Mutex<usize>,
-  cv: Condvar,
-}
-
-impl ConcurrencyLimiter {
-  pub(crate) fn new(max: usize) -> Self {
-    let max = max.max(1);
-    ConcurrencyLimiter {
-      inner: Arc::new(LimiterInner {
-        max,
-        active: Mutex::new(0),
-        cv: Condvar::new(),
-      }),
-    }
-  }
-
-  pub(crate) fn acquire(&self) -> ConcurrencyPermit {
-    let mut guard = self.inner.active.lock().unwrap();
-    while *guard >= self.inner.max {
-      guard = self.inner.cv.wait(guard).unwrap();
-    }
-    *guard += 1;
-    ConcurrencyPermit {
-      inner: Arc::clone(&self.inner),
-    }
-  }
-}
-
-#[derive(Debug)]
-pub(crate) struct ConcurrencyPermit {
-  inner: Arc<LimiterInner>,
-}
-
-impl Drop for ConcurrencyPermit {
-  fn drop(&mut self) {
-    let mut guard = self.inner.active.lock().unwrap();
-    *guard = guard.saturating_sub(1);
-    self.inner.cv.notify_one();
-  }
 }
 
 impl SnapshotStore {
@@ -1327,9 +1658,6 @@ impl SnapshotStore {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::sync::atomic::{AtomicUsize, Ordering};
-  use std::sync::Arc;
-  use std::time::Duration;
   use tempfile::tempdir;
 
   #[test]
@@ -1337,34 +1665,6 @@ mod tests {
     assert!(Shard::parse("bad").is_err());
     assert!(Shard::parse("1/0").is_err());
     assert!(Shard::parse("2/2").is_err());
-  }
-
-  #[test]
-  fn concurrency_limiter_caps_parallelism() {
-    let limiter = ConcurrencyLimiter::new(2);
-    let active = Arc::new(AtomicUsize::new(0));
-    let max_seen = Arc::new(AtomicUsize::new(0));
-
-    let handles: Vec<_> = (0..6)
-      .map(|_| {
-        let limiter = limiter.clone();
-        let active = active.clone();
-        let max_seen = max_seen.clone();
-        std::thread::spawn(move || {
-          let _permit = limiter.acquire();
-          let current = active.fetch_add(1, Ordering::SeqCst) + 1;
-          max_seen.fetch_max(current, Ordering::SeqCst);
-          std::thread::sleep(Duration::from_millis(10));
-          active.fetch_sub(1, Ordering::SeqCst);
-        })
-      })
-      .collect();
-
-    for handle in handles {
-      handle.join().unwrap();
-    }
-
-    assert!(max_seen.load(Ordering::SeqCst) <= 2);
   }
 
   #[test]
