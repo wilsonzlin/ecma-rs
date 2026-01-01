@@ -5,23 +5,6 @@ use std::sync::Arc;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 use types_ts_interned::TypeKind;
 
-fn normalize(path: &Path) -> String {
-  use std::path::Component;
-
-  let mut parts = Vec::new();
-  for comp in path.components() {
-    match comp {
-      Component::CurDir => {}
-      Component::ParentDir => {
-        parts.pop();
-      }
-      Component::Normal(seg) => parts.push(seg.to_string_lossy().to_string()),
-      other => parts.push(other.as_os_str().to_string_lossy().to_string()),
-    }
-  }
-  parts.join("/")
-}
-
 fn load_fixture(name: &str) -> (MemoryHost, Vec<FileKey>) {
   let base = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("tests")

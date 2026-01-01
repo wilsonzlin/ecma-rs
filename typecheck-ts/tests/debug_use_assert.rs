@@ -33,7 +33,7 @@ fn debug_use_assert_return_type() {
   let host = SimpleHost {
     files: HashMap::from([(path.clone(), Arc::from(source))]),
   };
-  let mut program = Program::new(host, vec![path.clone()]);
+  let program = Program::new(host, vec![path.clone()]);
   let file_id: FileId = program.file_id(&path).unwrap();
   let defs = program.definitions_in_file(file_id);
   let assert_number = defs

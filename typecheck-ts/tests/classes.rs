@@ -394,20 +394,18 @@ fn private_classes_are_nominal() {
     is_static: false,
   };
 
-  let class_a = env.build_class(ClassDecl {
-    name: "A".into(),
-    extends: None,
-    fields: vec![field.clone()],
-    methods: Vec::new(),
-    constructor: None,
-  });
-  let class_b = env.build_class(ClassDecl {
-    name: "B".into(),
-    extends: None,
-    fields: vec![field],
-    methods: Vec::new(),
-    constructor: None,
-  });
+  let mut decl_a = ClassDecl::new("A");
+  decl_a.fields.push(field.clone());
+  let class_a = env.build_class(decl_a);
+
+  let mut decl_b = ClassDecl::new("B");
+  decl_b.fields.push(field);
+  let class_b = env.build_class(decl_b);
+
+  assert_eq!(class_a.name, "A");
+  assert_eq!(class_b.name, "B");
+  assert_ne!(class_a.origin, class_b.origin);
+  assert_ne!(class_a.instance_def, class_b.instance_def);
 
   let ctx = env.relate_ctx(types_ts_interned::TypeOptions::default());
   assert!(!ctx.is_assignable(class_a.instance, class_b.instance));

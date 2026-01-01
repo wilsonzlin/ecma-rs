@@ -44,12 +44,6 @@ impl TestHost {
     let key = Self::key_for(file);
     self.files.insert(key, Arc::from(src.to_string()));
   }
-
-  fn resolve_to(&mut self, specifier: &str, target: FileId) {
-    self
-      .resolutions
-      .insert(specifier.to_string(), Self::key_for(target));
-  }
 }
 
 impl Host for TestHost {

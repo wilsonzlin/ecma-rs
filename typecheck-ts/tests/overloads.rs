@@ -4,8 +4,7 @@ use diagnostics::{FileId, Span, TextRange};
 use typecheck_ts::check::expr::resolve_call;
 use typecheck_ts::codes;
 use types_ts_interned::{
-  Param, RelateCtx, Signature, TypeDisplay, TypeId, TypeKind, TypeOptions, TypeParamDecl,
-  TypeParamId, TypeStore,
+  Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 fn span() -> Span {
