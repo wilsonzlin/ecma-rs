@@ -544,7 +544,7 @@ impl<'a> RelateCtx<'a> {
     let src_kind = self.store.type_kind(src);
     let dst_kind = self.store.type_kind(dst);
 
-    if mode.contains(RelationMode::SKIP_NORMALIZE) {
+    if mode.contains(RelationMode::SKIP_NORMALIZE) && depth == 0 {
       debug_assert!(
         !matches!(
           &src_kind,
