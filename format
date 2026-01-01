@@ -6,6 +6,10 @@ pushd "$(dirname "$0")" >/dev/null
 
 cargo fmt --all
 
-npx prettier@2.3.2 -w 'version' '.github/**/*.yaml' 'minify-js-nodejs/*.{js,json,ts}'
+if command -v npx >/dev/null 2>&1; then
+  npx prettier@2.3.2 -w 'version' '.github/**/*.yaml' 'minify-js-nodejs/*.{js,json,ts}'
+else
+  echo "warning: npx not found; skipping prettier formatting" >&2
+fi
 
 popd >/dev/null
