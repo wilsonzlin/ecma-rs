@@ -132,6 +132,13 @@ fn collect_type_imports(lowered: &LowerResult) -> Vec<sem_ts::TypeImport> {
             }
           }
         }
+        hir_js::TypeExprKind::TypeQuery(name) => {
+          if let hir_js::TypeName::Import(import) = name {
+            if let Some(module) = &import.module {
+              imports.insert((module.clone(), ty.span));
+            }
+          }
+        }
         hir_js::TypeExprKind::Import(import) => {
           imports.insert((import.module.clone(), ty.span));
         }
