@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::instantiate::Substituter;
 use types_ts_interned::{
-  Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  PropKey, Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
@@ -368,10 +368,24 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
     }
     (TypeKind::Array { ty: src_ty, .. }, TypeKind::Object(dst_obj)) => {
       let dst_shape = store.shape(store.object(*dst_obj).shape);
+      let dummy_name = store.intern_name("");
+      let is_number_like_indexer = |idx: &types_ts_interned::Indexer| {
+        crate::type_queries::indexer_accepts_key(&PropKey::Number(0), idx.key_type, store)
+          && !crate::type_queries::indexer_accepts_key(
+            &PropKey::String(dummy_name),
+            idx.key_type,
+            store,
+          )
+          && !crate::type_queries::indexer_accepts_key(
+            &PropKey::Symbol(dummy_name),
+            idx.key_type,
+            store,
+          )
+      };
       if let Some(idx) = dst_shape
         .indexers
         .iter()
-        .find(|idx| matches!(store.type_kind(idx.key_type), TypeKind::Number))
+        .find(|idx| is_number_like_indexer(idx))
       {
         return is_assignable(store, *src_ty, idx.value_type);
       }
@@ -433,6 +447,42 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
   }
 
   false
+}
+
+#[cfg(test)]
+mod tests {
+  use super::is_assignable;
+  use types_ts_interned::{Indexer, ObjectType, Shape, TypeKind, TypeStore};
+
+  #[test]
+  fn is_assignable_array_to_number_like_intersection_indexer() {
+    let store = TypeStore::new();
+    let primitives = store.primitive_ids();
+
+    let array = store.intern_type(TypeKind::Array {
+      ty: primitives.string,
+      readonly: false,
+    });
+
+    // key_type: (string | number) & number behaves like `number`.
+    let key_type = store.intersection(vec![
+      store.union(vec![primitives.string, primitives.number]),
+      primitives.number,
+    ]);
+    let shape = store.intern_shape(Shape {
+      properties: Vec::new(),
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: vec![Indexer {
+        key_type,
+        value_type: primitives.string,
+        readonly: false,
+      }],
+    });
+    let obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
+
+    assert!(is_assignable(&store, array, obj));
+  }
 }
 
 fn widen_inferred_candidate(store: &TypeStore, ty: TypeId) -> TypeId {
