@@ -519,7 +519,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
-    let raw_check = self.store.type_kind(check);
+    let raw_check_param = match self.store.type_kind(check) {
+      TypeKind::TypeParam(param) => Some(param),
+      _ => None,
+    };
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
     // In TypeScript, `any` in the checked position makes the conditional type
     // evaluate to a union of both branches.
@@ -537,7 +540,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           let mut results = Vec::new();
           for member in members {
             let mut inner_subst = subst.clone();
-            if let TypeKind::TypeParam(param) = raw_check {
+            if let Some(param) = raw_check_param {
               inner_subst = inner_subst.with(param, member);
             }
             results.push(self.evaluate_conditional(
@@ -553,10 +556,34 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           return self.store.union(results);
         }
         _ => {}
-      };
+      }
     }
 
     let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
+
+    // Conditional types are only reducible once their operands are known.
+    //
+    // When we cannot prove assignability (most notably due to unsubstituted type
+    // parameters or `infer` placeholders) we must defer evaluation instead of
+    // incorrectly collapsing to the false branch.
+    //
+    // Note: This logic is intentionally conservative to match TypeScript's
+    // behavior for generic conditional types.
+    if raw_check_param.is_some_and(|param| subst.get(param).is_none())
+      || self.conditional_is_indeterminate_operand(check_eval, subst, depth + 1)
+      || self.conditional_is_indeterminate_operand(extends_eval, subst, depth + 1)
+    {
+      let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
+      let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
+      return self.store.intern_type(TypeKind::Conditional {
+        check: check_eval,
+        extends: extends_eval,
+        true_ty: true_eval,
+        false_ty: false_eval,
+        distributive,
+      });
+    }
+
     let assignable = match self.conditional_assignability {
       Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
       None => {
@@ -578,6 +605,138 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       false_ty
     };
     self.evaluate_with_subst(branch, subst, depth + 1)
+  }
+
+  fn conditional_is_indeterminate_operand(
+    &self,
+    ty: TypeId,
+    subst: &Substitution,
+    depth: usize,
+  ) -> bool {
+    let mut visited = AHashSet::new();
+    self.conditional_is_indeterminate_operand_inner(ty, subst, depth, &mut visited)
+  }
+
+  fn conditional_is_indeterminate_operand_inner(
+    &self,
+    ty: TypeId,
+    subst: &Substitution,
+    depth: usize,
+    visited: &mut AHashSet<TypeId>,
+  ) -> bool {
+    if depth >= self.depth_limit {
+      // If we can't soundly inspect the operand (usually due to deep recursion),
+      // do not attempt to reduce the conditional.
+      return true;
+    }
+    if !visited.insert(ty) {
+      return false;
+    }
+
+    match self.store.type_kind(ty) {
+      TypeKind::Infer { .. } => true,
+      TypeKind::TypeParam(param) => subst.get(param).is_none(),
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .into_iter()
+        .any(|m| self.conditional_is_indeterminate_operand_inner(m, subst, depth + 1, visited)),
+      TypeKind::Array { ty, .. } => {
+        self.conditional_is_indeterminate_operand_inner(ty, subst, depth + 1, visited)
+      }
+      TypeKind::Tuple(elems) => elems.into_iter().any(|elem| {
+        self.conditional_is_indeterminate_operand_inner(elem.ty, subst, depth + 1, visited)
+      }),
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        shape.properties.iter().any(|prop| {
+          self.conditional_is_indeterminate_operand_inner(prop.data.ty, subst, depth + 1, visited)
+        }) || shape.indexers.iter().any(|idx| {
+          self.conditional_is_indeterminate_operand_inner(idx.key_type, subst, depth + 1, visited)
+            || self.conditional_is_indeterminate_operand_inner(
+              idx.value_type,
+              subst,
+              depth + 1,
+              visited,
+            )
+        }) || shape
+          .call_signatures
+          .iter()
+          .any(|sig| self.conditional_signature_is_indeterminate(*sig, subst, depth + 1, visited))
+          || shape
+            .construct_signatures
+            .iter()
+            .any(|sig| self.conditional_signature_is_indeterminate(*sig, subst, depth + 1, visited))
+      }
+      TypeKind::Callable { overloads } => overloads
+        .into_iter()
+        .any(|sig| self.conditional_signature_is_indeterminate(sig, subst, depth + 1, visited)),
+      TypeKind::Ref { args, .. } => args
+        .into_iter()
+        .any(|arg| self.conditional_is_indeterminate_operand_inner(arg, subst, depth + 1, visited)),
+      TypeKind::Predicate { asserted, .. } => asserted.is_some_and(|asserted| {
+        self.conditional_is_indeterminate_operand_inner(asserted, subst, depth + 1, visited)
+      }),
+      TypeKind::Conditional {
+        check,
+        extends,
+        true_ty,
+        false_ty,
+        ..
+      } => {
+        self.conditional_is_indeterminate_operand_inner(check, subst, depth + 1, visited)
+          || self.conditional_is_indeterminate_operand_inner(extends, subst, depth + 1, visited)
+          || self.conditional_is_indeterminate_operand_inner(true_ty, subst, depth + 1, visited)
+          || self.conditional_is_indeterminate_operand_inner(false_ty, subst, depth + 1, visited)
+      }
+      TypeKind::Mapped(mapped) => {
+        self.conditional_is_indeterminate_operand_inner(mapped.source, subst, depth + 1, visited)
+          || self.conditional_is_indeterminate_operand_inner(
+            mapped.value,
+            subst,
+            depth + 1,
+            visited,
+          )
+          || mapped.name_type.is_some_and(|ty| {
+            self.conditional_is_indeterminate_operand_inner(ty, subst, depth + 1, visited)
+          })
+          || mapped.as_type.is_some_and(|ty| {
+            self.conditional_is_indeterminate_operand_inner(ty, subst, depth + 1, visited)
+          })
+      }
+      TypeKind::TemplateLiteral(tpl) => tpl.spans.into_iter().any(|chunk| {
+        self.conditional_is_indeterminate_operand_inner(chunk.ty, subst, depth + 1, visited)
+      }),
+      TypeKind::IndexedAccess { obj, index } => {
+        self.conditional_is_indeterminate_operand_inner(obj, subst, depth + 1, visited)
+          || self.conditional_is_indeterminate_operand_inner(index, subst, depth + 1, visited)
+      }
+      TypeKind::KeyOf(inner) => {
+        self.conditional_is_indeterminate_operand_inner(inner, subst, depth + 1, visited)
+      }
+      _ => false,
+    }
+  }
+
+  fn conditional_signature_is_indeterminate(
+    &self,
+    sig: crate::SignatureId,
+    subst: &Substitution,
+    depth: usize,
+    visited: &mut AHashSet<TypeId>,
+  ) -> bool {
+    let sig = self.store.signature(sig);
+    sig.params.iter().any(|param| {
+      self.conditional_is_indeterminate_operand_inner(param.ty, subst, depth + 1, visited)
+    }) || self.conditional_is_indeterminate_operand_inner(sig.ret, subst, depth + 1, visited)
+      || sig.this_param.is_some_and(|this| {
+        self.conditional_is_indeterminate_operand_inner(this, subst, depth + 1, visited)
+      })
+      || sig.type_params.iter().any(|tp| {
+        tp.constraint.is_some_and(|constraint| {
+          self.conditional_is_indeterminate_operand_inner(constraint, subst, depth + 1, visited)
+        }) || tp.default.is_some_and(|default| {
+          self.conditional_is_indeterminate_operand_inner(default, subst, depth + 1, visited)
+        })
+      })
   }
 
   fn evaluate_mapped(&mut self, mapped: MappedType, subst: &Substitution, depth: usize) -> TypeId {

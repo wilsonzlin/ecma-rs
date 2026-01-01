@@ -71,6 +71,49 @@ fn conditional_distributes_over_union_with_substitution() {
 }
 
 #[test]
+fn conditional_with_unsubstituted_type_param_is_deferred() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(cond);
+
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
+fn conditional_with_infer_in_extends_is_deferred() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: store.intern_type(TypeKind::Infer {
+      param: TypeParamId(1),
+      constraint: None,
+    }),
+    true_ty: store.intern_type(TypeKind::TypeParam(TypeParamId(1))),
+    false_ty: primitives.never,
+    distributive: false,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(cond);
+
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
 fn distributive_conditional_never_is_never() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
