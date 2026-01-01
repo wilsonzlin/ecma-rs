@@ -332,6 +332,98 @@ fn string_literal_namespace_import_alias_can_be_reexported() {
 }
 
 #[test]
+fn default_export_can_be_reexported_as_string_literal_name() {
+  let mut host = MemoryHost::default();
+  let key_dep = fk(453);
+  let key_root = fk(454);
+  let key_entry = fk(455);
+
+  host.insert(
+    key_dep.clone(),
+    "const value: number = 1;\nexport default value;\n",
+  );
+  host.insert(
+    key_root.clone(),
+    "export { default as \"a-b\" } from \"./dep\";\n",
+  );
+  host.insert(
+    key_entry.clone(),
+    "import { \"a-b\" as bar } from \"./root\";\nbar satisfies number;\n",
+  );
+  host.link(key_root.clone(), "./dep", key_dep.clone());
+  host.link(key_entry.clone(), "./root", key_root.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_root = program.file_id(&key_root).expect("root file id");
+  let exports_root = program.exports_of(file_root);
+  let ab_entry = exports_root.get("a-b").expect("a-b export in root");
+  assert!(ab_entry.def.is_none());
+  let ab_ty = ab_entry.type_id.expect("type for a-b export");
+  assert_eq!(program.display_type(ab_ty).to_string(), "number");
+
+  let file_entry = program.file_id(&key_entry).expect("entry file id");
+  let bar_def = program
+    .definitions_in_file(file_entry)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("bar"))
+    .expect("imported bar def");
+  let bar_ty = program.type_of_def_interned(bar_def);
+  assert_eq!(program.display_type(bar_ty).to_string(), "number");
+}
+
+#[test]
+fn string_literal_export_can_be_reexported_as_default() {
+  let mut host = MemoryHost::default();
+  let key_dep = fk(456);
+  let key_root = fk(457);
+  let key_entry = fk(458);
+
+  host.insert(
+    key_dep.clone(),
+    "export const foo: number = 1;\nexport { foo as \"a-b\" };\n",
+  );
+  host.insert(
+    key_root.clone(),
+    "export { \"a-b\" as default } from \"./dep\";\n",
+  );
+  host.insert(
+    key_entry.clone(),
+    "import v from \"./root\";\nv satisfies number;\n",
+  );
+  host.link(key_root.clone(), "./dep", key_dep.clone());
+  host.link(key_entry.clone(), "./root", key_root.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_root = program.file_id(&key_root).expect("root file id");
+  let exports_root = program.exports_of(file_root);
+  let default_entry = exports_root.get("default").expect("default export in root");
+  assert!(default_entry.def.is_none());
+  let default_ty = default_entry.type_id.expect("type for default export");
+  assert_eq!(program.display_type(default_ty).to_string(), "number");
+
+  let file_entry = program.file_id(&key_entry).expect("entry file id");
+  let v_def = program
+    .definitions_in_file(file_entry)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("v"))
+    .expect("imported v def");
+  let v_ty = program.type_of_def_interned(v_def);
+  assert_eq!(program.display_type(v_ty).to_string(), "number");
+}
+
+#[test]
 fn default_export_has_type() {
   let mut host = MemoryHost::default();
   let key = FileKey::new("default.ts");

@@ -1899,10 +1899,9 @@ impl<'a> Checker<'a> {
               ));
               prim.unknown
             });
-          let expected_props_ty =
-            self.jsx_expected_props_for_value_tag(component_ty, elem.loc).map(|expected| {
-              self.jsx_apply_intrinsic_attributes(expected)
-            });
+          let expected_props_ty = self
+            .jsx_expected_props_for_value_tag(component_ty, elem.loc)
+            .map(|expected| self.jsx_apply_intrinsic_attributes(expected));
           let actual_props = self.jsx_actual_props(
             elem.loc,
             &elem.stx.attributes,
@@ -1962,10 +1961,9 @@ impl<'a> Checker<'a> {
           for segment in member.stx.path.iter() {
             current = self.member_type(current, segment);
           }
-          let expected_props_ty =
-            self.jsx_expected_props_for_value_tag(current, elem.loc).map(|expected| {
-              self.jsx_apply_intrinsic_attributes(expected)
-            });
+          let expected_props_ty = self
+            .jsx_expected_props_for_value_tag(current, elem.loc)
+            .map(|expected| self.jsx_apply_intrinsic_attributes(expected));
           let actual_props = self.jsx_actual_props(
             elem.loc,
             &elem.stx.attributes,

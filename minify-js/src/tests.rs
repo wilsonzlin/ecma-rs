@@ -220,6 +220,24 @@ fn preserves_default_export_in_reexports() {
 }
 
 #[test]
+fn preserves_default_as_string_literal_reexport() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { default as \"a-b\" } from \"mod\";",
+  );
+  assert_eq!(result, "export{default as\"a-b\"}from\"mod\";");
+}
+
+#[test]
+fn preserves_string_export_as_default_reexport() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { \"a-b\" as default } from \"mod\";",
+  );
+  assert_eq!(result, "export{\"a-b\"as default}from\"mod\";");
+}
+
+#[test]
 fn preserves_named_default_import_specifier() {
   // Use direct `eval` to disable renaming so we can assert on the raw output.
   let result = minified(
