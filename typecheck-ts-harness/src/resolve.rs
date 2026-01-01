@@ -56,7 +56,7 @@ fn resolve_non_relative(
   }
 
   // b) Treat the specifier as a rooted virtual path and apply file/directory expansion.
-  if let Some(found) = resolve_as_file_or_directory(files, &normalized) {
+  if let Some(found) = resolve_as_file_or_directory_normalized(files, &normalized, 0) {
     return Some(found);
   }
 
@@ -121,7 +121,7 @@ fn resolve_imports_specifier(
 }
 
 fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) -> Option<FileKey> {
-  let package_json = normalize_name(&virtual_join(dir, "package.json"));
+  let package_json = virtual_join(dir, "package.json");
   let package_key = files.resolve(&package_json)?;
   let parsed = files.package_json(&package_key)?;
   let imports = parsed.get("imports")?.as_object()?;
@@ -130,10 +130,10 @@ fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) ->
     (target, None)
   } else {
     let (pattern_key, star_match) = best_exports_subpath_pattern(imports, specifier)?;
-    (imports.get(&pattern_key)?, Some(star_match))
+    (imports.get(pattern_key)?, Some(star_match))
   };
 
-  resolve_json_target_to_file(files, dir, target, star_match.as_deref(), 0)
+  resolve_json_target_to_file(files, dir, target, star_match, 0)
 }
 
 fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<FileKey> {
@@ -150,15 +150,29 @@ fn resolve_as_file_or_directory_inner(
   }
 
   let base_candidate = normalize_name(base);
+  resolve_as_file_or_directory_normalized(files, &base_candidate, depth)
+}
 
-  if let Some(found) = files.resolve(&base_candidate) {
+fn resolve_as_file_or_directory_normalized(
+  files: &HarnessFileSet,
+  base_candidate: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  if depth > 16 {
+    return None;
+  }
+
+  if let Some(found) = files.resolve(base_candidate) {
     return Some(found);
   }
 
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
     for ext in ["ts", "tsx", "d.ts"] {
-      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
+      candidate.push_str(trimmed);
+      candidate.push('.');
+      candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
@@ -166,7 +180,10 @@ fn resolve_as_file_or_directory_inner(
   } else if base_candidate.ends_with(".jsx") {
     let trimmed = base_candidate.trim_end_matches(".jsx");
     for ext in ["tsx", "d.ts"] {
-      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
+      candidate.push_str(trimmed);
+      candidate.push('.');
+      candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
@@ -174,7 +191,10 @@ fn resolve_as_file_or_directory_inner(
   } else if base_candidate.ends_with(".mjs") {
     let trimmed = base_candidate.trim_end_matches(".mjs");
     for ext in ["mts", "d.mts"] {
-      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
+      candidate.push_str(trimmed);
+      candidate.push('.');
+      candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
@@ -182,14 +202,20 @@ fn resolve_as_file_or_directory_inner(
   } else if base_candidate.ends_with(".cjs") {
     let trimmed = base_candidate.trim_end_matches(".cjs");
     for ext in ["cts", "d.cts"] {
-      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
+      candidate.push_str(trimmed);
+      candidate.push('.');
+      candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
     }
   } else if !is_source_root(&base_candidate) {
     for ext in EXTENSIONS {
-      let candidate = normalize_name(&format!("{base_candidate}.{ext}"));
+      let mut candidate = String::with_capacity(base_candidate.len() + 1 + ext.len());
+      candidate.push_str(base_candidate);
+      candidate.push('.');
+      candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
@@ -203,7 +229,7 @@ fn resolve_as_file_or_directory_inner(
   }
 
   for index in INDEX_FILES {
-    let joined = normalize_name(&virtual_join(&base_candidate, index));
+    let joined = virtual_join(base_candidate, index);
     if let Some(found) = files.resolve(&joined) {
       return Some(found);
     }
@@ -213,7 +239,7 @@ fn resolve_as_file_or_directory_inner(
 }
 
 fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> Option<FileKey> {
-  let package_json = normalize_name(&virtual_join(dir, "package.json"));
+  let package_json = virtual_join(dir, "package.json");
   let package_key = files.resolve(&package_json)?;
   let parsed = files.package_json(&package_key)?;
 
@@ -231,9 +257,7 @@ fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> 
 
   if let Some(exports) = parsed.get("exports") {
     if let Some((target, star_match)) = select_exports_target(exports, ".") {
-      if let Some(found) =
-        resolve_json_target_to_file(files, dir, target, star_match.as_deref(), depth)
-      {
+      if let Some(found) = resolve_json_target_to_file(files, dir, target, star_match, depth) {
         return Some(found);
       }
     }
@@ -258,7 +282,7 @@ fn resolve_package_json_entry(
     return None;
   }
   let entry = normalize_name(&virtual_join(dir, entry));
-  resolve_as_file_or_directory_inner(files, &entry, depth + 1)
+  resolve_as_file_or_directory_normalized(files, &entry, depth + 1)
 }
 
 fn resolve_via_exports(
@@ -267,12 +291,12 @@ fn resolve_via_exports(
   subpath: &str,
   depth: usize,
 ) -> Option<FileKey> {
-  let package_json = normalize_name(&virtual_join(package_dir, "package.json"));
+  let package_json = virtual_join(package_dir, "package.json");
   let package_key = files.resolve(&package_json)?;
   let parsed = files.package_json(&package_key)?;
   let exports = parsed.get("exports")?;
   let (target, star_match) = select_exports_target(exports, subpath)?;
-  resolve_json_target_to_file(files, package_dir, target, star_match.as_deref(), depth)
+  resolve_json_target_to_file(files, package_dir, target, star_match, depth)
 }
 
 fn resolve_json_target_to_file(
@@ -287,13 +311,13 @@ fn resolve_json_target_to_file(
   }
 
   match value {
-    Value::String(s) => {
-      let entry = match star_match {
-        Some(star) => s.replace('*', star),
-        None => s.to_string(),
-      };
-      resolve_json_string_to_file(files, base_dir, &entry, depth + 1)
-    }
+    Value::String(s) => match star_match {
+      Some(star) => {
+        let entry = s.replace('*', star);
+        resolve_json_string_to_file(files, base_dir, &entry, depth + 1)
+      }
+      None => resolve_json_string_to_file(files, base_dir, s, depth + 1),
+    },
     Value::Array(items) => items
       .iter()
       .find_map(|item| resolve_json_target_to_file(files, base_dir, item, star_match, depth + 1)),
@@ -323,10 +347,10 @@ fn resolve_json_string_to_file(
   resolve_as_file_or_directory_inner(files, &joined, depth)
 }
 
-fn select_exports_target<'a>(
+fn select_exports_target<'a, 'b>(
   exports: &'a Value,
-  subpath: &str,
-) -> Option<(&'a Value, Option<String>)> {
+  subpath: &'b str,
+) -> Option<(&'a Value, Option<&'b str>)> {
   match exports {
     Value::Object(map) => {
       let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
@@ -335,7 +359,7 @@ fn select_exports_target<'a>(
           return Some((target, None));
         }
         let (pattern_key, star_match) = best_exports_subpath_pattern(map, subpath)?;
-        Some((map.get(&pattern_key)?, Some(star_match)))
+        Some((map.get(pattern_key)?, Some(star_match)))
       } else {
         (subpath == ".").then_some((exports, None))
       }
@@ -344,12 +368,12 @@ fn select_exports_target<'a>(
   }
 }
 
-fn best_exports_subpath_pattern(
-  map: &Map<String, Value>,
-  subpath: &str,
-) -> Option<(String, String)> {
-  let mut best_key: Option<String> = None;
-  let mut best_star: Option<String> = None;
+fn best_exports_subpath_pattern<'a, 'b>(
+  map: &'a Map<String, Value>,
+  subpath: &'b str,
+) -> Option<(&'a str, &'b str)> {
+  let mut best_key: Option<&'a str> = None;
+  let mut best_star: Option<&'b str> = None;
 
   for key in map.keys() {
     let Some((prefix, suffix)) = key.split_once('*') else {
@@ -366,15 +390,15 @@ fn best_exports_subpath_pattern(
     }
     let star = &subpath[prefix.len()..subpath.len() - suffix.len()];
 
-    let replace = match best_key.as_ref() {
+    let replace = match best_key {
       None => true,
       Some(existing) => {
-        key.len() > existing.len() || (key.len() == existing.len() && key < existing)
+        key.len() > existing.len() || (key.len() == existing.len() && key.as_str() < existing)
       }
     };
     if replace {
-      best_key = Some(key.clone());
-      best_star = Some(star.to_string());
+      best_key = Some(key);
+      best_star = Some(star);
     }
   }
 
@@ -422,11 +446,18 @@ fn virtual_parent_dir(path: &str) -> String {
 
 fn virtual_join(base: &str, segment: &str) -> String {
   if base == "/" {
-    format!("/{segment}")
-  } else if base.ends_with('/') {
-    format!("{base}{segment}")
+    let mut joined = String::with_capacity(1 + segment.len());
+    joined.push('/');
+    joined.push_str(segment);
+    joined
   } else {
-    format!("{base}/{segment}")
+    let mut joined = String::with_capacity(base.len() + 1 + segment.len());
+    joined.push_str(base);
+    if !base.ends_with('/') {
+      joined.push('/');
+    }
+    joined.push_str(segment);
+    joined
   }
 }
 
