@@ -244,3 +244,32 @@ fn assignment_to_typed_member_checks_excess_properties() {
     diagnostics[0]
   );
 }
+
+#[test]
+fn intersection_target_allows_combined_props() {
+  let diagnostics = run("let x: { foo: number } & { bar: number } = { foo: 1, bar: 2 };");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
+}
+
+#[test]
+fn intersection_target_reports_excess_property() {
+  let diagnostics = run(
+    "let x: { foo: number } & { bar: number } = { foo: 1, bar: 2, baz: 3 };",
+  );
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected one diagnostic, got {:?}",
+    diagnostics
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}

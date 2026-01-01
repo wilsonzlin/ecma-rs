@@ -632,6 +632,7 @@ pub fn check_body_with_expander(
     jsx_mode,
     jsx_element_ty: None,
     jsx_intrinsic_elements_ty: None,
+    jsx_intrinsic_attributes_ty: None,
     jsx_children_prop_name: None,
     jsx_namespace_missing_reported: false,
     expr_types,
@@ -738,6 +739,7 @@ struct Checker<'a> {
   jsx_mode: Option<JsxMode>,
   jsx_element_ty: Option<TypeId>,
   jsx_intrinsic_elements_ty: Option<TypeId>,
+  jsx_intrinsic_attributes_ty: Option<TypeId>,
   jsx_children_prop_name: Option<TsNameId>,
   jsx_namespace_missing_reported: bool,
   expr_types: Vec<TypeId>,
@@ -1833,6 +1835,7 @@ impl<'a> Checker<'a> {
                 Span::new(self.file, loc_to_range(self.file, name.loc)),
               ));
           } else {
+            let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
             self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         }
@@ -1851,6 +1854,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, id.loc)),
                 ));
             } else {
+              let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
               self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
           }
@@ -1887,6 +1891,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, member.loc)),
                 ));
             } else {
+              let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
               self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
           }
@@ -2075,6 +2080,17 @@ impl<'a> Checker<'a> {
     ));
   }
 
+  fn jsx_apply_intrinsic_attributes(&mut self, expected: TypeId) -> TypeId {
+    if matches!(self.store.type_kind(expected), TypeKind::Any | TypeKind::Unknown) {
+      return expected;
+    }
+    let intrinsic = self.jsx_intrinsic_attributes_type();
+    if matches!(self.store.type_kind(intrinsic), TypeKind::EmptyObject) {
+      return expected;
+    }
+    self.store.intersection(vec![expected, intrinsic])
+  }
+
   fn check_jsx_component(
     &mut self,
     component_ty: TypeId,
@@ -2155,6 +2171,7 @@ impl<'a> Checker<'a> {
     if expected_props == prim.unknown {
       return;
     }
+    let expected_props = self.jsx_apply_intrinsic_attributes(expected_props);
     self.check_jsx_props(loc, actual_props, expected_props);
   }
 
@@ -2293,6 +2310,19 @@ impl<'a> Checker<'a> {
     }
     let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_intrinsic_elements_ty = Some(ty);
+    ty
+  }
+
+  fn jsx_intrinsic_attributes_type(&mut self) -> TypeId {
+    if let Some(ty) = self.jsx_intrinsic_attributes_ty {
+      return ty;
+    }
+    // `JSX.IntrinsicAttributes` is optional; when absent treat it as `{}` so it
+    // neither contributes additional props nor disables checks.
+    let ty = self
+      .resolve_type_ref(&["JSX", "IntrinsicAttributes"])
+      .unwrap_or_else(|| self.store.intern_type(TypeKind::EmptyObject));
+    self.jsx_intrinsic_attributes_ty = Some(ty);
     ty
   }
 
@@ -3968,7 +3998,75 @@ impl<'a> Checker<'a> {
         }
         !saw_object
       }
-      TypeKind::Intersection(members) => members.iter().all(|m| self.type_accepts_props(*m, props)),
+      TypeKind::Intersection(members) => {
+        // Excess property checking on intersection targets behaves like checking
+        // against the merged property set of all intersected object types. In
+        // particular, `{ a } & { b }` should accept `{ a, b }` without treating
+        // either `a` or `b` as excess.
+        //
+        // To keep union semantics correct, distribute unions inside the
+        // intersection into a top-level union before applying the merged-props
+        // check. This avoids incorrectly accepting `{ a, b }` for targets like
+        // `({ a } | { b }) & { key }`.
+        let expanded_members: Vec<TypeId> = members
+          .iter()
+          .copied()
+          .map(|member| self.expand_for_props(member))
+          .collect();
+        for (idx, member) in expanded_members.iter().enumerate() {
+          if let TypeKind::Union(options) = self.store.type_kind(*member) {
+            let mut distributed = Vec::with_capacity(options.len());
+            for option in options {
+              let mut parts = Vec::with_capacity(expanded_members.len());
+              for (j, other) in expanded_members.iter().enumerate() {
+                if j == idx {
+                  continue;
+                }
+                parts.push(*other);
+              }
+              parts.push(option);
+              distributed.push(self.store.intersection(parts));
+            }
+            return self.type_accepts_props(self.store.union(distributed), props);
+          }
+        }
+
+        let mut object_members: Vec<TypeId> = Vec::new();
+        for member in expanded_members.iter().copied() {
+          match self.store.type_kind(member) {
+            TypeKind::Object(_) | TypeKind::Union(_) | TypeKind::Intersection(_) | TypeKind::Mapped(_) => {
+              object_members.push(member);
+            }
+            TypeKind::Ref { def, args } => {
+              if let Some(expanded) = self
+                .ref_expander
+                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
+              {
+                object_members.push(expanded);
+              }
+            }
+            _ => {}
+          }
+        }
+
+        if object_members.is_empty() {
+          return true;
+        }
+
+        let mut single = HashSet::with_capacity(1);
+        for prop in props {
+          single.clear();
+          single.insert(prop.clone());
+          if !object_members
+            .iter()
+            .copied()
+            .any(|member| self.type_accepts_props(member, &single))
+          {
+            return false;
+          }
+        }
+        true
+      }
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         if !shape.indexers.is_empty() {

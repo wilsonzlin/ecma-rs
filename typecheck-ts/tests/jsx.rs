@@ -557,3 +557,53 @@ const bad = <Foo x={"no"} />;
     "expected a type mismatch diagnostic for constrained generic props, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn intrinsic_attributes_are_merged_into_expected_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface IntrinsicAttributes { key?: string }
+  interface IntrinsicElements {
+    div: { id?: string };
+  }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(props: { x: number }): JSX.Element { return null as any; }
+const ok = <div key="x" id="y" />;
+const ok2 = <Foo x={1} key="k" />;
+const bad = <div key={123} />;
+"#;
+  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics
+      .iter()
+      .filter(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str())
+      .count(),
+    1,
+    "expected exactly one type mismatch diagnostic, got {diagnostics:?}"
+  );
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::EXCESS_PROPERTY.as_str()),
+    "did not expect excess property diagnostics, got {diagnostics:?}"
+  );
+}
