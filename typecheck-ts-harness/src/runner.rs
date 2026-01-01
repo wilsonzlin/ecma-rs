@@ -7,7 +7,10 @@ use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAU
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
-use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA_VERSION};
+use crate::tsc::{
+  node_available, typescript_available, TscDiagnostics, TscRequest, TscRunner,
+  TSC_BASELINE_SCHEMA_VERSION,
+};
 use crate::{read_utf8_file, FailOn, Result, VirtualFile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -475,8 +478,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     })
     .collect();
 
-  let tsc_runner = TscWrapperRunner::new(opts.node_path.clone());
-  let tsc_available = tsc_runner.available();
+  let tsc_available = node_available(&opts.node_path) && typescript_available(&opts.node_path);
   let snapshot_store = SnapshotStore::new(&opts.root);
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
   if let Some(builder) = profile_builder.as_mut() {
@@ -485,6 +487,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 
   let job_count = opts.jobs.max(1);
   let tsc_limiter = Arc::new(ConcurrencyLimiter::new(job_count));
+  let tsc_pool = Arc::new(TscRunnerPool::new(opts.node_path.clone(), tsc_limiter.clone()));
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -500,10 +503,9 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
           run_single_case(
             planned.case.clone(),
             compare_mode,
-            &tsc_runner,
+            tsc_pool.clone(),
             tsc_available,
             &snapshot_store,
-            tsc_limiter.clone(),
             &opts,
           )
         };
@@ -623,17 +625,16 @@ fn resolve_compare_mode(
 fn run_single_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_runner: &TscWrapperRunner,
+  tsc_pool: Arc<TscRunnerPool>,
   tsc_available: bool,
   snapshots: &SnapshotStore,
-  tsc_limiter: Arc<ConcurrencyLimiter>,
   opts: &ConformanceOptions,
 ) -> TestResult {
   let (tx, rx) = mpsc::channel();
   let span = info_span!("test_case", test_id = %case.id);
   let _enter = span.enter();
   let span_for_thread = span.clone();
-  let cloned_runner = tsc_runner.clone();
+  let cloned_tsc_pool = tsc_pool.clone();
   let cloned_snapshots = snapshots.clone();
   let timeout_id = case.id.clone();
   let timeout_path = case.path.display().to_string();
@@ -648,13 +649,12 @@ fn run_single_case(
     let result = execute_case(
       case,
       compare_mode,
-      cloned_runner,
+      cloned_tsc_pool,
       tsc_available,
       cloned_snapshots,
       span_tolerance,
       update_snapshots,
       collect_query_stats,
-      tsc_limiter,
     );
     let _ = tx.send(result);
   });
@@ -684,13 +684,12 @@ fn run_single_case(
 fn execute_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_runner: TscWrapperRunner,
+  tsc_pool: Arc<TscRunnerPool>,
   tsc_available: bool,
   snapshots: SnapshotStore,
   span_tolerance: u32,
   update_snapshots: bool,
   collect_query_stats: bool,
-  tsc_limiter: Arc<ConcurrencyLimiter>,
 ) -> TestResult {
   let total_start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
@@ -706,7 +705,7 @@ fn execute_case(
   let tsc_options = harness_options.to_tsc_options_map();
   let options = build_test_options(&harness_options, &tsc_options);
 
-  let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
+  let mut tsc_raw: Option<TscDiagnostics> = None;
   let mut tsc_ms: Option<u128> = None;
   // The diff/normalization phase begins after we have Rust diagnostics. If we
   // invoke tsc, we reset this clock after tsc completes so `diff_ms` does not
@@ -717,7 +716,7 @@ fn execute_case(
     CompareMode::Tsc => {
       if tsc_available {
         let tsc_start = Instant::now();
-        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+        let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
         tsc_ms = Some(tsc_start.elapsed().as_millis());
         diff_start = Instant::now();
         tsc_raw = raw;
@@ -730,7 +729,7 @@ fn execute_case(
       if update_snapshots {
         if tsc_available {
           let tsc_start = Instant::now();
-          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+          let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
           tsc_ms = Some(tsc_start.elapsed().as_millis());
           diff_start = Instant::now();
           tsc_raw = raw;
@@ -740,9 +739,10 @@ fn execute_case(
         }
       } else {
         match snapshots.load(&case.id) {
-          Ok(diags) => {
-            tsc_raw = Some(diags.clone());
-            EngineDiagnostics::ok(normalize_tsc_diagnostics(&diags))
+          Ok(snapshot) => {
+            let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
+            tsc_raw = Some(snapshot);
+            EngineDiagnostics::ok(normalized)
           }
           Err(err) => EngineDiagnostics::crashed(format!("missing snapshot: {err}")),
         }
@@ -841,17 +841,15 @@ fn harness_sleep_for_case(id: &str) -> Option<Duration> {
 }
 
 fn run_tsc_with_raw(
-  runner: &TscWrapperRunner,
+  pool: &TscRunnerPool,
   file_set: &HarnessFileSet,
   options: &Map<String, Value>,
-  limiter: &ConcurrencyLimiter,
-) -> (EngineDiagnostics, Option<Vec<TscDiagnostic>>) {
-  let _permit = limiter.acquire();
-  match runner.run(file_set, options) {
-    Ok(diags) => (
-      EngineDiagnostics::ok(normalize_tsc_diagnostics(&diags)),
-      Some(diags),
-    ),
+) -> (EngineDiagnostics, Option<TscDiagnostics>) {
+  match pool.run(file_set, options) {
+    Ok(diags) => {
+      let normalized = normalize_tsc_diagnostics(&diags.diagnostics);
+      (EngineDiagnostics::ok(normalized), Some(diags))
+    }
     Err(err) => (EngineDiagnostics::crashed(err), None),
   }
 }
@@ -1067,85 +1065,68 @@ fn has_known_extension(name: &str) -> bool {
     || name.ends_with(".jsx")
 }
 
-#[derive(Clone)]
-struct TscWrapperRunner {
+struct TscRunnerPool {
   node_path: PathBuf,
+  limiter: Arc<ConcurrencyLimiter>,
+  runners: Mutex<Vec<TscRunner>>,
 }
 
-impl TscWrapperRunner {
-  fn new(node_path: PathBuf) -> Self {
-    Self { node_path }
-  }
-
-  fn available(&self) -> bool {
-    #[cfg(feature = "with-node")]
-    {
-      crate::tsc::node_available(&self.node_path)
-        && crate::tsc::typescript_available(&self.node_path)
-    }
-
-    #[cfg(not(feature = "with-node"))]
-    {
-      false
+impl TscRunnerPool {
+  fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
+    Self {
+      node_path,
+      limiter,
+      runners: Mutex::new(Vec::new()),
     }
   }
 
   fn run(
     &self,
-    files: &HarnessFileSet,
+    file_set: &HarnessFileSet,
     options: &Map<String, Value>,
-  ) -> std::result::Result<Vec<TscDiagnostic>, String> {
-    #[cfg(not(feature = "with-node"))]
-    {
-      let _ = (files, options);
-      return Err("built without `with-node` feature".to_string());
+  ) -> std::result::Result<TscDiagnostics, String> {
+    let _permit = self.limiter.acquire();
+    let mut runner = self.checkout().map_err(|err| err.to_string())?;
+    let request = build_tsc_request(file_set, options);
+    let result = runner.check(request).map_err(|err| err.to_string());
+    self.release(runner);
+    result
+  }
+
+  fn checkout(&self) -> anyhow::Result<TscRunner> {
+    let mut runners = self.runners.lock().unwrap();
+    if let Some(runner) = runners.pop() {
+      Ok(runner)
+    } else {
+      TscRunner::new(self.node_path.clone())
     }
+  }
 
-    #[cfg(feature = "with-node")]
-    {
-      let wrapper = wrapper_path();
-      if !wrapper.exists() {
-        return Err(format!("missing tsc wrapper at {}", wrapper.display()));
-      }
-      let temp_dir = tempfile::tempdir().map_err(|err| err.to_string())?;
-      files
-        .write_to_dir(temp_dir.path())
-        .map_err(|err| err.to_string())?;
-      let mut cmd = std::process::Command::new(&self.node_path);
-      cmd.current_dir(temp_dir.path());
-      cmd.arg(wrapper);
-      if !options.is_empty() {
-        let env = serde_json::to_string(options)
-          .map_err(|err| format!("serialize harness options: {err}"))?;
-        cmd.env("HARNESS_OPTIONS", env);
-      }
-      for file in files.iter() {
-        cmd.arg(&file.fs_path);
-      }
-
-      let output = cmd.output().map_err(|err| format!("spawn node: {err}"))?;
-
-      if !output.status.success() {
-        return Err(format!(
-          "tsc wrapper exited with status {}: stdout={} stderr={}",
-          output.status,
-          String::from_utf8_lossy(&output.stdout),
-          String::from_utf8_lossy(&output.stderr)
-        ));
-      }
-
-      let parsed: TscDiagnostics = serde_json::from_slice(&output.stdout)
-        .map_err(|err| format!("parse tsc JSON output: {err}"))?;
-
-      Ok(parsed.diagnostics)
-    }
+  fn release(&self, runner: TscRunner) {
+    let mut runners = self.runners.lock().unwrap();
+    runners.push(runner);
   }
 }
 
-fn wrapper_path() -> PathBuf {
-  Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("scripts")
-    .join("tsc_wrapper.js")
+fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) -> TscRequest {
+  let mut files = HashMap::new();
+  let mut root_names = Vec::new();
+
+  for file in file_set.iter() {
+    let name = file.key.as_str().to_string();
+    root_names.push(name.clone());
+    files.insert(name, file.content.to_string());
+  }
+
+  root_names.sort();
+  root_names.dedup();
+
+  TscRequest {
+    root_names,
+    files,
+    options: options.clone(),
+    type_queries: Vec::new(),
+  }
 }
 
 #[derive(Clone)]
@@ -1227,26 +1208,30 @@ impl SnapshotStore {
     path
   }
 
-  fn load(&self, id: &str) -> std::io::Result<Vec<TscDiagnostic>> {
+  fn load(&self, id: &str) -> std::io::Result<TscDiagnostics> {
     let path = self.path_for(id);
     let data = read_utf8_file(&path)?;
     let parsed: TscDiagnostics = serde_json::from_str(&data)?;
-    Ok(parsed.diagnostics)
+    let version = parsed.schema_version.unwrap_or(0);
+    if version != TSC_BASELINE_SCHEMA_VERSION {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!(
+          "snapshot schema mismatch (found {version}, expected {TSC_BASELINE_SCHEMA_VERSION}); regenerate snapshots"
+        ),
+      ));
+    }
+    Ok(parsed)
   }
 
-  fn save(&self, id: &str, diagnostics: &[TscDiagnostic]) -> std::io::Result<()> {
+  fn save(&self, id: &str, diagnostics: &TscDiagnostics) -> std::io::Result<()> {
     let path = self.path_for(id);
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent)?;
     }
 
-    let payload = TscDiagnostics {
-      schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
-      metadata: TscMetadata::default(),
-      diagnostics: diagnostics.to_vec(),
-      type_facts: None,
-      crash: None,
-    };
+    let mut payload = diagnostics.clone();
+    payload.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(path, format!("{json}\n"))
   }

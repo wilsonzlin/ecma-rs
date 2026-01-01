@@ -47,7 +47,7 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 ### Node.js + `typescript` npm package
 
 The harness shells out to Node and loads the `typescript` package via
-`scripts/tsc_wrapper.js` / `scripts/tsc_runner.js`.
+`scripts/tsc_runner.js` (an NDJSON, in-memory TypeScript runner).
 
 ```
 node --version
@@ -163,7 +163,7 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
   invocations are concurrency-limited to keep process count bounded, and JSON
   output is stably ordered regardless of scheduling.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
-- The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
+- The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.
 
 ### Expectations manifests

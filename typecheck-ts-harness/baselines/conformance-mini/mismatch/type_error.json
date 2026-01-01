@@ -1,4 +1,9 @@
 {
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": null,
+    "options": {}
+  },
   "diagnostics": [
     {
       "code": 2322,
