@@ -246,6 +246,44 @@ fn type_exports_propagate_through_reexports() {
 }
 
 #[test]
+fn exports_support_string_literal_names() {
+  let mut host = MemoryHost::default();
+  let key_mod = fk(400);
+  let key_entry = fk(401);
+  host.insert(
+    key_mod.clone(),
+    "export const foo: number = 1;\nexport { foo as \"a-b\" };",
+  );
+  host.insert(
+    key_entry.clone(),
+    "import { \"a-b\" as bar } from \"./mod\";\nbar satisfies number;\n",
+  );
+  host.link(key_entry.clone(), "./mod", key_mod.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_mod = program.file_id(&key_mod).expect("module id");
+  let exports_mod = program.exports_of(file_mod);
+  let export = exports_mod.get("a-b").expect("export a-b present");
+  let export_ty = export.type_id.expect("type for export a-b");
+  assert_eq!(program.display_type(export_ty).to_string(), "number");
+
+  let file_entry = program.file_id(&key_entry).expect("entry id");
+  let bar_def = program
+    .definitions_in_file(file_entry)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("bar"))
+    .expect("imported bar def");
+  let bar_ty = program.type_of_def_interned(bar_def);
+  assert_eq!(program.display_type(bar_ty).to_string(), "number");
+}
+
+#[test]
 fn export_star_cycle_reaches_fixpoint() {
   let mut host = MemoryHost::default();
   let key_a = fk(210);
