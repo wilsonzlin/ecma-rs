@@ -1813,6 +1813,16 @@ fn keyof_never_is_never() {
 }
 
 #[test]
+fn keyof_empty_object_is_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(empty_object)));
+  assert_eq!(evaluated, primitives.never);
+}
+
+#[test]
 fn keyof_string_indexer_includes_number() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

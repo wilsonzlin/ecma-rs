@@ -1486,7 +1486,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         acc
       }
-      TypeKind::Unknown | TypeKind::Never => KeySet::Known(Vec::new()),
+      TypeKind::Unknown | TypeKind::Never | TypeKind::EmptyObject => KeySet::Known(Vec::new()),
       TypeKind::Object(obj) => {
         let mut keys = Vec::new();
         let shape = self.store.shape(self.store.object(obj).shape);
