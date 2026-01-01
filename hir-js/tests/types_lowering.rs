@@ -564,9 +564,8 @@ fn union_canonicalization_is_span_stable_for_type_query_types() {
 #[test]
 fn union_canonicalization_is_span_stable_for_indexed_access_types() {
   let base = lower_from_source(r#"type A = (T["b"]) | (T["a"]);"#).expect("lower");
-  let with_padding =
-    lower_from_source("type Z = string;\ntype A = (T[\"b\"]) | (T[\"a\"]);")
-      .expect("lower with padding");
+  let with_padding = lower_from_source("type Z = string;\ntype A = (T[\"b\"]) | (T[\"a\"]);")
+    .expect("lower with padding");
 
   let base_members = union_member_indexed_access_index_literals(&base, "A");
   let with_padding_members = union_member_indexed_access_index_literals(&with_padding, "A");
@@ -929,9 +928,8 @@ fn intersection_canonicalization_is_span_stable_for_type_query_types() {
 #[test]
 fn intersection_canonicalization_is_span_stable_for_indexed_access_types() {
   let base = lower_from_source(r#"type A = (T["b"]) & (T["a"]);"#).expect("lower");
-  let with_padding =
-    lower_from_source("type Z = string;\ntype A = (T[\"b\"]) & (T[\"a\"]);")
-      .expect("lower with padding");
+  let with_padding = lower_from_source("type Z = string;\ntype A = (T[\"b\"]) & (T[\"a\"]);")
+    .expect("lower with padding");
 
   let base_members = intersection_member_indexed_access_index_literals(&base, "A");
   let with_padding_members = intersection_member_indexed_access_index_literals(&with_padding, "A");
