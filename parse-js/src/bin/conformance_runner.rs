@@ -105,8 +105,7 @@ struct SimpleFiles {
 
 impl SimpleFiles {
   fn insert(&mut self, name: String, text: String) -> FileId {
-    let normalized = normalize_virtual_path(&name);
-    if let Some(id) = self.ids.get(&normalized) {
+    if let Some(id) = self.ids.get(&name) {
       if let Some(file) = self.files.get_mut(id.0 as usize) {
         file.text = text;
       }
@@ -114,10 +113,10 @@ impl SimpleFiles {
     }
     let id = FileId(self.files.len() as u32);
     self.files.push(SimpleFile {
-      name: normalized.clone(),
+      name: name.clone(),
       text,
     });
-    self.ids.insert(normalized, id);
+    self.ids.insert(name, id);
     id
   }
 
@@ -160,11 +159,19 @@ fn empty_test_result(path: &Path) -> TestResult {
 }
 
 fn normalize_path(path: &Path) -> String {
-  path.to_string_lossy().replace('\\', "/")
+  let mut normalized = path.to_string_lossy().into_owned();
+  if normalized.contains('\\') {
+    normalized = normalized.replace('\\', "/");
+  }
+  normalized
 }
 
 fn normalize_virtual_path(path: &str) -> String {
-  path.replace('\\', "/")
+  if path.contains('\\') {
+    path.replace('\\', "/")
+  } else {
+    path.to_string()
+  }
 }
 
 fn parse_directive(line: &str) -> Option<HarnessDirective> {
@@ -327,7 +334,7 @@ fn load_failure_paths(path: &Path) -> HashSet<String> {
   report
     .lines()
     .filter_map(|line| line.strip_prefix("File: "))
-    .map(|p| p.trim().replace('\\', "/"))
+    .map(|p| normalize_virtual_path(p.trim()))
     .collect()
 }
 
@@ -367,15 +374,17 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     return timeout_test_result(path, timeout_secs);
   };
   base_result.directives = directives;
-  virtual_files
-    .sort_by(|a, b| normalize_virtual_path(&a.name).cmp(&normalize_virtual_path(&b.name)));
+  for vf in &mut virtual_files {
+    vf.name = normalize_virtual_path(&vf.name);
+  }
+  virtual_files.sort_by(|a, b| a.name.cmp(&b.name));
 
   for vf in virtual_files {
     if cancel.load(AtomicOrdering::Relaxed) {
       return timeout_test_result(path, timeout_secs);
     }
     let should_parse = should_parse(&vf.kind);
-    let normalized_name = normalize_virtual_path(&vf.name);
+    let normalized_name = vf.name;
     let file_id = base_result
       .files_store
       .insert(normalized_name.clone(), vf.content.clone());
