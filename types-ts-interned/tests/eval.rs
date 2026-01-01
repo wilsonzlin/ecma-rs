@@ -1247,6 +1247,73 @@ fn template_literal_distributes_over_union_parts() {
 }
 
 #[test]
+fn template_literal_pattern_is_preserved() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tpl = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "foo".into(),
+    spans: vec![TemplateChunk {
+      literal: "bar".into(),
+      ty: primitives.string,
+    }],
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(tpl);
+
+  assert_ne!(result, primitives.string);
+  let TypeKind::TemplateLiteral(tpl) = store.type_kind(result) else {
+    panic!(
+      "expected template literal, got {:?}",
+      store.type_kind(result)
+    );
+  };
+  assert_eq!(tpl.head, "foo".to_string());
+  assert_eq!(tpl.spans.len(), 1);
+  assert_eq!(tpl.spans[0].literal, "bar".to_string());
+  assert_eq!(tpl.spans[0].ty, primitives.string);
+}
+
+#[test]
+fn template_literal_as_mapped_key_produces_string_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key_pattern = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "foo".into(),
+    spans: vec![TemplateChunk {
+      literal: "bar".into(),
+      ty: primitives.string,
+    }],
+  }));
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: key_pattern,
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: None,
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 1);
+  assert_eq!(shape.indexers[0].key_type, primitives.string);
+  assert_eq!(shape.indexers[0].value_type, primitives.number);
+}
+
+#[test]
 fn template_literal_expansion_bails_out_on_blowup() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

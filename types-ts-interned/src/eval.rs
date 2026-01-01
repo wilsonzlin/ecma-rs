@@ -1,6 +1,6 @@
 use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::ids::{DefId, ObjectId, TypeId, TypeParamId};
-use crate::kind::{MappedModifier, MappedType, TemplateLiteralType, TypeKind};
+use crate::kind::{MappedModifier, MappedType, TemplateChunk, TemplateLiteralType, TypeKind};
 use crate::relate::RelateCtx;
 use crate::shape::{PropData, PropKey, Property, Shape};
 use crate::store::TypeStore;
@@ -1122,7 +1122,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) -> TypeId {
     let strings = self.compute_template_strings(&tpl, subst, depth + 1);
     match strings {
-      Some(strings) => {
+      TemplateStringComputation::Finite(strings) => {
         if strings.is_empty() {
           return self.store.primitive_ids().never;
         }
@@ -1133,7 +1133,23 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         self.store.union(types)
       }
-      None => self.store.primitive_ids().string,
+      TemplateStringComputation::TooLarge => self.store.primitive_ids().string,
+      TemplateStringComputation::Infinite => {
+        let evaluated_spans = tpl
+          .spans
+          .into_iter()
+          .map(|chunk| TemplateChunk {
+            literal: chunk.literal,
+            ty: self.evaluate_with_subst(chunk.ty, subst, depth + 1),
+          })
+          .collect();
+        self
+          .store
+          .intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+            head: tpl.head,
+            spans: evaluated_spans,
+          }))
+      }
     }
   }
 
@@ -1285,14 +1301,16 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::Symbol | TypeKind::UniqueSymbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::TemplateLiteral(tpl) => {
         match self.compute_template_strings(&tpl, &Substitution::empty(), 0) {
-          Some(strings) => KeySet::known(
+          TemplateStringComputation::Finite(strings) => KeySet::known(
             strings
               .into_iter()
               .map(|s| Key::Literal(PropKey::String(self.store.intern_name(s))))
               .collect(),
             &self.store,
           ),
-          None => KeySet::Unknown,
+          TemplateStringComputation::Infinite | TemplateStringComputation::TooLarge => {
+            KeySet::known(vec![Key::String], &self.store)
+          }
         }
       }
       TypeKind::String => KeySet::known(vec![Key::String], &self.store),
@@ -1419,14 +1437,16 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::Array { .. } => KeySet::known(vec![Key::Number], &self.store),
       TypeKind::TemplateLiteral(tpl) => {
         match self.compute_template_strings(&tpl, subst, depth + 1) {
-          Some(strings) => KeySet::known(
+          TemplateStringComputation::Finite(strings) => KeySet::known(
             strings
               .into_iter()
               .map(|s| Key::Literal(PropKey::String(self.store.intern_name(s))))
               .collect(),
             &self.store,
           ),
-          None => KeySet::Unknown,
+          TemplateStringComputation::Infinite | TemplateStringComputation::TooLarge => {
+            KeySet::known(vec![Key::String], &self.store)
+          }
         }
       }
       TypeKind::StringLiteral(id) => {
@@ -1511,26 +1531,44 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     tpl: &TemplateLiteralType,
     subst: &Substitution,
     depth: usize,
-  ) -> Option<Vec<String>> {
-    let mut acc = vec![tpl.head.clone()];
+  ) -> TemplateStringComputation {
+    // First determine whether all template atoms are finite. Any non-finite atom
+    // makes the whole template non-enumerable (`Infinite`), while atoms that are
+    // finite-but-too-large should still bail out to `string` (`TooLarge`).
+    let mut saw_too_large_atom = false;
+    let mut atom_strings: Vec<Vec<String>> = Vec::with_capacity(tpl.spans.len());
     for span in tpl.spans.iter() {
+      match self.template_atom_strings(span.ty, subst, depth + 1) {
+        TemplateStringComputation::Finite(strings) => atom_strings.push(strings),
+        TemplateStringComputation::Infinite => return TemplateStringComputation::Infinite,
+        TemplateStringComputation::TooLarge => {
+          saw_too_large_atom = true;
+          atom_strings.push(Vec::new());
+        }
+      }
+    }
+    if saw_too_large_atom {
+      return TemplateStringComputation::TooLarge;
+    }
+
+    let mut acc = vec![tpl.head.clone()];
+    for (span, atom_strings) in tpl.spans.iter().zip(atom_strings.into_iter()) {
       if acc.is_empty() {
         break;
       }
-      let atom_strings = self.template_atom_strings(span.ty, subst, depth + 1)?;
       if atom_strings.is_empty() {
         acc.clear();
         break;
       }
       match acc.len().checked_mul(atom_strings.len()) {
         Some(product) if product <= self.max_template_strings => {}
-        _ => return None,
+        _ => return TemplateStringComputation::TooLarge,
       }
       let mut next = Vec::new();
       for base in &acc {
         for atom in &atom_strings {
           if next.len() >= self.max_template_strings {
-            return None;
+            return TemplateStringComputation::TooLarge;
           }
           let mut new = base.clone();
           new.push_str(atom);
@@ -1541,11 +1579,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       acc = next;
     }
     if acc.len() > self.max_template_strings {
-      return None;
+      return TemplateStringComputation::TooLarge;
     }
     acc.sort();
     acc.dedup();
-    Some(acc)
+    TemplateStringComputation::Finite(acc)
   }
 
   fn template_atom_strings(
@@ -1553,30 +1591,48 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     ty: TypeId,
     subst: &Substitution,
     depth: usize,
-  ) -> Option<Vec<String>> {
+  ) -> TemplateStringComputation {
     let evaluated = self.evaluate_with_subst(ty, subst, depth + 1);
     match self.store.type_kind(evaluated) {
-      TypeKind::StringLiteral(id) => Some(vec![self.store.name(id)]),
-      TypeKind::NumberLiteral(num) => Some(vec![num.0.to_string()]),
-      TypeKind::BooleanLiteral(val) => Some(vec![val.to_string()]),
+      TypeKind::StringLiteral(id) => TemplateStringComputation::Finite(vec![self.store.name(id)]),
+      TypeKind::NumberLiteral(num) => TemplateStringComputation::Finite(vec![num.0.to_string()]),
+      TypeKind::BooleanLiteral(val) => TemplateStringComputation::Finite(vec![val.to_string()]),
       TypeKind::TemplateLiteral(tpl) => self.compute_template_strings(&tpl, subst, depth + 1),
       TypeKind::Union(members) => {
         let mut out = Vec::new();
+        let mut saw_too_large = false;
         for member in members {
-          let Some(mut vals) = self.template_atom_strings(member, subst, depth + 1) else {
-            return None;
-          };
-          out.append(&mut vals);
-          if out.len() > self.max_template_strings {
-            return None;
+          match self.template_atom_strings(member, subst, depth + 1) {
+            TemplateStringComputation::Finite(mut vals) => {
+              if !saw_too_large {
+                out.append(&mut vals);
+                if out.len() > self.max_template_strings {
+                  saw_too_large = true;
+                  out.clear();
+                }
+              }
+            }
+            TemplateStringComputation::Infinite => return TemplateStringComputation::Infinite,
+            TemplateStringComputation::TooLarge => saw_too_large = true,
           }
         }
-        Some(out)
+        if saw_too_large {
+          TemplateStringComputation::TooLarge
+        } else {
+          TemplateStringComputation::Finite(out)
+        }
       }
-      TypeKind::Never => Some(Vec::new()),
-      _ => None,
+      TypeKind::Never => TemplateStringComputation::Finite(Vec::new()),
+      _ => TemplateStringComputation::Infinite,
     }
   }
+}
+
+#[derive(Clone, Debug)]
+enum TemplateStringComputation {
+  Finite(Vec<String>),
+  Infinite,
+  TooLarge,
 }
 
 struct MappedKeyTypes {
