@@ -2,13 +2,15 @@ use super::side_effects::is_side_effect_free_expr;
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use ahash::HashSet;
+use crate::rename::ExportNameSymbol;
 use derive_visitor::{Drive, Visitor};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::import_export::ExportName;
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
-use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
+use parse_js::ast::stmt::{ExportListStmt, ForBody, SwitchBranch, TryStmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol};
@@ -59,14 +61,38 @@ where
 fn collect_used_symbols(top: &Node<TopLevel>) -> HashSet<SymbolId> {
   type IdExprNode = Node<IdExpr>;
   type IdPatNode = Node<IdPat>;
+  type ExportNameNode = Node<ExportName>;
+  type ExportListStmtNode = Node<ExportListStmt>;
 
   #[derive(Default, Visitor)]
-  #[visitor(IdExprNode(enter), IdPatNode(enter))]
+  #[visitor(
+    ExportListStmtNode(enter, exit),
+    ExportNameNode(enter),
+    IdExprNode(enter),
+    IdPatNode(enter)
+  )]
   struct UseCollector {
     used: HashSet<SymbolId>,
+    in_export_list: usize,
   }
 
   impl UseCollector {
+    fn enter_export_list_stmt_node(&mut self, _node: &ExportListStmtNode) {
+      self.in_export_list += 1;
+    }
+
+    fn exit_export_list_stmt_node(&mut self, _node: &ExportListStmtNode) {
+      if self.in_export_list > 0 {
+        self.in_export_list -= 1;
+      }
+    }
+
+    fn enter_export_name_node(&mut self, node: &ExportNameNode) {
+      if let Some(sym) = node.assoc.get::<ExportNameSymbol>().map(|s| s.0) {
+        self.used.insert(sym);
+      }
+    }
+
     fn enter_id_expr_node(&mut self, node: &IdExprNode) {
       if let Some(sym) = resolved_symbol(&node.assoc) {
         self.used.insert(sym);
@@ -74,6 +100,9 @@ fn collect_used_symbols(top: &Node<TopLevel>) -> HashSet<SymbolId> {
     }
 
     fn enter_id_pat_node(&mut self, node: &IdPatNode) {
+      if self.in_export_list > 0 {
+        return;
+      }
       if declared_symbol(&node.assoc).is_some() {
         return;
       }

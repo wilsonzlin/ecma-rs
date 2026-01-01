@@ -5,6 +5,7 @@ use parse_js::ast::expr::IdExpr;
 use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
+use parse_js::ast::stmt::ExportListStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};
@@ -23,7 +24,7 @@ pub struct ScopeHazards {
 }
 
 #[derive(Clone, Copy)]
-struct ExportNameSymbol(SymbolId);
+pub(crate) struct ExportNameSymbol(pub(crate) SymbolId);
 
 #[cfg_attr(feature = "emit-minify", allow(dead_code))]
 #[derive(Clone, Debug)]
@@ -47,6 +48,7 @@ struct SymbolCollector<'a> {
   top_level_mode: TopLevelMode,
   exported: HashSet<SymbolId>,
   export_decl_stack: Vec<bool>,
+  export_list_from_stack: Vec<bool>,
   ignore_id_pats: usize,
   scope_usages: HashMap<ScopeId, ScopeUsages>,
 }
@@ -54,6 +56,7 @@ struct SymbolCollector<'a> {
 type ClassDeclNode = Node<ClassDecl>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type ExportNameNode = Node<ExportName>;
+type ExportListStmtNode = Node<ExportListStmt>;
 type FuncDeclNode = Node<FuncDecl>;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
@@ -64,6 +67,7 @@ type VarDeclNode = Node<VarDecl>;
 #[visitor(
   ClassDeclNode(enter, exit),
   ClassOrFuncNameNode(enter),
+  ExportListStmtNode(enter, exit),
   ExportNameNode(enter, exit),
   FuncDeclNode(enter, exit),
   IdExprNode(enter),
@@ -81,6 +85,7 @@ impl<'a> SymbolCollector<'a> {
       top_level_mode,
       exported: HashSet::default(),
       export_decl_stack: vec![false],
+      export_list_from_stack: Vec::new(),
       ignore_id_pats: 0,
       scope_usages: HashMap::default(),
     }
@@ -137,6 +142,14 @@ impl<'a> SymbolCollector<'a> {
 }
 
 impl SymbolCollectorVisitor<'_> {
+  fn enter_export_list_stmt_node(&mut self, node: &mut ExportListStmtNode) {
+    self.inner.export_list_from_stack.push(node.stx.from.is_some());
+  }
+
+  fn exit_export_list_stmt_node(&mut self, _node: &mut ExportListStmtNode) {
+    self.inner.export_list_from_stack.pop();
+  }
+
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
     let export = self.inner.top_level_mode == TopLevelMode::Module && node.stx.export;
     self.inner.export_decl_stack.push(export);
@@ -205,15 +218,22 @@ impl SymbolCollectorVisitor<'_> {
   }
 
   fn enter_export_name_node(&mut self, node: &mut ExportNameNode) {
-    let Some(scope) = scope_id(&node.assoc) else {
-      return;
-    };
-    if let ModuleExportImportName::Ident(name) = &node.stx.exportable {
-      if let Some(sym) = self.inner.resolve_export_name(scope, name) {
-        node.assoc.set(ExportNameSymbol(sym));
-        self.inner.record_symbol_usage(scope, sym);
-      } else {
-        self.inner.record_unknown(scope, name);
+    let is_reexport = self
+      .inner
+      .export_list_from_stack
+      .last()
+      .copied()
+      .unwrap_or(false);
+    if !is_reexport {
+      if let Some(scope) = scope_id(&node.assoc) {
+        if let ModuleExportImportName::Ident(name) = &node.stx.exportable {
+          if let Some(sym) = self.inner.resolve_export_name(scope, name) {
+            node.assoc.set(ExportNameSymbol(sym));
+            self.inner.record_symbol_usage(scope, sym);
+          } else {
+            self.inner.record_unknown(scope, name);
+          }
+        }
       }
     }
     self.inner.ignore_id_pats += 1;
@@ -443,6 +463,7 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
 #[derive(VisitorMut)]
 #[visitor(
   ClassOrFuncNameNode(enter),
+  ExportListStmtNode(enter, exit),
   ExportNameNode(enter),
   IdExprNode(enter),
   IdPatNode(enter)
@@ -450,9 +471,20 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
 struct ApplyVisitor<'a> {
   renames: &'a HashMap<SymbolId, String>,
   replacements: Vec<Replacement>,
+  in_export_list: usize,
 }
 
 impl<'a> ApplyVisitor<'a> {
+  fn enter_export_list_stmt_node(&mut self, _node: &mut ExportListStmtNode) {
+    self.in_export_list += 1;
+  }
+
+  fn exit_export_list_stmt_node(&mut self, _node: &mut ExportListStmtNode) {
+    if self.in_export_list > 0 {
+      self.in_export_list -= 1;
+    }
+  }
+
   fn maybe_apply(&mut self, loc: (usize, usize), sym: Option<SymbolId>, name: &mut String) {
     let Some(sym) = sym else { return };
     let Some(new_name) = self.renames.get(&sym) else {
@@ -482,6 +514,9 @@ impl<'a> ApplyVisitor<'a> {
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+    if self.in_export_list > 0 {
+      return;
+    }
     let sym = resolved_symbol(&node.assoc);
     let len = node.stx.name.len();
     let start = node.loc.0.saturating_sub(len);
@@ -528,6 +563,7 @@ pub fn apply_renames(
   let mut visitor = ApplyVisitor {
     renames,
     replacements: Vec::new(),
+    in_export_list: 0,
   };
   top.drive_mut(&mut visitor);
   visitor.replacements
