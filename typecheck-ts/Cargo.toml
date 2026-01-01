@@ -30,6 +30,7 @@ sha2 = "0.10"
 # salsa 0.18 provides the 2022 tracked/input APIs without the newer Rust 1.85 toolchain
 # requirement and uses clone-based snapshots instead of the removed ParallelDatabase trait.
 salsa = "0.18"
+derive-visitor = "0.4.0"
 
 [dev-dependencies]
 diagnostics = { path = "../diagnostics" }

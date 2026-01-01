@@ -88,13 +88,14 @@ fn module_resolve_for(db: &dyn Db, entry: ModuleResolutionInput) -> Option<FileI
 fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   panic_if_cancelled(db);
   let lowered = lower_hir_for(db, file);
-  let Some(lowered) = lowered.lowered.as_deref() else {
-    return Arc::from([]);
-  };
-  let mut specs: Vec<_> = collect_module_specifiers(lowered)
-    .into_iter()
-    .map(|(spec, _)| spec)
-    .collect();
+  let parsed = parse_for(db, file);
+  let mut specs: Vec<Arc<str>> = Vec::new();
+  if let Some(lowered) = lowered.lowered.as_deref() {
+    specs.extend(collect_module_specifiers(lowered).into_iter().map(|(spec, _)| spec));
+  }
+  if let Some(ast) = parsed.ast.as_deref() {
+    specs.extend(collect_type_only_module_specifiers_from_ast(ast).into_iter().map(|(s, _)| s));
+  }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
   Arc::from(specs.into_boxed_slice())
@@ -1445,6 +1446,53 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
     }
   }
   specs
+}
+
+fn collect_type_only_module_specifiers_from_ast(
+  ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
+) -> Vec<(Arc<str>, TextRange)> {
+  use derive_visitor::Drive;
+  use derive_visitor::Visitor;
+  use parse_js::ast::expr::Expr;
+  use parse_js::ast::node::Node;
+  use parse_js::ast::type_expr::{TypeEntityName, TypeImport, TypeQuery};
+
+  type TypeImportNode = Node<TypeImport>;
+  type TypeQueryNode = Node<TypeQuery>;
+
+  fn collect_from_entity_name(name: &TypeEntityName, specs: &mut Vec<(Arc<str>, TextRange)>) {
+    match name {
+      TypeEntityName::Qualified(qualified) => collect_from_entity_name(&qualified.left, specs),
+      TypeEntityName::Import(import) => {
+        if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
+          specs.push((Arc::from(spec.stx.value.clone()), import.loc.into()));
+        }
+      }
+      _ => {}
+    }
+  }
+
+  #[derive(Default, Visitor)]
+  #[visitor(TypeImportNode(enter), TypeQueryNode(enter))]
+  struct Collector {
+    specs: Vec<(Arc<str>, TextRange)>,
+  }
+
+  impl Collector {
+    fn enter_type_import_node(&mut self, node: &TypeImportNode) {
+      self
+        .specs
+        .push((Arc::from(node.stx.module_specifier.clone()), node.loc.into()));
+    }
+
+    fn enter_type_query_node(&mut self, node: &TypeQueryNode) {
+      collect_from_entity_name(&node.stx.expr_name, &mut self.specs);
+    }
+  }
+
+  let mut collector = Collector::default();
+  ast.drive(&mut collector);
+  collector.specs
 }
 
 /// Current compiler options.

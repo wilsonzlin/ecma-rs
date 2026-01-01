@@ -4427,6 +4427,7 @@ impl ProgramState {
           };
           self.local_semantics.insert(file, locals);
           self.asts.insert(file, Arc::clone(&ast));
+          self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
           let (lowered, _lower_diags) = lower_hir_with_diagnostics(
             file,
             match file_kind {
@@ -7073,6 +7074,55 @@ impl ProgramState {
         self.queue_type_imports_in_namespace_body(file, &inner.stx.body, host, queue)
       }
     }
+  }
+
+  fn queue_type_imports_in_ast(
+    &mut self,
+    file: FileId,
+    ast: &Node<TopLevel>,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    type TypeImportNode = Node<parse_js::ast::type_expr::TypeImport>;
+    type TypeQueryNode = Node<parse_js::ast::type_expr::TypeQuery>;
+
+    #[derive(derive_visitor::Visitor)]
+    #[visitor(TypeImportNode(enter), TypeQueryNode(enter))]
+    struct TypeImportCollector<'a> {
+      state: &'a mut ProgramState,
+      file: FileId,
+      host: &'a Arc<dyn Host>,
+      queue: &'a mut VecDeque<FileId>,
+    }
+
+    impl<'a> TypeImportCollector<'a> {
+      fn enter_type_import_node(&mut self, node: &TypeImportNode) {
+        if let Some(target) =
+          self
+            .state
+            .record_module_resolution(self.file, &node.stx.module_specifier, self.host)
+        {
+          self.queue.push_back(target);
+        }
+      }
+
+      fn enter_type_query_node(&mut self, node: &TypeQueryNode) {
+        self.state.queue_type_imports_in_entity_name(
+          self.file,
+          &node.stx.expr_name,
+          self.host,
+          self.queue,
+        );
+      }
+    }
+
+    let mut collector = TypeImportCollector {
+      state: self,
+      file,
+      host,
+      queue,
+    };
+    derive_visitor::Drive::drive(ast, &mut collector);
   }
 
   fn queue_type_imports_in_type_expr(
