@@ -47,11 +47,29 @@ fn hir_emits_string_literal_export_star_alias() {
 }
 
 #[test]
+fn hir_emits_default_export_star_alias() {
+  roundtrip(
+    "export * as default from \"mod\";",
+    "export*as default from\"mod\";",
+  );
+}
+
+#[test]
 fn hir_emits_string_literal_namespace_import_alias() {
   roundtrip(
     "import * as \"ns-name\" from \"mod\";",
     "import*as\"ns-name\"from\"mod\";",
   );
+}
+
+#[test]
+fn hir_emits_default_export_alias() {
+  roundtrip("export { a as default };", "export{a as default};");
+}
+
+#[test]
+fn hir_keeps_reexport_default_shorthand() {
+  roundtrip("export { default } from \"mod\";", "export{default}from\"mod\";");
 }
 
 #[test]

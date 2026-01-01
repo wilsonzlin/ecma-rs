@@ -44,11 +44,29 @@ fn export_star_alias_can_be_string_literal() {
 }
 
 #[test]
+fn export_star_alias_can_be_default_keyword() {
+  roundtrip(
+    "export * as default from \"mod\";",
+    "export*as default from\"mod\";",
+  );
+}
+
+#[test]
 fn import_star_alias_can_be_string_literal() {
   roundtrip(
     "import * as \"ns-name\" from \"mod\";",
     "import*as\"ns-name\"from\"mod\";",
   );
+}
+
+#[test]
+fn export_alias_can_be_default_keyword() {
+  roundtrip("export { a as default };", "export{a as default};");
+}
+
+#[test]
+fn reexport_default_name_does_not_require_as() {
+  roundtrip("export { default } from \"mod\";", "export{default}from\"mod\";");
 }
 
 #[test]

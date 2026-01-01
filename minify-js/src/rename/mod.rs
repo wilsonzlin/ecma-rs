@@ -547,7 +547,7 @@ impl<'a> ApplyVisitor<'a> {
       return;
     };
     let alias_raw = &node.stx.alias.stx.name;
-    let alias = if is_module_binding_identifier_token(alias_raw) {
+    let alias = if alias_raw == "default" || is_module_binding_identifier_token(alias_raw) {
       alias_raw.clone()
     } else {
       js_string_literal(alias_raw)

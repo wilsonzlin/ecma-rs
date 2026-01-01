@@ -774,7 +774,11 @@ fn emit_export_list_stmt(em: &mut Emitter, export: &ExportListStmt) -> EmitResul
       em.write_punct("*");
       if let Some(name) = name {
         em.write_keyword("as");
-        emit_module_binding_identifier_or_string_literal(em, &name.stx.name);
+        if name.stx.name == "default" {
+          em.write_identifier("default");
+        } else {
+          emit_module_binding_identifier_or_string_literal(em, &name.stx.name);
+        }
       }
     }
     ExportNames::Specific(names) => {
@@ -811,11 +815,15 @@ fn emit_export_name(em: &mut Emitter, name: &Node<ExportName>) -> EmitResult {
   // - exported names that are not valid pattern identifiers (`export { while as ... }`)
   let alias_required = match &name.exportable {
     ModuleExportImportName::Str(_) => true,
-    ModuleExportImportName::Ident(name) => !is_module_binding_identifier_token(name),
+    ModuleExportImportName::Ident(name) => name != "default" && !is_module_binding_identifier_token(name),
   };
   if alias_required || name.alias.stx.name != name.exportable.as_str() {
     em.write_keyword("as");
-    emit_module_binding_identifier_or_string_literal(em, &name.alias.stx.name);
+    if name.alias.stx.name == "default" {
+      em.write_identifier("default");
+    } else {
+      emit_module_binding_identifier_or_string_literal(em, &name.alias.stx.name);
+    }
   }
   Ok(())
 }

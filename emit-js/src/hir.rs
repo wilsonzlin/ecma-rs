@@ -383,18 +383,23 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
   }
   em.write_keyword("export");
   em.write_punct("{");
-  for (idx, spec) in specs.iter().enumerate() {
-    if idx > 0 {
-      em.write_punct(",");
+    for (idx, spec) in specs.iter().enumerate() {
+      if idx > 0 {
+        em.write_punct(",");
+      }
+      let local = ctx.name(spec.local);
+      emit_identifier_name_or_string_literal(em, local);
+      let local_requires_alias = local != "default" && !is_module_binding_identifier_token(local);
+      if spec.local != spec.exported || local_requires_alias {
+        em.write_keyword("as");
+        let exported = ctx.name(spec.exported);
+        if exported == "default" {
+          em.write_identifier("default");
+        } else {
+          emit_module_binding_identifier_or_string_literal(em, exported);
+        }
+      }
     }
-    let local = ctx.name(spec.local);
-    emit_identifier_name_or_string_literal(em, local);
-    let local_requires_alias = !is_module_binding_identifier_token(local);
-    if spec.local != spec.exported || local_requires_alias {
-      em.write_keyword("as");
-      emit_module_binding_identifier_or_string_literal(em, ctx.name(spec.exported));
-    }
-  }
   em.write_punct("}");
   if let Some(source) = &named.source {
     em.write_keyword("from");
@@ -417,7 +422,12 @@ fn emit_export_all(em: &mut Emitter, ctx: &HirContext<'_>, all: &ExportAll) -> E
   em.write_punct("*");
   if let Some(alias) = &all.alias {
     em.write_keyword("as");
-    emit_module_binding_identifier_or_string_literal(em, ctx.name(alias.exported));
+    let exported = ctx.name(alias.exported);
+    if exported == "default" {
+      em.write_identifier("default");
+    } else {
+      emit_module_binding_identifier_or_string_literal(em, exported);
+    }
   }
   em.write_keyword("from");
   emit_string(em, &all.source.value);

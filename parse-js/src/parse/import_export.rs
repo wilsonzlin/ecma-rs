@@ -336,7 +336,17 @@ impl<'a> Parser<'a> {
           let alias = p.consume_if(TT::KeywordAs).and_then(|| {
             // ES2022: arbitrary module namespace identifiers - allow string literals
             let t = p.peek();
-            if t.typ == TT::LiteralString {
+            if t.typ == TT::KeywordDefault {
+              // `default` is allowed as an exported name (e.g. `export * as default from "mod"`),
+              // but it is not a valid pattern identifier so we need to special-case it here.
+              p.consume();
+              Ok(Node::new(
+                t.loc,
+                IdPat {
+                  name: "default".to_string(),
+                },
+              ))
+            } else if t.typ == TT::LiteralString {
               let name = p.lit_str_val()?;
               Ok(Node::new(t.loc, IdPat { name }))
             } else {
