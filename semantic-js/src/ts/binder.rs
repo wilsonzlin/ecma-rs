@@ -1647,7 +1647,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
     let namespaces = if type_only {
-      Namespace::TYPE
+      // A type-only `export * as ns` still introduces a namespace symbol so
+      // consumers can write `import type { ns } ...; type T = ns.Foo`.
+      Namespace::TYPE | Namespace::NAMESPACE
     } else {
       Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
     };
