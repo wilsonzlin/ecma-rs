@@ -1026,8 +1026,8 @@ impl<'a> Checker<'a> {
       if idx % 2048 == 0 {
         self.check_cancelled();
       }
-      let contains = func.func_span.start <= span.start && func.func_span.end >= span.end;
-      if !contains {
+      let strictly_contains = func.func_span.start < span.start && func.func_span.end > span.end;
+      if !strictly_contains {
         continue;
       }
       let len = func.func_span.end.saturating_sub(func.func_span.start);
@@ -1050,6 +1050,7 @@ impl<'a> Checker<'a> {
       return false;
     };
     let func_node = unsafe { &*func.func };
+    let prim = self.store.primitive_ids();
 
     let mut type_param_decls = Vec::new();
     let mut has_type_params = false;
@@ -1058,8 +1059,45 @@ impl<'a> Checker<'a> {
       has_type_params = true;
       type_param_decls = self.lower_type_params(params);
     }
-
-    self.bind_params(func_node, &type_param_decls, None);
+    fn bind_missing(
+      checker: &mut Checker<'_>,
+      pat: &Node<AstPat>,
+      ty: TypeId,
+      type_params: &[TypeParamDecl],
+    ) {
+      match pat.stx.as_ref() {
+        AstPat::Id(id) => {
+          if checker.lookup(&id.stx.name).is_none() {
+            checker.insert_binding(id.stx.name.clone(), ty, type_params.to_vec());
+          }
+        }
+        AstPat::Arr(arr) => {
+          for elem in arr.stx.elements.iter().flatten() {
+            bind_missing(checker, &elem.target, ty, type_params);
+          }
+          if let Some(rest) = &arr.stx.rest {
+            bind_missing(checker, rest, ty, type_params);
+          }
+        }
+        AstPat::Obj(obj) => {
+          for prop in obj.stx.properties.iter() {
+            bind_missing(checker, &prop.stx.target, ty, type_params);
+          }
+          if let Some(rest) = &obj.stx.rest {
+            bind_missing(checker, rest, ty, type_params);
+          }
+        }
+        AstPat::AssignTarget(_) => {}
+      }
+    }
+    for param in func_node.stx.parameters.iter() {
+      bind_missing(
+        self,
+        &param.stx.pattern.stx.pat,
+        prim.unknown,
+        &type_param_decls,
+      );
+    }
     has_type_params
   }
 
@@ -1081,8 +1119,29 @@ impl<'a> Checker<'a> {
         .map(|ann| self.lowerer.lower_type_expr(ann));
       let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let contextual_param_ty = contextual_sig
-        .and_then(|sig| sig.params.get(idx))
-        .map(|param| param.ty)
+        .and_then(|sig| {
+          if let Some(param_sig) = sig.params.get(idx) {
+            if param_sig.rest && !param.stx.rest {
+              let elem_ty = self.spread_element_type(param_sig.ty);
+              return Some(elem_ty);
+            }
+            return Some(param_sig.ty);
+          }
+
+          let rest = sig
+            .params
+            .iter()
+            .enumerate()
+            .find(|(_, param)| param.rest)
+            .filter(|(rest_idx, _)| idx >= *rest_idx);
+          rest.map(|(_, rest_param)| {
+            if param.stx.rest {
+              rest_param.ty
+            } else {
+              self.spread_element_type(rest_param.ty)
+            }
+          })
+        })
         // Treat `unknown` contextual parameter types as absent so `--noImplicitAny`
         // still reports implicit `any` for untyped parameters when the surrounding
         // context doesn't provide a real type (e.g. uncontextualized arrow
