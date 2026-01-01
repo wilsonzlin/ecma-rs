@@ -1092,25 +1092,23 @@ pub mod body_check {
     bindings: &mut HashMap<String, TypeId>,
     binding_defs: &mut HashMap<String, DefId>,
     file: FileId,
+    unknown: TypeId,
+    seen: &mut HashSet<String>,
   ) {
-    let prim = ctx.store.primitive_ids();
     let Some(pat) = body.pats.get(pat_id.0 as usize) else {
       return;
     };
-    let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(prim.unknown);
+    let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
     match &pat.kind {
       HirPatKind::Ident(name_id) => {
         if let Some(name) = names.resolve(*name_id) {
-          bindings
-            .entry(name.to_string())
-            .and_modify(|existing| {
-              if *existing == prim.unknown && ty != prim.unknown {
-                *existing = ty;
-              }
-            })
-            .or_insert(ty);
+          let name = name.to_string();
+          if !seen.insert(name.clone()) {
+            return;
+          }
+          bindings.insert(name.clone(), ty);
           if let Some(def_id) = ctx.def_spans.get(&(file, pat.span)).copied() {
-            binding_defs.entry(name.to_string()).or_insert(def_id);
+            binding_defs.insert(name, def_id);
           }
         }
       }
@@ -1125,10 +1123,12 @@ pub mod body_check {
             bindings,
             binding_defs,
             file,
+            unknown,
+            seen,
           );
         }
         if let Some(rest) = arr.rest {
-          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file);
+          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file, unknown, seen);
         }
       }
       HirPatKind::Object(obj) => {
@@ -1142,10 +1142,12 @@ pub mod body_check {
             bindings,
             binding_defs,
             file,
+            unknown,
+            seen,
           );
         }
         if let Some(rest) = obj.rest {
-          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file);
+          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file, unknown, seen);
         }
       }
       HirPatKind::Rest(inner) => {
@@ -1158,6 +1160,8 @@ pub mod body_check {
           bindings,
           binding_defs,
           file,
+          unknown,
+          seen,
         );
       }
       HirPatKind::Assign { target, .. } => {
@@ -1170,6 +1174,8 @@ pub mod body_check {
           bindings,
           binding_defs,
           file,
+          unknown,
+          seen,
         );
       }
       HirPatKind::AssignTarget(_) => {}
@@ -1207,6 +1213,7 @@ pub mod body_check {
   ) {
     let ctx = &db.context;
     let mut visited = HashSet::new();
+    let mut seen_names = HashSet::new();
     let mut current = ctx.body_parents.get(&body_id).copied();
     while let Some(parent) = current {
       if !visited.insert(parent) {
@@ -1239,11 +1246,12 @@ pub mod body_check {
           bindings,
           binding_defs,
           meta.file,
+          unknown,
+          &mut seen_names,
         );
       }
       current = ctx.body_parents.get(&parent).copied();
     }
-    let _ = unknown;
   }
 
   fn function_expr_span(db: &BodyCheckDb, body_id: BodyId) -> Option<TextRange> {
@@ -1962,10 +1970,21 @@ fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId
     }
 
     if start == u32::MAX {
-      lowered
-        .def(body.owner)
-        .map(|def| def.span)
-        .unwrap_or_else(|| TextRange::new(0, 0))
+      // Prefer the stored body span for synthesized bodies (notably initializer bodies) that
+      // don't contain nested statement/expression spans.
+      match body.kind {
+        hir_js::BodyKind::Class => TextRange::new(0, 0),
+        _ => {
+          if body.span.start != body.span.end {
+            body.span
+          } else {
+            lowered
+              .def(body.owner)
+              .map(|def| def.span)
+              .unwrap_or_else(|| TextRange::new(0, 0))
+          }
+        }
+      }
     } else {
       TextRange::new(start, end)
     }
@@ -2079,8 +2098,14 @@ fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId
     }
 
     let computed_parent = stack.last().map(|(id, _)| *id).unwrap_or(root_body);
-    if !parents.contains_key(&child) && computed_parent != child {
-      parents.insert(child, computed_parent);
+    if computed_parent != child {
+      let is_initializer = lowered
+        .body(child)
+        .map(|body| matches!(body.kind, hir_js::BodyKind::Initializer))
+        .unwrap_or(false);
+      if is_initializer || !parents.contains_key(&child) {
+        parents.insert(child, computed_parent);
+      }
     }
     stack.push((child, range));
   }

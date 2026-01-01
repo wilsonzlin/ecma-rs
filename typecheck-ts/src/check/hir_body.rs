@@ -3071,6 +3071,7 @@ impl<'a> Checker<'a> {
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
+    let prim = self.store.primitive_ids();
     match left.stx.as_ref() {
       AstExpr::Id(id) => {
         if let Some(binding) = self.lookup(&id.stx.name) {
@@ -3079,6 +3080,19 @@ impl<'a> Checker<'a> {
           } else {
             self.check_expr(right)
           };
+          if matches!(op, OperatorName::Assignment) {
+            if let AstExpr::LitObj(obj) = right.stx.as_ref() {
+              if self.has_excess_properties(obj, binding.ty) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, right.loc),
+                  },
+                ));
+              }
+            }
+          }
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -3103,6 +3117,19 @@ impl<'a> Checker<'a> {
           } else {
             self.check_expr(right)
           };
+          if matches!(op, OperatorName::Assignment) {
+            if let AstExpr::LitObj(obj) = right.stx.as_ref() {
+              if self.has_excess_properties(obj, binding.ty) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, right.loc),
+                  },
+                ));
+              }
+            }
+          }
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -3119,6 +3146,83 @@ impl<'a> Checker<'a> {
           self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
           return value_ty;
         }
+      }
+      AstExpr::Member(mem) => {
+        let obj_ty = self.check_expr(&mem.stx.left);
+        let target_ty = self.member_type(obj_ty, &mem.stx.right);
+        let value_ty = if matches!(op, OperatorName::Assignment) && target_ty != prim.unknown {
+          self.check_expr_with_expected(right, target_ty)
+        } else {
+          self.check_expr(right)
+        };
+        if target_ty != prim.unknown {
+          if matches!(op, OperatorName::Assignment) {
+            if let AstExpr::LitObj(obj) = right.stx.as_ref() {
+              if self.has_excess_properties(obj, target_ty) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, right.loc),
+                  },
+                ));
+              }
+            }
+          }
+          if !self.relate.is_assignable(value_ty, target_ty) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "assignment type mismatch",
+              Span {
+                file: self.file,
+                range: loc_to_range(self.file, left.loc),
+              },
+            ));
+          }
+        }
+        return value_ty;
+      }
+      AstExpr::ComputedMember(mem) => {
+        let obj_ty = self.check_expr(&mem.stx.object);
+        let _ = self.check_expr(&mem.stx.member);
+        let prop = match mem.stx.member.stx.as_ref() {
+          AstExpr::LitStr(str_lit) => Some(str_lit.stx.value.clone()),
+          AstExpr::LitNum(num) => Some(num.stx.value.0.to_string()),
+          _ => None,
+        };
+        let target_ty = prop
+          .as_deref()
+          .map(|key| self.member_type(obj_ty, key))
+          .unwrap_or(prim.unknown);
+        let value_ty = if matches!(op, OperatorName::Assignment) && target_ty != prim.unknown {
+          self.check_expr_with_expected(right, target_ty)
+        } else {
+          self.check_expr(right)
+        };
+        if target_ty != prim.unknown {
+          if matches!(op, OperatorName::Assignment) {
+            if let AstExpr::LitObj(obj) = right.stx.as_ref() {
+              if self.has_excess_properties(obj, target_ty) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, right.loc),
+                  },
+                ));
+              }
+            }
+          }
+          if !self.relate.is_assignable(value_ty, target_ty) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "assignment type mismatch",
+              Span {
+                file: self.file,
+                range: loc_to_range(self.file, left.loc),
+              },
+            ));
+          }
+        }
+        return value_ty;
       }
       AstExpr::ArrPat(arr) => {
         let value_ty = self.check_expr(right);
@@ -5953,9 +6057,9 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn optional_chain_info(&mut self, expr: ExprId) -> Option<OptionalChainInfo> {
+    let prim = self.store.primitive_ids();
     match &self.body.exprs[expr.0 as usize].kind {
       ExprKind::Member(mem) if mem.optional => {
-        let prim = self.store.primitive_ids();
         let base = self.optional_chain_root(mem.object)?;
         let base_ty = self.expr_types[mem.object.0 as usize];
         let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);

@@ -207,3 +207,30 @@ fn call_argument_array_literal_element_checks_excess_properties() {
     diagnostics[0]
   );
 }
+
+#[test]
+fn assignment_to_typed_identifier_checks_excess_properties() {
+  let diagnostics = run("let x: { foo: number };\nx = { foo: 1, bar: 2 };");
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
+
+#[test]
+fn assignment_to_typed_member_checks_excess_properties() {
+  let diagnostics = run(
+    "let obj: { nested: { foo: number } } = { nested: { foo: 1 } };\n\
+     obj.nested = { foo: 1, bar: 2 };",
+  );
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}

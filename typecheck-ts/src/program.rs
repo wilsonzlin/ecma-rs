@@ -6931,7 +6931,13 @@ impl ProgramState {
         end = end.max(pat.span.end);
       }
       if start == u32::MAX {
-        TextRange::new(0, 0)
+        // Use the stored body span for synthesized bodies (notably initializer bodies) that don't
+        // record statement/expression spans. This keeps span containment inference stable so
+        // initializer bodies inherit bindings from their lexical parent.
+        match body.kind {
+          HirBodyKind::Class => TextRange::new(0, 0),
+          _ => body.span,
+        }
       } else {
         TextRange::new(start, end)
       }
@@ -6959,8 +6965,18 @@ impl ProgramState {
         stack.pop();
       }
       let computed_parent = stack.last().map(|(id, _)| *id).unwrap_or(root_body);
-      if !self.body_parents.contains_key(&child) && computed_parent != child {
-        self.body_parents.insert(child, computed_parent);
+      if computed_parent != child {
+        let is_initializer = lowered
+          .body(child)
+          .map(|body| matches!(body.kind, HirBodyKind::Initializer))
+          .unwrap_or(false);
+        // Initializer bodies must inherit bindings from their containing scope
+        // (e.g. function parameters). The def-parent chain can be incomplete or
+        // point at a broader container, so prefer the lexical parent inferred
+        // from span containment for initializer bodies.
+        if is_initializer || !self.body_parents.contains_key(&child) {
+          self.body_parents.insert(child, computed_parent);
+        }
       }
       stack.push((child, range));
     }
@@ -9054,6 +9070,8 @@ impl ProgramState {
       bindings: &mut HashMap<String, TypeId>,
       binding_defs: &mut HashMap<String, DefId>,
       file: FileId,
+      unknown: TypeId,
+      seen: &mut HashSet<String>,
     ) {
       let Some(pat) = body.pats.get(pat_id.0 as usize) else {
         return;
@@ -9067,34 +9085,24 @@ impl ProgramState {
       // non-interned `TypeId`s.
       let ty = result
         .pat_type(PatId(pat_id.0))
-        .unwrap_or(state.interned_unknown());
+        .unwrap_or(unknown);
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
-            bindings
-              .entry(name.to_string())
-              .and_modify(|existing| {
-                // Never overwrite a non-unknown binding with an unknown fallback,
-                // but do upgrade unknown bindings when we learn a better type.
-                if let Some(store) = state.interned_store.as_ref() {
-                  let existing_unknown = !store.contains_type_id(*existing)
-                    || matches!(store.type_kind(*existing), tti::TypeKind::Unknown);
-                  let ty_unknown = !store.contains_type_id(ty)
-                    || matches!(store.type_kind(ty), tti::TypeKind::Unknown);
-                  if existing_unknown && !ty_unknown {
-                    *existing = ty;
-                  }
-                } else if *existing == state.builtin.unknown && ty != state.builtin.unknown {
-                  *existing = ty;
-                }
-              })
-              .or_insert(ty);
+            let name = name.to_string();
+            if !seen.insert(name.clone()) {
+              return;
+            }
+            // Even if `ty` is `unknown`, record the binding so nested bodies
+            // resolve the identifier and shadow any file/global binding with the
+            // same name.
+            bindings.insert(name.clone(), ty);
             if let Some(def_id) = state
               .def_data
               .iter()
               .find_map(|(id, data)| (data.file == file && data.span == pat.span).then_some(*id))
             {
-              binding_defs.entry(name.to_string()).or_insert(def_id);
+              binding_defs.insert(name, def_id);
             }
           }
         }
@@ -9109,6 +9117,8 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              unknown,
+              seen,
             );
           }
           if let Some(rest) = arr.rest {
@@ -9121,6 +9131,8 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              unknown,
+              seen,
             );
           }
         }
@@ -9135,6 +9147,8 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              unknown,
+              seen,
             );
           }
           if let Some(rest) = obj.rest {
@@ -9147,6 +9161,8 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              unknown,
+              seen,
             );
           }
         }
@@ -9160,6 +9176,8 @@ impl ProgramState {
             bindings,
             binding_defs,
             file,
+            unknown,
+            seen,
           );
         }
         HirPatKind::Assign { target, .. } => {
@@ -9172,6 +9190,8 @@ impl ProgramState {
             bindings,
             binding_defs,
             file,
+            unknown,
+            seen,
           );
         }
         HirPatKind::AssignTarget(_) => {}
@@ -9179,6 +9199,12 @@ impl ProgramState {
     }
 
     let mut visited = HashSet::new();
+    let mut seen_names = HashSet::new();
+    let unknown = self
+      .interned_store
+      .as_ref()
+      .map(|store| store.primitive_ids().unknown)
+      .unwrap_or(self.builtin.unknown);
     let mut current = self.body_parents.get(&body_id).copied();
     if let Some(meta) = self.body_map.get(&body_id).copied() {
       if matches!(meta.kind, HirBodyKind::Initializer) {
@@ -9230,6 +9256,8 @@ impl ProgramState {
           bindings,
           binding_defs,
           meta.file,
+          unknown,
+          &mut seen_names,
         );
       }
       current = self.body_parents.get(&parent).copied();
