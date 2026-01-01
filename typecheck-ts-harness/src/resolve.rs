@@ -1,6 +1,6 @@
 use crate::multifile::normalize_name;
 use crate::runner::HarnessFileSet;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use typecheck_ts::FileKey;
 
 const EXPORT_CONDITIONS: [&str; 4] = ["types", "default", "import", "require"];
@@ -245,8 +245,14 @@ fn resolve_exports_value(exports: &Value, subpath: &str, depth: usize) -> Option
     Value::Object(map) => {
       let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
       if has_subpath_keys {
-        let target = map.get(subpath)?;
-        resolve_export_target(target, depth + 1)
+        if let Some(target) = map.get(subpath) {
+          return resolve_export_target(target, depth + 1);
+        }
+
+        let (pattern_key, star_match) = best_exports_subpath_pattern(map, subpath)?;
+        let target = map.get(&pattern_key)?;
+        let resolved = resolve_export_target(target, depth + 1)?;
+        Some(resolved.replace('*', &star_match))
       } else {
         (subpath == ".").then(|| resolve_export_target(exports, depth + 1))?
       }
@@ -279,6 +285,40 @@ fn resolve_export_target(value: &Value, depth: usize) -> Option<String> {
     Value::Null => None,
     _ => None,
   }
+}
+
+fn best_exports_subpath_pattern(map: &Map<String, Value>, subpath: &str) -> Option<(String, String)> {
+  let mut best_key: Option<String> = None;
+  let mut best_star: Option<String> = None;
+
+  for key in map.keys() {
+    let Some((prefix, suffix)) = key.split_once('*') else {
+      continue;
+    };
+    if suffix.contains('*') {
+      continue;
+    }
+    if !subpath.starts_with(prefix) || !subpath.ends_with(suffix) {
+      continue;
+    }
+    if subpath.len() < prefix.len() + suffix.len() {
+      continue;
+    }
+    let star = &subpath[prefix.len()..subpath.len() - suffix.len()];
+
+    let replace = match best_key.as_ref() {
+      None => true,
+      Some(existing) => {
+        key.len() > existing.len() || (key.len() == existing.len() && key < existing)
+      }
+    };
+    if replace {
+      best_key = Some(key.clone());
+      best_star = Some(star.to_string());
+    }
+  }
+
+  Some((best_key?, best_star?))
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {

@@ -1668,6 +1668,34 @@ mod tests {
   }
 
   #[test]
+  fn resolves_bare_specifier_via_package_json_exports_subpath_pattern() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo/bar\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/package.json".to_string(),
+        content: r#"{ "name": "foo", "exports": { "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" } } }"#.to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/dist/bar.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host
+      .resolve(&from, "foo/bar")
+      .expect("foo/bar should resolve via exports pattern");
+    let expected = file_set.resolve("/node_modules/foo/dist/bar.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
   fn resolves_relative_js_specifier_via_d_ts_substitution() {
     let files = vec![
       VirtualFile {
