@@ -6,5 +6,5 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-cargo test -p parse-js --test conformance_runner --features conformance-runner -- \
+cargo run -p parse-js --features conformance-runner --bin conformance_runner -- \
   --failures "${ROOT}/typescript_conformance_failures.txt" "$@"
