@@ -52,6 +52,30 @@ fn import_alias_can_be_string_literal() {
 }
 
 #[test]
+fn import_type_alias_can_be_string_literal() {
+  roundtrip(
+    "import type { \"a-b\" as \"c-d\" } from \"x\";",
+    "import type{\"a-b\"as\"c-d\"}from\"x\";",
+  );
+}
+
+#[test]
+fn export_type_alias_can_be_string_literal() {
+  roundtrip(
+    "export type { a as \"a-b\" };",
+    "export type{a as\"a-b\"};",
+  );
+}
+
+#[test]
+fn export_type_star_alias_can_be_string_literal() {
+  roundtrip(
+    "export type * as \"ns-name\" from \"mod\";",
+    "export type*as\"ns-name\"from\"mod\";",
+  );
+}
+
+#[test]
 fn string_import_name_still_requires_as_when_alias_matches() {
   roundtrip(
     "import { \"a-b\" as \"a-b\" } from \"x\";",
