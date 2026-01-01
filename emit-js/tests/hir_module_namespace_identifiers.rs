@@ -55,6 +55,14 @@ fn hir_emits_string_literal_import_alias() {
 }
 
 #[test]
+fn hir_emits_string_literal_import_with_identifier_alias() {
+  roundtrip(
+    "import { \"a-b\" as bar } from \"x\";",
+    "import{\"a-b\"as bar}from\"x\";",
+  );
+}
+
+#[test]
 fn hir_keeps_as_for_string_import_when_alias_matches() {
   roundtrip(
     "import { \"a-b\" as \"a-b\" } from \"x\";",
@@ -67,6 +75,14 @@ fn hir_keeps_as_for_string_export_when_alias_matches() {
   roundtrip(
     "export { \"a-b\" as \"a-b\" } from \"x\";",
     "export{\"a-b\"as\"a-b\"}from\"x\";",
+  );
+}
+
+#[test]
+fn hir_emits_string_literal_export_with_identifier_alias() {
+  roundtrip(
+    "export { \"a-b\" as bar } from \"x\";",
+    "export{\"a-b\"as bar}from\"x\";",
   );
 }
 

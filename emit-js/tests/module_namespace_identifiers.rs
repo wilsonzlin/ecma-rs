@@ -52,6 +52,14 @@ fn import_alias_can_be_string_literal() {
 }
 
 #[test]
+fn import_string_name_can_have_identifier_alias() {
+  roundtrip(
+    "import { \"a-b\" as bar } from \"x\";",
+    "import{\"a-b\"as bar}from\"x\";",
+  );
+}
+
+#[test]
 fn import_type_alias_can_be_string_literal() {
   roundtrip(
     "import type { \"a-b\" as \"c-d\" } from \"x\";",
@@ -85,6 +93,14 @@ fn string_export_name_still_requires_as_when_alias_matches() {
   roundtrip(
     "export { \"a-b\" as \"a-b\" } from \"x\";",
     "export{\"a-b\"as\"a-b\"}from\"x\";",
+  );
+}
+
+#[test]
+fn export_string_name_can_have_identifier_alias() {
+  roundtrip(
+    "export { \"a-b\" as bar } from \"x\";",
+    "export{\"a-b\"as bar}from\"x\";",
   );
 }
 
