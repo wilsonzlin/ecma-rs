@@ -118,6 +118,59 @@ fn array_and_tuple_assignable_to_object_keyword() {
 }
 
 #[test]
+fn array_assignable_to_number_like_intersection_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let array = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+
+  // key_type: (string | number) & number behaves like `number`.
+  let number_like_key = store.intersection(vec![
+    store.union(vec![primitives.string, primitives.number]),
+    primitives.number,
+  ]);
+  let dst_number_like = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: number_like_key,
+        value_type: primitives.string,
+        readonly: false,
+      }],
+    },
+  );
+  assert!(ctx.is_assignable(array, dst_number_like));
+
+  // key_type: (string | number) & string behaves like `string`, so it must not be satisfied by an
+  // array (arrays only model a number index signature here).
+  let string_like_key = store.intersection(vec![
+    store.union(vec![primitives.string, primitives.number]),
+    primitives.string,
+  ]);
+  let dst_string_like = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: string_like_key,
+        value_type: primitives.string,
+        readonly: false,
+      }],
+    },
+  );
+  assert!(!ctx.is_assignable(array, dst_string_like));
+}
+
+#[test]
 fn type_params_treated_as_unknown() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

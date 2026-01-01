@@ -929,10 +929,12 @@ impl<'a> RelateCtx<'a> {
             reason,
           };
         }
+        let number_key = self.store.primitive_ids().number;
         if let Some(idx) = dst_shape
           .indexers
           .iter()
-          .find(|idx| matches!(self.store.type_kind(idx.key_type), TypeKind::Number))
+          .filter(|idx| self.indexer_key_covers(number_key, idx.key_type, mode, depth))
+          .min_by_key(|idx| self.indexer_key_specificity(idx.key_type, mode, depth))
         {
           let related = self.relate_internal(
             *src_elem,
