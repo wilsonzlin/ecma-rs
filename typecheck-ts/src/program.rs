@@ -4666,7 +4666,8 @@ impl ProgramState {
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let mut declared_type_cache: HashMap<(FileId, TextRange), Option<TypeId>> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
-    let mut qualified_def_members: HashMap<(DefId, String, sem_ts::Namespace), DefId> = HashMap::new();
+    let mut qualified_def_members: HashMap<(DefId, String, sem_ts::Namespace), DefId> =
+      HashMap::new();
     for ((_, parent, name, ns), def_id) in def_by_name.iter() {
       if let Some(parent) = *parent {
         qualified_def_members.insert((parent, name.clone(), *ns), *def_id);

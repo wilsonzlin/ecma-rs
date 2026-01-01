@@ -220,4 +220,3 @@ fn unknown_intrinsic_emits_diagnostic() {
     "expected JSX_UNKNOWN_INTRINSIC_ELEMENT, got {diagnostics:?}"
   );
 }
-

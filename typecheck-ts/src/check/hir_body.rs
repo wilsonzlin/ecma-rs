@@ -15,8 +15,8 @@ use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
-use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxText};
+use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -45,9 +45,9 @@ use super::caches::BodyCaches;
 use super::expr::{resolve_call, resolve_construct};
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
+use crate::lib_support::JsxMode;
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
-use crate::lib_support::JsxMode;
 
 #[derive(Default, Clone)]
 struct Scope {
@@ -552,8 +552,7 @@ pub fn check_body(
 ) -> BodyCheckResult {
   check_body_with_expander(
     body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, false,
-    None,
-    None,
+    None, None,
   )
 }
 
@@ -1639,10 +1638,12 @@ impl<'a> Checker<'a> {
         if intrinsic_elements != prim.unknown {
           let found = self.member_type(intrinsic_elements, tag);
           if found == prim.unknown {
-            self.diagnostics.push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
-              format!("unknown JSX intrinsic element `{tag}`"),
-              Span::new(self.file, loc_to_range(self.file, name.loc)),
-            ));
+            self
+              .diagnostics
+              .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
+                format!("unknown JSX intrinsic element `{tag}`"),
+                Span::new(self.file, loc_to_range(self.file, name.loc)),
+              ));
           } else {
             props_ty = found;
           }
@@ -1650,14 +1651,19 @@ impl<'a> Checker<'a> {
       }
       Some(JsxElemName::Id(id)) => {
         let name = id.stx.name.as_str();
-        let component_ty = self.lookup(name).map(|binding| binding.ty).unwrap_or_else(|| {
-          self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-            format!("unknown identifier `{name}`"),
-            Span::new(self.file, loc_to_range(self.file, id.loc)),
-          ));
-          prim.unknown
-        });
-        props_ty = self.jsx_component_props_type(component_ty).unwrap_or(prim.unknown);
+        let component_ty = self
+          .lookup(name)
+          .map(|binding| binding.ty)
+          .unwrap_or_else(|| {
+            self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+              format!("unknown identifier `{name}`"),
+              Span::new(self.file, loc_to_range(self.file, id.loc)),
+            ));
+            prim.unknown
+          });
+        props_ty = self
+          .jsx_component_props_type(component_ty)
+          .unwrap_or(prim.unknown);
       }
       Some(JsxElemName::Member(member)) => {
         // Member expressions like `<Foo.Bar />` are treated like looking up
@@ -1676,7 +1682,9 @@ impl<'a> Checker<'a> {
         for segment in member.stx.path.iter() {
           current = self.member_type(current, segment);
         }
-        props_ty = self.jsx_component_props_type(current).unwrap_or(prim.unknown);
+        props_ty = self
+          .jsx_component_props_type(current)
+          .unwrap_or(prim.unknown);
       }
     }
 
