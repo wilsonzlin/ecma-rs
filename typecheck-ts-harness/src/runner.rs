@@ -1405,10 +1405,14 @@ impl TscRunnerPool {
     request: TscRequest,
     deadline: Instant,
   ) -> std::result::Result<TscDiagnostics, TscPoolError> {
-    let mut request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-    if request_id == 0 {
-      request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-    }
+    // `0` means "no request", and `u64::MAX` is used as the per-worker
+    // cancellation sentinel during pool shutdown. Skip both.
+    let request_id = loop {
+      let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+      if id != 0 && id != u64::MAX {
+        break id;
+      }
+    };
 
     let Some(worker_idx) = self.availability.checkout(deadline) else {
       return Err(TscPoolError::Timeout);
