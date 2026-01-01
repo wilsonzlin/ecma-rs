@@ -582,7 +582,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         MappedModifier::Remove => false,
       };
 
-      let mut remapped_keys = self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1);
+      let Some(mut remapped_keys) =
+        self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1)
+      else {
+        continue;
+      };
       if remapped_keys.is_empty() {
         let mut value_ty = value_ty;
         if optional {
@@ -657,16 +661,21 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     entry: &Key,
     subst: &Substitution,
     depth: usize,
-  ) -> Vec<PropKey> {
+  ) -> Option<Vec<PropKey>> {
     let remap_ty = mapped.as_type.or(mapped.name_type);
     let Some(remap_ty) = remap_ty else {
-      return Vec::new();
+      return Some(Vec::new());
     };
     let key_tys = self.mapped_key_type_ids(entry);
     let mut inner_subst = subst.clone();
     inner_subst = inner_subst.with(mapped.param, key_tys.original);
     let evaluated = self.evaluate_with_subst(remap_ty, &inner_subst, depth + 1);
-    self.keys_to_prop_keys(evaluated)
+
+    if matches!(self.store.type_kind(evaluated), TypeKind::Never) {
+      return None;
+    }
+
+    Some(self.keys_to_prop_keys(evaluated))
   }
 
   fn keys_to_prop_keys(&mut self, ty: TypeId) -> Vec<PropKey> {

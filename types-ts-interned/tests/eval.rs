@@ -301,6 +301,71 @@ fn mapped_type_applies_modifiers_and_remaps() {
 }
 
 #[test]
+fn mapped_type_remap_as_never_filters_keys() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let name_a = store.intern_name("a");
+  let name_b = store.intern_name("b");
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![
+      Property {
+        key: PropKey::String(name_a),
+        data: PropData {
+          ty: primitives.string,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      },
+      Property {
+        key: PropKey::String(name_b),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      },
+    ],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: store.intern_type(TypeKind::KeyOf(obj_ty)),
+    value: primitives.boolean,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(primitives.never),
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+  assert!(shape.properties.is_empty());
+  assert!(shape.indexers.is_empty());
+  assert!(shape.call_signatures.is_empty());
+  assert!(shape.construct_signatures.is_empty());
+}
+
+#[test]
 fn template_literal_distributes_over_union_parts() {
   let store = TypeStore::new();
 
