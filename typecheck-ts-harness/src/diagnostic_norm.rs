@@ -1,4 +1,4 @@
-use crate::multifile::normalize_name;
+use crate::multifile::normalize_name_into;
 use crate::tsc::TscDiagnostic;
 use serde::{Deserialize, Serialize};
 use typecheck_ts::{Diagnostic, FileId, Severity};
@@ -69,10 +69,11 @@ pub fn normalize_rust_diagnostics_with_options(
   file_name: impl Fn(FileId) -> Option<String>,
   options: &NormalizationOptions,
 ) -> Vec<NormalizedDiagnostic> {
+  let mut name_buf = String::new();
   diags
     .iter()
     .map(|diag| {
-      let file = normalize_file_name(file_name(diag.primary.file), options);
+      let file = normalize_file_name_owned(file_name(diag.primary.file), options, &mut name_buf);
       let (start, end) = normalize_span(diag.primary.range.start, diag.primary.range.end);
 
       NormalizedDiagnostic {
@@ -109,7 +110,7 @@ pub fn normalize_tsc_diagnostics_with_options(
     .map(|diag| NormalizedDiagnostic {
       engine: DiagnosticEngine::Tsc,
       code: Some(DiagnosticCode::Tsc(diag.code)),
-      file: normalize_file_name(diag.file.clone(), options),
+      file: normalize_file_name_borrowed(diag.file.as_deref(), options),
       start: diag.start,
       end: diag.end,
       severity: normalize_severity(diag.category.as_deref(), options),
@@ -239,48 +240,111 @@ fn normalize_span(start: u32, end: u32) -> (u32, u32) {
   }
 }
 
-fn normalize_file_name(file: Option<String>, options: &NormalizationOptions) -> Option<String> {
+fn normalize_file_name_owned(
+  file: Option<String>,
+  options: &NormalizationOptions,
+  normalized_buf: &mut String,
+) -> Option<String> {
   if !options.normalize_paths {
     return file;
   }
 
   let mut name = file?;
-  name = normalize_name(&name);
+  normalize_file_name_into(&name, options, normalized_buf);
+  std::mem::swap(&mut name, normalized_buf);
+  Some(name)
+}
 
-  if !name.starts_with('/') {
-    name = format!("/{}", name.trim_start_matches('/'));
+fn normalize_file_name_borrowed(file: Option<&str>, options: &NormalizationOptions) -> Option<String> {
+  let file = file?;
+  if !options.normalize_paths {
+    return Some(file.to_string());
   }
 
-  if let Some(rest) = name.strip_prefix('/') {
-    let bytes = rest.as_bytes();
-    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
-      let stripped = rest[2..].trim_start_matches('/');
-      if stripped.is_empty() {
-        name = "/".to_string();
-      } else {
-        name = format!("/{}", stripped);
+  let mut normalized = String::with_capacity(file.len() + 1);
+  normalize_file_name_into(file, options, &mut normalized);
+  Some(normalized)
+}
+
+fn normalize_file_name_into(raw: &str, options: &NormalizationOptions, out: &mut String) {
+  debug_assert!(options.normalize_paths);
+  normalize_name_into(raw, out);
+  if !out.starts_with('/') {
+    out.insert(0, '/');
+  }
+
+  strip_drive_prefix(out);
+  strip_synthetic_drive_prefix(out);
+}
+
+fn strip_drive_prefix(name: &mut String) {
+  let (is_drive, strip_start, len) = {
+    let bytes = name.as_bytes();
+    if bytes.len() >= 3
+      && bytes[0] == b'/'
+      && bytes[2] == b':'
+      && bytes[1].is_ascii_alphabetic()
+    {
+      let mut idx = 3usize;
+      while idx < bytes.len() && bytes[idx] == b'/' {
+        idx += 1;
       }
+      (true, idx, bytes.len())
+    } else {
+      (false, 0usize, bytes.len())
     }
+  };
+
+  if !is_drive {
+    return;
   }
 
+  if strip_start >= len {
+    name.truncate(1);
+  } else {
+    name.replace_range(1..strip_start, "");
+  }
+}
+
+fn strip_synthetic_drive_prefix(name: &mut String) {
   // Some fixtures/baselines may contain synthetic `drive_<letter>/...` prefixes (historically used
   // to keep drive-rooted paths relative on Windows). Strip that segment back to the canonical form.
-  if let Some(rest) = name.strip_prefix('/') {
-    let (first, remaining) = rest.split_once('/').unwrap_or((rest, ""));
-    if let Some(letter) = first.strip_prefix("drive_") {
-      let bytes = letter.as_bytes();
-      if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() {
-        let remaining = remaining.trim_start_matches('/');
-        if remaining.is_empty() {
-          name = "/".to_string();
-        } else {
-          name = format!("/{}", remaining);
-        }
-      }
+  let (is_synthetic, strip_start, len) = {
+    let bytes = name.as_bytes();
+    if bytes.len() < 2 || bytes[0] != b'/' {
+      return;
     }
+
+    let mut seg_end = 1usize;
+    while seg_end < bytes.len() && bytes[seg_end] != b'/' {
+      seg_end += 1;
+    }
+
+    let seg_len = seg_end - 1;
+    if seg_len == 7
+      && bytes.len() >= 8
+      && bytes[1..7] == *b"drive_"
+      && bytes[7].is_ascii_alphabetic()
+    {
+      let mut idx = seg_end;
+      while idx < bytes.len() && bytes[idx] == b'/' {
+        idx += 1;
+      }
+      (true, idx, bytes.len())
+    } else {
+      (false, 0usize, bytes.len())
+    }
+  };
+
+  if !is_synthetic {
+    return;
   }
 
-  Some(name)
+  if strip_start >= len {
+    name.truncate(1);
+  } else {
+    name.replace_range(1..strip_start, "");
+  }
 }
 
 fn normalize_severity(raw: Option<&str>, options: &NormalizationOptions) -> Option<String> {
@@ -311,7 +375,7 @@ pub fn diagnostic_code_display(code: &DiagnosticCode) -> String {
 }
 
 pub fn normalize_path_for_compare(path: &str, options: &NormalizationOptions) -> String {
-  normalize_file_name(Some(path.to_string()), options).unwrap_or_else(|| path.to_string())
+  normalize_file_name_borrowed(Some(path), options).unwrap_or_else(|| path.to_string())
 }
 
 /// Normalize a rendered type string for stable comparisons.
