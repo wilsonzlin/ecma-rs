@@ -995,7 +995,12 @@ impl<'a> Checker<'a> {
       let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let contextual_param_ty = contextual_sig
         .and_then(|sig| sig.params.get(idx))
-        .map(|param| param.ty);
+        .map(|param| param.ty)
+        // Treat `unknown` contextual parameter types as absent so `--noImplicitAny`
+        // still reports implicit `any` for untyped parameters when the surrounding
+        // context doesn't provide a real type (e.g. uncontextualized arrow
+        // functions).
+        .filter(|ty| *ty != prim.unknown);
       let is_this = idx == 0
         && matches!(
           param.stx.pattern.stx.pat.stx.as_ref(),
