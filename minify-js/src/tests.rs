@@ -360,6 +360,15 @@ fn type_only_export_star_as_default_is_removed() {
 }
 
 #[test]
+fn type_only_string_export_as_default_is_removed() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"export type { "a-b" as default } from "mod";export const x=1;"#,
+  );
+  assert_eq!(result, "export const x=1;");
+}
+
+#[test]
 fn preserves_module_import_export_attributes() {
   let result = minified(
     TopLevelMode::Module,

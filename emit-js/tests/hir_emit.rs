@@ -147,6 +147,22 @@ fn hir_emission_drops_type_only_export_star_as_default() {
 }
 
 #[test]
+fn hir_emission_drops_type_only_default_export_with_string_alias() {
+  let source = r#"export type { default as "a-b" } from "mod"; export const x = 1;"#;
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower TS source");
+  let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
+  assert_eq!(emitted, "export const x=1;");
+}
+
+#[test]
+fn hir_emission_drops_type_only_string_export_as_default() {
+  let source = r#"export type { "a-b" as default } from "mod"; export const x = 1;"#;
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower TS source");
+  let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
+  assert_eq!(emitted, "export const x=1;");
+}
+
+#[test]
 fn do_while_emits_trailing_semicolon() {
   // The trailing semicolon is required for a `do...while` statement to be
   // parseable when immediately followed by another statement in minified output

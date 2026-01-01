@@ -198,6 +198,30 @@ fn export_type_star_alias_can_be_default_keyword() {
 }
 
 #[test]
+fn export_type_default_can_be_aliased() {
+  roundtrip(
+    "export type { default as foo } from \"mod\";",
+    "export type{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
+fn export_type_default_can_be_aliased_to_string_literal() {
+  roundtrip(
+    r#"export type { default as "a-b" } from "mod";"#,
+    r#"export type{default as"a-b"}from"mod";"#,
+  );
+}
+
+#[test]
+fn export_type_string_name_can_be_aliased_as_default() {
+  roundtrip(
+    r#"export type { "a-b" as default } from "mod";"#,
+    r#"export type{"a-b"as default}from"mod";"#,
+  );
+}
+
+#[test]
 fn string_import_name_still_requires_as_when_alias_matches() {
   roundtrip(
     "import { \"a-b\" as \"a-b\" } from \"x\";",
