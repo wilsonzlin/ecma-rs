@@ -408,7 +408,10 @@ impl<'a> TypeLowerer<'a> {
     }
   }
 
-  fn lower_type_params(&mut self, params: Option<&[Node<TypeParameter>]>) -> Vec<TypeParamId> {
+  pub(crate) fn lower_type_params(
+    &mut self,
+    params: Option<&[Node<TypeParameter>]>,
+  ) -> Vec<TypeParamId> {
     params
       .map(|params| {
         params
@@ -1312,9 +1315,11 @@ impl<'a> TypeLowerer<'a> {
       ),
       TypeExprKind::Parenthesized(inner) => self.type_expr_sort_key(*inner, cache, in_progress),
       TypeExprKind::TypeQuery(name) => TypeSortKey::TypeQuery(self.type_name_sort_key(name)),
-      TypeExprKind::KeyOf(inner) => {
-        TypeSortKey::KeyOf(Box::new(self.type_expr_sort_key(*inner, cache, in_progress)))
-      }
+      TypeExprKind::KeyOf(inner) => TypeSortKey::KeyOf(Box::new(self.type_expr_sort_key(
+        *inner,
+        cache,
+        in_progress,
+      ))),
       TypeExprKind::IndexedAccess {
         object_type,
         index_type,
@@ -1331,7 +1336,9 @@ impl<'a> TypeLowerer<'a> {
       TypeExprKind::Infer(type_param) => {
         TypeSortKey::Infer(self.type_param_sort_key(*type_param, cache, in_progress))
       }
-      TypeExprKind::Mapped(mapped) => TypeSortKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress)),
+      TypeExprKind::Mapped(mapped) => {
+        TypeSortKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress))
+      }
       TypeExprKind::TemplateLiteral(tmpl) => TypeSortKey::TemplateLiteral(TemplateLiteralKey {
         head: tmpl.head.clone(),
         spans: tmpl
@@ -1485,25 +1492,31 @@ impl<'a> TypeLowerer<'a> {
           in_progress,
         ),
       },
-      TypeMemberKind::Constructor(signature) => TypeMemberKey::Constructor(self.signature_sort_key(
-        &signature.type_params,
-        &signature.params,
-        signature.return_type,
-        cache,
-        in_progress,
-      )),
-      TypeMemberKind::CallSignature(signature) => TypeMemberKey::CallSignature(self.signature_sort_key(
-        &signature.type_params,
-        &signature.params,
-        signature.return_type,
-        cache,
-        in_progress,
-      )),
-      TypeMemberKind::IndexSignature(signature) => TypeMemberKey::IndexSignature(IndexSignatureKey {
-        readonly: signature.readonly,
-        parameter_type: self.type_expr_sort_key(signature.parameter_type, cache, in_progress),
-        type_annotation: self.type_expr_sort_key(signature.type_annotation, cache, in_progress),
-      }),
+      TypeMemberKind::Constructor(signature) => {
+        TypeMemberKey::Constructor(self.signature_sort_key(
+          &signature.type_params,
+          &signature.params,
+          signature.return_type,
+          cache,
+          in_progress,
+        ))
+      }
+      TypeMemberKind::CallSignature(signature) => {
+        TypeMemberKey::CallSignature(self.signature_sort_key(
+          &signature.type_params,
+          &signature.params,
+          signature.return_type,
+          cache,
+          in_progress,
+        ))
+      }
+      TypeMemberKind::IndexSignature(signature) => {
+        TypeMemberKey::IndexSignature(IndexSignatureKey {
+          readonly: signature.readonly,
+          parameter_type: self.type_expr_sort_key(signature.parameter_type, cache, in_progress),
+          type_annotation: self.type_expr_sort_key(signature.type_annotation, cache, in_progress),
+        })
+      }
       TypeMemberKind::Getter(getter) => TypeMemberKey::Getter {
         name: self.property_name_key(&getter.name),
         return_type: getter

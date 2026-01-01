@@ -1025,11 +1025,21 @@ fn lower_var_body(
     .initializer
     .as_ref()
     .map(|expr| lower_expr(expr, &mut builder, ctx));
+  let definite_assignment = decl.definite_assignment;
+  let type_annotation = decl
+    .type_annotation
+    .as_ref()
+    .map(|ann| builder.lower_type_expr(ann, ctx));
   let stmt_id = builder.alloc_stmt(
     ctx.to_range(decl.pattern.loc),
     StmtKind::Var(VarDecl {
       kind,
-      declarators: vec![VarDeclarator { pat: pat_id, init }],
+      declarators: vec![VarDeclarator {
+        pat: pat_id,
+        init,
+        definite_assignment,
+        type_annotation,
+      }],
     }),
   );
   builder.root_stmt(stmt_id);
@@ -1086,6 +1096,37 @@ fn lower_function_body(
     types,
     span_map,
   );
+
+  let (type_params, param_type_annotations, return_type) = {
+    let arenas = builder.types.entry(owner).or_default();
+    let mut lowerer = TypeLowerer::new(
+      owner,
+      arenas,
+      &mut *builder.names,
+      &mut *builder.span_map,
+      ctx,
+    );
+    let type_params = lowerer.lower_type_params(func.stx.type_parameters.as_deref());
+    let param_type_annotations = func
+      .stx
+      .parameters
+      .iter()
+      .map(|param| {
+        param
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|ann| lowerer.lower_type_expr(ann))
+      })
+      .collect::<Vec<_>>();
+    let return_type = func
+      .stx
+      .return_type
+      .as_ref()
+      .map(|ret| lowerer.lower_type_expr(ret));
+    (type_params, param_type_annotations, return_type)
+  };
+
   let mut param_decorators = decorator_store
     .params_by_def
     .remove(&owner)
@@ -1102,10 +1143,14 @@ fn lower_function_body(
       .get_mut(idx)
       .map(std::mem::take)
       .unwrap_or_default();
+    let type_annotation = param_type_annotations.get(idx).copied().unwrap_or(None);
     params.push(Param {
       pat,
       decorators,
       default,
+      optional: param.stx.optional,
+      rest: param.stx.rest,
+      type_annotation,
     });
   }
 
@@ -1129,7 +1174,9 @@ fn lower_function_body(
   };
 
   builder.function = Some(FunctionData {
+    type_params,
     params,
+    return_type,
     async_: func.stx.async_,
     generator: func.stx.generator,
     is_arrow,
@@ -1532,7 +1579,9 @@ fn lower_var_decl_stmt(
   let kind = match decl.stx.mode {
     parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
     parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
-    _ => VarDeclKind::Var,
+    parse_js::ast::stmt::decl::VarDeclMode::Var => VarDeclKind::Var,
+    parse_js::ast::stmt::decl::VarDeclMode::Using => VarDeclKind::Using,
+    parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
   };
   let mut declarators: Vec<VarDeclarator> = Vec::new();
   for declarator in decl.stx.declarators.iter() {
@@ -1541,7 +1590,16 @@ fn lower_var_decl_stmt(
       .initializer
       .as_ref()
       .map(|expr| lower_expr(expr, builder, ctx));
-    declarators.push(VarDeclarator { pat: pat_id, init });
+    let type_annotation = declarator
+      .type_annotation
+      .as_ref()
+      .map(|ann| builder.lower_type_expr(ann, ctx));
+    declarators.push(VarDeclarator {
+      pat: pat_id,
+      init,
+      definite_assignment: declarator.definite_assignment,
+      type_annotation,
+    });
   }
   VarDecl { kind, declarators }
 }
@@ -1571,7 +1629,9 @@ fn lower_for_head(
       let kind = match mode {
         parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
         parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
-        _ => VarDeclKind::Var,
+        parse_js::ast::stmt::decl::VarDeclMode::Var => VarDeclKind::Var,
+        parse_js::ast::stmt::decl::VarDeclMode::Using => VarDeclKind::Using,
+        parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
       };
       let pat_id = lower_pat(&pat_decl.stx.pat, builder, ctx);
       ForHead::Var(VarDecl {
@@ -1579,6 +1639,8 @@ fn lower_for_head(
         declarators: vec![VarDeclarator {
           pat: pat_id,
           init: None,
+          definite_assignment: false,
+          type_annotation: None,
         }],
       })
     }
@@ -2373,6 +2435,9 @@ impl<'a> BodyBuilder<'a> {
     expr: &Node<parse_js::ast::type_expr::TypeExpr>,
     ctx: &mut LoweringContext,
   ) -> crate::ids::TypeExprId {
+    // Type IDs are scoped to a single `DefId`. For type syntax that appears
+    // inside executable bodies (e.g. function parameters and variable
+    // declarators), attach lowered type nodes to the body's owner `DefId`.
     let owner = self.owner;
     let arenas = self.types.entry(owner).or_default();
     let mut lowerer = TypeLowerer::new(owner, arenas, &mut *self.names, &mut *self.span_map, ctx);
@@ -3434,7 +3499,9 @@ fn collect_var_decl<'a>(
   let kind = match var_decl.stx.mode {
     parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
     parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
-    _ => VarDeclKind::Var,
+    parse_js::ast::stmt::decl::VarDeclMode::Var => VarDeclKind::Var,
+    parse_js::ast::stmt::decl::VarDeclMode::Using => VarDeclKind::Using,
+    parse_js::ast::stmt::decl::VarDeclMode::AwaitUsing => VarDeclKind::AwaitUsing,
   };
   for declarator in var_decl.stx.declarators.iter() {
     let declarator_raw = RawNode(declarator as *const _ as *const ());

@@ -487,16 +487,13 @@ fn emit_param_list(
     if idx > 0 {
       em.write_punct(",");
     }
+    if param.rest {
+      em.write_punct("...");
+    }
     emit_pat(em, ctx, body, param.pat, false)?;
     if let Some(default) = param.default {
       em.write_punct("=");
-      emit_expr_with_min_prec(
-        em,
-        ctx,
-        body,
-        default,
-        assignment_expr_min_prec,
-      )?;
+      emit_expr_with_min_prec(em, ctx, body, default, assignment_expr_min_prec)?;
     }
   }
   em.write_punct(")");
@@ -817,12 +814,16 @@ fn emit_var_decl(
   // Initializers are followed by `,` or `;`, so comma expressions must be
   // parenthesized to avoid being parsed as additional declarators.
   let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
-  let keyword = match decl.kind {
-    VarDeclKind::Const => "const",
-    VarDeclKind::Let => "let",
-    VarDeclKind::Var => "var",
-  };
-  em.write_keyword(keyword);
+  match decl.kind {
+    VarDeclKind::Const => em.write_keyword("const"),
+    VarDeclKind::Let => em.write_keyword("let"),
+    VarDeclKind::Var => em.write_keyword("var"),
+    VarDeclKind::Using => em.write_keyword("using"),
+    VarDeclKind::AwaitUsing => {
+      em.write_keyword("await");
+      em.write_keyword("using");
+    }
+  }
   for (idx, declarator) in decl.declarators.iter().enumerate() {
     if idx > 0 {
       em.write_punct(",");
@@ -830,13 +831,7 @@ fn emit_var_decl(
     emit_pat(em, ctx, body, declarator.pat, false)?;
     if let Some(init) = declarator.init {
       em.write_punct("=");
-      emit_expr_with_min_prec(
-        em,
-        ctx,
-        body,
-        init,
-        assignment_expr_min_prec,
-      )?;
+      emit_expr_with_min_prec(em, ctx, body, init, assignment_expr_min_prec)?;
     }
   }
   if trailing_semicolon {
@@ -862,7 +857,8 @@ fn emit_pat(
     PatKind::Array(array) => {
       // Default values are followed by `,` or `]` and must therefore treat the
       // comma operator as needing parentheses.
-      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
+      let assignment_expr_min_prec =
+        Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       em.write_punct("[");
       for (idx, element) in array.elements.iter().enumerate() {
         if idx > 0 {
@@ -872,13 +868,7 @@ fn emit_pat(
           emit_pat(em, ctx, body, element.pat, in_assignment)?;
           if let Some(default) = element.default_value {
             em.write_punct("=");
-            emit_expr_with_min_prec(
-              em,
-              ctx,
-              body,
-              default,
-              assignment_expr_min_prec,
-            )?;
+            emit_expr_with_min_prec(em, ctx, body, default, assignment_expr_min_prec)?;
           }
         }
       }
@@ -894,7 +884,8 @@ fn emit_pat(
     PatKind::Object(obj) => {
       // Default values are followed by `,` or `}` and must therefore treat the
       // comma operator as needing parentheses.
-      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
+      let assignment_expr_min_prec =
+        Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       if in_assignment {
         em.write_punct("(");
       }
@@ -910,13 +901,7 @@ fn emit_pat(
         }
         if let Some(default) = prop.default_value {
           em.write_punct("=");
-          emit_expr_with_min_prec(
-            em,
-            ctx,
-            body,
-            default,
-            assignment_expr_min_prec,
-          )?;
+          emit_expr_with_min_prec(em, ctx, body, default, assignment_expr_min_prec)?;
         }
       }
       if let Some(rest) = obj.rest {
@@ -935,16 +920,11 @@ fn emit_pat(
       target,
       default_value,
     } => {
-      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
+      let assignment_expr_min_prec =
+        Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       emit_pat(em, ctx, body, *target, in_assignment)?;
       em.write_punct("=");
-      emit_expr_with_min_prec(
-        em,
-        ctx,
-        body,
-        *default_value,
-        assignment_expr_min_prec,
-      )?;
+      emit_expr_with_min_prec(em, ctx, body, *default_value, assignment_expr_min_prec)?;
     }
     PatKind::AssignTarget(expr) => {
       emit_expr_with_min_prec(

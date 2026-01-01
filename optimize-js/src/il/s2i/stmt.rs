@@ -159,7 +159,7 @@ impl<'p> HirSourceToInst<'p> {
   }
 
   pub fn compile_var_decl(&mut self, decl: &VarDecl) -> OptimizeResult<()> {
-    for VarDeclarator { pat, init } in decl.declarators.iter() {
+    for VarDeclarator { pat, init, .. } in decl.declarators.iter() {
       let Some(init) = init else {
         continue;
       };

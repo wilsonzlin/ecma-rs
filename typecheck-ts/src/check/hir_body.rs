@@ -3785,7 +3785,9 @@ impl<'a> FlowBodyChecker<'a> {
             }
             ForInit::Var(var) => {
               let mode = match var.kind {
-                hir_js::VarDeclKind::Const => BindingMode::Declare,
+                hir_js::VarDeclKind::Const
+                | hir_js::VarDeclKind::Using
+                | hir_js::VarDeclKind::AwaitUsing => BindingMode::Declare,
                 _ => BindingMode::Assign,
               };
               for declarator in var.declarators.iter() {
@@ -3888,7 +3890,9 @@ impl<'a> FlowBodyChecker<'a> {
         }
         StmtKind::Var(decl) => {
           let mode = match decl.kind {
-            hir_js::VarDeclKind::Const => BindingMode::Declare,
+            hir_js::VarDeclKind::Const
+            | hir_js::VarDeclKind::Using
+            | hir_js::VarDeclKind::AwaitUsing => BindingMode::Declare,
             _ => BindingMode::Assign,
           };
           for declarator in decl.declarators.iter() {
@@ -3961,7 +3965,9 @@ impl<'a> FlowBodyChecker<'a> {
             ForHead::Pat(pat) => self.assign_pat(*pat, right_ty, &mut loop_env),
             ForHead::Var(var) => {
               let mode = match var.kind {
-                hir_js::VarDeclKind::Const => BindingMode::Declare,
+                hir_js::VarDeclKind::Const
+                | hir_js::VarDeclKind::Using
+                | hir_js::VarDeclKind::AwaitUsing => BindingMode::Declare,
                 _ => BindingMode::Assign,
               };
               for declarator in var.declarators.iter() {

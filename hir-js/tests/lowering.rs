@@ -19,6 +19,7 @@ use hir_js::ObjectProperty;
 use hir_js::StmtKind;
 use hir_js::TypeExprKind;
 use hir_js::TypeName;
+use hir_js::VarDeclKind;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -397,7 +398,11 @@ fn nested_defs_are_parented_to_enclosing_function() {
     .def(a.parent.expect("a should have declarator parent"))
     .expect("a declarator def");
   assert_eq!(a_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(a_decl.parent, Some(outer.id), "a should be nested under outer");
+  assert_eq!(
+    a_decl.parent,
+    Some(outer.id),
+    "a should be nested under outer"
+  );
 
   let inner = find_def(DefKind::Function, "inner");
   assert_eq!(
@@ -409,7 +414,9 @@ fn nested_defs_are_parented_to_enclosing_function() {
   let arrows: Vec<_> = result
     .defs
     .iter()
-    .filter(|def| def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some("<arrow>"))
+    .filter(|def| {
+      def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some("<arrow>")
+    })
     .collect();
   assert_eq!(arrows.len(), 2, "expected exactly two arrow function defs");
 
@@ -496,7 +503,9 @@ fn nested_def_ids_do_not_shift_across_unrelated_edits_in_other_functions() {
   let base_second = base
     .defs
     .iter()
-    .find(|def| def.path.kind == DefKind::Function && base.names.resolve(def.name) == Some("second"))
+    .find(|def| {
+      def.path.kind == DefKind::Function && base.names.resolve(def.name) == Some("second")
+    })
     .expect("second function in base");
   let variant_second = variant
     .defs
@@ -1807,7 +1816,10 @@ fn lowers_export_import_equals() {
     .iter()
     .find(|def| def.path.kind == DefKind::ImportBinding && names.resolve(def.name) == Some("Foo"))
     .expect("Foo import binding definition");
-  assert!(foo_def.is_exported, "export import should mark binding exported");
+  assert!(
+    foo_def.is_exported,
+    "export import should mark binding exported"
+  );
   assert_eq!(
     import_equals.local.local_def,
     Some(foo_def.id),
@@ -1817,10 +1829,9 @@ fn lowers_export_import_equals() {
   let exports = &result.hir.exports;
   assert!(
     exports.iter().any(|export| match &export.kind {
-      ExportKind::Named(named) => named
-        .specifiers
-        .iter()
-        .any(|spec| spec.local_def == Some(foo_def.id) && names.resolve(spec.exported) == Some("Foo")),
+      ExportKind::Named(named) => named.specifiers.iter().any(|spec| spec.local_def
+        == Some(foo_def.id)
+        && names.resolve(spec.exported) == Some("Foo")),
       _ => false,
     }),
     "export import should create a file-level export for Foo"
@@ -1944,8 +1955,7 @@ fn namespace_members_have_parent_and_export_flag() {
 
 #[test]
 fn namespace_type_info_members_exclude_nested_function_locals() {
-  let source =
-    r#"export namespace NS { export function f(){ const x = 1; function g(){} } export const y = 2; }"#;
+  let source = r#"export namespace NS { export function f(){ const x = 1; function g(){} } export const y = 2; }"#;
   let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
 
   let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
@@ -1967,8 +1977,14 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
     other => panic!("expected namespace type info, got {other:?}"),
   };
 
-  assert!(members.contains(&f.id), "NS members should include exported function f");
-  assert!(members.contains(&y.id), "NS members should include exported const y");
+  assert!(
+    members.contains(&f.id),
+    "NS members should include exported function f"
+  );
+  assert!(
+    members.contains(&y.id),
+    "NS members should include exported const y"
+  );
   assert!(
     !members.contains(&x.id),
     "NS members should not include nested function local x"
@@ -1978,18 +1994,30 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
     "NS members should not include nested function local g"
   );
 
-  assert_eq!(f.parent, Some(ns.id), "f should be a direct namespace member");
+  assert_eq!(
+    f.parent,
+    Some(ns.id),
+    "f should be a direct namespace member"
+  );
   let y_decl = result
     .def(y.parent.expect("y should have declarator parent"))
     .expect("y declarator def");
   assert_eq!(y_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(y_decl.parent, Some(ns.id), "y should be a direct namespace member");
+  assert_eq!(
+    y_decl.parent,
+    Some(ns.id),
+    "y should be a direct namespace member"
+  );
 
   let x_decl = result
     .def(x.parent.expect("x should have declarator parent"))
     .expect("x declarator def");
   assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(x_decl.parent, Some(f.id), "x should be scoped to function f");
+  assert_eq!(
+    x_decl.parent,
+    Some(f.id),
+    "x should be scoped to function f"
+  );
   assert_eq!(g.parent, Some(f.id), "g should be scoped to function f");
 }
 
@@ -2024,12 +2052,20 @@ fn module_type_info_members_exclude_nested_function_locals() {
     "module \"m\" members should not include nested function local x"
   );
 
-  assert_eq!(f.parent, Some(module.id), "f should be a direct module member");
+  assert_eq!(
+    f.parent,
+    Some(module.id),
+    "f should be a direct module member"
+  );
   let x_decl = result
     .def(x.parent.expect("x should have declarator parent"))
     .expect("x declarator def");
   assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
-  assert_eq!(x_decl.parent, Some(f.id), "x should be scoped to function f");
+  assert_eq!(
+    x_decl.parent,
+    Some(f.id),
+    "x should be scoped to function f"
+  );
 }
 
 #[test]
@@ -2154,9 +2190,7 @@ fn lowers_nested_jsx_elements_as_expressions() {
   let result = lower_from_source_with_kind(FileKind::Tsx, source).expect("lower");
   let body = result.body(result.root_body()).expect("root body");
 
-  let child_start = source
-    .find("<span/>")
-    .expect("child span should exist") as u32;
+  let child_start = source.find("<span/>").expect("child span should exist") as u32;
   let child_end = child_start + "<span/>".len() as u32;
   let child_range = TextRange::new(child_start, child_end);
 
@@ -2425,6 +2459,119 @@ fn type_expr_ids_do_not_shift_across_unrelated_body_insertions() {
     .expect("variant type assertion");
 
   assert_eq!(base_ty, variant_ty);
+}
+
+#[test]
+fn lowers_function_signature_types_and_param_flags() {
+  let source = "function f<T>(x: string, y?: number, ...rest: boolean[]): void {}";
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some("f"))
+    .expect("function def");
+  let body_id = def.body.expect("function body id");
+  let body = result.body(body_id).expect("function body");
+  let func = body.function.as_ref().expect("function metadata");
+  assert_eq!(func.type_params.len(), 1);
+  assert_eq!(func.params.len(), 3);
+
+  let arenas = result.type_arenas(def.id).expect("type arenas");
+  let x = &func.params[0];
+  assert!(!x.optional);
+  assert!(!x.rest);
+  let x_ty = x.type_annotation.expect("x type annotation");
+  assert!(matches!(
+    arenas.type_exprs[x_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+
+  let y = &func.params[1];
+  assert!(y.optional);
+  assert!(!y.rest);
+  let y_ty = y.type_annotation.expect("y type annotation");
+  assert!(matches!(
+    arenas.type_exprs[y_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+
+  let rest = &func.params[2];
+  assert!(!rest.optional);
+  assert!(rest.rest);
+  let rest_ty = rest.type_annotation.expect("rest type annotation");
+  match &arenas.type_exprs[rest_ty.0 as usize].kind {
+    TypeExprKind::Array(arr) => assert!(matches!(
+      arenas.type_exprs[arr.element.0 as usize].kind,
+      TypeExprKind::Boolean
+    )),
+    other => panic!("expected boolean[] type, got {other:?}"),
+  }
+
+  let ret = func.return_type.expect("return type");
+  assert!(matches!(
+    arenas.type_exprs[ret.0 as usize].kind,
+    TypeExprKind::Void
+  ));
+}
+
+#[test]
+fn lowers_var_type_annotations_and_definite_assignment() {
+  let source = r#"let x!: number; const y: string = "a";"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+  let arenas = result
+    .type_arenas(body.owner)
+    .expect("type arenas for root body");
+
+  let decls: Vec<_> = body
+    .stmts
+    .iter()
+    .filter_map(|stmt| match &stmt.kind {
+      StmtKind::Var(decl) => Some(decl),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(decls.len(), 2);
+
+  let x_decl = decls
+    .iter()
+    .find(|decl| decl.kind == VarDeclKind::Let)
+    .expect("let decl");
+  let x_declr = &x_decl.declarators[0];
+  assert!(x_declr.definite_assignment);
+  let x_ty = x_declr.type_annotation.expect("x type annotation");
+  assert!(matches!(
+    arenas.type_exprs[x_ty.0 as usize].kind,
+    TypeExprKind::Number
+  ));
+
+  let y_decl = decls
+    .iter()
+    .find(|decl| decl.kind == VarDeclKind::Const)
+    .expect("const decl");
+  let y_declr = &y_decl.declarators[0];
+  assert!(!y_declr.definite_assignment);
+  let y_ty = y_declr.type_annotation.expect("y type annotation");
+  assert!(matches!(
+    arenas.type_exprs[y_ty.0 as usize].kind,
+    TypeExprKind::String
+  ));
+}
+
+#[test]
+fn lowers_using_declarations() {
+  let source = "using r = foo(); await using ar = bar();";
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+  let kinds: Vec<_> = body
+    .stmts
+    .iter()
+    .filter_map(|stmt| match &stmt.kind {
+      StmtKind::Var(decl) => Some(decl.kind),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(kinds, vec![VarDeclKind::Using, VarDeclKind::AwaitUsing]);
 }
 
 proptest! {

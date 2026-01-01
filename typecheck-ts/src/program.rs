@@ -6299,6 +6299,8 @@ impl ProgramState {
                     hir_js::VarDeclKind::Var => VarDeclMode::Var,
                     hir_js::VarDeclKind::Let => VarDeclMode::Let,
                     hir_js::VarDeclKind::Const => VarDeclMode::Const,
+                    hir_js::VarDeclKind::Using => VarDeclMode::Using,
+                    hir_js::VarDeclKind::AwaitUsing => VarDeclMode::AwaitUsing,
                   };
                   if let Some(init) = declarator.init {
                     let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
@@ -10611,7 +10613,8 @@ impl ProgramState {
                 VarDeclMode::Var => HirVarDeclKind::Var,
                 VarDeclMode::Let => HirVarDeclKind::Let,
                 VarDeclMode::Const => HirVarDeclKind::Const,
-                VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
+                VarDeclMode::Using => HirVarDeclKind::Using,
+                VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
               });
            let mut init_span_for_const = None;
            let mut init_pat_is_root = true;

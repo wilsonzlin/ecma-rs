@@ -616,6 +616,9 @@ pub struct Param {
   pub pat: PatId,
   pub decorators: Vec<Decorator>,
   pub default: Option<ExprId>,
+  pub optional: bool,
+  pub rest: bool,
+  pub type_annotation: Option<TypeExprId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -626,7 +629,9 @@ pub enum FunctionBody {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionData {
+  pub type_params: Vec<TypeParamId>,
   pub params: Vec<Param>,
+  pub return_type: Option<TypeExprId>,
   pub async_: bool,
   pub generator: bool,
   pub is_arrow: bool,
@@ -992,12 +997,16 @@ pub enum VarDeclKind {
   Var,
   Let,
   Const,
+  Using,
+  AwaitUsing,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarDeclarator {
   pub pat: PatId,
   pub init: Option<ExprId>,
+  pub definite_assignment: bool,
+  pub type_annotation: Option<TypeExprId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
