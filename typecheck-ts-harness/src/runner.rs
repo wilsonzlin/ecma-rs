@@ -873,69 +873,137 @@ fn diff_diagnostics(
   sort_diagnostics(&mut rust_sorted);
   sort_diagnostics(&mut tsc_sorted);
 
-  let len = rust_sorted.len().min(tsc_sorted.len());
-  for idx in 0..len {
-    let rust = &rust_sorted[idx];
-    let tsc = &tsc_sorted[idx];
-    if rust.file != tsc.file
-      || !within_tolerance(rust.start, tsc.start, span_tolerance)
-      || !within_tolerance(rust.end, tsc.end, span_tolerance)
-    {
-      return (
-        TestOutcome::SpanMismatch,
-        Some(MismatchDetail {
-          message: format!(
-            "span mismatch between {} and {}",
-            describe(rust),
-            describe(tsc)
-          ),
-          rust: Some(rust.clone()),
-          tsc: Some(tsc.clone()),
-        }),
-      );
+  // Greedily match expected (tsc) diagnostics to actual (rust) diagnostics.
+  //
+  // This avoids cascaded mismatches when one side has an extra diagnostic near the
+  // top of the sorted list (the previous implementation zipped by index).
+  let mut used = vec![false; rust_sorted.len()];
+  let mut missing: Vec<NormalizedDiagnostic> = Vec::new();
+  let mut extra: Vec<NormalizedDiagnostic> = Vec::new();
+  let mut span_mismatches: Vec<(NormalizedDiagnostic, NormalizedDiagnostic)> = Vec::new();
+  let mut code_mismatches: Vec<(NormalizedDiagnostic, NormalizedDiagnostic)> = Vec::new();
+
+  for tsc in &tsc_sorted {
+    if let Some(idx) = find_diag(&rust_sorted, &used, |rust| {
+      rust.file == tsc.file
+        && within_tolerance(rust.start, tsc.start, span_tolerance)
+        && within_tolerance(rust.end, tsc.end, span_tolerance)
+        && rust.codes_match(tsc)
+    }) {
+      used[idx] = true;
+      continue;
     }
 
-    if rust.code != tsc.code {
-      return (
-        TestOutcome::CodeMismatch,
-        Some(MismatchDetail {
-          message: format!(
-            "code mismatch between {} and {}",
-            describe(rust),
-            describe(tsc)
-          ),
-          rust: Some(rust.clone()),
-          tsc: Some(tsc.clone()),
-        }),
-      );
+    if let Some(idx) = find_best_diag(&rust_sorted, &used, tsc, |rust| {
+      rust.file == tsc.file
+        && within_tolerance(rust.start, tsc.start, span_tolerance)
+        && within_tolerance(rust.end, tsc.end, span_tolerance)
+        && !rust.codes_match(tsc)
+    }) {
+      used[idx] = true;
+      code_mismatches.push((rust_sorted[idx].clone(), tsc.clone()));
+      continue;
+    }
+
+    if let Some(idx) = find_best_diag(&rust_sorted, &used, tsc, |rust| {
+      rust.file == tsc.file && rust.codes_match(tsc)
+    }) {
+      used[idx] = true;
+      span_mismatches.push((rust_sorted[idx].clone(), tsc.clone()));
+      continue;
+    }
+
+    missing.push(tsc.clone());
+  }
+
+  for (idx, rust) in rust_sorted.iter().enumerate() {
+    if !used[idx] {
+      extra.push(rust.clone());
     }
   }
 
-  if rust_sorted.len() > tsc_sorted.len() {
-    let rust = rust_sorted.get(len).cloned();
+  if let Some(tsc) = missing.first() {
+    return (
+      TestOutcome::RustMissingDiagnostics,
+      Some(MismatchDetail {
+        message: format!("rust missed {} diagnostic(s)", missing.len()),
+        rust: None,
+        tsc: Some(tsc.clone()),
+      }),
+    );
+  }
+
+  if let Some(rust) = extra.first() {
     return (
       TestOutcome::RustExtraDiagnostics,
       Some(MismatchDetail {
-        message: "rust produced extra diagnostics".to_string(),
-        rust,
+        message: format!("rust produced {} extra diagnostic(s)", extra.len()),
+        rust: Some(rust.clone()),
         tsc: None,
       }),
     );
   }
 
-  if rust_sorted.len() < tsc_sorted.len() {
-    let tsc = tsc_sorted.get(len).cloned();
+  if let Some((rust, tsc)) = span_mismatches.first() {
     return (
-      TestOutcome::RustMissingDiagnostics,
+      TestOutcome::SpanMismatch,
       Some(MismatchDetail {
-        message: "rust missed diagnostics".to_string(),
-        rust: None,
-        tsc,
+        message: format!("span mismatch between {} and {}", describe(rust), describe(tsc)),
+        rust: Some(rust.clone()),
+        tsc: Some(tsc.clone()),
+      }),
+    );
+  }
+
+  if let Some((rust, tsc)) = code_mismatches.first() {
+    return (
+      TestOutcome::CodeMismatch,
+      Some(MismatchDetail {
+        message: format!("code mismatch between {} and {}", describe(rust), describe(tsc)),
+        rust: Some(rust.clone()),
+        tsc: Some(tsc.clone()),
       }),
     );
   }
 
   (TestOutcome::Match, None)
+}
+
+fn find_diag<F>(actual: &[NormalizedDiagnostic], used: &[bool], mut predicate: F) -> Option<usize>
+where
+  F: FnMut(&NormalizedDiagnostic) -> bool,
+{
+  actual
+    .iter()
+    .enumerate()
+    .find(|(idx, diag)| !used[*idx] && predicate(diag))
+    .map(|(idx, _)| idx)
+}
+
+fn find_best_diag<F>(
+  actual: &[NormalizedDiagnostic],
+  used: &[bool],
+  expected: &NormalizedDiagnostic,
+  mut predicate: F,
+) -> Option<usize>
+where
+  F: FnMut(&NormalizedDiagnostic) -> bool,
+{
+  let mut best: Option<(usize, u32)> = None;
+  for (idx, diag) in actual.iter().enumerate() {
+    if used[idx] || !predicate(diag) {
+      continue;
+    }
+    let distance = expected.start.abs_diff(diag.start) + expected.end.abs_diff(diag.end);
+    if best
+      .as_ref()
+      .map(|(_, best_distance)| distance < *best_distance)
+      .unwrap_or(true)
+    {
+      best = Some((idx, distance));
+    }
+  }
+  best.map(|(idx, _)| idx)
 }
 
 fn summarize(results: &[TestResult]) -> Summary {
@@ -1234,6 +1302,119 @@ mod tests {
 
     let (outcome, _) = diff_diagnostics(&tsc, &rust, 0);
     assert_eq!(outcome, TestOutcome::RustMissingDiagnostics);
+  }
+
+  #[test]
+  fn diff_matches_rust_ts_prefixed_code_with_tsc_numeric_code() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS2345".into())),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::Match);
+    assert!(detail.is_none());
+  }
+
+  #[test]
+  fn diff_matches_rust_numeric_string_code_with_tsc_numeric_code() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("2345".into())),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+
+    let (outcome, _) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::Match);
+  }
+
+  #[test]
+  fn diff_reports_code_mismatch_for_different_codes() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS9999".into())),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::CodeMismatch);
+    assert!(detail.is_some());
+  }
+
+  #[test]
+  fn diff_does_not_cascade_span_mismatches_from_extra_diagnostics() {
+    let rust = vec![
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS9999".into())),
+        file: Some("a.ts".into()),
+        start: 0,
+        end: 1,
+        severity: None,
+        message: None,
+      },
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS2345".into())),
+        file: Some("a.ts".into()),
+        start: 10,
+        end: 11,
+        severity: None,
+        message: None,
+      },
+    ];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 10,
+      end: 11,
+      severity: None,
+      message: None,
+    }];
+
+    let (outcome, _) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::RustExtraDiagnostics);
   }
 
   #[test]
