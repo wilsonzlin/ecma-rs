@@ -13,13 +13,15 @@ JSON (suitable for CI tracking), set `TYPECHECK_TS_BENCH_JSON=1` in the
 environment. When JSON output is enabled, the human-readable summary is emitted
 to stderr and stdout is reserved for JSON so it can be redirected to a file.
 
+All `typecheck-ts-bench` bench binaries accept `--json` as an alternative to the
+environment variable (pass it after `--` to `cargo bench`). Using
+`TYPECHECK_TS_BENCH_JSON=1` is preferred since Cargo forwards flags to every
+benchmark/test binary and libtest harnesses may reject unknown arguments.
+
 To keep CI runtime bounded, you can scale down the iteration counts by setting
 `TYPECHECK_TS_BENCH_ITERS_SCALE` to a positive integer. Each benchmark's default
 iteration count is divided by this value (clamped to a minimum of 1), preserving
 deterministic ordering/format while reducing total work.
-
-Passing `--json` directly to `cargo bench` is discouraged because that flag is
-forwarded to all test binaries and may be rejected by libtest harnesses.
 
 ### Reproducing the nightly JSON report locally
 
@@ -29,7 +31,45 @@ mkdir -p reports
 TYPECHECK_TS_BENCH_JSON=1 TYPECHECK_TS_BENCH_ITERS_SCALE=10 \
   cargo bench -p typecheck-ts-bench --bench pipeline --locked \
   > reports/typecheck-ts-bench.json
+
+TYPECHECK_TS_BENCH_JSON=1 \
+  cargo bench -p typecheck-ts-bench --bench body_alloc --locked \
+  > reports/typecheck-ts-body-alloc.json
+
+TYPECHECK_TS_BENCH_JSON=1 \
+  cargo bench -p typecheck-ts-bench --bench check_body_alloc --locked \
+  > reports/typecheck-ts-check-body-alloc.json
 ```
+
+Nightly CI uploads these JSON artifacts from `.github/workflows/nightly.yaml`:
+
+- `typecheck-ts-bench.json` (artifact `typecheck-ts-bench`)
+- `typecheck-ts-body-alloc.json` (artifact `typecheck-ts-body-alloc`)
+- `typecheck-ts-check-body-alloc.json` (artifact `typecheck-ts-check-body-alloc`)
+
+### Allocation bench JSON schema
+
+`body_alloc` and `check_body_alloc` use a small, versioned schema so their
+allocation counters can be archived/compared reliably:
+
+```json
+{
+  "schema_version": 1,
+  "results": [
+    { "name": "control_flow", "allocations": 123, "diagnostics": 0 },
+    { "name": "control_flow/evaluate", "allocations": 45, "diagnostics": 0, "exprs": 678 }
+  ]
+}
+```
+
+- `results` are sorted deterministically by `name`.
+- `exprs` is only present for `check_body_alloc`.
+
+If runtime becomes an issue (especially in CI), you can:
+
+- limit which fixtures run by setting `TYPECHECK_TS_BENCH_ALLOC_FIXTURES` to a
+  comma-separated list (e.g. `control_flow,generics`)
+- skip allocation benches entirely with `TYPECHECK_TS_BENCH_ALLOC_SKIP=1`
 
 ## What is measured
 

@@ -75,13 +75,15 @@ jobs:
       - name: Generate lockfile
         run: cargo generate-lockfile
 
-      - name: typecheck-ts benchmark (JSON)
+      - name: typecheck-ts benchmarks (JSON)
         env:
           TYPECHECK_TS_BENCH_JSON: "1"
           TYPECHECK_TS_BENCH_ITERS_SCALE: "10"
         run: |
           mkdir -p reports
           cargo bench -p typecheck-ts-bench --bench pipeline --locked > reports/typecheck-ts-bench.json
+          cargo bench -p typecheck-ts-bench --bench body_alloc --locked > reports/typecheck-ts-body-alloc.json
+          cargo bench -p typecheck-ts-bench --bench check_body_alloc --locked > reports/typecheck-ts-check-body-alloc.json
 
       - name: Upload benchmark report
         if: always()
@@ -89,6 +91,20 @@ jobs:
         with:
           name: typecheck-ts-bench
           path: reports/typecheck-ts-bench.json
+
+      - name: Upload body allocation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-ts-body-alloc
+          path: reports/typecheck-ts-body-alloc.json
+
+      - name: Upload per-body allocation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-ts-check-body-alloc
+          path: reports/typecheck-ts-check-body-alloc.json
 
   ts-conformance:
     runs-on: ubuntu-24.04
