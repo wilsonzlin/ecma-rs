@@ -1094,9 +1094,12 @@ fn rewrite_enum_member_refs(
             *name = JsxElemName::Member(Node::new(
               loc,
               JsxMemberExpr {
-                base: Node::new(loc, IdExpr {
-                  name: object_ident.to_string(),
-                }),
+                base: Node::new(
+                  loc,
+                  IdExpr {
+                    name: object_ident.to_string(),
+                  },
+                ),
                 path: vec![member],
               },
             ));
