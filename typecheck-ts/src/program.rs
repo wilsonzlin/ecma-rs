@@ -9585,13 +9585,6 @@ impl ProgramState {
             }
           })
         };
-        if name == "takes" {
-          eprintln!(
-            "DEBUG takes binding initial ty {:?} def {:?}",
-            ty.map(|t| tti::TypeDisplay::new(&store, t).to_string()),
-            binding.def
-          );
-        }
         if let Some(converted) = ty {
           if matches!(store.type_kind(converted), tti::TypeKind::Unknown) {
             ty = None;
@@ -9799,16 +9792,6 @@ impl ProgramState {
         } else {
           ty
         };
-        if name == "takes" {
-          eprintln!(
-            "DEBUG takes binding final ty {} (existing {})",
-            tti::TypeDisplay::new(&store, ty),
-            bindings
-              .get(name)
-              .map(|t| tti::TypeDisplay::new(&store, *t).to_string())
-              .unwrap_or_else(|| "<none>".to_string())
-          );
-        }
         bindings.insert(name.to_string(), ty);
         if let Some(def) = def_for_resolver {
           binding_defs.insert(name.to_string(), def);
