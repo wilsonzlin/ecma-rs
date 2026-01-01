@@ -718,6 +718,115 @@ fn number_indexer_does_not_satisfy_string_indexer() {
 }
 
 #[test]
+fn intersection_indexer_key_behaves_like_string() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  // key_type: (string | number) & string
+  let key_type = store.intersection(vec![
+    store.union(vec![primitives.string, primitives.number]),
+    primitives.string,
+  ]);
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type,
+        value_type: primitives.boolean,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst_string = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.boolean,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst_symbol = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.symbol,
+        value_type: primitives.boolean,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx.is_assignable(src, dst_string));
+  assert!(!ctx.is_assignable(src, dst_symbol));
+}
+
+#[test]
+fn intersection_indexer_key_requires_all_members() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let union_key = store.union(vec![primitives.string, primitives.symbol]);
+  let intersection_key = store.intersection(vec![union_key, primitives.string]);
+
+  let make_obj = |key_type| {
+    object_type(
+      &store,
+      Shape {
+        properties: vec![],
+        call_signatures: vec![],
+        construct_signatures: vec![],
+        indexers: vec![Indexer {
+          key_type,
+          value_type: primitives.boolean,
+          readonly: false,
+        }],
+      },
+    )
+  };
+
+  let src_union = make_obj(union_key);
+  let src_intersection = make_obj(intersection_key);
+
+  let dst_symbol = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.symbol,
+        value_type: primitives.boolean,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  // Union is OR: (string | symbol) should satisfy a symbol indexer.
+  assert!(ctx.is_assignable(src_union, dst_symbol));
+
+  // Intersection is AND: (string | symbol) & string behaves like `string`, so it must not satisfy
+  // a symbol indexer.
+  assert!(!ctx.is_assignable(src_intersection, dst_symbol));
+}
+
+#[test]
 fn relation_uses_merged_indexer() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

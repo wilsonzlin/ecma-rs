@@ -1510,6 +1510,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   fn indexer_accepts_key(&self, key: &PropKey, idx_key: TypeId) -> bool {
+    self.indexer_accepts_key_inner(key, idx_key, 0)
+  }
+
+  fn indexer_accepts_key_inner(&self, key: &PropKey, idx_key: TypeId, depth: usize) -> bool {
+    if depth >= self.depth_limit {
+      return false;
+    }
+
     match self.store.type_kind(idx_key) {
       TypeKind::String | TypeKind::StringLiteral(_) => {
         matches!(key, PropKey::String(_) | PropKey::Number(_))
@@ -1518,10 +1526,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(key, PropKey::Symbol(_)),
       TypeKind::Union(members) => members
         .iter()
-        .any(|member| self.indexer_accepts_key(key, *member)),
+        .any(|member| self.indexer_accepts_key_inner(key, *member, depth + 1)),
       TypeKind::Intersection(members) => members
         .iter()
-        .any(|member| self.indexer_accepts_key(key, *member)),
+        .all(|member| self.indexer_accepts_key_inner(key, *member, depth + 1)),
       _ => false,
     }
   }

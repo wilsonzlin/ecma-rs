@@ -71,6 +71,7 @@ pub struct ReasonNode {
 
 const MAX_REASON_DEPTH: usize = 12;
 const MAX_REASON_NODES: usize = 256;
+const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
 
 #[derive(Default, Debug)]
 struct ReasonBudget {
@@ -2443,18 +2444,33 @@ impl<'a> RelateCtx<'a> {
     mode: RelationMode,
     depth: usize,
   ) -> bool {
+    self.indexer_key_accepts_prop_kind_inner(idx_key, kind, mode, depth, 0)
+  }
+
+  fn indexer_key_accepts_prop_kind_inner(
+    &self,
+    idx_key: TypeId,
+    kind: PropKeyKind,
+    mode: RelationMode,
+    depth: usize,
+    match_depth: usize,
+  ) -> bool {
+    if match_depth >= MAX_INDEXER_KEY_MATCH_DEPTH {
+      return false;
+    }
+
     match self.store.type_kind(idx_key) {
       TypeKind::String | TypeKind::StringLiteral(_) => {
         matches!(kind, PropKeyKind::String | PropKeyKind::Number)
       }
       TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(kind, PropKeyKind::Number),
       TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(kind, PropKeyKind::Symbol),
-      TypeKind::Union(members) => members
-        .iter()
-        .any(|member| self.indexer_key_accepts_prop_kind(*member, kind, mode, depth + 1)),
-      TypeKind::Intersection(members) => members
-        .iter()
-        .any(|member| self.indexer_key_accepts_prop_kind(*member, kind, mode, depth + 1)),
+      TypeKind::Union(members) => members.iter().any(|member| {
+        self.indexer_key_accepts_prop_kind_inner(*member, kind, mode, depth + 1, match_depth + 1)
+      }),
+      TypeKind::Intersection(members) => members.iter().all(|member| {
+        self.indexer_key_accepts_prop_kind_inner(*member, kind, mode, depth + 1, match_depth + 1)
+      }),
       _ => {
         let key_ty = match kind {
           PropKeyKind::String => self.store.primitive_ids().string,

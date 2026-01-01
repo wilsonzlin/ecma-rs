@@ -1906,6 +1906,95 @@ fn indexed_access_uses_symbol_indexer_value_type() {
 }
 
 #[test]
+fn indexed_access_intersection_indexer_key_behaves_like_string() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  // key_type: (string | number) & string
+  let key_type = store.intersection(vec![
+    store.union(vec![primitives.string, primitives.number]),
+    primitives.string,
+  ]);
+
+  let shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type,
+      value_type: primitives.boolean,
+      readonly: false,
+    }],
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+
+  // A string indexer accepts both string and number property names.
+  let indexed_number = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: primitives.number,
+  });
+  assert_eq!(eval.evaluate(indexed_number), primitives.boolean);
+
+  // It must not accept symbol keys.
+  let indexed_symbol = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: primitives.symbol,
+  });
+  assert_eq!(eval.evaluate(indexed_symbol), primitives.never);
+}
+
+#[test]
+fn indexed_access_intersection_indexer_key_requires_all_members() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let union_key = store.union(vec![primitives.string, primitives.symbol]);
+  let intersection_key = store.intersection(vec![union_key, primitives.string]);
+
+  let make_obj = |key_type| {
+    let shape_id = store.intern_shape(Shape {
+      properties: Vec::new(),
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: vec![Indexer {
+        key_type,
+        value_type: primitives.boolean,
+        readonly: false,
+      }],
+    });
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: shape_id }),
+    ))
+  };
+
+  let obj_union = make_obj(union_key);
+  let obj_intersection = make_obj(intersection_key);
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+
+  // Union is OR: (string | symbol) should accept symbol keys.
+  let indexed_union_symbol = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_union,
+    index: primitives.symbol,
+  });
+  assert_eq!(eval.evaluate(indexed_union_symbol), primitives.boolean);
+
+  // Intersection is AND: (string | symbol) & string behaves like `string`, so it must reject
+  // symbol keys.
+  let indexed_intersection_symbol = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_intersection,
+    index: primitives.symbol,
+  });
+  assert_eq!(eval.evaluate(indexed_intersection_symbol), primitives.never);
+}
+
+#[test]
 fn mapped_type_preserves_symbol_indexer() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
