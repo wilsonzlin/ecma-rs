@@ -1856,27 +1856,36 @@ mod tests {
     assert_eq!(tsx.file_name().unwrap(), "foo.tsx.json");
     assert_eq!(d_ts.file_name().unwrap(), "foo.d.ts.json");
 
-    let legacy_path = store.legacy_path_for("foo.ts");
-    let payload = TscDiagnostics {
-      schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
-      metadata: Default::default(),
-      diagnostics: vec![crate::tsc::TscDiagnostic {
-        code: 1,
-        file: None,
-        start: 0,
-        end: 0,
-        category: None,
-        message: None,
-      }],
-      crash: None,
-      type_facts: None,
+    let write_legacy = |id: &str, code: u32| {
+      let legacy_path = store.legacy_path_for(id);
+      let payload = TscDiagnostics {
+        schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
+        metadata: Default::default(),
+        diagnostics: vec![crate::tsc::TscDiagnostic {
+          code,
+          file: None,
+          start: 0,
+          end: 0,
+          category: None,
+          message: None,
+        }],
+        crash: None,
+        type_facts: None,
+      };
+      let json = serde_json::to_string(&payload).unwrap();
+      std::fs::write(legacy_path, json).unwrap();
     };
-    let json = serde_json::to_string(&payload).unwrap();
-    std::fs::write(legacy_path, json).unwrap();
+
+    write_legacy("foo.ts", 1);
+    write_legacy("foo.d.ts", 2);
 
     let loaded = store.load("foo.ts").unwrap();
     assert_eq!(loaded.diagnostics.len(), 1);
     assert_eq!(loaded.diagnostics[0].code, 1);
+
+    let loaded = store.load("foo.d.ts").unwrap();
+    assert_eq!(loaded.diagnostics.len(), 1);
+    assert_eq!(loaded.diagnostics[0].code, 2);
   }
 
   #[test]
