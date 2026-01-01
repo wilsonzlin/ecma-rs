@@ -539,6 +539,44 @@ fn type_query_imports_are_traversed() {
 }
 
 #[test]
+fn import_type_expressions_are_traversed() {
+  let file_a = FileId(2004);
+  let file_b = FileId(2005);
+
+  let src_a = "export interface Foo {}";
+  let ast_a = parse(src_a).expect("parse file A");
+  let lower_a = lower_file(file_a, HirFileKind::Ts, &ast_a);
+  let hir_a = lower_to_ts_hir(&ast_a, &lower_a);
+
+  let src_b = r#"
+    type Bar = import("a").Foo;
+    type Baz = import("a");
+  "#;
+  let ast_b = parse(src_b).expect("parse file B");
+  let lower_b = lower_file(file_b, HirFileKind::Ts, &ast_b);
+  let hir_b = lower_to_ts_hir(&ast_b, &lower_b);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(hir_a),
+    file_b => Arc::new(hir_b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_a = semantics
+    .exports_of_opt(file_a)
+    .expect("import type dependency should be bound");
+  let symbols = semantics.symbols();
+  let foo = exports_a.get("Foo").expect("Foo exported");
+  assert!(foo.symbol_for(Namespace::TYPE, symbols).is_some());
+}
+
+#[test]
 fn export_namespace_import_uses_local_binding() {
   let file_a = FileId(22);
   let file_b = FileId(23);
