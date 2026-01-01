@@ -13108,6 +13108,174 @@ impl ProgramState {
   }
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn initializer_bodies_have_function_parent() {
+    let source = r#"
+function Box() {}
+
+function onlyObjects(val: object | number) {
+  if (val instanceof Box) {
+    const inner = val;
+    return inner;
+  }
+  return val;
+}
+"#;
+
+    let mut host = crate::MemoryHost::new();
+    let file_key = FileKey::new("main.ts");
+    host.insert(file_key.clone(), source);
+    let program = Program::new(host, vec![file_key.clone()]);
+    let _ = program.check();
+    let file_id = program.file_id(&file_key).expect("file id");
+
+    let state = program.lock_state();
+    let only_objects_def = state
+      .def_data
+      .iter()
+      .find_map(|(def, data)| {
+        (data.file == file_id
+          && data.name == "onlyObjects"
+          && matches!(data.kind, DefKind::Function(_)))
+        .then_some(*def)
+      })
+      .expect("onlyObjects def");
+    let only_objects_body = match state.def_data.get(&only_objects_def).map(|d| &d.kind) {
+      Some(DefKind::Function(func)) => func.body.expect("onlyObjects body"),
+      other => panic!("unexpected def kind for onlyObjects: {other:?}"),
+    };
+
+    let inner_initializer_body = state
+      .def_data
+      .iter()
+      .find_map(|(def, data)| {
+        (data.file == file_id && data.name == "inner")
+          .then(|| state.body_of_def(*def))
+          .flatten()
+      })
+      .expect("inner body");
+
+    let inner_meta = state.body_map.get(&inner_initializer_body).expect("inner meta");
+    assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
+
+    let parent = state
+      .body_parents
+      .get(&inner_initializer_body)
+      .copied()
+      .expect("initializer body parent");
+    assert_eq!(
+      parent, only_objects_body,
+      "expected initializer body parent to be enclosing function body"
+    );
+    let parent_kind = state.body_map.get(&parent).map(|m| m.kind);
+    assert_eq!(parent_kind, Some(HirBodyKind::Function));
+  }
+
+  #[test]
+  fn narrowing_patterns_fixture_initializer_parent_chain() {
+    let source = include_str!("../tests/litmus/narrowing_patterns/main.ts");
+    let mut host = crate::MemoryHost::new();
+    let file_key = FileKey::new("main.ts");
+    host.insert(file_key.clone(), source);
+    let program = Program::new(host, vec![file_key.clone()]);
+    let _ = program.check();
+    let file_id = program.file_id(&file_key).expect("file id");
+
+    let mut state = program.lock_state();
+    let only_objects_def = state
+      .def_data
+      .iter()
+      .find_map(|(def, data)| {
+        (data.file == file_id
+          && data.name == "onlyObjects"
+          && matches!(data.kind, DefKind::Function(_)))
+        .then_some(*def)
+      })
+      .expect("onlyObjects def");
+    let only_objects_body = match state.def_data.get(&only_objects_def).map(|d| &d.kind) {
+      Some(DefKind::Function(func)) => func.body.expect("onlyObjects body"),
+      other => panic!("unexpected def kind for onlyObjects: {other:?}"),
+    };
+
+    let inner_initializer_body = state
+      .def_data
+      .iter()
+      .find_map(|(def, data)| {
+        (data.file == file_id && data.name == "inner")
+          .then(|| state.body_of_def(*def))
+          .flatten()
+      })
+      .expect("inner body");
+    let inner_meta = state.body_map.get(&inner_initializer_body).expect("inner meta");
+    assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
+
+    let parent = state
+      .body_parents
+      .get(&inner_initializer_body)
+      .copied()
+      .expect("initializer body parent");
+    assert_eq!(
+      parent, only_objects_body,
+      "expected narrowing_patterns inner initializer body to be parented to onlyObjects body"
+    );
+
+    let lowered = state.hir_lowered.get(&file_id).expect("lowered");
+    let only_objects_hir = lowered
+      .body(only_objects_body)
+      .expect("onlyObjects hir body");
+    let val_pat_id = only_objects_hir
+      .function
+      .as_ref()
+      .and_then(|func| func.params.first())
+      .map(|param| param.pat)
+      .expect("val param pat");
+    let val_pat = only_objects_hir
+      .pats
+      .get(val_pat_id.0 as usize)
+      .expect("val pat");
+    let val_name = match &val_pat.kind {
+      HirPatKind::Ident(name_id) => lowered.names.resolve(*name_id),
+      _ => None,
+    };
+    assert_eq!(val_name, Some("val"));
+
+    let only_objects_result = state.check_body(only_objects_body).expect("check onlyObjects");
+    let val_pat_ty = only_objects_result
+      .pat_type(PatId(val_pat_id.0))
+      .expect("val pat type");
+    assert_ne!(val_pat_ty, state.interned_unknown());
+
+    // Ensure no body in this fixture reports `val` as an unknown identifier.
+    let mut bodies: Vec<_> = state
+      .body_map
+      .iter()
+      .filter_map(|(body, meta)| (meta.file == file_id).then_some((*body, meta.kind)))
+      .collect();
+    bodies.sort_by_key(|(id, _)| id.0);
+    for (body, kind) in bodies {
+      let result = state.check_body(body).expect("check body");
+      if let Some(diag) = result
+        .diagnostics
+        .iter()
+        .find(|diag| diag.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+      {
+        let owner = state.owner_of_body(body);
+        let owner_name = owner
+          .and_then(|id| state.def_data.get(&id).map(|data| data.name.clone()))
+          .unwrap_or_else(|| "<unknown>".to_string());
+        panic!(
+          "unexpected unknown identifier diagnostic in body {:?} ({:?}) owner {:?} `{}`: {:?}",
+          body, kind, owner, owner_name, diag
+        );
+      }
+    }
+  }
+}
+
 fn type_member_name(key: &TypePropertyKey) -> Option<String> {
   match key {
     TypePropertyKey::Identifier(name) => Some(name.clone()),
