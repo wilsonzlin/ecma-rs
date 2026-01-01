@@ -1,4 +1,6 @@
 use crate::cache::{CacheConfig, CacheStats, ShardedCache};
+use crate::eval::EvaluatorCacheStats;
+use crate::eval::EvaluatorCaches;
 use crate::eval::ExpandedType;
 use crate::eval::TypeEvaluator;
 use crate::eval::TypeExpander as EvalTypeExpander;
@@ -170,6 +172,7 @@ pub struct RelateCtx<'a> {
   pub options: TypeOptions,
   hooks: RelateHooks<'a>,
   cache: RelationCache,
+  normalizer_caches: EvaluatorCaches,
   in_progress: RefCell<HashSet<RelationKey>>,
   reason_budget: RefCell<ReasonBudget>,
 }
@@ -223,6 +226,7 @@ impl<'a> RelateCtx<'a> {
       options,
       hooks,
       cache,
+      normalizer_caches: EvaluatorCaches::new(CacheConfig::default()),
       in_progress: RefCell::new(HashSet::new()),
       reason_budget: RefCell::new(ReasonBudget::default()),
     }
@@ -230,6 +234,10 @@ impl<'a> RelateCtx<'a> {
 
   pub fn cache_stats(&self) -> CacheStats {
     self.cache.stats()
+  }
+
+  pub fn normalizer_cache_stats(&self) -> EvaluatorCacheStats {
+    self.normalizer_caches.stats()
   }
 
   pub fn clear_cache(&self) {
@@ -1915,7 +1923,8 @@ impl<'a> RelateCtx<'a> {
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
-    let mut evaluator = TypeEvaluator::new(self.store.clone(), &adapter);
+    let mut evaluator =
+      TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone());
     evaluator.evaluate(ty)
   }
 

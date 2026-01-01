@@ -1,7 +1,7 @@
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  CacheConfig, CacheStats, EvaluatorCaches, RelateCtx, RelationCache, TypeEvaluator, TypeExpander,
-  TypeKind, TypeOptions, TypeStore,
+  CacheConfig, CacheStats, EvaluatorCaches, ObjectType, PropData, PropKey, Property, RelateCtx,
+  RelationCache, Shape, TypeEvaluator, TypeExpander, TypeKind, TypeOptions, TypeStore,
 };
 
 fn default_options() -> TypeOptions {
@@ -178,4 +178,50 @@ fn caches_can_be_cleared_and_reused() {
 
   assert!(ctx.is_assignable(primitives.number, primitives.number));
   assert_eq!(cache.stats().hits, 0, "fresh cache should start cold");
+}
+
+#[test]
+fn relate_ctx_normalizer_caches_are_reused_across_relation_checks() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let key = store.intern_name("a");
+  let mut shape = Shape::new();
+  shape.properties.push(Property {
+    key: PropKey::String(key),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  });
+  let shape_id = store.intern_shape(shape);
+  let obj_id = store.intern_object(ObjectType { shape: shape_id });
+  let obj_ty = store.intern_type(TypeKind::Object(obj_id));
+
+  let index_ty = store.intern_type(TypeKind::StringLiteral(key));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: index_ty,
+  });
+
+  assert!(ctx.is_assignable(indexed, primitives.number));
+  let first = ctx.normalizer_cache_stats();
+  assert!(
+    first.eval.insertions > 0,
+    "expected normalization to populate eval cache: {first:?}"
+  );
+
+  ctx.clear_cache();
+  assert!(ctx.is_assignable(indexed, primitives.number));
+  let second = ctx.normalizer_cache_stats();
+  assert!(
+    second.eval.hits > first.eval.hits,
+    "expected cache hits to increase on repeated normalization: first={first:?}, second={second:?}"
+  );
 }
