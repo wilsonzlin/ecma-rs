@@ -254,6 +254,26 @@ fn normalize_file_name(file: Option<String>, options: &NormalizationOptions) -> 
     }
   }
 
+  // The conformance runner writes drive-rooted virtual paths like `c:/foo/bar.ts` to disk under a
+  // synthetic directory (e.g. `drive_c/foo/bar.ts`) so joins remain relative on Windows.
+  //
+  // For diagnostics comparisons we want those to behave like real drive paths, so strip the
+  // synthetic `drive_<letter>` segment back to the drive-less canonical form.
+  if let Some(rest) = name.strip_prefix('/') {
+    let (first, remaining) = rest.split_once('/').unwrap_or((rest, ""));
+    if let Some(letter) = first.strip_prefix("drive_") {
+      let bytes = letter.as_bytes();
+      if bytes.len() == 1 && bytes[0].is_ascii_alphabetic() {
+        let remaining = remaining.trim_start_matches('/');
+        if remaining.is_empty() {
+          name = "/".to_string();
+        } else {
+          name = format!("/{}", remaining);
+        }
+      }
+    }
+  }
+
   Some(name)
 }
 
@@ -469,6 +489,21 @@ mod tests {
     let diags = vec![TscDiagnostic {
       code: 1,
       file: Some("C:\\case\\src\\a.ts".to_string()),
+      start: 0,
+      end: 1,
+      category: Some("error".to_string()),
+      message: None,
+    }];
+    let normalized =
+      normalize_tsc_diagnostics_with_options(&diags, &NormalizationOptions::default());
+    assert_eq!(normalized[0].file.as_deref(), Some("/case/src/a.ts"));
+  }
+
+  #[test]
+  fn strips_synthetic_drive_prefix_paths() {
+    let diags = vec![TscDiagnostic {
+      code: 1,
+      file: Some("drive_c/case/src/a.ts".to_string()),
       start: 0,
       end: 1,
       category: Some("error".to_string()),
