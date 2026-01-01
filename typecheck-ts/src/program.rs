@@ -8835,24 +8835,37 @@ impl ProgramState {
       let Some(pat) = body.pats.get(pat_id.0 as usize) else {
         return;
       };
+      // Parent bodies may still be mid-check (e.g. recursive initializer checks), in
+      // which case `BodyCheckResult` can be empty and pattern types are missing.
+      //
+      // Nested bodies still need the *binding name* to exist so we don't emit
+      // spurious "unknown identifier" diagnostics; use an interned `unknown`
+      // type as a safe fallback so downstream type operations don't panic on
+      // non-interned `TypeId`s.
       let ty = result
         .pat_type(PatId(pat_id.0))
         .unwrap_or(state.interned_unknown());
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
-            if ty != state.builtin.unknown {
-              bindings
-                .entry(name.to_string())
-                .and_modify(|existing| {
-                  if let Some(store) = state.interned_store.as_ref() {
-                    if matches!(store.type_kind(*existing), tti::TypeKind::Unknown) {
-                      *existing = ty;
-                    }
+            bindings
+              .entry(name.to_string())
+              .and_modify(|existing| {
+                // Never overwrite a non-unknown binding with an unknown fallback,
+                // but do upgrade unknown bindings when we learn a better type.
+                if let Some(store) = state.interned_store.as_ref() {
+                  let existing_unknown = !store.contains_type_id(*existing)
+                    || matches!(store.type_kind(*existing), tti::TypeKind::Unknown);
+                  let ty_unknown = !store.contains_type_id(ty)
+                    || matches!(store.type_kind(ty), tti::TypeKind::Unknown);
+                  if existing_unknown && !ty_unknown {
+                    *existing = ty;
                   }
-                })
-                .or_insert(ty);
-            }
+                } else if *existing == state.builtin.unknown && ty != state.builtin.unknown {
+                  *existing = ty;
+                }
+              })
+              .or_insert(ty);
             if let Some(def_id) = state
               .def_data
               .iter()
