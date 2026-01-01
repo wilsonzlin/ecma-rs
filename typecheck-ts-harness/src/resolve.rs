@@ -350,8 +350,22 @@ fn resolve_json_string_to_file(
   if entry.starts_with('/') || is_drive_root(entry) {
     return resolve_as_file_or_directory_inner(files, entry, depth);
   }
+
+  // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
+  // path is already normalized and we can skip an extra `normalize_name` allocation.
+  let entry = entry.strip_prefix("./").unwrap_or(entry);
+  if entry.is_empty() {
+    return resolve_as_file_or_directory_normalized(files, base_dir, depth);
+  }
+
   let joined = virtual_join(base_dir, entry);
-  resolve_as_file_or_directory_inner(files, &joined, depth)
+  // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
+  // Fall back to the normalizing path to preserve resolution behaviour.
+  if entry.starts_with('/') || subpath_needs_normalization(entry) {
+    resolve_as_file_or_directory_inner(files, &joined, depth)
+  } else {
+    resolve_as_file_or_directory_normalized(files, &joined, depth)
+  }
 }
 
 fn select_exports_target<'a, 'b>(
