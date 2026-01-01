@@ -68,6 +68,35 @@ fn string_export_name_still_requires_as_when_alias_matches() {
 }
 
 #[test]
+fn reserved_keyword_alias_stays_quoted() {
+  roundtrip("export { a as \"while\" };", "export{a as\"while\"};");
+}
+
+#[test]
+fn keyword_import_name_still_requires_as_when_alias_matches() {
+  roundtrip(
+    "import { while as \"while\" } from \"x\";",
+    "import{while as\"while\"}from\"x\";",
+  );
+}
+
+#[test]
+fn keyword_export_name_still_requires_as_when_alias_matches() {
+  roundtrip(
+    "export { while as \"while\" } from \"x\";",
+    "export{while as\"while\"}from\"x\";",
+  );
+}
+
+#[test]
+fn export_star_reserved_keyword_alias_stays_quoted() {
+  roundtrip(
+    "export * as \"while\" from \"mod\";",
+    "export*as\"while\"from\"mod\";",
+  );
+}
+
+#[test]
 fn escaped_identifier_alias_is_not_quoted() {
   roundtrip("export { a as \\u0061 };", "export{a as \\u0061};");
 }

@@ -1,5 +1,6 @@
 use crate::Emitter;
 use parse_js::lex::{lex_next, LexMode, Lexer};
+use parse_js::parse::expr::pat::{is_valid_pattern_identifier, ParsePatternRules};
 use parse_js::token::TT;
 use parse_js::Dialect;
 
@@ -29,6 +30,40 @@ pub(crate) fn is_identifier_name_token(name: &str) -> bool {
 
 pub(crate) fn emit_identifier_name_or_string_literal(em: &mut Emitter, name: &str) {
   if is_identifier_name_token(name) {
+    em.write_identifier(name);
+  } else {
+    em.write_string_literal(name);
+  }
+}
+
+/// Returns true when `name` can be emitted as a single token accepted by
+/// `parse-js` as a module import/export alias identifier.
+///
+/// `parse-js` stores string-literal aliases as `IdPat { name: <string value> }`.
+/// Even when the string is lexically a keyword (`while`, `await`, etc.), it may
+/// not be valid in this position without quotes; this helper mirrors the
+/// parser's `id_pat` validation for module-level patterns.
+pub(crate) fn is_module_binding_identifier_token(name: &str) -> bool {
+  let mut lexer = Lexer::new(name);
+  let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Ts);
+
+  if token.loc.0 != 0 || token.loc.1 != name.len() {
+    return false;
+  }
+
+  // Import/export declarations are only valid in modules, where `await` is not
+  // permitted as an identifier.
+  is_valid_pattern_identifier(
+    token.typ,
+    ParsePatternRules {
+      await_allowed: false,
+      yield_allowed: true,
+    },
+  )
+}
+
+pub(crate) fn emit_module_binding_identifier_or_string_literal(em: &mut Emitter, name: &str) {
+  if is_module_binding_identifier_token(name) {
     em.write_identifier(name);
   } else {
     em.write_string_literal(name);

@@ -69,3 +69,32 @@ fn hir_keeps_as_for_string_export_when_alias_matches() {
     "export{\"a-b\"as\"a-b\"}from\"x\";",
   );
 }
+
+#[test]
+fn hir_keeps_reserved_keyword_alias_quoted() {
+  roundtrip("export { a as \"while\" };", "export{a as\"while\"};");
+}
+
+#[test]
+fn hir_keeps_as_for_keyword_import_when_alias_matches() {
+  roundtrip(
+    "import { while as \"while\" } from \"x\";",
+    "import{while as\"while\"}from\"x\";",
+  );
+}
+
+#[test]
+fn hir_keeps_as_for_keyword_export_when_alias_matches() {
+  roundtrip(
+    "export { while as \"while\" } from \"x\";",
+    "export{while as\"while\"}from\"x\";",
+  );
+}
+
+#[test]
+fn hir_keeps_export_star_reserved_keyword_alias_quoted() {
+  roundtrip(
+    "export * as \"while\" from \"mod\";",
+    "export*as\"while\"from\"mod\";",
+  );
+}

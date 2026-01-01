@@ -1,5 +1,5 @@
 use crate::expr_js::{emit_expr, ExprCtx};
-use crate::module_names::emit_identifier_name_or_string_literal;
+use crate::module_names::{emit_module_binding_identifier_or_string_literal, is_module_binding_identifier_token};
 use crate::ts_type::{emit_ts_type, emit_type_parameters};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
 use parse_js::ast::class_or_object::{
@@ -739,13 +739,17 @@ fn emit_import_name(em: &mut Emitter, name: &Node<ImportName>) -> EmitResult {
   }
   emit_module_export_import_name(em, &name.importable);
   let alias_name = pat_decl_ident_name(&name.alias);
-  // For string-literal imported names, an explicit alias is always required
-  // (`import { "a-b" as ... }`), even when the alias matches.
-  let alias_required = matches!(&name.importable, ModuleExportImportName::Str(_));
+  // Some imported names require an explicit alias even when the alias matches:
+  // - string-literal imported names (`import { "a-b" as ... }`)
+  // - imported names that are not valid pattern identifiers (`import { while as ... }`)
+  let alias_required = match &name.importable {
+    ModuleExportImportName::Str(_) => true,
+    ModuleExportImportName::Ident(name) => !is_module_binding_identifier_token(name),
+  };
   if alias_required || alias_name != Some(name.importable.as_str()) {
     em.write_keyword("as");
     if let Some(alias_name) = alias_name {
-      emit_identifier_name_or_string_literal(em, alias_name);
+      emit_module_binding_identifier_or_string_literal(em, alias_name);
     } else {
       emit_pat_decl(em, &name.alias)?;
     }
@@ -763,7 +767,7 @@ fn emit_export_list_stmt(em: &mut Emitter, export: &ExportListStmt) -> EmitResul
       em.write_punct("*");
       if let Some(name) = name {
         em.write_keyword("as");
-        emit_identifier_name_or_string_literal(em, &name.stx.name);
+        emit_module_binding_identifier_or_string_literal(em, &name.stx.name);
       }
     }
     ExportNames::Specific(names) => {
@@ -795,12 +799,16 @@ fn emit_export_name(em: &mut Emitter, name: &Node<ExportName>) -> EmitResult {
     em.write_keyword("type");
   }
   emit_module_export_import_name(em, &name.exportable);
-  // For string-literal exported names, an explicit alias is always required
-  // (`export { "a-b" as ... }`), even when the alias matches.
-  let alias_required = matches!(&name.exportable, ModuleExportImportName::Str(_));
+  // Some exported names require an explicit alias even when the alias matches:
+  // - string-literal exported names (`export { "a-b" as ... }`)
+  // - exported names that are not valid pattern identifiers (`export { while as ... }`)
+  let alias_required = match &name.exportable {
+    ModuleExportImportName::Str(_) => true,
+    ModuleExportImportName::Ident(name) => !is_module_binding_identifier_token(name),
+  };
   if alias_required || name.alias.stx.name != name.exportable.as_str() {
     em.write_keyword("as");
-    emit_identifier_name_or_string_literal(em, &name.alias.stx.name);
+    emit_module_binding_identifier_or_string_literal(em, &name.alias.stx.name);
   }
   Ok(())
 }
