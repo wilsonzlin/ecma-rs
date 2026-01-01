@@ -52,7 +52,22 @@ fn import_alias_can_be_string_literal() {
 }
 
 #[test]
+fn string_import_name_still_requires_as_when_alias_matches() {
+  roundtrip(
+    "import { \"a-b\" as \"a-b\" } from \"x\";",
+    "import{\"a-b\"as\"a-b\"}from\"x\";",
+  );
+}
+
+#[test]
+fn string_export_name_still_requires_as_when_alias_matches() {
+  roundtrip(
+    "export { \"a-b\" as \"a-b\" } from \"x\";",
+    "export{\"a-b\"as\"a-b\"}from\"x\";",
+  );
+}
+
+#[test]
 fn escaped_identifier_alias_is_not_quoted() {
   roundtrip("export { a as \\u0061 };", "export{a as \\u0061};");
 }
-

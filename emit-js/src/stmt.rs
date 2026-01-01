@@ -739,7 +739,10 @@ fn emit_import_name(em: &mut Emitter, name: &Node<ImportName>) -> EmitResult {
   }
   emit_module_export_import_name(em, &name.importable);
   let alias_name = pat_decl_ident_name(&name.alias);
-  if alias_name != Some(name.importable.as_str()) {
+  // For string-literal imported names, an explicit alias is always required
+  // (`import { "a-b" as ... }`), even when the alias matches.
+  let alias_required = matches!(&name.importable, ModuleExportImportName::Str(_));
+  if alias_required || alias_name != Some(name.importable.as_str()) {
     em.write_keyword("as");
     if let Some(alias_name) = alias_name {
       emit_identifier_name_or_string_literal(em, alias_name);
@@ -792,7 +795,10 @@ fn emit_export_name(em: &mut Emitter, name: &Node<ExportName>) -> EmitResult {
     em.write_keyword("type");
   }
   emit_module_export_import_name(em, &name.exportable);
-  if name.alias.stx.name != name.exportable.as_str() {
+  // For string-literal exported names, an explicit alias is always required
+  // (`export { "a-b" as ... }`), even when the alias matches.
+  let alias_required = matches!(&name.exportable, ModuleExportImportName::Str(_));
+  if alias_required || name.alias.stx.name != name.exportable.as_str() {
     em.write_keyword("as");
     emit_identifier_name_or_string_literal(em, &name.alias.stx.name);
   }

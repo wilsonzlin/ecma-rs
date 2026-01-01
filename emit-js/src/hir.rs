@@ -1,5 +1,5 @@
 use crate::escape::{emit_regex_literal, emit_string_literal, emit_template_literal_segment};
-use crate::module_names::emit_identifier_name_or_string_literal;
+use crate::module_names::{emit_identifier_name_or_string_literal, is_identifier_name_token};
 use crate::precedence::{
   child_min_prec_for_binary, needs_parens, Prec, ARROW_FUNCTION_PRECEDENCE, CALL_MEMBER_PRECEDENCE,
   PRIMARY_PRECEDENCE,
@@ -239,8 +239,11 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
         if idx > 0 {
           em.write_punct(",");
         }
-        emit_identifier_name_or_string_literal(em, ctx.name(spec.imported));
-        if spec.imported != spec.local {
+        let imported = ctx.name(spec.imported);
+        emit_identifier_name_or_string_literal(em, imported);
+        // String-literal module import names always require an explicit alias
+        // (`import { "a-b" as ... }`), even when the alias matches.
+        if spec.imported != spec.local || !is_identifier_name_token(imported) {
           em.write_keyword("as");
           emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
         }
@@ -329,8 +332,11 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
     if idx > 0 {
       em.write_punct(",");
     }
-    emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
-    if spec.local != spec.exported {
+    let local = ctx.name(spec.local);
+    emit_identifier_name_or_string_literal(em, local);
+    // String-literal module export names always require an explicit alias
+    // (`export { "a-b" as ... }`), even when the alias matches.
+    if spec.local != spec.exported || !is_identifier_name_token(local) {
       em.write_keyword("as");
       emit_identifier_name_or_string_literal(em, ctx.name(spec.exported));
     }
