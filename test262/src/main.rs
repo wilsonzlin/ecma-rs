@@ -429,7 +429,12 @@ fn collect_cases(
 }
 
 fn normalize_path(path: impl AsRef<Path>) -> String {
-  path.as_ref().to_string_lossy().replace('\\', "/")
+  let mut normalized = path.as_ref().to_string_lossy().into_owned();
+  // Avoid allocating a second String on Unix where paths already use `/`.
+  if normalized.contains('\\') {
+    normalized = normalized.replace('\\', "/");
+  }
+  normalized
 }
 
 fn apply_shard(cases: Vec<TestCase>, shard: Shard) -> Vec<TestCase> {
