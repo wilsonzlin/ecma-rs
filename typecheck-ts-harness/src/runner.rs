@@ -735,6 +735,7 @@ fn resolve_compare_mode(
 struct TimeoutManager {
   inner: Arc<TimeoutManagerInner>,
   thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+  next_token: AtomicU64,
 }
 
 struct TimeoutManagerInner {
@@ -743,7 +744,7 @@ struct TimeoutManagerInner {
 }
 
 struct TimeoutManagerState {
-  active: HashMap<String, TimeoutEntry>,
+  active: HashMap<u64, TimeoutEntry>,
   shutdown: bool,
 }
 
@@ -754,7 +755,7 @@ struct TimeoutEntry {
 }
 
 struct TimeoutGuard {
-  test_id: String,
+  token: u64,
   deadline: Instant,
   inner: Arc<TimeoutManagerInner>,
 }
@@ -775,13 +776,15 @@ impl TimeoutManager {
     Self {
       inner,
       thread: Mutex::new(Some(handle)),
+      next_token: AtomicU64::new(1),
     }
   }
 
-  fn register(&self, test_id: String, deadline: Instant) -> TimeoutGuard {
+  fn register(&self, deadline: Instant) -> TimeoutGuard {
+    let token = self.next_token.fetch_add(1, Ordering::Relaxed);
     let mut state = self.inner.state.lock().unwrap();
     state.active.insert(
-      test_id.clone(),
+      token,
       TimeoutEntry {
         deadline,
         program: None,
@@ -790,7 +793,7 @@ impl TimeoutManager {
     );
     self.inner.cv.notify_one();
     TimeoutGuard {
-      test_id,
+      token,
       deadline,
       inner: Arc::clone(&self.inner),
     }
@@ -813,7 +816,7 @@ impl Drop for TimeoutManager {
 impl TimeoutGuard {
   fn set_program(&self, program: Arc<Program>) {
     let mut state = self.inner.state.lock().unwrap();
-    let Some(entry) = state.active.get_mut(&self.test_id) else {
+    let Some(entry) = state.active.get_mut(&self.token) else {
       return;
     };
 
@@ -830,7 +833,7 @@ impl TimeoutGuard {
 impl Drop for TimeoutGuard {
   fn drop(&mut self) {
     let mut state = self.inner.state.lock().unwrap();
-    state.active.remove(&self.test_id);
+    state.active.remove(&self.token);
     self.inner.cv.notify_one();
   }
 }
@@ -889,7 +892,7 @@ fn run_single_case(
   let _enter = span.enter();
   let total_start = Instant::now();
   let deadline = total_start + opts.timeout;
-  let timeout_guard = timeout_manager.register(case.id.clone(), deadline);
+  let timeout_guard = timeout_manager.register(deadline);
   execute_case(
     case,
     compare_mode,
@@ -2654,7 +2657,7 @@ echo '{"diagnostics":[]}'
 
     let manager = TimeoutManager::new();
     let deadline = Instant::now() - Duration::from_millis(1);
-    let guard = manager.register("deadline_passed".to_string(), deadline);
+    let guard = manager.register(deadline);
 
     let file_set = HarnessFileSet::new(&[VirtualFile {
       name: "case.ts".to_string(),
@@ -2686,7 +2689,7 @@ echo '{"diagnostics":[]}'
 
     let manager = TimeoutManager::new();
     let deadline = Instant::now() + Duration::from_millis(50);
-    let guard = manager.register("deadline_future".to_string(), deadline);
+    let guard = manager.register(deadline);
 
     let file_set = HarnessFileSet::new(&[VirtualFile {
       name: "case.ts".to_string(),
