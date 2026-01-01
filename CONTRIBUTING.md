@@ -11,6 +11,8 @@ This workspace is kept warning-free and treats `Cargo.lock` as a generated artif
 - `cargo test --workspace --locked`
 - `./scripts/gen_deps_graph.sh` (or `just docs`) and ensure `git diff --exit-code docs/deps.md` is clean
 
+To apply formatting fixes locally (as opposed to checking formatting), run `./format` (it runs `cargo fmt --all` and also runs prettier when `npx` is available).
+
 Clippy focuses on correctness and suspicious lints while allowing the noisier style/complexity lints so the signal stays actionable.
 
 If you have [`just`](https://github.com/casey/just) installed, the root `justfile` provides shortcuts:

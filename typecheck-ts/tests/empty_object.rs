@@ -25,12 +25,8 @@ let bad_null: {} = null;
   assert_eq!(mismatches.len(), 2, "diagnostics: {diagnostics:?}");
 
   let file_id = program.file_id(&file).expect("file id for a.ts");
-  let bad_object_offset = u32::try_from(
-    source
-      .find("object = 1")
-      .expect("bad object assignment"),
-  )
-  .expect("offset fits in u32")
+  let bad_object_offset = u32::try_from(source.find("object = 1").expect("bad object assignment"))
+    .expect("offset fits in u32")
     + "object = ".len() as u32;
   let bad_null_offset = u32::try_from(source.find("= null").expect("bad null assignment"))
     .expect("offset fits in u32")
