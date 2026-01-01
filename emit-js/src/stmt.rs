@@ -1,4 +1,5 @@
 use crate::expr_js::{emit_expr, ExprCtx};
+use crate::module_names::emit_identifier_name_or_string_literal;
 use crate::ts_type::{emit_ts_type, emit_type_parameters};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
 use parse_js::ast::class_or_object::{
@@ -737,9 +738,14 @@ fn emit_import_name(em: &mut Emitter, name: &Node<ImportName>) -> EmitResult {
     em.write_keyword("type");
   }
   emit_module_export_import_name(em, &name.importable);
-  if pat_decl_ident_name(&name.alias) != Some(name.importable.as_str()) {
+  let alias_name = pat_decl_ident_name(&name.alias);
+  if alias_name != Some(name.importable.as_str()) {
     em.write_keyword("as");
-    emit_pat_decl(em, &name.alias)?;
+    if let Some(alias_name) = alias_name {
+      emit_identifier_name_or_string_literal(em, alias_name);
+    } else {
+      emit_pat_decl(em, &name.alias)?;
+    }
   }
   Ok(())
 }
@@ -754,7 +760,7 @@ fn emit_export_list_stmt(em: &mut Emitter, export: &ExportListStmt) -> EmitResul
       em.write_punct("*");
       if let Some(name) = name {
         em.write_keyword("as");
-        emit_id_pat(em, name)?;
+        emit_identifier_name_or_string_literal(em, &name.stx.name);
       }
     }
     ExportNames::Specific(names) => {
@@ -788,7 +794,7 @@ fn emit_export_name(em: &mut Emitter, name: &Node<ExportName>) -> EmitResult {
   emit_module_export_import_name(em, &name.exportable);
   if name.alias.stx.name != name.exportable.as_str() {
     em.write_keyword("as");
-    em.write_identifier(&name.alias.stx.name);
+    emit_identifier_name_or_string_literal(em, &name.alias.stx.name);
   }
   Ok(())
 }

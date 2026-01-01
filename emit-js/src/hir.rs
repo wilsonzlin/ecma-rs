@@ -1,4 +1,5 @@
 use crate::escape::{emit_regex_literal, emit_string_literal, emit_template_literal_segment};
+use crate::module_names::emit_identifier_name_or_string_literal;
 use crate::precedence::{
   child_min_prec_for_binary, needs_parens, Prec, ARROW_FUNCTION_PRECEDENCE, CALL_MEMBER_PRECEDENCE,
   PRIMARY_PRECEDENCE,
@@ -234,19 +235,19 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
       em.write_punct(",");
     }
     em.write_punct("{");
-    for (idx, spec) in named_specifiers.iter().enumerate() {
-      if idx > 0 {
-        em.write_punct(",");
+      for (idx, spec) in named_specifiers.iter().enumerate() {
+        if idx > 0 {
+          em.write_punct(",");
+        }
+        emit_identifier_name_or_string_literal(em, ctx.name(spec.imported));
+        if spec.imported != spec.local {
+          em.write_keyword("as");
+          emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
+        }
       }
-      em.write_identifier(ctx.name(spec.imported));
-      if spec.imported != spec.local {
-        em.write_keyword("as");
-        em.write_identifier(ctx.name(spec.local));
-      }
+      em.write_punct("}");
+      wrote = true;
     }
-    em.write_punct("}");
-    wrote = true;
-  }
   if wrote {
     em.write_keyword("from");
   }
@@ -328,10 +329,10 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
     if idx > 0 {
       em.write_punct(",");
     }
-    em.write_identifier(ctx.name(spec.local));
+    emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
     if spec.local != spec.exported {
       em.write_keyword("as");
-      em.write_identifier(ctx.name(spec.exported));
+      emit_identifier_name_or_string_literal(em, ctx.name(spec.exported));
     }
   }
   em.write_punct("}");
@@ -346,12 +347,12 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
 fn emit_export_all(em: &mut Emitter, ctx: &HirContext<'_>, all: &ExportAll) -> EmitResult {
   em.write_keyword("export");
   em.write_punct("*");
-  em.write_keyword("from");
-  emit_string(em, &all.source.value);
   if let Some(alias) = &all.alias {
     em.write_keyword("as");
-    em.write_identifier(ctx.name(alias.exported));
+    emit_identifier_name_or_string_literal(em, ctx.name(alias.exported));
   }
+  em.write_keyword("from");
+  emit_string(em, &all.source.value);
   em.write_semicolon();
   Ok(())
 }

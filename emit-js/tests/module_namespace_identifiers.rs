@@ -1,0 +1,58 @@
+use emit_js::{emit_program, EmitOptions, Emitter};
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+
+mod util;
+
+fn roundtrip(src: &str, expected: &str) {
+  let opts = ParseOptions {
+    dialect: Dialect::Ts,
+    source_type: SourceType::Module,
+  };
+  let parsed = parse_with_options(src, opts).unwrap_or_else(|err| panic!("parse {src:?}: {err:?}"));
+  let mut emitter = Emitter::new(EmitOptions::minified());
+  emit_program(&mut emitter, parsed.stx.as_ref())
+    .unwrap_or_else(|err| panic!("emit {src:?}: {err:?}"));
+  let emitted = String::from_utf8(emitter.into_bytes()).expect("utf-8");
+  assert_eq!(emitted, expected);
+
+  let reparsed =
+    parse_with_options(&emitted, opts).unwrap_or_else(|err| panic!("reparse {emitted:?}: {err:?}"));
+  assert_eq!(
+    util::serialize_without_locs(&parsed),
+    util::serialize_without_locs(&reparsed),
+    "emitted source: {emitted}"
+  );
+
+  // Ensure the output is deterministic when re-emitting the re-parsed program.
+  let mut emitter2 = Emitter::new(EmitOptions::minified());
+  emit_program(&mut emitter2, reparsed.stx.as_ref()).expect("emit second pass");
+  let emitted2 = String::from_utf8(emitter2.into_bytes()).expect("utf-8");
+  assert_eq!(emitted2, emitted, "emission must be deterministic");
+}
+
+#[test]
+fn export_alias_can_be_string_literal() {
+  roundtrip("export { a as \"a-b\" };", "export{a as\"a-b\"};");
+}
+
+#[test]
+fn export_star_alias_can_be_string_literal() {
+  roundtrip(
+    "export * as \"ns-name\" from \"mod\";",
+    "export*as\"ns-name\"from\"mod\";",
+  );
+}
+
+#[test]
+fn import_alias_can_be_string_literal() {
+  roundtrip(
+    "import { \"a-b\" as \"c-d\" } from \"x\";",
+    "import{\"a-b\"as\"c-d\"}from\"x\";",
+  );
+}
+
+#[test]
+fn escaped_identifier_alias_is_not_quoted() {
+  roundtrip("export { a as \\u0061 };", "export{a as \\u0061};");
+}
+
