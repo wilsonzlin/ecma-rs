@@ -605,18 +605,34 @@ fn indexer_matches(key: &PropKey, idxer: &Indexer, store: &TypeStore) -> bool {
   indexer_accepts_key(key, idxer.key_type, store)
 }
 
+const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
+
 fn indexer_accepts_key(key: &PropKey, idx_key: TypeId, store: &TypeStore) -> bool {
+  indexer_accepts_key_inner(key, idx_key, store, 0)
+}
+
+fn indexer_accepts_key_inner(
+  key: &PropKey,
+  idx_key: TypeId,
+  store: &TypeStore,
+  depth: usize,
+) -> bool {
+  if depth >= MAX_INDEXER_KEY_MATCH_DEPTH {
+    return false;
+  }
+
   match store.type_kind(idx_key) {
     TypeKind::String | TypeKind::StringLiteral(_) => {
       matches!(key, PropKey::String(_) | PropKey::Number(_))
     }
     TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(key, PropKey::Number(_)),
+    TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(key, PropKey::Symbol(_)),
     TypeKind::Union(members) => members
       .iter()
-      .any(|member| indexer_accepts_key(key, *member, store)),
+      .any(|member| indexer_accepts_key_inner(key, *member, store, depth + 1)),
     TypeKind::Intersection(members) => members
       .iter()
-      .any(|member| indexer_accepts_key(key, *member, store)),
+      .all(|member| indexer_accepts_key_inner(key, *member, store, depth + 1)),
     _ => false,
   }
 }
@@ -781,5 +797,45 @@ impl IndexerKey for IndexerInfo {
 
   fn value(&self) -> TypeId {
     self.value_type
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn indexer_accepts_key_intersection_is_and() {
+    let store = TypeStore::new();
+    let primitives = store.primitive_ids();
+
+    let union_key = store.union(vec![primitives.string, primitives.symbol]);
+    let intersection_key = store.intersection(vec![union_key, primitives.string]);
+
+    let sym_name = store.intern_name("sym");
+    let key_symbol = PropKey::Symbol(sym_name);
+
+    // Union is OR: (string | symbol) accepts symbol keys.
+    assert!(indexer_accepts_key(&key_symbol, union_key, &store));
+
+    // Intersection is AND: (string | symbol) & string behaves like `string`, so it rejects symbol keys.
+    assert!(!indexer_accepts_key(&key_symbol, intersection_key, &store));
+  }
+
+  #[test]
+  fn indexer_accepts_key_string_special_case_is_preserved_through_intersection() {
+    let store = TypeStore::new();
+    let primitives = store.primitive_ids();
+
+    // (string | number) & string should behave like `string`: it accepts numeric property names.
+    let intersection_key = store.intersection(vec![
+      store.union(vec![primitives.string, primitives.number]),
+      primitives.string,
+    ]);
+    assert!(indexer_accepts_key(
+      &PropKey::Number(0),
+      intersection_key,
+      &store
+    ));
   }
 }
