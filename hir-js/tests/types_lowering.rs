@@ -612,6 +612,14 @@ fn union_does_not_dedup_distinct_computed_string_property_names() {
 }
 
 #[test]
+fn union_does_not_dedup_distinct_computed_template_property_names() {
+  let result = lower_from_source(r#"type A = { [`foo`]: string } | { [`bar`]: string };"#)
+    .expect("lower");
+  let members = union_member_first_property_names(&result, "A");
+  assert_eq!(members, vec!["bar", "foo"]);
+}
+
+#[test]
 fn union_canonicalization_is_span_stable_for_type_literals() {
   let base = lower_from_source("type A = ({ a: string } | { b: number });").expect("lower");
   let with_padding =

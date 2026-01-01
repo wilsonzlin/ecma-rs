@@ -49,6 +49,7 @@ use parse_js::ast::expr::ClassExpr as AstClassExpr;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
+use parse_js::ast::expr::lit::LitTemplatePart;
 use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, ParamDecl};
@@ -1050,6 +1051,16 @@ impl<'a> TypeLowerer<'a> {
       TypePropertyKey::Computed(expr) => match &*expr.stx {
         Expr::LitStr(lit) => PropertyName::String(lit.stx.value.clone()),
         Expr::LitNum(lit) => PropertyName::Number(lit.stx.value.to_string()),
+        Expr::LitTemplate(tmpl) => {
+          let mut out = String::new();
+          for part in tmpl.stx.parts.iter() {
+            match part {
+              LitTemplatePart::String(s) => out.push_str(s),
+              LitTemplatePart::Substitution(_) => return PropertyName::Computed,
+            }
+          }
+          PropertyName::String(out)
+        }
         _ => PropertyName::Computed,
       },
     }
