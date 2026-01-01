@@ -495,3 +495,41 @@ declare class Bar extends import("./ambient_mod").Base {
     "ambient class type references should queue referenced module"
   );
 }
+
+#[test]
+fn type_imports_in_lib_files_queue_dependencies() {
+  let entry = FileKey::new("entry.ts");
+  let dep = FileKey::new("dep.ts");
+  let lib = FileKey::new("lib:custom");
+
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.include_dom = false;
+
+  let host = TestHost::new(options)
+    .with_file(entry.clone(), "export const value = 1;")
+    .with_file(dep.clone(), "export type Thing = number;")
+    .with_lib(LibFile {
+      key: lib.clone(),
+      name: Arc::from("custom.d.ts"),
+      kind: FileKind::Dts,
+      text: Arc::from(r#"export type FromDep = import("./dep").Thing;"#),
+    })
+    .link(lib.clone(), "./dep", dep.clone());
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let entry_id = program.file_id(&entry).expect("entry file id");
+  let dep_id = program
+    .file_id(&dep)
+    .expect("dep should be discovered via import() type inside a lib file");
+
+  let mut expected = vec![entry_id, dep_id];
+  expected.sort_by_key(|id| id.0);
+  assert_eq!(program.reachable_files(), expected);
+
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+}

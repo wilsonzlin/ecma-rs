@@ -6041,6 +6041,7 @@ impl ProgramState {
           };
           self.local_semantics.insert(file_id, locals);
           self.asts.insert(file_id, Arc::clone(&ast));
+          self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);
           let lowered = db::lower_hir(&self.typecheck_db, file_id);
           let Some(lowered) = lowered.lowered else {
             continue;
