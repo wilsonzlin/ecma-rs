@@ -1153,11 +1153,13 @@ fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) ->
     files.insert(name, file.content.to_string());
   }
 
-  let root_names: Vec<String> = file_set
+  let mut root_names: Vec<String> = file_set
     .root_keys()
     .into_iter()
     .map(|key| key.as_str().to_string())
     .collect();
+  root_names.sort();
+  root_names.dedup();
 
   TscRequest {
     root_names,
