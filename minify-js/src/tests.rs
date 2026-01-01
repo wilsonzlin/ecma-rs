@@ -1103,7 +1103,11 @@ fn rewrites_enum_member_references_in_jsx_element_names_using_alias_when_enum_na
     Stmt::VarDecl(decl) => decl,
     other => panic!("expected enum alias var decl, got {other:?}"),
   };
-  let alias_declarator = alias_decl.stx.declarators.first().expect("alias declarator");
+  let alias_declarator = alias_decl
+    .stx
+    .declarators
+    .first()
+    .expect("alias declarator");
   match alias_declarator.pattern.stx.pat.stx.as_ref() {
     parse_js::ast::expr::pat::Pat::Id(id) => assert_eq!(id.stx.name, "__minify_ts_enum_E"),
     other => panic!("expected identifier pattern, got {other:?}"),
