@@ -1470,8 +1470,32 @@ impl<'a> Checker<'a> {
           }
         }
 
-        for diag in &resolution.diagnostics {
-          self.diagnostics.push(diag.clone());
+        let candidate_sigs = callable_signatures(self.store.as_ref(), callee_ty);
+        let allow_assignable_fallback = resolution.diagnostics.len() == 1
+          && resolution.diagnostics[0].code.as_str() == codes::NO_OVERLOAD.as_str()
+          && candidate_sigs.len() == 1;
+        let mut reported_assignability = false;
+        if allow_assignable_fallback {
+          if let Some(sig_id) = candidate_sigs.first().copied() {
+            let sig = self.store.signature(sig_id);
+            let before = self.diagnostics.len();
+            for (idx, arg) in call.stx.arguments.iter().enumerate() {
+              if let Some(param) = sig.params.get(idx) {
+                let arg_ty = arg_types
+                  .get(idx)
+                  .copied()
+                  .unwrap_or(self.store.primitive_ids().unknown);
+                self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+              }
+            }
+            reported_assignability = self.diagnostics.len() > before;
+          }
+        }
+
+        if !reported_assignability {
+          for diag in &resolution.diagnostics {
+            self.diagnostics.push(diag.clone());
+          }
         }
         if resolution.diagnostics.is_empty() {
           if let Some(sig_id) = resolution.signature {
@@ -1519,11 +1543,9 @@ impl<'a> Checker<'a> {
             }
           }
         }
-        let contextual_sig = resolution.signature.or_else(|| {
-          callable_signatures(self.store.as_ref(), callee_ty)
-            .into_iter()
-            .next()
-        });
+        let contextual_sig = resolution
+          .signature
+          .or_else(|| candidate_sigs.into_iter().next());
         if let Some(sig_id) = contextual_sig {
           let sig = self.store.signature(sig_id);
           for (idx, arg) in call.stx.arguments.iter().enumerate() {
@@ -1940,6 +1962,14 @@ impl<'a> Checker<'a> {
         .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
         .map(|expanded| self.member_type(expanded, prop))
         .unwrap_or(prim.unknown),
+      TypeKind::Callable { .. } if prop == "call" => {
+        let sigs = callable_signatures(self.store.as_ref(), obj);
+        if sigs.is_empty() {
+          prim.unknown
+        } else {
+          self.build_call_method_type(sigs)
+        }
+      }
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for candidate in shape.properties.iter() {
@@ -1956,6 +1986,9 @@ impl<'a> Checker<'a> {
             }
             _ => {}
           }
+        }
+        if prop == "call" && !shape.call_signatures.is_empty() {
+          return self.build_call_method_type(shape.call_signatures.clone());
         }
         shape
           .indexers
@@ -1996,6 +2029,33 @@ impl<'a> Checker<'a> {
       TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
       _ => prim.unknown,
     }
+  }
+
+  fn build_call_method_type(&self, sigs: Vec<SignatureId>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let mut overloads = Vec::new();
+    for sig_id in sigs {
+      let sig = self.store.signature(sig_id);
+      let this_arg = sig.this_param.unwrap_or(prim.any);
+      let mut params = Vec::with_capacity(sig.params.len() + 1);
+      params.push(SigParam {
+        name: None,
+        ty: this_arg,
+        optional: false,
+        rest: false,
+      });
+      params.extend(sig.params.clone());
+      let call_sig = Signature {
+        params,
+        ret: sig.ret,
+        type_params: sig.type_params.clone(),
+        this_param: None,
+      };
+      overloads.push(self.store.intern_signature(call_sig));
+    }
+    overloads.sort();
+    overloads.dedup();
+    self.store.intern_type(TypeKind::Callable { overloads })
   }
 
   fn array_literal_context(&self, expected: TypeId, arity: usize) -> Option<ArrayLiteralContext> {
@@ -3046,6 +3106,7 @@ impl<'a> Checker<'a> {
   }
 
   fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
+    let prim = self.store.primitive_ids();
     if matches!(self.store.type_kind(src), TypeKind::Any | TypeKind::Unknown)
       || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
     {
@@ -3088,11 +3149,40 @@ impl<'a> Checker<'a> {
         self.store.type_kind(dst)
       );
     }
+    let mut range = loc_to_range(self.file, expr.loc);
+    if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+      for member in obj.stx.members.iter() {
+        let (prop, key_loc) = match &member.stx.typ {
+          ObjMemberType::Valued {
+            key: ClassOrObjKey::Direct(key),
+            ..
+          } => (key.stx.key.clone(), Some(key.loc)),
+          ObjMemberType::Shorthand { id } => (id.stx.name.clone(), Some(id.loc)),
+          _ => continue,
+        };
+        let prop_src = self.member_type(src, &prop);
+        let prop_dst = self.member_type(dst, &prop);
+        if prop_src == prim.unknown || prop_dst == prim.unknown {
+          continue;
+        }
+        if !self.relate.is_assignable(prop_src, prop_dst) {
+          if let Some(loc) = key_loc {
+            let key_range = loc_to_range(self.file, loc);
+            range = TextRange::new(
+              key_range.start,
+              key_range.start.saturating_add(prop.len() as u32),
+            );
+          }
+          break;
+        }
+      }
+    }
+
     self.diagnostics.push(codes::TYPE_MISMATCH.error(
       "type mismatch",
       Span {
         file: self.file,
-        range: loc_to_range(self.file, expr.loc),
+        range,
       },
     ));
   }
