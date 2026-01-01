@@ -560,7 +560,17 @@ fn matches_discriminant_path(
           }
           _ => None,
         });
-      let prop_ty = prop_ty.or_else(|| shape.indexers.first().map(|idx| idx.value_type));
+      let prop_ty = prop_ty.or_else(|| {
+        let empty_name = store.intern_name(String::new());
+        let probe_key = match first {
+          PathSegment::String(_) => types_ts_interned::PropKey::String(empty_name),
+          PathSegment::Number(_) => types_ts_interned::PropKey::Number(0),
+        };
+        shape.indexers.iter().find_map(|idx| {
+          crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, store)
+            .then_some(idx.value_type)
+        })
+      });
       let Some(prop_ty) = prop_ty else {
         return false;
       };
@@ -629,11 +639,21 @@ pub fn narrow_by_in_check(
     }
     TypeKind::Object(obj) => {
       let shape = store.shape(store.object(obj).shape);
+      let empty_name = store.intern_name(String::new());
+      let probe_key = if prop.parse::<f64>().is_ok() {
+        types_ts_interned::PropKey::Number(0)
+      } else {
+        types_ts_interned::PropKey::String(empty_name)
+      };
+      let has_indexer = shape
+        .indexers
+        .iter()
+        .any(|idx| crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, store));
       let has_prop = shape.properties.iter().any(|p| match p.key {
         types_ts_interned::PropKey::String(name) => store.name(name) == prop,
         types_ts_interned::PropKey::Number(num) => num.to_string() == prop,
         _ => false,
-      }) || shape.indexers.first().is_some();
+      }) || has_indexer;
       if has_prop {
         yes.push(ty);
       } else {

@@ -3585,7 +3585,17 @@ fn lookup_interned_property_type(
           return Some(prop.data.ty);
         }
       }
-      shape.indexers.first().map(|idx| idx.value_type)
+      let probe_key = if name.parse::<f64>().is_ok() {
+        PropKey::Number(0)
+      } else {
+        PropKey::String(store.intern_name(String::new()))
+      };
+      for indexer in shape.indexers.iter() {
+        if crate::type_queries::indexer_accepts_key(&probe_key, indexer.key_type, store) {
+          return Some(indexer.value_type);
+        }
+      }
+      None
     }
     tti::TypeKind::Array { ty, .. } => {
       if name == "length" {

@@ -2810,6 +2810,7 @@ impl<'a> Checker<'a> {
     type_params: Vec<TypeParamDecl>,
   ) {
     let prim = self.store.primitive_ids();
+    let empty_name = self.store.intern_name(String::new());
     let value_is_any = matches!(self.store.type_kind(value), TypeKind::Any);
     let shape = match self.store.type_kind(value) {
       TypeKind::Object(obj_id) => Some(self.store.shape(self.store.object(obj_id).shape)),
@@ -2836,8 +2837,16 @@ impl<'a> Checker<'a> {
               }
             }
             if prop_ty == prim.unknown {
-              if let Some(idx) = shape.indexers.first() {
-                prop_ty = idx.value_type;
+              let probe_key = if key.parse::<f64>().is_ok() {
+                PropKey::Number(0)
+              } else {
+                PropKey::String(empty_name)
+              };
+              for idx in shape.indexers.iter() {
+                if crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, &self.store) {
+                  prop_ty = idx.value_type;
+                  break;
+                }
               }
             }
           }
