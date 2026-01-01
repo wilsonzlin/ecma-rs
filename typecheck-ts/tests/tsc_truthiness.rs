@@ -1,18 +1,92 @@
 use std::fs;
-use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::io::Read;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[derive(Debug)]
+enum CommandOutcome {
+  SpawnFailed,
+  TimedOut,
+  Output(Output),
+}
+
+fn reap_child_with_timeout(
+  child: &mut std::process::Child,
+  timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait()? {
+      Some(status) => return Ok(Some(status)),
+      None => {
+        if Instant::now() >= deadline {
+          return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+    }
+  }
+}
+
+fn output_with_timeout(mut command: Command, timeout: Duration) -> CommandOutcome {
+  command.stdin(Stdio::null());
+  command.stdout(Stdio::piped());
+  command.stderr(Stdio::piped());
+  let mut child = match command.spawn() {
+    Ok(child) => child,
+    Err(_) => return CommandOutcome::SpawnFailed,
+  };
+
+  let mut stdout = child.stdout.take().unwrap();
+  let mut stderr = child.stderr.take().unwrap();
+  let deadline = Instant::now() + timeout;
+
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) => {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        let _ = stderr.read_to_end(&mut err);
+        return CommandOutcome::Output(Output {
+          status,
+          stdout: out,
+          stderr: err,
+        });
+      }
+      Ok(None) => {
+        if Instant::now() >= deadline {
+          let _ = child.kill();
+          let _ = reap_child_with_timeout(&mut child, Duration::from_millis(200));
+          return CommandOutcome::TimedOut;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+      Err(_) => return CommandOutcome::SpawnFailed,
+    }
+  }
+}
 
 #[test]
 fn tsc_truthiness_baseline() {
-  let version = Command::new("tsc").arg("--version").output();
-  let Ok(version) = version else {
+  let mut version_cmd = Command::new("tsc");
+  version_cmd.arg("--version");
+  let version = output_with_timeout(version_cmd, Duration::from_secs(5));
+  let version = match version {
+    CommandOutcome::Output(output) => output,
+    CommandOutcome::SpawnFailed => {
+      eprintln!("skipping truthiness baseline: tsc not available");
+      return;
+    }
+    CommandOutcome::TimedOut => {
+      eprintln!("skipping truthiness baseline: tsc --version timed out");
+      return;
+    }
+  };
+  if !version.status.success() {
     eprintln!("skipping truthiness baseline: tsc not available");
     return;
   };
-  if !version.status.success() {
-    eprintln!("skipping truthiness baseline: tsc unusable");
-    return;
-  }
 
   let ts = r#"
 function stringNull(x: string | null) {
@@ -85,13 +159,25 @@ function falsyLiterals(x: "" | "a", y: 0 | 1, z: 0n | 1n) {
   path.push(format!("ts_truthiness_{unique}.ts"));
   fs::write(&path, ts).expect("write temp ts file");
 
-  let output = Command::new("tsc")
+  let mut tsc_cmd = Command::new("tsc");
+  tsc_cmd
     .args(["--pretty", "false", "--strict", "--noEmit"])
-    .arg(&path)
-    .output()
-    .expect("run tsc");
+    .arg(&path);
+  let output = output_with_timeout(tsc_cmd, Duration::from_secs(30));
 
   let _ = fs::remove_file(&path);
+
+  let output = match output {
+    CommandOutcome::Output(output) => output,
+    CommandOutcome::SpawnFailed => {
+      eprintln!("skipping truthiness baseline: tsc not available");
+      return;
+    }
+    CommandOutcome::TimedOut => {
+      eprintln!("skipping truthiness baseline: tsc invocation timed out");
+      return;
+    }
+  };
 
   assert!(
     output.status.success(),
