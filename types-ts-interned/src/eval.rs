@@ -524,25 +524,31 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     let raw_check = self.store.type_kind(check);
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
     if distributive {
-      if let TypeKind::Union(members) = self.store.type_kind(check_eval) {
-        let mut results = Vec::new();
-        for member in members {
-          let mut inner_subst = subst.clone();
-          if let TypeKind::TypeParam(param) = raw_check {
-            inner_subst = inner_subst.with(param, member);
+      match self.store.type_kind(check_eval) {
+        // Distributive conditional types distribute over unions; `never` behaves
+        // like an empty union and therefore yields `never`.
+        TypeKind::Never => return self.store.primitive_ids().never,
+        TypeKind::Union(members) => {
+          let mut results = Vec::new();
+          for member in members {
+            let mut inner_subst = subst.clone();
+            if let TypeKind::TypeParam(param) = raw_check {
+              inner_subst = inner_subst.with(param, member);
+            }
+            results.push(self.evaluate_conditional(
+              member,
+              extends,
+              true_ty,
+              false_ty,
+              false,
+              &inner_subst,
+              depth + 1,
+            ));
           }
-          results.push(self.evaluate_conditional(
-            member,
-            extends,
-            true_ty,
-            false_ty,
-            false,
-            &inner_subst,
-            depth + 1,
-          ));
+          return self.store.union(results);
         }
-        return self.store.union(results);
-      }
+        _ => {}
+      };
     }
 
     let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);

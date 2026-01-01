@@ -71,6 +71,38 @@ fn conditional_distributes_over_union_with_substitution() {
 }
 
 #[test]
+fn distributive_conditional_never_is_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    DefId(0),
+    ExpandedType {
+      params: vec![TypeParamId(0)],
+      ty: cond,
+    },
+  );
+
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: vec![primitives.never],
+  });
+
+  let mut eval = evaluator(store.clone(), &expander);
+  let result = eval.evaluate(ref_ty);
+  assert_eq!(result, primitives.never);
+}
+
+#[test]
 fn distributive_conditional_substitutes_extends_per_member() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
