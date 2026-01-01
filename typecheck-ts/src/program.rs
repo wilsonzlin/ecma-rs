@@ -13159,7 +13159,10 @@ function onlyObjects(val: object | number) {
       })
       .expect("inner body");
 
-    let inner_meta = state.body_map.get(&inner_initializer_body).expect("inner meta");
+    let inner_meta = state
+      .body_map
+      .get(&inner_initializer_body)
+      .expect("inner meta");
     assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
 
     let parent = state
@@ -13210,7 +13213,10 @@ function onlyObjects(val: object | number) {
           .flatten()
       })
       .expect("inner body");
-    let inner_meta = state.body_map.get(&inner_initializer_body).expect("inner meta");
+    let inner_meta = state
+      .body_map
+      .get(&inner_initializer_body)
+      .expect("inner meta");
     assert_eq!(inner_meta.kind, HirBodyKind::Initializer);
 
     let parent = state
@@ -13243,7 +13249,9 @@ function onlyObjects(val: object | number) {
     };
     assert_eq!(val_name, Some("val"));
 
-    let only_objects_result = state.check_body(only_objects_body).expect("check onlyObjects");
+    let only_objects_result = state
+      .check_body(only_objects_body)
+      .expect("check onlyObjects");
     let val_pat_ty = only_objects_result
       .pat_type(PatId(val_pat_id.0))
       .expect("val pat type");
