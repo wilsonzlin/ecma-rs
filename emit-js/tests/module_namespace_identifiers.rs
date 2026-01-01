@@ -150,6 +150,14 @@ fn export_type_star_alias_can_be_string_literal() {
 }
 
 #[test]
+fn export_type_star_alias_can_be_default_keyword() {
+  roundtrip(
+    "export type * as default from \"mod\";",
+    "export type*as default from\"mod\";",
+  );
+}
+
+#[test]
 fn string_import_name_still_requires_as_when_alias_matches() {
   roundtrip(
     "import { \"a-b\" as \"a-b\" } from \"x\";",
