@@ -2300,12 +2300,19 @@ impl<'a> Checker<'a> {
       }
     }
 
-    let mut expected_child_ty = expected.unwrap_or(prim.unknown);
-    if has_spread_child || meaningful > 1 {
-      if let TypeKind::Array { ty, .. } = self.store.type_kind(expected_child_ty) {
-        expected_child_ty = ty;
-      }
-    }
+    let expected_children_ty = expected.unwrap_or(prim.unknown);
+    let expected_spread_ty = if has_spread_child
+      && self.spread_element_type(expected_children_ty) != prim.unknown
+    {
+      expected_children_ty
+    } else {
+      prim.unknown
+    };
+    let expected_child_ty = if has_spread_child || meaningful > 1 {
+      self.spread_element_type(expected_children_ty)
+    } else {
+      expected_children_ty
+    };
 
     for child in children {
       match child {
@@ -2319,7 +2326,7 @@ impl<'a> Checker<'a> {
             continue;
           }
           let expr_ty = if expr.stx.spread {
-            self.check_expr(&expr.stx.value)
+            self.check_expr_with_expected(&expr.stx.value, expected_spread_ty)
           } else {
             self.check_expr_with_expected(&expr.stx.value, expected_child_ty)
           };
@@ -3390,6 +3397,16 @@ impl<'a> Checker<'a> {
   fn spread_element_type(&self, ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
     match self.store.type_kind(ty) {
+      TypeKind::Any => prim.any,
+      TypeKind::Unknown => prim.unknown,
+      TypeKind::Union(members) => {
+        let elems: Vec<_> = members.into_iter().map(|m| self.spread_element_type(m)).collect();
+        self.store.union(elems)
+      }
+      TypeKind::Intersection(members) => {
+        let elems: Vec<_> = members.into_iter().map(|m| self.spread_element_type(m)).collect();
+        self.store.intersection(elems)
+      }
       TypeKind::Array { ty, .. } => ty,
       TypeKind::Tuple(elems) => {
         let members: Vec<_> = elems.into_iter().map(|e| e.ty).collect();
