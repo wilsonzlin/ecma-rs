@@ -350,6 +350,15 @@ pub struct DeclData {
   pub is_ambient: bool,
   pub is_global: bool,
   pub order: u32,
+  /// Alias metadata for declarations that create a local binding referencing
+  /// another entity (e.g. `import Foo = Bar.Baz`).
+  pub alias: Option<AliasTarget>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AliasTarget {
+  /// TypeScript `import Foo = Bar.Baz` / `export import Foo = Bar.Baz`.
+  EntityName { path: Vec<String>, span: TextRange },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -524,6 +533,10 @@ impl SymbolTable {
     self.decls.get(&id).expect("decl exists for id")
   }
 
+  pub fn decl_alias(&self, decl: DeclId) -> Option<&AliasTarget> {
+    self.decl(decl).alias.as_ref()
+  }
+
   /// Find the symbol that owns a declaration for the given [`DefId`] in the
   /// requested namespace.
   pub fn symbol_for_def(&self, def: DefId, ns: Namespace) -> Option<SymbolId> {
@@ -552,20 +565,34 @@ impl SymbolTable {
     is_global: bool,
     order: u32,
     def_id: Option<DefId>,
+    alias: Option<AliasTarget>,
   ) -> DeclId {
     let def = def_id.unwrap_or_else(|| synthetic_def_id(file, &name, &kind, order));
     let id = stable_decl_id(file, &name, &kind, namespaces, def, order);
-    self.decls.entry(id).or_insert(DeclData {
-      id,
-      def_id: def,
-      file,
-      name,
-      kind,
-      namespaces,
-      is_ambient,
-      is_global,
-      order,
-    });
+    if let Some(existing) = self.decls.get(&id) {
+      debug_assert_eq!(
+        existing.alias.as_ref(),
+        alias.as_ref(),
+        "decl alias mismatch for {:?}",
+        id
+      );
+    } else {
+      self.decls.insert(
+        id,
+        DeclData {
+          id,
+          def_id: def,
+          file,
+          name,
+          kind,
+          namespaces,
+          is_ambient,
+          is_global,
+          order,
+          alias,
+        },
+      );
+    }
     id
   }
 
@@ -689,6 +716,21 @@ impl TsProgramSemantics {
       return &[];
     }
     sym.decls_for(ns).as_slice()
+  }
+
+  pub fn decl_alias(&self, decl: DeclId) -> Option<&AliasTarget> {
+    self.symbols.decl_alias(decl)
+  }
+
+  pub fn symbol_alias_target(&self, symbol: SymbolId, ns: Namespace) -> Option<&AliasTarget> {
+    let sym = self.symbols.symbol(symbol);
+    if !ns.is_single() || !sym.namespaces.contains(ns) {
+      return None;
+    }
+    sym
+      .decls_for(ns)
+      .iter()
+      .find_map(|decl| self.symbols.decl_alias(*decl))
   }
 
   pub fn global_symbols(&self) -> &BTreeMap<String, SymbolGroup> {

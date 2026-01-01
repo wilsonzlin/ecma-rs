@@ -514,6 +514,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         decl.is_global,
         order,
         Some(decl.def_id),
+        None,
       );
       let _symbol_id = add_decl_to_groups(
         &mut state.symbols,
@@ -668,7 +669,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           };
           self.add_import_binding(state, owner, file_id, entry);
         }
-        ImportEqualsTarget::EntityName { .. } => {
+        ImportEqualsTarget::EntityName { path, span } => {
           let namespaces = Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE;
           let order = import.local_span.start;
           let decl_id = self.symbols.alloc_decl(
@@ -680,6 +681,10 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             false,
             order,
             import_def_ids.get(&import.local).copied(),
+            Some(AliasTarget::EntityName {
+              path: path.clone(),
+              span: *span,
+            }),
           );
           add_decl_to_groups(
             &mut state.symbols,
@@ -1029,6 +1034,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       true,
       export.span.range.start,
       None,
+      None,
     );
     add_decl_to_groups(
       &mut self.global_symbols,
@@ -1086,6 +1092,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       false,
       order,
       entry.def_id,
+      None,
     );
     let symbol = add_decl_to_groups(
       &mut state.symbols,

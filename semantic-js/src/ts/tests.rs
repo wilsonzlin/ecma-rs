@@ -772,6 +772,95 @@ fn import_equals_require_binds_namespace_origin() {
 }
 
 #[test]
+fn import_equals_entity_name_records_alias_target() {
+  let file = FileId(72);
+
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::ImportBinding, Exported::No));
+  hir.import_equals.push(ImportEquals {
+    local: "Foo".to_string(),
+    local_span: span(1),
+    target: ImportEqualsTarget::EntityName {
+      path: vec!["Bar".to_string(), "Baz".to_string()],
+      span: span(2),
+    },
+    is_exported: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let foo_symbol = semantics
+    .resolve_in_module(file, "Foo", Namespace::VALUE)
+    .expect("import equals binding present");
+  let decls = semantics.symbol_decls(foo_symbol, Namespace::VALUE);
+  assert_eq!(decls.len(), 1);
+  match semantics
+    .decl_alias(decls[0])
+    .expect("alias metadata present")
+  {
+    AliasTarget::EntityName {
+      path,
+      span: alias_span,
+    } => {
+      assert_eq!(path, &vec!["Bar".to_string(), "Baz".to_string()]);
+      assert_eq!(*alias_span, span(2));
+    }
+  }
+}
+
+#[test]
+fn export_import_equals_entity_name_preserves_alias_target() {
+  let file = FileId(73);
+
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::ImportBinding, Exported::No));
+  hir.import_equals.push(ImportEquals {
+    local: "Foo".to_string(),
+    local_span: span(1),
+    target: ImportEqualsTarget::EntityName {
+      path: vec!["Bar".to_string(), "Baz".to_string()],
+      span: span(2),
+    },
+    is_exported: true,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics.exports_of(file);
+  assert!(exports.contains_key("Foo"));
+
+  let symbols = semantics.symbols();
+  let exported_symbol = exports
+    .get("Foo")
+    .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
+    .expect("Foo exported in value namespace");
+  let decls = semantics.symbol_decls(exported_symbol, Namespace::VALUE);
+  assert_eq!(decls.len(), 1);
+  match semantics
+    .decl_alias(decls[0])
+    .expect("alias metadata present on exported decl")
+  {
+    AliasTarget::EntityName {
+      path,
+      span: alias_span,
+    } => {
+      assert_eq!(path, &vec!["Bar".to_string(), "Baz".to_string()]);
+      assert_eq!(*alias_span, span(2));
+    }
+  }
+}
+
+#[test]
 fn unresolved_import_reports_specifier_span() {
   let file = FileId(50);
   let mut hir = HirFile::module(file);
