@@ -394,6 +394,93 @@ fn distributive_conditional_substitutes_extends_per_member() {
 }
 
 #[test]
+fn distributive_conditional_substitutes_in_extends_per_member() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let name_a = store.intern_name("a");
+
+  let m1_shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_a),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let m1 = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: m1_shape }),
+  ));
+
+  let m2_shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_a),
+      data: PropData {
+        ty: m1,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let m2 = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: m2_shape }),
+  ));
+
+  let param = TypeParamId(0);
+  let param_ty = store.intern_type(TypeKind::TypeParam(param));
+  let extends_shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_a),
+      data: PropData {
+        ty: param_ty,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let extends_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: extends_shape }),
+  ));
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: param_ty,
+    extends: extends_ty,
+    true_ty: primitives.number,
+    false_ty: primitives.string,
+    distributive: true,
+  });
+
+  let union = store.union(vec![m1, m2]);
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate_with_bindings(cond, [(param, union)]);
+
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
 fn conditional_uses_structural_object_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

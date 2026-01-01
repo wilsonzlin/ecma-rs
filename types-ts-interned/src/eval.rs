@@ -711,8 +711,6 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       _ => None,
     };
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
-    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
-
     // TypeScript conditional types have a few special cases that are not
     // captured by simple assignability checks:
     //
@@ -720,6 +718,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     //   `never` (distribution over an empty union).
     // - `any` is treated as both assignable and not-assignable, producing the
     //   union of both branches.
+    //
+    // Note: distribution must occur before any deferral logic (returning an
+    // unevaluated conditional) so that `extends` is evaluated with the per-union
+    // member substitution (e.g. `T -> member`) rather than once with the full
+    // union binding.
     match self.store.type_kind(check_eval) {
       TypeKind::Never if distributive => return self.store.primitive_ids().never,
       TypeKind::Any => {
@@ -748,6 +751,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
       _ => {}
     }
+
+    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
 
     // Conditional types are only reducible once their operands are known.
     //
