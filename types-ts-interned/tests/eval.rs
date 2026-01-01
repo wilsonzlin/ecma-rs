@@ -114,7 +114,7 @@ fn conditional_with_infer_in_extends_is_deferred() {
 }
 
 #[test]
-fn distributive_conditional_never_is_never() {
+fn distributive_conditional_instantiated_with_never_yields_never() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
@@ -126,27 +126,14 @@ fn distributive_conditional_never_is_never() {
     distributive: true,
   });
 
-  let mut expander = MockExpander::default();
-  expander.insert(
-    DefId(0),
-    ExpandedType {
-      params: vec![TypeParamId(0)],
-      ty: cond,
-    },
-  );
-
-  let ref_ty = store.intern_type(TypeKind::Ref {
-    def: DefId(0),
-    args: vec![primitives.never],
-  });
-
-  let mut eval = evaluator(store.clone(), &expander);
-  let result = eval.evaluate(ref_ty);
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate_with_bindings(cond, vec![(TypeParamId(0), primitives.never)]);
   assert_eq!(result, primitives.never);
 }
 
 #[test]
-fn conditional_any_is_union_of_branches() {
+fn conditional_checked_type_any_yields_union_of_branches() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 

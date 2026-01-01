@@ -524,42 +524,44 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       _ => None,
     };
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
-    // In TypeScript, `any` in the checked position makes the conditional type
-    // evaluate to a union of both branches.
-    if matches!(self.store.type_kind(check_eval), TypeKind::Any) {
-      let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
-      let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
-      return self.store.union(vec![true_eval, false_eval]);
-    }
-    if distributive {
-      match self.store.type_kind(check_eval) {
-        // Distributive conditional types distribute over unions; `never` behaves
-        // like an empty union and therefore yields `never`.
-        TypeKind::Never => return self.store.primitive_ids().never,
-        TypeKind::Union(members) => {
-          let mut results = Vec::new();
-          for member in members {
-            let mut inner_subst = subst.clone();
-            if let Some(param) = raw_check_param {
-              inner_subst = inner_subst.with(param, member);
-            }
-            results.push(self.evaluate_conditional(
-              member,
-              extends,
-              true_ty,
-              false_ty,
-              false,
-              &inner_subst,
-              depth + 1,
-            ));
-          }
-          return self.store.union(results);
-        }
-        _ => {}
+    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
+
+    // TypeScript conditional types have a few special cases that are not
+    // captured by simple assignability checks:
+    //
+    // - Distributive conditional types instantiated with `never` evaluate to
+    //   `never` (distribution over an empty union).
+    // - `any` is treated as both assignable and not-assignable, producing the
+    //   union of both branches.
+    match self.store.type_kind(check_eval) {
+      TypeKind::Never if distributive => return self.store.primitive_ids().never,
+      TypeKind::Any => {
+        let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
+        let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
+        return self.store.union(vec![true_eval, false_eval]);
       }
+      TypeKind::Union(members) if distributive => {
+        let mut results = Vec::new();
+        for member in members {
+          let mut inner_subst = subst.clone();
+          if let Some(param) = raw_check_param {
+            inner_subst = inner_subst.with(param, member);
+          }
+          results.push(self.evaluate_conditional(
+            member,
+            extends,
+            true_ty,
+            false_ty,
+            false,
+            &inner_subst,
+            depth + 1,
+          ));
+        }
+        return self.store.union(results);
+      }
+      _ => {}
     }
 
-    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
     // Conditional types are only reducible once their operands are known.
     //
     // When we cannot prove assignability (most notably due to unsubstituted type
