@@ -81,6 +81,14 @@ fn reexport_default_can_be_aliased() {
 }
 
 #[test]
+fn reexport_default_can_be_aliased_to_string_literal() {
+  roundtrip(
+    r#"export { default as "a-b" } from "mod";"#,
+    r#"export{default as"a-b"}from"mod";"#,
+  );
+}
+
+#[test]
 fn reexport_named_can_be_aliased_as_default() {
   roundtrip(
     "export { foo as default } from \"mod\";",
@@ -89,10 +97,34 @@ fn reexport_named_can_be_aliased_as_default() {
 }
 
 #[test]
+fn reexport_string_name_can_be_aliased_as_default() {
+  roundtrip(
+    r#"export { "a-b" as default } from "mod";"#,
+    r#"export{"a-b"as default}from"mod";"#,
+  );
+}
+
+#[test]
 fn import_named_default_requires_as() {
   roundtrip(
     "import { default as foo } from \"mod\";",
     "import{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
+fn import_named_default_can_have_string_literal_alias() {
+  roundtrip(
+    r#"import { default as "a-b" } from "mod";"#,
+    r#"import{default as"a-b"}from"mod";"#,
+  );
+}
+
+#[test]
+fn import_type_named_default_can_have_string_literal_alias() {
+  roundtrip(
+    r#"import type { default as "a-b" } from "mod";"#,
+    r#"import type{default as"a-b"}from"mod";"#,
   );
 }
 

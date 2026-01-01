@@ -84,6 +84,22 @@ fn hir_emits_default_reexport_with_identifier_alias() {
 }
 
 #[test]
+fn hir_emits_default_reexport_with_string_literal_alias() {
+  roundtrip(
+    r#"export { default as "a-b" } from "mod";"#,
+    r#"export{default as"a-b"}from"mod";"#,
+  );
+}
+
+#[test]
+fn hir_emits_string_reexport_as_default() {
+  roundtrip(
+    r#"export { "a-b" as default } from "mod";"#,
+    r#"export{"a-b"as default}from"mod";"#,
+  );
+}
+
+#[test]
 fn hir_emits_named_reexport_as_default() {
   roundtrip(
     "export { foo as default } from \"mod\";",
@@ -96,6 +112,14 @@ fn hir_emits_named_import_of_default_with_alias() {
   roundtrip(
     "import { default as foo } from \"mod\";",
     "import{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
+fn hir_emits_named_import_of_default_with_string_literal_alias() {
+  roundtrip(
+    r#"import { default as "a-b" } from "mod";"#,
+    r#"import{default as"a-b"}from"mod";"#,
   );
 }
 
