@@ -952,63 +952,59 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         MappedModifier::Remove => false,
       };
 
-      let Some(mut remapped_keys) =
-        self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1)
-      else {
-        continue;
+      let remap_keys = self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1);
+      // If we cannot determine the remapped keys precisely (e.g. template
+      // literal explosion), fall back to the pre-existing behavior and keep the
+      // original mapped key. This is intentionally conservative.
+      let remap_keys = match remap_keys {
+        KeySet::Unknown => KeySet::known(vec![entry.key.clone()], &self.store),
+        other => other,
       };
-      if remapped_keys.is_empty() {
-        let mut value_ty = value_ty;
-        if optional {
-          value_ty = self
-            .store
-            .union(vec![value_ty, self.store.primitive_ids().undefined]);
-        }
-        match entry.key {
-          Key::String => {
-            indexers.push(crate::Indexer {
-              key_type: self.store.primitive_ids().string,
-              value_type: value_ty,
-              readonly,
-            });
-            continue;
-          }
-          Key::Number => {
-            indexers.push(crate::Indexer {
-              key_type: self.store.primitive_ids().number,
-              value_type: value_ty,
-              readonly,
-            });
-            continue;
-          }
-          Key::Symbol => {
-            indexers.push(crate::Indexer {
-              key_type: self.store.primitive_ids().symbol,
-              value_type: value_ty,
-              readonly,
-            });
-            continue;
-          }
-          Key::Literal(prop_key) => remapped_keys.push(prop_key),
-        }
-      }
-      if remapped_keys.is_empty() {
+
+      let KeySet::Known(keys) = remap_keys else {
+        unreachable!("remap_keys should be normalized above");
+      };
+      if keys.is_empty() {
         continue;
       }
 
-      for prop_key in remapped_keys {
-        properties.push(Property {
-          key: prop_key,
-          data: PropData {
-            ty: value_ty,
-            optional,
+      let mut index_value_ty = value_ty;
+      if optional {
+        index_value_ty = self
+          .store
+          .union(vec![index_value_ty, self.store.primitive_ids().undefined]);
+      }
+
+      for key in keys {
+        match key {
+          Key::String => indexers.push(crate::Indexer {
+            key_type: self.store.primitive_ids().string,
+            value_type: index_value_ty,
             readonly,
-            accessibility: None,
-            is_method: false,
-            origin: None,
-            declared_on: None,
-          },
-        });
+          }),
+          Key::Number => indexers.push(crate::Indexer {
+            key_type: self.store.primitive_ids().number,
+            value_type: index_value_ty,
+            readonly,
+          }),
+          Key::Symbol => indexers.push(crate::Indexer {
+            key_type: self.store.primitive_ids().symbol,
+            value_type: index_value_ty,
+            readonly,
+          }),
+          Key::Literal(prop_key) => properties.push(Property {
+            key: prop_key,
+            data: PropData {
+              ty: value_ty,
+              optional,
+              readonly,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          }),
+        }
       }
     }
 
@@ -1031,39 +1027,16 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     entry: &Key,
     subst: &Substitution,
     depth: usize,
-  ) -> Option<Vec<PropKey>> {
+  ) -> KeySet {
     let remap_ty = mapped.as_type.or(mapped.name_type);
     let Some(remap_ty) = remap_ty else {
-      return Some(Vec::new());
+      return KeySet::known(vec![entry.clone()], &self.store);
     };
     let key_tys = self.mapped_key_type_ids(entry);
     let mut inner_subst = subst.clone();
     inner_subst = inner_subst.with(mapped.param, key_tys.original);
     let evaluated = self.evaluate_with_subst(remap_ty, &inner_subst, depth + 1);
-
-    if matches!(self.store.type_kind(evaluated), TypeKind::Never) {
-      return None;
-    }
-
-    Some(self.keys_to_prop_keys(evaluated))
-  }
-
-  fn keys_to_prop_keys(&mut self, ty: TypeId) -> Vec<PropKey> {
-    match self.store.type_kind(ty) {
-      TypeKind::Union(members) => members
-        .into_iter()
-        .flat_map(|member| self.keys_to_prop_keys(member))
-        .collect(),
-      TypeKind::StringLiteral(id) => vec![PropKey::String(id)],
-      TypeKind::NumberLiteral(num) => vec![PropKey::Number(num.0 as i64)],
-      TypeKind::TemplateLiteral(tpl) => self
-        .compute_template_strings(&tpl, &Substitution::empty(), 0)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|s| PropKey::String(self.store.intern_name(s)))
-        .collect(),
-      _ => Vec::new(),
-    }
+    self.keys_from_index_type(evaluated)
   }
 
   fn mapped_key_type_ids(&self, key: &Key) -> MappedKeyTypes {
@@ -1301,6 +1274,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         KeySet::known(keys, &self.store)
       }
+      TypeKind::Never => KeySet::known(Vec::new(), &self.store),
       TypeKind::StringLiteral(id) => {
         KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store)
       }

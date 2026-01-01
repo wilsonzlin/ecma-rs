@@ -1110,6 +1110,110 @@ fn mapped_type_remap_as_never_filters_keys() {
 }
 
 #[test]
+fn mapped_as_string_produces_string_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: key_a,
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(primitives.string),
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 1);
+  let indexer = &shape.indexers[0];
+  assert_eq!(indexer.key_type, primitives.string);
+  assert_eq!(indexer.value_type, primitives.number);
+}
+
+#[test]
+fn mapped_as_number_produces_number_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: key_a,
+    value: primitives.boolean,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(primitives.number),
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 1);
+  let indexer = &shape.indexers[0];
+  assert_eq!(indexer.key_type, primitives.number);
+  assert_eq!(indexer.value_type, primitives.boolean);
+}
+
+#[test]
+fn mapped_as_union_emits_indexer_and_literals() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key_a_name = store.intern_name("a");
+  let key_a = store.intern_type(TypeKind::StringLiteral(key_a_name));
+
+  let literal_num = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(123.0)));
+  let as_union = store.union(vec![primitives.string, literal_num]);
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: key_a,
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(as_union),
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert_eq!(shape.indexers.len(), 1);
+  assert_eq!(shape.indexers[0].key_type, primitives.string);
+  assert_eq!(shape.indexers[0].value_type, primitives.number);
+
+  assert_eq!(shape.properties.len(), 1);
+  assert_eq!(shape.properties[0].key, PropKey::Number(123));
+  assert_eq!(shape.properties[0].data.ty, primitives.number);
+  assert!(!shape
+    .properties
+    .iter()
+    .any(|prop| prop.key == PropKey::String(key_a_name)));
+}
+
+#[test]
 fn template_literal_distributes_over_union_parts() {
   let store = TypeStore::new();
 
