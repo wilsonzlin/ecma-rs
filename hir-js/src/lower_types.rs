@@ -1250,7 +1250,6 @@ impl<'a> TypeLowerer<'a> {
           .elements
           .iter()
           .map(|el| TupleElementKey {
-            label: el.label.map(|id| self.name_id_to_string(id)),
             optional: el.optional,
             rest: el.rest,
             ty: self.type_expr_sort_key(el.ty, cache, in_progress),
@@ -1737,7 +1736,6 @@ struct IndexSignatureKey {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TupleElementKey {
-  label: Option<String>,
   optional: bool,
   rest: bool,
   ty: TypeSortKey,
