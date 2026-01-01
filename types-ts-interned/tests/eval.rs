@@ -1849,6 +1849,39 @@ fn keyof_string_indexer_includes_number() {
 }
 
 #[test]
+fn keyof_intersection_indexer_key_behaves_like_string() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  // key_type: (string | number) & string
+  let key_type = store.intersection(vec![
+    store.union(vec![primitives.string, primitives.number]),
+    primitives.string,
+  ]);
+
+  let shape = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type,
+      value_type: primitives.boolean,
+      readonly: false,
+    }],
+  });
+  let obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
+
+  let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(obj)));
+  let TypeKind::Union(members) = store.type_kind(evaluated) else {
+    panic!("expected union, got {:?}", store.type_kind(evaluated));
+  };
+
+  assert!(members.contains(&primitives.string));
+  assert!(members.contains(&primitives.number));
+  assert_eq!(members.len(), 2);
+}
+
+#[test]
 fn keyof_union_with_disjoint_keys_is_never() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

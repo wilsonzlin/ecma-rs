@@ -1406,13 +1406,20 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             })
             .or_insert((prop.data.optional, prop.data.readonly));
         }
+        let dummy_name = self.store.intern_name("");
         for idxer in shape.indexers.iter() {
-          let keys: &[Key] = match self.store.type_kind(idxer.key_type) {
-            TypeKind::String => &[Key::String, Key::Number],
-            TypeKind::Number => &[Key::Number],
-            TypeKind::Symbol | TypeKind::UniqueSymbol => &[Key::Symbol],
-            _ => continue,
-          };
+          // Index signatures can use non-primitive key types (e.g. `(string | number) & string`),
+          // so derive the broad keys they accept by probing with representative property keys.
+          let mut keys = Vec::new();
+          if self.indexer_accepts_key(&PropKey::String(dummy_name), idxer.key_type) {
+            keys.push(Key::String);
+          }
+          if self.indexer_accepts_key(&PropKey::Number(0), idxer.key_type) {
+            keys.push(Key::Number);
+          }
+          if self.indexer_accepts_key(&PropKey::Symbol(dummy_name), idxer.key_type) {
+            keys.push(Key::Symbol);
+          }
           for key in keys {
             merged
               .entry(key.clone())
@@ -1493,15 +1500,16 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         for prop in shape.properties.iter() {
           keys.push(Key::Literal(prop.key.clone()));
         }
+        let dummy_name = self.store.intern_name("");
         for idx in shape.indexers.iter() {
-          match self.store.type_kind(idx.key_type) {
-            TypeKind::String => {
-              keys.push(Key::String);
-              keys.push(Key::Number);
-            }
-            TypeKind::Number => keys.push(Key::Number),
-            TypeKind::Symbol | TypeKind::UniqueSymbol => keys.push(Key::Symbol),
-            _ => {}
+          if self.indexer_accepts_key(&PropKey::String(dummy_name), idx.key_type) {
+            keys.push(Key::String);
+          }
+          if self.indexer_accepts_key(&PropKey::Number(0), idx.key_type) {
+            keys.push(Key::Number);
+          }
+          if self.indexer_accepts_key(&PropKey::Symbol(dummy_name), idx.key_type) {
+            keys.push(Key::Symbol);
           }
         }
         KeySet::known(keys, &self.store)
