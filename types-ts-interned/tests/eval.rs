@@ -71,6 +71,61 @@ fn conditional_distributes_over_union_with_substitution() {
 }
 
 #[test]
+fn distributive_conditional_substitutes_extends_per_member() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tp = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+
+  // Inner conditional is intentionally non-distributive (check is wrapped in an array)
+  // but still references the same type parameter.
+  let inner_cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::Array {
+      ty: tp,
+      readonly: false,
+    }),
+    extends: store.intern_type(TypeKind::Array {
+      ty: primitives.string,
+      readonly: false,
+    }),
+    true_ty: primitives.number,
+    false_ty: primitives.string,
+    distributive: false,
+  });
+
+  let outer_cond = store.intern_type(TypeKind::Conditional {
+    check: tp,
+    extends: inner_cond,
+    true_ty: primitives.number,
+    false_ty: primitives.string,
+    distributive: true,
+  });
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    DefId(0),
+    ExpandedType {
+      params: vec![TypeParamId(0)],
+      ty: outer_cond,
+    },
+  );
+
+  let arg_union = store.union(vec![primitives.string, primitives.number]);
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: vec![arg_union],
+  });
+
+  // Correct distributive semantics must re-evaluate the `extends` clause with the
+  // per-member substitution. If it incorrectly reuses the union-substituted
+  // `extends` type, the string branch would spuriously become assignable and
+  // produce `number | string` here.
+  let mut eval = evaluator(store.clone(), &expander);
+  let result = eval.evaluate(ref_ty);
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
 fn conditional_uses_structural_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

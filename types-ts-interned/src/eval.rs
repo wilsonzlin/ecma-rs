@@ -523,7 +523,6 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) -> TypeId {
     let raw_check = self.store.type_kind(check);
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
-    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
     if distributive {
       if let TypeKind::Union(members) = self.store.type_kind(check_eval) {
         let mut results = Vec::new();
@@ -534,7 +533,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           }
           results.push(self.evaluate_conditional(
             member,
-            extends_eval,
+            extends,
             true_ty,
             false_ty,
             false,
@@ -546,6 +545,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
     }
 
+    let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
     let assignable = match self.conditional_assignability {
       Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
       None => self
