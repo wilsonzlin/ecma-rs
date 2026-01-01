@@ -1907,6 +1907,21 @@ fn keyof_empty_object_is_never() {
 }
 
 #[test]
+fn indexed_access_over_empty_object_is_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  let index = store.intern_type(TypeKind::KeyOf(empty_object));
+  let access = store.intern_type(TypeKind::IndexedAccess {
+    obj: empty_object,
+    index,
+  });
+  let evaluated = store.evaluate(access);
+  assert_eq!(evaluated, primitives.never);
+}
+
+#[test]
 fn keyof_string_indexer_includes_number() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

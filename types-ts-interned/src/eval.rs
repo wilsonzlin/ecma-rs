@@ -1200,6 +1200,12 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           KeySet::Unknown => self.store.primitive_ids().unknown,
         }
       }
+      TypeKind::EmptyObject => match self.keys_from_index_type(index_eval) {
+        // `{}` has no known keys, so any indexed access that successfully type
+        // checks collapses to `never`.
+        KeySet::Known(_) => self.store.primitive_ids().never,
+        KeySet::Unknown => self.store.primitive_ids().unknown,
+      },
       TypeKind::Array { ty, .. } => match self.store.type_kind(index_eval) {
         TypeKind::StringLiteral(id) if self.store.name(id) == "length" => {
           self.store.primitive_ids().number
