@@ -1815,11 +1815,13 @@ pub(crate) fn build_tsc_request(
   }
 
   // `HarnessFileSet::root_keys` already returns a deterministic, de-duplicated
-  // list of roots, so avoid re-sorting on every request.
+  // list of roots. Use the cached root slice directly so we don't allocate an
+  // intermediate `Vec<FileKey>` for every request.
   let root_names: Vec<Arc<str>> = file_set
-    .root_keys()
-    .into_iter()
-    .map(|key| key.0)
+    .inner
+    .roots
+    .iter()
+    .map(|key| Arc::clone(&key.0))
     .collect();
 
   TscRequest {

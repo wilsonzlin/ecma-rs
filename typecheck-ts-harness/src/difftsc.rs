@@ -1014,12 +1014,7 @@ fn span_distance(a: &NormalizedDiagnostic, b: &NormalizedDiagnostic) -> u32 {
   a.start.abs_diff(b.start) + a.end.abs_diff(b.end)
 }
 
-fn render_mismatch_report(
-  test: &TestCase,
-  diff: &MismatchReport,
-  normalization: &NormalizationOptions,
-) -> String {
-  let files = build_file_map(&test.files, normalization);
+fn render_mismatch_report(diff: &MismatchReport, files: &HashMap<String, Arc<str>>) -> String {
   let mut report = String::new();
   if !diff.missing.is_empty() {
     if !report.is_empty() {
@@ -1073,11 +1068,9 @@ fn render_mismatch_report(
 }
 
 fn render_type_mismatch_report(
-  test: &TestCase,
   diff: &TypeMismatchReport,
-  normalization: &NormalizationOptions,
+  files: &HashMap<String, Arc<str>>,
 ) -> String {
-  let files = build_file_map(&test.files, normalization);
   let mut report = String::new();
 
   if !diff.missing_exports.is_empty() {
@@ -1145,7 +1138,7 @@ fn render_type_mismatch_report(
     missing.sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
     writeln!(&mut report, "missing type queries (tsc only):").ok();
     for fact in missing {
-      writeln!(&mut report, "- {}", format_marker_fact(&fact, &files)).ok();
+      writeln!(&mut report, "- {}", format_marker_fact(&fact, files)).ok();
     }
   }
 
@@ -1157,7 +1150,7 @@ fn render_type_mismatch_report(
     unexpected.sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
     writeln!(&mut report, "extra type queries (rust only):").ok();
     for fact in unexpected {
-      writeln!(&mut report, "- {}", format_marker_fact(&fact, &files)).ok();
+      writeln!(&mut report, "- {}", format_marker_fact(&fact, files)).ok();
     }
   }
 
@@ -1185,13 +1178,13 @@ fn render_type_mismatch_report(
       writeln!(
         &mut report,
         "- expected: {}",
-        format_marker_fact(&pair.expected, &files)
+        format_marker_fact(&pair.expected, files)
       )
       .ok();
       writeln!(
         &mut report,
         "  actual: {}",
-        format_marker_fact(&pair.actual, &files)
+        format_marker_fact(&pair.actual, files)
       )
       .ok();
     }
@@ -1206,22 +1199,23 @@ fn render_full_report(
   types: Option<&TypeMismatchReport>,
   normalization: &NormalizationOptions,
 ) -> Option<String> {
+  if diag.is_none() && types.is_none() {
+    return None;
+  }
+
+  let files = build_file_map(&test.files, normalization);
   let mut sections = Vec::new();
   if let Some(diag) = diag {
-    sections.push(render_mismatch_report(test, diag, normalization));
+    sections.push(render_mismatch_report(diag, &files));
   }
   if let Some(types) = types {
-    let rendered = render_type_mismatch_report(test, types, normalization);
+    let rendered = render_type_mismatch_report(types, &files);
     if !rendered.is_empty() {
       sections.push(rendered);
     }
   }
 
-  if sections.is_empty() {
-    None
-  } else {
-    Some(sections.join("\n\n"))
-  }
+  Some(sections.join("\n\n"))
 }
 
 fn sort_pairs(pairs: &mut Vec<MismatchPair>) {
@@ -2000,7 +1994,8 @@ mod tests {
       },
     ];
     let diff = diff_diagnostics(&expected, &actual, &opts).expect("diff");
-    let report = render_mismatch_report(&test, &diff, &opts);
+    let files = build_file_map(&test.files, &opts);
+    let report = render_mismatch_report(&diff, &files);
     let expected_report = "\
 missing diagnostics (tsc only):
 - /a.ts:1:71-1:72 [error 5]
