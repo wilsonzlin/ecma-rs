@@ -2,6 +2,7 @@ use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
 use num_cpus;
+use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
 use typecheck_ts_harness::build_filter;
@@ -200,9 +201,13 @@ fn main() -> ExitCode {
       match run_conformance(options) {
         Ok(report) => {
           if json {
-            match serde_json::to_string_pretty(&report) {
-              Ok(output) => println!("{output}"),
-              Err(err) => return print_error(err),
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(err) = serde_json::to_writer_pretty(&mut handle, &report) {
+              return print_error(err);
+            }
+            if let Err(err) = writeln!(&mut handle) {
+              return print_error(err);
             }
           } else {
             println!("Ran {} test(s)", report.summary.total);

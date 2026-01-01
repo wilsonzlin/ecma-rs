@@ -19,6 +19,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
+use std::io::Write;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -1274,23 +1275,23 @@ fn diff_diagnostics(
   tsc_diags: &[NormalizedDiagnostic],
   span_tolerance: u32,
 ) -> (TestOutcome, Option<MismatchDetail>) {
-  let mut rust_sorted = rust_diags.to_vec();
-  let mut tsc_sorted = tsc_diags.to_vec();
-  sort_diagnostics(&mut rust_sorted);
-  sort_diagnostics(&mut tsc_sorted);
-
   // Greedily match expected (tsc) diagnostics to actual (rust) diagnostics.
   //
   // This avoids cascaded mismatches when one side has an extra diagnostic near the
   // top of the sorted list (the previous implementation zipped by index).
-  let mut used = vec![false; rust_sorted.len()];
-  let mut missing: Vec<NormalizedDiagnostic> = Vec::new();
-  let mut extra: Vec<NormalizedDiagnostic> = Vec::new();
-  let mut span_mismatches: Vec<(NormalizedDiagnostic, NormalizedDiagnostic)> = Vec::new();
-  let mut code_mismatches: Vec<(NormalizedDiagnostic, NormalizedDiagnostic)> = Vec::new();
+  //
+  // Note: `EngineDiagnostics::ok` sorts diagnostics up-front for deterministic
+  // output, so avoid cloning/sorting the full diagnostic arrays here.
+  let mut used = vec![false; rust_diags.len()];
+  let mut missing_count: usize = 0;
+  let mut first_missing: Option<NormalizedDiagnostic> = None;
+  let mut first_extra: Option<NormalizedDiagnostic> = None;
+  let mut extra_count: usize = 0;
+  let mut first_span_mismatch: Option<(NormalizedDiagnostic, NormalizedDiagnostic)> = None;
+  let mut first_code_mismatch: Option<(NormalizedDiagnostic, NormalizedDiagnostic)> = None;
 
-  for tsc in &tsc_sorted {
-    if let Some(idx) = find_diag(&rust_sorted, &used, |rust| {
+  for tsc in tsc_diags {
+    if let Some(idx) = find_diag(rust_diags, &used, |rust| {
       rust.file == tsc.file
         && within_tolerance(rust.start, tsc.start, span_tolerance)
         && within_tolerance(rust.end, tsc.end, span_tolerance)
@@ -1300,82 +1301,94 @@ fn diff_diagnostics(
       continue;
     }
 
-    if let Some(idx) = find_best_diag(&rust_sorted, &used, tsc, |rust| {
+    if let Some(idx) = find_best_diag(rust_diags, &used, tsc, |rust| {
       rust.file == tsc.file
         && within_tolerance(rust.start, tsc.start, span_tolerance)
         && within_tolerance(rust.end, tsc.end, span_tolerance)
         && !rust.codes_match(tsc)
     }) {
       used[idx] = true;
-      code_mismatches.push((rust_sorted[idx].clone(), tsc.clone()));
+      if first_code_mismatch.is_none() {
+        first_code_mismatch = Some((rust_diags[idx].clone(), tsc.clone()));
+      }
       continue;
     }
 
-    if let Some(idx) = find_best_diag(&rust_sorted, &used, tsc, |rust| {
+    if let Some(idx) = find_best_diag(rust_diags, &used, tsc, |rust| {
       rust.file == tsc.file && rust.codes_match(tsc)
     }) {
       used[idx] = true;
-      span_mismatches.push((rust_sorted[idx].clone(), tsc.clone()));
+      if first_span_mismatch.is_none() {
+        first_span_mismatch = Some((rust_diags[idx].clone(), tsc.clone()));
+      }
       continue;
     }
 
-    missing.push(tsc.clone());
-  }
-
-  for (idx, rust) in rust_sorted.iter().enumerate() {
-    if !used[idx] {
-      extra.push(rust.clone());
+    missing_count += 1;
+    if first_missing.is_none() {
+      first_missing = Some(tsc.clone());
     }
   }
 
-  if let Some(tsc) = missing.first() {
+  if missing_count > 0 {
+    let tsc = first_missing.expect("missing_count implies at least one missing diagnostic");
     return (
       TestOutcome::RustMissingDiagnostics,
       Some(MismatchDetail {
-        message: format!("rust missed {} diagnostic(s)", missing.len()),
+        message: format!("rust missed {} diagnostic(s)", missing_count),
         rust: None,
-        tsc: Some(tsc.clone()),
+        tsc: Some(tsc),
       }),
     );
   }
 
-  if let Some(rust) = extra.first() {
+  for (idx, rust) in rust_diags.iter().enumerate() {
+    if !used[idx] {
+      extra_count += 1;
+      if first_extra.is_none() {
+        first_extra = Some(rust.clone());
+      }
+    }
+  }
+
+  if extra_count > 0 {
+    let rust = first_extra.expect("extra_count implies at least one extra diagnostic");
     return (
       TestOutcome::RustExtraDiagnostics,
       Some(MismatchDetail {
-        message: format!("rust produced {} extra diagnostic(s)", extra.len()),
-        rust: Some(rust.clone()),
+        message: format!("rust produced {} extra diagnostic(s)", extra_count),
+        rust: Some(rust),
         tsc: None,
       }),
     );
   }
 
-  if let Some((rust, tsc)) = span_mismatches.first() {
+  if let Some((rust, tsc)) = first_span_mismatch {
     return (
       TestOutcome::SpanMismatch,
       Some(MismatchDetail {
         message: format!(
           "span mismatch between {} and {}",
-          describe(rust),
-          describe(tsc)
+          describe(&rust),
+          describe(&tsc)
         ),
-        rust: Some(rust.clone()),
-        tsc: Some(tsc.clone()),
+        rust: Some(rust),
+        tsc: Some(tsc),
       }),
     );
   }
 
-  if let Some((rust, tsc)) = code_mismatches.first() {
+  if let Some((rust, tsc)) = first_code_mismatch {
     return (
       TestOutcome::CodeMismatch,
       Some(MismatchDetail {
         message: format!(
           "code mismatch between {} and {}",
-          describe(rust),
-          describe(tsc)
+          describe(&rust),
+          describe(&tsc)
         ),
-        rust: Some(rust.clone()),
-        tsc: Some(tsc.clone()),
+        rust: Some(rust),
+        tsc: Some(tsc),
       }),
     );
   }
@@ -1854,8 +1867,11 @@ impl SnapshotStore {
 
     let mut payload = diagnostics.clone();
     payload.canonicalize_for_baseline();
-    let json = serde_json::to_string_pretty(&payload)?;
-    std::fs::write(path, format!("{json}\n"))
+    let file = std::fs::File::create(path)?;
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, &payload)?;
+    writeln!(writer)?;
+    Ok(())
   }
 }
 

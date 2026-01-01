@@ -3,7 +3,7 @@ use crate::runner::Summary;
 use crate::{CompareMode, ConformanceOptions, HarnessError, TestOutcome, TestResult};
 use serde::Serialize;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -126,8 +126,6 @@ impl ProfileBuilder {
     path: &Path,
   ) -> Result<(), HarnessError> {
     let report = self.finish(summary, wall_time);
-    let json =
-      serde_json::to_string_pretty(&report).map_err(|err| HarnessError::Output(err.to_string()))?;
 
     if let Some(parent) = path.parent() {
       if !parent.as_os_str().is_empty() {
@@ -136,8 +134,12 @@ impl ProfileBuilder {
       }
     }
 
-    fs::write(path, format!("{json}\n"))
+    let file = fs::File::create(path)
       .map_err(|err| HarnessError::Output(format!("write profile: {err}")))?;
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(&mut writer, &report)
+      .map_err(|err| HarnessError::Output(err.to_string()))?;
+    writeln!(writer).map_err(|err| HarnessError::Output(format!("write profile: {err}")))?;
 
     Ok(())
   }

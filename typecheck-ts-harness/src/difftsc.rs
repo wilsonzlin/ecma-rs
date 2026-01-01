@@ -23,6 +23,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use typecheck_ts::Program;
@@ -417,12 +418,17 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
   }
 
   if args.json {
-    let json = serde_json::to_string_pretty(&JsonReport {
-      summary: summary.clone(),
-      results: results.clone(),
-    })
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    serde_json::to_writer_pretty(
+      &mut handle,
+      &JsonReport {
+        summary: summary.clone(),
+        results: results.clone(),
+      },
+    )
     .context("serialize JSON output")?;
-    println!("{json}");
+    writeln!(handle).context("write JSON output")?;
   } else {
     print_human_summary(&suite_name, &summary, &results);
   }
