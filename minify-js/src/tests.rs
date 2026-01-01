@@ -2162,7 +2162,13 @@ fn erases_class_auto_accessors_to_parseable_js() {
     other => panic!("expected class decl, got {other:?}"),
   };
   assert_eq!(class_decl.stx.members.len(), 1);
-  let member = class_decl.stx.members.first().expect("class member").stx.as_ref();
+  let member = class_decl
+    .stx
+    .members
+    .first()
+    .expect("class member")
+    .stx
+    .as_ref();
 
   match &member.key {
     ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "bar"),
