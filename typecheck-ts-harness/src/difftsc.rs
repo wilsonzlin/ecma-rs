@@ -1636,10 +1636,7 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
   }
 }
 
-fn build_request(
-  test: &TestCase,
-  base_options: &Map<String, Value>,
-) -> TscRequest {
+fn build_request(test: &TestCase, base_options: &Map<String, Value>) -> TscRequest {
   let mut files = HashMap::new();
   let mut root_names = Vec::new();
 
