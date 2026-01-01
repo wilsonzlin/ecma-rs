@@ -339,6 +339,21 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
     })
     .collect();
   if specs.is_empty() {
+    if !named.is_type_only {
+      if let Some(source) = &named.source {
+        // Preserve side-effect-only export-from statements (`export {} from "mod";`).
+        //
+        // `hir-js` represents these as `ExportNamed { source: Some(_), specifiers: [] }`.
+        // After filtering type-only specifiers, we can distinguish this from
+        // `export { type Foo } from "mod"` (which becomes empty but still has
+        // specifiers) and should not produce a runtime import.
+        if named.specifiers.is_empty() {
+          em.write_keyword("import");
+          emit_string(em, &source.value);
+          em.write_semicolon();
+        }
+      }
+    }
     return Ok(());
   }
   em.write_keyword("export");

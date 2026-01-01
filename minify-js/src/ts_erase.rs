@@ -718,6 +718,12 @@ fn strip_import(
   if import_stmt.stx.type_only {
     return None;
   }
+  let was_side_effect_only = import_stmt.stx.default.is_none()
+    && match import_stmt.stx.names.as_ref() {
+      None => true,
+      Some(ImportNames::Specific(names)) => names.is_empty(),
+      Some(ImportNames::All(_)) => false,
+    };
   if let Some(names) = import_stmt.stx.names.as_mut() {
     match names {
       ImportNames::Specific(list) => {
@@ -742,7 +748,11 @@ fn strip_import(
     default.stx.pat = strip_pat(ctx, pat);
   }
   if import_stmt.stx.default.is_none() && import_stmt.stx.names.is_none() {
-    None
+    if was_side_effect_only {
+      Some(new_node(loc, assoc, Stmt::Import(import_stmt)))
+    } else {
+      None
+    }
   } else {
     Some(new_node(loc, assoc, Stmt::Import(import_stmt)))
   }
@@ -759,11 +769,15 @@ fn strip_export_list(
   }
   match &mut export_stmt.stx.names {
     ExportNames::Specific(names) => {
+      let was_empty = names.is_empty();
       names.retain(|name| !name.stx.type_only);
       for name in names.iter_mut() {
         name.stx.type_only = false;
       }
       if names.is_empty() {
+        if was_empty && export_stmt.stx.from.is_some() {
+          return Some(new_node(loc, assoc, Stmt::ExportList(export_stmt)));
+        }
         return None;
       }
     }

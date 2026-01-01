@@ -702,6 +702,92 @@ fn drops_type_only_imports() {
 }
 
 #[test]
+fn preserves_side_effect_imports() {
+  let src = r#"import "./side";"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+  let import = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::Import(import) => import,
+    other => panic!("expected import statement, got {other:?}"),
+  };
+  assert_eq!(import.stx.module, "./side");
+  assert!(import.stx.default.is_none());
+  assert!(import.stx.names.is_none());
+}
+
+#[test]
+fn preserves_empty_named_imports_for_side_effects() {
+  let src = r#"import {} from "./side";"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+  let import = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::Import(import) => import,
+    other => panic!("expected import statement, got {other:?}"),
+  };
+  assert_eq!(import.stx.module, "./side");
+  assert!(import.stx.default.is_none());
+  match import.stx.names.as_ref() {
+    None => {}
+    Some(ImportNames::Specific(names)) => assert!(names.is_empty()),
+    other => panic!("expected side-effect import with no bindings, got {other:?}"),
+  }
+}
+
+#[test]
+fn does_not_keep_named_imports_that_become_empty_after_stripping_types() {
+  let src = r#"import { type Foo } from "./types";"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert!(
+    !parsed
+      .stx
+      .body
+      .iter()
+      .any(|stmt| matches!(stmt.stx.as_ref(), Stmt::Import(_))),
+    "expected type-only named import to be removed"
+  );
+}
+
+#[test]
+fn preserves_empty_export_from_for_side_effects() {
+  let src = r#"export {} from "./side";"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+  match parsed.stx.body[0].stx.as_ref() {
+    Stmt::ExportList(export_stmt) => {
+      assert_eq!(export_stmt.stx.from.as_deref(), Some("./side"));
+      match &export_stmt.stx.names {
+        parse_js::ast::import_export::ExportNames::Specific(names) => assert!(names.is_empty()),
+        other => panic!("expected specific export list, got {other:?}"),
+      }
+    }
+    Stmt::Import(import_stmt) => {
+      assert_eq!(import_stmt.stx.module, "./side");
+      assert!(import_stmt.stx.default.is_none());
+      match import_stmt.stx.names.as_ref() {
+        None => {}
+        Some(ImportNames::Specific(names)) => assert!(names.is_empty()),
+        other => panic!("expected side-effect import, got {other:?}"),
+      }
+    }
+    other => panic!("expected export-from or import statement, got {other:?}"),
+  }
+}
+
+#[test]
+fn does_not_keep_type_only_export_from_as_side_effects() {
+  let src = r#"export { type Foo } from "./types";"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert!(
+    !parsed.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+      Stmt::Import(import) => import.stx.module == "./types",
+      Stmt::ExportList(export_list) => export_list.stx.from.as_deref() == Some("./types"),
+      _ => false,
+    }),
+    "expected type-only export-from to be removed"
+  );
+}
+
+#[test]
 fn lowers_import_equals_require() {
   let src = r#"
     import foo = require("bar");
