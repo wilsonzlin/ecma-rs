@@ -631,6 +631,130 @@ fn declaration_merging_orders_deterministically() {
   assert_eq!(classy.namespaces(symbols), Namespace::TYPE);
 }
 
+fn assert_merged_value_type_namespace(
+  semantics: &TsProgramSemantics,
+  file: FileId,
+  name: &str,
+) -> SymbolId {
+  let symbols = semantics.symbols();
+  let group = semantics
+    .exports_of(file)
+    .get(name)
+    .unwrap_or_else(|| panic!("expected export for '{}'", name));
+  let mask = group.namespaces(symbols);
+  assert!(
+    mask.contains(Namespace::VALUE),
+    "expected '{}' to contain VALUE namespace",
+    name
+  );
+  assert!(
+    mask.contains(Namespace::TYPE),
+    "expected '{}' to contain TYPE namespace",
+    name
+  );
+  assert!(
+    mask.contains(Namespace::NAMESPACE),
+    "expected '{}' to contain NAMESPACE namespace",
+    name
+  );
+
+  let value = group
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("VALUE namespace symbol present");
+  let ty = group
+    .symbol_for(Namespace::TYPE, symbols)
+    .expect("TYPE namespace symbol present");
+  let namespace = group
+    .symbol_for(Namespace::NAMESPACE, symbols)
+    .expect("NAMESPACE namespace symbol present");
+  assert_eq!(value, ty, "VALUE and TYPE symbols should be merged");
+  assert_eq!(
+    value, namespace,
+    "VALUE and NAMESPACE symbols should be merged"
+  );
+  value
+}
+
+#[test]
+fn class_namespace_merge_in_both_orders() {
+  let file = FileId(200);
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let mut class_first = HirFile::module(file);
+  class_first
+    .decls
+    .push(mk_decl(0, "C", DeclKind::Class, Exported::Named));
+  class_first
+    .decls
+    .push(mk_decl(1, "C", DeclKind::Namespace, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(class_first) };
+  let (semantics, diags) =
+    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+  let class_first_sym = assert_merged_value_type_namespace(&semantics, file, "C");
+
+  let mut namespace_first = HirFile::module(file);
+  namespace_first
+    .decls
+    .push(mk_decl(0, "C", DeclKind::Namespace, Exported::Named));
+  namespace_first
+    .decls
+    .push(mk_decl(1, "C", DeclKind::Class, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file => Arc::new(namespace_first) };
+  let (semantics, diags) =
+    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+  let namespace_first_sym = assert_merged_value_type_namespace(&semantics, file, "C");
+
+  assert_eq!(
+    class_first_sym, namespace_first_sym,
+    "merged symbol ID should be stable across declaration order"
+  );
+}
+
+#[test]
+fn enum_namespace_merge_in_both_orders() {
+  let file = FileId(201);
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let mut enum_first = HirFile::module(file);
+  enum_first
+    .decls
+    .push(mk_decl(0, "E", DeclKind::Enum, Exported::Named));
+  enum_first
+    .decls
+    .push(mk_decl(1, "E", DeclKind::Namespace, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(enum_first) };
+  let (semantics, diags) =
+    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+  let enum_first_sym = assert_merged_value_type_namespace(&semantics, file, "E");
+
+  let mut namespace_first = HirFile::module(file);
+  namespace_first
+    .decls
+    .push(mk_decl(0, "E", DeclKind::Namespace, Exported::Named));
+  namespace_first
+    .decls
+    .push(mk_decl(1, "E", DeclKind::Enum, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file => Arc::new(namespace_first) };
+  let (semantics, diags) =
+    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+  let namespace_first_sym = assert_merged_value_type_namespace(&semantics, file, "E");
+
+  assert_eq!(
+    enum_first_sym, namespace_first_sym,
+    "merged symbol ID should be stable across declaration order"
+  );
+}
+
 #[test]
 fn unresolved_import_export_have_spans() {
   let file = FileId(50);

@@ -911,6 +911,25 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
     for entry in state.imports.values_mut() {
       self.rewrite_module_ref(&mut entry.from, entry.specifier_span, true, seen);
+      // Import entries store a `SymbolId`, but the binder may upgrade merged
+      // symbols when additional namespace bits arrive later (e.g. module
+      // augmentations). Refresh the import binding symbol from the current
+      // module symbol group so we always mutate the canonical symbol.
+      if let Some(group) = state.symbols.get(&entry.local) {
+        let preferred = if entry.type_only {
+          Namespace::TYPE
+        } else {
+          Namespace::VALUE
+        };
+        if let Some(sym) = group
+          .symbol_for(preferred, &self.symbols)
+          .or_else(|| group.symbol_for(Namespace::TYPE, &self.symbols))
+          .or_else(|| group.symbol_for(Namespace::VALUE, &self.symbols))
+          .or_else(|| group.symbol_for(Namespace::NAMESPACE, &self.symbols))
+        {
+          entry.symbol = sym;
+        }
+      }
       self.update_import_origin(entry);
     }
 
@@ -965,11 +984,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       ImportItem::Default => "default".to_string(),
       ImportItem::Namespace => "*".to_string(),
     };
-    let symbol = self.symbols.symbol_mut(entry.symbol);
-    symbol.origin = SymbolOrigin::Import {
-      from: entry.from.clone(),
-      imported,
-    };
+    if let Some(symbol) = self.symbols.symbols.get_mut(&entry.symbol) {
+      symbol.origin = SymbolOrigin::Import {
+        from: entry.from.clone(),
+        imported,
+      };
+    }
   }
 
   fn handle_export_as_namespace(&mut self, state: &ModuleState, seen: &mut BTreeMap<String, Span>) {
@@ -1731,8 +1751,58 @@ fn merge_decl_into_group(
   }
 
   if let SymbolGroupKind::Merged(sym) = group.kind.clone() {
-    symbols.add_decl_to_symbol(sym, decl, namespaces);
-    return (SymbolGroup::merged(sym), sym);
+    let existing = symbols.symbol(sym).clone();
+    if existing.namespaces.contains(namespaces) {
+      symbols.add_decl_to_symbol(sym, decl, namespaces);
+      return (SymbolGroup::merged(sym), sym);
+    }
+
+    // We have an existing merged symbol, but the incoming declaration introduces
+    // additional namespace bits not present in the symbol ID. Symbol IDs are
+    // content-addressed by `(owner, name, namespaces)`, so we must rebuild a
+    // new merged symbol with the expanded namespace mask and migrate the
+    // declarations. This keeps declaration merging stable regardless of the
+    // order in which declarations arrive (e.g. `class C {}` + `namespace C {}`).
+    let mut decls = existing.decls.clone();
+    for bit in namespaces.iter_bits() {
+      decls[ns_index(bit)].push(decl);
+    }
+
+    for list in decls.iter_mut() {
+      list.sort_by(|a, b| {
+        symbols
+          .decl(*a)
+          .order
+          .cmp(&symbols.decl(*b).order)
+          .then_with(|| a.cmp(b))
+      });
+      list.dedup();
+    }
+
+    let mut mask = Namespace::empty();
+    for (idx, bit) in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE]
+      .iter()
+      .enumerate()
+    {
+      if !decls[idx].is_empty() {
+        mask |= *bit;
+      }
+    }
+
+    let merged = symbols.alloc_symbol(owner, name, mask, existing.origin.clone());
+    {
+      let data = symbols.symbol_mut(merged);
+      data.namespaces = mask;
+      data.origin = existing.origin;
+      data.decls = decls;
+    }
+    // Drop the old symbol to keep `def_to_symbol` stable and avoid keeping the
+    // same declaration attached to multiple symbols.
+    if sym != merged {
+      symbols.symbols.remove(&sym);
+    }
+
+    return (SymbolGroup::merged(merged), merged);
   }
 
   if !namespaces.is_single() {
