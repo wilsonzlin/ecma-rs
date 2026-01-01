@@ -5131,7 +5131,11 @@ fn lower_module_item_attributes(
   body_ids.push(body_id);
   body_index.insert(body_id, idx);
   bodies.push(Arc::new(builder.finish_with_id(body_id)));
-  ModuleAttributes { body: body_id, expr, span }
+  ModuleAttributes {
+    body: body_id,
+    expr,
+    span,
+  }
 }
 
 fn lower_module_items(
@@ -5211,25 +5215,21 @@ fn lower_module_items(
           value: import.stx.module.clone(),
           span: item.span,
         };
-        let attributes = import
-          .stx
-          .attributes
-          .as_ref()
-          .map(|attrs| {
-            lower_module_item_attributes(
-              attrs,
-              item.span.start,
-              names,
-              def_lookup,
-              types,
-              bodies,
-              body_ids,
-              body_index,
-              allocated_body_ids,
-              span_map,
-              ctx,
-            )
-          });
+        let attributes = import.stx.attributes.as_ref().map(|attrs| {
+          lower_module_item_attributes(
+            attrs,
+            item.span.start,
+            names,
+            def_lookup,
+            types,
+            bodies,
+            body_ids,
+            body_index,
+            allocated_body_ids,
+            span_map,
+            ctx,
+          )
+        });
         imports.push(Import {
           id: ImportId(next_import),
           span: item.span,
@@ -5327,25 +5327,21 @@ fn lower_module_items(
           value: s.clone(),
           span: item.span,
         });
-        let attributes = export
-          .stx
-          .attributes
-          .as_ref()
-          .map(|attrs| {
-            lower_module_item_attributes(
-              attrs,
-              item.span.start,
-              names,
-              def_lookup,
-              types,
-              bodies,
-              body_ids,
-              body_index,
-              allocated_body_ids,
-              span_map,
-              ctx,
-            )
-          });
+        let attributes = export.stx.attributes.as_ref().map(|attrs| {
+          lower_module_item_attributes(
+            attrs,
+            item.span.start,
+            names,
+            def_lookup,
+            types,
+            bodies,
+            body_ids,
+            body_index,
+            allocated_body_ids,
+            span_map,
+            ctx,
+          )
+        });
         match &export.stx.names {
           ExportNames::All(alias) => {
             let alias = alias.as_ref().map(|a| ExportAlias {

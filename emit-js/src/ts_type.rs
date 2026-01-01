@@ -781,7 +781,9 @@ impl<'a> TypeEmitter<'a> {
 
     let mut buf = Vec::new();
     emit_template_literal_segment(&mut buf, &template.head);
-    self.em.write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
+    self
+      .em
+      .write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
 
     for span in &template.spans {
       self.em.write_raw_str("${");
@@ -789,7 +791,9 @@ impl<'a> TypeEmitter<'a> {
       self.em.write_raw_byte(b'}');
       buf.clear();
       emit_template_literal_segment(&mut buf, &span.stx.literal);
-      self.em.write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
+      self
+        .em
+        .write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
     }
 
     self.em.write_raw_byte(b'`');

@@ -225,7 +225,11 @@ fn emit_import(em: &mut Emitter, ctx: &HirContext<'_>, import: &Import) -> EmitR
   }
 }
 
-fn emit_module_attributes(em: &mut Emitter, ctx: &HirContext<'_>, attrs: &ModuleAttributes) -> EmitResult {
+fn emit_module_attributes(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  attrs: &ModuleAttributes,
+) -> EmitResult {
   em.write_keyword("with");
   let body = ctx
     .body(attrs.body)
