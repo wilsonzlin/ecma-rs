@@ -79,7 +79,12 @@ fn resolve_non_relative(
         return Some(found);
       }
       let entry = virtual_join(&package_dir, subpath);
-      if let Some(found) = resolve_as_file_or_directory(files, &entry) {
+      let found = if subpath_needs_normalization(subpath) {
+        resolve_as_file_or_directory(files, &entry)
+      } else {
+        resolve_as_file_or_directory_normalized(files, &entry, 0)
+      };
+      if let Some(found) = found {
         return Some(found);
       }
     } else if let Some(found) = resolve_as_file_or_directory_normalized(files, &package_dir, 0) {
@@ -409,6 +414,21 @@ fn best_exports_subpath_pattern<'a, 'b>(
 
 fn is_relative_specifier(specifier: &str) -> bool {
   specifier.starts_with("./") || specifier.starts_with("../")
+}
+
+fn subpath_needs_normalization(subpath: &str) -> bool {
+  // Most package subpaths are already normalized (e.g. `pkg/dist/index.js`). Skip the more
+  // expensive `normalize_name` call when the string cannot contain segments that need collapsing.
+  subpath.contains('\\')
+    || subpath.contains("//")
+    || subpath == "."
+    || subpath == ".."
+    || subpath.starts_with("./")
+    || subpath.starts_with("../")
+    || subpath.contains("/./")
+    || subpath.contains("/../")
+    || subpath.ends_with("/.")
+    || subpath.ends_with("/..")
 }
 
 fn is_drive_root(dir: &str) -> bool {
