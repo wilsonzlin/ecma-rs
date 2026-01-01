@@ -929,13 +929,13 @@ impl<'a> TypeLowerer<'a> {
       let a_member = &self.arenas.type_members[a.0 as usize];
       let b_member = &self.arenas.type_members[b.0 as usize];
       self
-        .member_sort_key(a_member)
-        .cmp(&self.member_sort_key(b_member))
+        .member_sort_key(*a, a_member)
+        .cmp(&self.member_sort_key(*b, b_member))
     });
     lowered
   }
 
-  fn member_sort_key(&self, member: &HirTypeMember) -> (String, u8, u32) {
+  fn member_sort_key(&self, id: TypeMemberId, member: &HirTypeMember) -> (String, u8, u32) {
     let (name, variant) = match &member.kind {
       TypeMemberKind::Property(prop) => (self.property_name_key(&prop.name), 0),
       TypeMemberKind::Method(method) => (self.property_name_key(&method.name), 1),
@@ -946,7 +946,7 @@ impl<'a> TypeLowerer<'a> {
       TypeMemberKind::IndexSignature(_) => ("[]".to_string(), 6),
       TypeMemberKind::Mapped(_) => ("[mapped]".to_string(), 7),
     };
-    (name, variant, member.span.start)
+    (name, variant, id.0)
   }
 
   fn property_name_key(&self, name: &PropertyName) -> String {
@@ -1177,18 +1177,7 @@ impl<'a> TypeLowerer<'a> {
       })
       .collect();
 
-    keyed.sort_by(|(ka, ida), (kb, idb)| {
-      ka.cmp(kb)
-        .then_with(|| {
-          let a_span = self.arenas.type_exprs[ida.0 as usize].span;
-          let b_span = self.arenas.type_exprs[idb.0 as usize].span;
-          a_span
-            .start
-            .cmp(&b_span.start)
-            .then_with(|| a_span.end.cmp(&b_span.end))
-        })
-        .then_with(|| ida.0.cmp(&idb.0))
-    });
+    keyed.sort_by(|(ka, ida), (kb, idb)| ka.cmp(kb).then_with(|| ida.0.cmp(&idb.0)));
     keyed.dedup_by(|(ka, _), (kb, _)| ka == kb);
     keyed.into_iter().map(|(_, id)| id).collect()
   }
@@ -1222,8 +1211,7 @@ impl<'a> TypeLowerer<'a> {
       let expr = &self.arenas.type_exprs[id.0 as usize];
       return TypeSortKey::Cycle {
         discriminant: self.type_kind_discriminant(&expr.kind),
-        span_start: expr.span.start,
-        span_end: expr.span.end,
+        id: id.0,
       };
     }
 
@@ -1635,8 +1623,7 @@ enum TypeSortKey {
   Import(ImportKey),
   Cycle {
     discriminant: u8,
-    span_start: u32,
-    span_end: u32,
+    id: u32,
   },
 }
 
