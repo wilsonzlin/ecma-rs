@@ -311,6 +311,212 @@ fn nested_disambiguators_are_scoped() {
 }
 
 #[test]
+fn nested_defs_are_parented_to_enclosing_function() {
+  let source = r#"
+    function outer(){ const a=1; function inner(){} const b=() => 1; }
+    function other(){ const c=() => 2; }
+  "#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} {kind:?} definition"))
+  };
+
+  let outer = find_def(DefKind::Function, "outer");
+  let other = find_def(DefKind::Function, "other");
+
+  let a = find_def(DefKind::Var, "a");
+  assert_eq!(a.parent, Some(outer.id), "a should be nested under outer");
+
+  let inner = find_def(DefKind::Function, "inner");
+  assert_eq!(
+    inner.parent,
+    Some(outer.id),
+    "inner should be nested under outer"
+  );
+
+  let arrows: Vec<_> = result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Function && result.names.resolve(def.name) == Some("<arrow>"))
+    .collect();
+  assert_eq!(arrows.len(), 2, "expected exactly two arrow function defs");
+
+  let outer_arrow = arrows
+    .iter()
+    .find(|def| def.parent == Some(outer.id))
+    .expect("expected arrow function def nested under outer");
+  let other_arrow = arrows
+    .iter()
+    .find(|def| def.parent == Some(other.id))
+    .expect("expected arrow function def nested under other");
+
+  assert_eq!(
+    outer_arrow.parent,
+    Some(outer.id),
+    "arrow in outer should be parented to outer"
+  );
+  assert_eq!(
+    other_arrow.parent,
+    Some(other.id),
+    "arrow in other should be parented to other"
+  );
+}
+
+#[test]
+fn nested_def_ids_do_not_shift_across_unrelated_edits_in_other_functions() {
+  let base_source = r#"
+    function first(){ const a = () => 1; }
+    function second(){ const b = () => 1; }
+  "#;
+  let variant_source = r#"
+    function first(){ const a = () => 1; const extra = () => 2; }
+    function second(){ const b = () => 1; }
+  "#;
+
+  let base = lower_from_source_with_kind(FileKind::Ts, base_source).expect("lower base");
+  let variant = lower_from_source_with_kind(FileKind::Ts, variant_source).expect("lower variant");
+
+  let base_second = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Function && base.names.resolve(def.name) == Some("second"))
+    .expect("second function in base");
+  let variant_second = variant
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function && variant.names.resolve(def.name) == Some("second")
+    })
+    .expect("second function in variant");
+  assert_eq!(
+    base_second.id, variant_second.id,
+    "second function DefId should remain stable"
+  );
+
+  let base_arrow = base
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function
+        && base.names.resolve(def.name) == Some("<arrow>")
+        && def.parent == Some(base_second.id)
+    })
+    .expect("arrow in base second()");
+  let variant_arrow = variant
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function
+        && variant.names.resolve(def.name) == Some("<arrow>")
+        && def.parent == Some(variant_second.id)
+    })
+    .expect("arrow in variant second()");
+
+  assert_eq!(
+    base_arrow.id, variant_arrow.id,
+    "arrow DefId in second() should remain stable"
+  );
+  assert_eq!(
+    base_arrow.body, variant_arrow.body,
+    "arrow BodyId in second() should remain stable"
+  );
+  assert_eq!(
+    base_arrow.path, variant_arrow.path,
+    "arrow DefPath in second() should remain stable"
+  );
+}
+
+#[test]
+fn nested_def_ids_in_class_method_bodies_do_not_shift_across_unrelated_edits() {
+  let base_source = r#"
+    class C { m(){ const f = () => 1; } }
+    class D { m(){ const g = () => 2; } }
+  "#;
+  let variant_source = r#"
+    class C { m(){ const f = () => 1; const extra = () => 3; } }
+    class D { m(){ const g = () => 2; } }
+  "#;
+
+  let base = lower_from_source_with_kind(FileKind::Ts, base_source).expect("lower base");
+  let variant = lower_from_source_with_kind(FileKind::Ts, variant_source).expect("lower variant");
+
+  let base_d = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Class && base.names.resolve(def.name) == Some("D"))
+    .expect("class D in base");
+  let variant_d = variant
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Class && variant.names.resolve(def.name) == Some("D"))
+    .expect("class D in variant");
+  assert_eq!(
+    base_d.id, variant_d.id,
+    "class D DefId should remain stable"
+  );
+
+  let base_method = base
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Method
+        && base.names.resolve(def.name) == Some("m")
+        && def.parent == Some(base_d.id)
+    })
+    .expect("D.m method def in base");
+  let variant_method = variant
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Method
+        && variant.names.resolve(def.name) == Some("m")
+        && def.parent == Some(variant_d.id)
+    })
+    .expect("D.m method def in variant");
+  assert_eq!(
+    base_method.id, variant_method.id,
+    "D.m DefId should remain stable"
+  );
+
+  let base_arrow = base
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function
+        && base.names.resolve(def.name) == Some("<arrow>")
+        && def.parent == Some(base_method.id)
+    })
+    .expect("arrow in base D.m()");
+  let variant_arrow = variant
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function
+        && variant.names.resolve(def.name) == Some("<arrow>")
+        && def.parent == Some(variant_method.id)
+    })
+    .expect("arrow in variant D.m()");
+
+  assert_eq!(
+    base_arrow.id, variant_arrow.id,
+    "arrow DefId in D.m() should remain stable"
+  );
+  assert_eq!(
+    base_arrow.body, variant_arrow.body,
+    "arrow BodyId in D.m() should remain stable"
+  );
+  assert_eq!(
+    base_arrow.path, variant_arrow.path,
+    "arrow DefPath in D.m() should remain stable"
+  );
+}
+
+#[test]
 fn lowering_is_deterministic_for_nested_defs() {
   let source = r#"
     namespace A {

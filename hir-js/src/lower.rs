@@ -2142,6 +2142,7 @@ fn collect_stmt<'a>(
     AstStmt::FunctionDecl(func) => {
       let (name_id, name_text) = name_from_optional(&func.stx.name, names);
       let decl_ambient = ambient;
+      let func_raw = RawNode::from(func);
       let mut desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
@@ -2174,28 +2175,31 @@ fn collect_stmt<'a>(
         }
       }
       descriptors.push(desc);
-      collect_func_params(
-        &func.stx.function,
-        descriptors,
-        module_items,
-        names,
-        decl_ambient,
-        in_global,
-        ctx,
-      );
-      collect_func_body(
-        &func.stx.function,
-        descriptors,
-        module_items,
-        names,
-        decl_ambient,
-        in_global,
-        ctx,
-      );
+      ctx.with_parent(Some(func_raw), |ctx| {
+        collect_func_params(
+          &func.stx.function,
+          descriptors,
+          module_items,
+          names,
+          decl_ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &func.stx.function,
+          descriptors,
+          module_items,
+          names,
+          decl_ambient,
+          in_global,
+          ctx,
+        );
+      });
     }
     AstStmt::ClassDecl(class_decl) => {
       let (name_id, name_text) = name_from_optional(&class_decl.stx.name, names);
       let decl_ambient = ambient || class_decl.stx.declare;
+      let class_raw = RawNode::from(class_decl);
       let mut desc = DefDescriptor::new(
         DefKind::Class,
         name_id,
@@ -2229,16 +2233,18 @@ fn collect_stmt<'a>(
         }
       }
       descriptors.push(desc);
-      collect_class_members(
-        &class_decl.stx.members,
-        RawNode::from(class_decl),
-        descriptors,
-        module_items,
-        names,
-        decl_ambient,
-        in_global,
-        ctx,
-      );
+      ctx.with_parent(Some(class_raw), |ctx| {
+        collect_class_members(
+          &class_decl.stx.members,
+          class_raw,
+          descriptors,
+          module_items,
+          names,
+          decl_ambient,
+          in_global,
+          ctx,
+        );
+      });
     }
     AstStmt::VarDecl(var_decl) => {
       collect_var_decl(
@@ -2620,6 +2626,7 @@ fn collect_stmt<'a>(
     }
     AstStmt::AmbientFunctionDecl(af) => {
       let name_id = names.intern(&af.stx.name);
+      let func_raw = RawNode::from(af);
       let mut desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
@@ -2631,9 +2638,19 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
+      desc.node = Some(func_raw);
       desc.is_exported = af.stx.export;
       descriptors.push(desc);
-      collect_func_params_from_parts(&af.stx.parameters, descriptors, names, true, in_global, ctx);
+      ctx.with_parent(Some(func_raw), |ctx| {
+        collect_func_params_from_parts(
+          &af.stx.parameters,
+          descriptors,
+          names,
+          true,
+          in_global,
+          ctx,
+        );
+      });
       if af.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
@@ -2827,6 +2844,7 @@ fn collect_class_members<'a>(
 ) {
   for member in members.iter() {
     let span = ctx.to_range(member.loc);
+    let member_raw = RawNode::from(member);
     let is_static = member.stx.static_;
     match &member.stx.val {
       ClassOrObjVal::Method(method) => {
@@ -2851,24 +2869,27 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        collect_func_params(
-          &method.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &method.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
+        let method_raw = RawNode::from(method);
+        ctx.with_parent(Some(method_raw), |ctx| {
+          collect_func_params(
+            &method.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+          collect_func_body(
+            &method.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        });
       }
       ClassOrObjVal::Getter(getter) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
@@ -2885,24 +2906,27 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        collect_func_params(
-          &getter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &getter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
+        let getter_raw = RawNode::from(getter);
+        ctx.with_parent(Some(getter_raw), |ctx| {
+          collect_func_params(
+            &getter.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+          collect_func_body(
+            &getter.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        });
       }
       ClassOrObjVal::Setter(setter) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
@@ -2919,24 +2943,27 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = is_static;
         descriptors.push(desc);
-        collect_func_params(
-          &setter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &setter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
+        let setter_raw = RawNode::from(setter);
+        ctx.with_parent(Some(setter_raw), |ctx| {
+          collect_func_params(
+            &setter.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+          collect_func_body(
+            &setter.stx.func,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        });
       }
       ClassOrObjVal::Prop(init) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
@@ -2954,15 +2981,17 @@ fn collect_class_members<'a>(
         desc.is_static = is_static;
         descriptors.push(desc);
         if let Some(expr) = init {
-          collect_expr(
-            expr,
-            descriptors,
-            module_items,
-            names,
-            ambient,
-            in_global,
-            ctx,
-          );
+          ctx.with_parent(Some(member_raw), |ctx| {
+            collect_expr(
+              expr,
+              descriptors,
+              module_items,
+              names,
+              ambient,
+              in_global,
+              ctx,
+            );
+          });
         }
       }
       ClassOrObjVal::StaticBlock(block) => {
@@ -2981,19 +3010,22 @@ fn collect_class_members<'a>(
         desc.parent = Some(parent);
         desc.is_static = true;
         descriptors.push(desc);
-        for stmt in block.stx.body.iter() {
-          collect_stmt(
-            stmt,
-            descriptors,
-            module_items,
-            names,
-            false,
-            false,
-            ambient,
-            in_global,
-            ctx,
-          );
-        }
+        let block_raw = RawNode::from(block);
+        ctx.with_parent(Some(block_raw), |ctx| {
+          for stmt in block.stx.body.iter() {
+            collect_stmt(
+              stmt,
+              descriptors,
+              module_items,
+              names,
+              false,
+              false,
+              ambient,
+              in_global,
+              ctx,
+            );
+          }
+        });
       }
       ClassOrObjVal::IndexSignature(_) => {}
     }
@@ -3563,7 +3595,7 @@ fn collect_expr<'a>(
   match &*expr.stx {
     AstExpr::Func(f) => {
       let (name_id, name_text) = name_from_optional(&f.stx.name, names);
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
         name_text,
@@ -3572,29 +3604,34 @@ fn collect_expr<'a>(
         ambient,
         in_global,
         DefSource::FuncExpr(f),
-      ));
-      collect_func_params(
-        &f.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
       );
-      collect_func_body(
-        &f.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
+      desc.parent = ctx.current_parent();
+      descriptors.push(desc);
+      let func_raw = RawNode::from(f);
+      ctx.with_parent(Some(func_raw), |ctx| {
+        collect_func_params(
+          &f.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &f.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      });
     }
     AstExpr::ArrowFunc(f) => {
       let name_id = names.intern("<arrow>");
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -3603,28 +3640,34 @@ fn collect_expr<'a>(
         ambient,
         in_global,
         DefSource::ArrowFunction(f),
-      ));
-      collect_func_params(
-        &f.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
       );
-      collect_func_body(
-        &f.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
+      desc.parent = ctx.current_parent();
+      descriptors.push(desc);
+      let func_raw = RawNode::from(f);
+      ctx.with_parent(Some(func_raw), |ctx| {
+        collect_func_params(
+          &f.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &f.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      });
     }
     AstExpr::Class(class_expr) => {
       let (name_id, text) = name_from_optional(&class_expr.stx.name, names);
+      let class_raw = RawNode::from(class_expr);
       let mut desc = DefDescriptor::new(
         DefKind::Class,
         name_id,
@@ -3636,17 +3679,20 @@ fn collect_expr<'a>(
         DefSource::ClassExpr(class_expr),
       );
       desc.type_source = Some(TypeSource::ClassExpr(class_expr));
+      desc.parent = ctx.current_parent();
       descriptors.push(desc);
-      collect_class_members(
-        &class_expr.stx.members,
-        RawNode::from(class_expr),
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
+      ctx.with_parent(Some(class_raw), |ctx| {
+        collect_class_members(
+          &class_expr.stx.members,
+          class_raw,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      });
     }
     AstExpr::Cond(cond) => {
       collect_expr(
@@ -3810,7 +3856,7 @@ fn collect_expr<'a>(
             ),
             ClassOrObjVal::Getter(getter) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
+              let mut desc = DefDescriptor::new(
                 DefKind::Method,
                 name_id,
                 name_text,
@@ -3819,29 +3865,34 @@ fn collect_expr<'a>(
                 ambient,
                 in_global,
                 DefSource::Getter(getter),
-              ));
-              collect_func_params(
-                &getter.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
               );
-              collect_func_body(
-                &getter.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
-              );
+              desc.parent = ctx.current_parent();
+              descriptors.push(desc);
+              let getter_raw = RawNode::from(getter);
+              ctx.with_parent(Some(getter_raw), |ctx| {
+                collect_func_params(
+                  &getter.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+                collect_func_body(
+                  &getter.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+              });
             }
             ClassOrObjVal::Setter(setter) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
+              let mut desc = DefDescriptor::new(
                 DefKind::Method,
                 name_id,
                 name_text,
@@ -3850,29 +3901,34 @@ fn collect_expr<'a>(
                 ambient,
                 in_global,
                 DefSource::Setter(setter),
-              ));
-              collect_func_params(
-                &setter.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
               );
-              collect_func_body(
-                &setter.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
-              );
+              desc.parent = ctx.current_parent();
+              descriptors.push(desc);
+              let setter_raw = RawNode::from(setter);
+              ctx.with_parent(Some(setter_raw), |ctx| {
+                collect_func_params(
+                  &setter.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+                collect_func_body(
+                  &setter.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+              });
             }
             ClassOrObjVal::Method(method) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
+              let mut desc = DefDescriptor::new(
                 DefKind::Method,
                 name_id,
                 name_text,
@@ -3881,25 +3937,30 @@ fn collect_expr<'a>(
                 ambient,
                 in_global,
                 DefSource::Method(method),
-              ));
-              collect_func_params(
-                &method.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
               );
-              collect_func_body(
-                &method.stx.func,
-                descriptors,
-                module_items,
-                names,
-                ambient,
-                in_global,
-                ctx,
-              );
+              desc.parent = ctx.current_parent();
+              descriptors.push(desc);
+              let method_raw = RawNode::from(method);
+              ctx.with_parent(Some(method_raw), |ctx| {
+                collect_func_params(
+                  &method.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+                collect_func_body(
+                  &method.stx.func,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+              });
             }
             _ => {}
           },
@@ -4254,10 +4315,11 @@ fn collect_func_params_from_parts<'a>(
   in_global: bool,
   ctx: &mut LoweringContext,
 ) {
+  let parent = ctx.current_parent();
   for param in params.iter() {
     let id = names.intern(&param.stx.name);
     let span = ctx.to_range(param.loc);
-    descriptors.push(DefDescriptor::new(
+    let mut desc = DefDescriptor::new(
       DefKind::Param,
       id,
       names.resolve(id).unwrap().to_string(),
@@ -4266,7 +4328,9 @@ fn collect_func_params_from_parts<'a>(
       ambient,
       in_global,
       DefSource::None,
-    ));
+    );
+    desc.parent = parent;
+    descriptors.push(desc);
   }
 }
 
@@ -4279,9 +4343,10 @@ fn collect_pat_defs<'a>(
   in_global: bool,
   ctx: &mut LoweringContext,
 ) {
+  let parent = ctx.current_parent();
   for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
     let text = names.resolve(name_id).unwrap().to_string();
-    descriptors.push(DefDescriptor::new(
+    let mut desc = DefDescriptor::new(
       kind,
       name_id,
       text,
@@ -4290,7 +4355,9 @@ fn collect_pat_defs<'a>(
       ambient,
       in_global,
       DefSource::None,
-    ));
+    );
+    desc.parent = parent;
+    descriptors.push(desc);
   }
 }
 
