@@ -7,7 +7,7 @@
   "diagnostics": [
     {
       "code": 2322,
-      "file": "../../type_error.ts",
+      "file": "type_error.ts",
       "start": 6,
       "end": 12,
       "category": "error",
