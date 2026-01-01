@@ -562,7 +562,10 @@ pub mod body_check {
       }
 
       if let Some(tracker) = tracker {
-        if !global.iter().any(|registered| Arc::ptr_eq(registered, &tracker)) {
+        if !global
+          .iter()
+          .any(|registered| Arc::ptr_eq(registered, &tracker))
+        {
           global.push(Arc::clone(&tracker));
         }
         *local = Some(tracker);

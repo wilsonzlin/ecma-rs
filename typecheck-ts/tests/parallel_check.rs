@@ -43,4 +43,3 @@ fn program_check_runs_bodies_in_parallel() {
     tracker.max_active()
   );
 }
-

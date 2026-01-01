@@ -4055,8 +4055,20 @@ impl ProgramState {
         .map(|(id, data)| (*id, data.kind.clone()))
         .collect(),
     );
-    let def_files = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.file)).collect());
-    let def_id_spans = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.span)).collect());
+    let def_files = Arc::new(
+      self
+        .def_data
+        .iter()
+        .map(|(id, data)| (*id, data.file))
+        .collect(),
+    );
+    let def_id_spans = Arc::new(
+      self
+        .def_data
+        .iter()
+        .map(|(id, data)| (*id, data.span))
+        .collect(),
+    );
     let exports = Arc::new(
       self
         .files
@@ -9207,8 +9219,20 @@ impl ProgramState {
           .map(|(id, data)| (*id, data.kind.clone()))
           .collect(),
       );
-      let def_files = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.file)).collect());
-      let def_spans = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.span)).collect());
+      let def_files = Arc::new(
+        self
+          .def_data
+          .iter()
+          .map(|(id, data)| (*id, data.file))
+          .collect(),
+      );
+      let def_spans = Arc::new(
+        self
+          .def_data
+          .iter()
+          .map(|(id, data)| (*id, data.span))
+          .collect(),
+      );
       let exports = Arc::new(
         self
           .files
@@ -11025,8 +11049,10 @@ impl ProgramState {
     let lowered = self.hir_lowered.get(&def_data.file)?;
     let hir_def = lowered.def(def)?;
     let def_name = lowered.names.resolve(hir_def.path.name);
-    if !matches!(hir_def.path.kind, HirDefKind::Var | HirDefKind::VarDeclarator)
-      && def_name != Some("default")
+    if !matches!(
+      hir_def.path.kind,
+      HirDefKind::Var | HirDefKind::VarDeclarator
+    ) && def_name != Some("default")
     {
       return None;
     }
