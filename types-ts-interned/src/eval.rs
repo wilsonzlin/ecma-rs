@@ -523,6 +523,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) -> TypeId {
     let raw_check = self.store.type_kind(check);
     let check_eval = self.evaluate_with_subst(check, subst, depth + 1);
+    // In TypeScript, `any` in the checked position makes the conditional type
+    // evaluate to a union of both branches.
+    if matches!(self.store.type_kind(check_eval), TypeKind::Any) {
+      let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
+      let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
+      return self.store.union(vec![true_eval, false_eval]);
+    }
     if distributive {
       match self.store.type_kind(check_eval) {
         // Distributive conditional types distribute over unions; `never` behaves

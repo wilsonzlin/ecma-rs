@@ -103,6 +103,55 @@ fn distributive_conditional_never_is_never() {
 }
 
 #[test]
+fn conditional_any_is_union_of_branches() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: primitives.any,
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let result = store.evaluate(cond);
+  assert_eq!(result, store.union(vec![primitives.number, primitives.boolean]));
+}
+
+#[test]
+fn distributive_conditional_any_is_union_of_branches() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    DefId(0),
+    ExpandedType {
+      params: vec![TypeParamId(0)],
+      ty: cond,
+    },
+  );
+
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: vec![primitives.any],
+  });
+
+  let mut eval = evaluator(store.clone(), &expander);
+  let result = eval.evaluate(ref_ty);
+  assert_eq!(result, store.union(vec![primitives.number, primitives.boolean]));
+}
+
+#[test]
 fn distributive_conditional_substitutes_extends_per_member() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
