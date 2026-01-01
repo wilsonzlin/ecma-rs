@@ -634,6 +634,8 @@ pub fn check_body_with_expander(
     jsx_intrinsic_elements_ty: None,
     jsx_intrinsic_attributes_ty: None,
     jsx_intrinsic_class_attributes_def: None,
+    jsx_element_attributes_prop_name: None,
+    jsx_library_managed_attributes_def: None,
     jsx_children_prop_name: None,
     jsx_namespace_missing_reported: false,
     expr_types,
@@ -742,6 +744,8 @@ struct Checker<'a> {
   jsx_intrinsic_elements_ty: Option<TypeId>,
   jsx_intrinsic_attributes_ty: Option<TypeId>,
   jsx_intrinsic_class_attributes_def: Option<Option<DefId>>,
+  jsx_element_attributes_prop_name: Option<Option<TsNameId>>,
+  jsx_library_managed_attributes_def: Option<Option<DefId>>,
   jsx_children_prop_name: Option<TsNameId>,
   jsx_namespace_missing_reported: bool,
   expr_types: Vec<TypeId>,
@@ -2161,6 +2165,15 @@ impl<'a> Checker<'a> {
         ret_ty = substituter.substitute_type(ret_ty);
       }
       if is_construct {
+        if let Some(attrs_prop) = self.jsx_element_attributes_prop_key() {
+          let prop_name = self.store.name(attrs_prop);
+          if self.type_has_prop(ret_ty, &prop_name) {
+            props_ty = self.member_type(ret_ty, &prop_name);
+          }
+        }
+      }
+      props_ty = self.jsx_apply_library_managed_attributes(component_ty, props_ty);
+      if is_construct {
         let class_attrs = self.jsx_intrinsic_class_attributes_type(ret_ty);
         if !matches!(self.store.type_kind(class_attrs), TypeKind::EmptyObject) {
           props_ty = self.store.intersection(vec![props_ty, class_attrs]);
@@ -2341,6 +2354,33 @@ impl<'a> Checker<'a> {
     ty
   }
 
+  fn jsx_library_managed_attributes_def_id(&mut self) -> Option<DefId> {
+    if let Some(cached) = self.jsx_library_managed_attributes_def.as_ref() {
+      return *cached;
+    }
+    let def = self
+      .resolve_type_ref(&["JSX", "LibraryManagedAttributes"])
+      .and_then(|ty| match self.store.type_kind(ty) {
+        TypeKind::Ref { def, args } if args.is_empty() => Some(def),
+        _ => None,
+      });
+    self.jsx_library_managed_attributes_def = Some(def);
+    def
+  }
+
+  fn jsx_apply_library_managed_attributes(&mut self, component: TypeId, props: TypeId) -> TypeId {
+    if matches!(self.store.type_kind(props), TypeKind::Any | TypeKind::Unknown) {
+      return props;
+    }
+    let Some(def) = self.jsx_library_managed_attributes_def_id() else {
+      return props;
+    };
+    self.store.canon(self.store.intern_type(TypeKind::Ref {
+      def,
+      args: vec![component, props],
+    }))
+  }
+
   fn jsx_intrinsic_class_attributes_def_id(&mut self) -> Option<DefId> {
     if let Some(cached) = self.jsx_intrinsic_class_attributes_def.as_ref() {
       return *cached;
@@ -2363,6 +2403,24 @@ impl<'a> Checker<'a> {
       def,
       args: vec![instance],
     }))
+  }
+
+  fn jsx_element_attributes_prop_key(&mut self) -> Option<TsNameId> {
+    if let Some(cached) = self.jsx_element_attributes_prop_name.as_ref() {
+      return *cached;
+    }
+    let Some(attrs_ty) = self.resolve_type_ref(&["JSX", "ElementAttributesProperty"]) else {
+      self.jsx_element_attributes_prop_name = Some(None);
+      return None;
+    };
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    self.jsx_collect_children_attribute_keys(attrs_ty, &mut candidates, &mut seen);
+    candidates.sort();
+    candidates.dedup();
+    let selected = candidates.into_iter().next().map(|name| self.store.intern_name(name));
+    self.jsx_element_attributes_prop_name = Some(selected);
+    selected
   }
 
   fn jsx_children_prop_key(&mut self, _loc: Loc) -> TsNameId {
@@ -2639,6 +2697,48 @@ impl<'a> Checker<'a> {
       }
       TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
       _ => prim.unknown,
+    }
+  }
+
+  fn type_has_prop(&self, ty: TypeId, prop: &str) -> bool {
+    let expanded = self.expand_for_props(ty);
+    if expanded != ty {
+      return self.type_has_prop(expanded, prop);
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        if !shape.indexers.is_empty() {
+          return true;
+        }
+        for candidate in shape.properties.iter() {
+          match candidate.key {
+            PropKey::String(name_id) => {
+              if self.store.name(name_id) == prop {
+                return true;
+              }
+            }
+            PropKey::Number(num) => {
+              if prop.parse::<i64>().ok() == Some(num) {
+                return true;
+              }
+            }
+            _ => {}
+          }
+        }
+        false
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .copied()
+        .any(|member| self.type_has_prop(member, prop)),
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.type_has_prop(expanded, prop))
+        .unwrap_or(false),
+      TypeKind::Mapped(_) => true,
+      _ => false,
     }
   }
 

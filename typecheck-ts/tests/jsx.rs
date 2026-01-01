@@ -658,3 +658,91 @@ const bad = <Foo x={1} ref={123} />;
     "did not expect excess property diagnostics, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn element_attributes_property_controls_class_component_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface ElementAttributesProperty { props: {} }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+interface FooProps { x: number }
+interface FooInstance { props: FooProps }
+declare const Foo: { new (): FooInstance };
+const ok = <Foo x={1} />;
+const bad = <Foo y={1} />;
+"#;
+  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected excess property, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn library_managed_attributes_are_applied_to_component_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  type LibraryManagedAttributes<C, P> = P & { managed?: string };
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(props: { x: number }): JSX.Element { return null as any; }
+const ok = <Foo x={1} managed="yes" />;
+const bad = <Foo x={1} managed={123} />;
+"#;
+  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::EXCESS_PROPERTY.as_str()),
+    "did not expect excess property diagnostics, got {diagnostics:?}"
+  );
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str()),
+    "expected a type mismatch diagnostic for managed, got {diagnostics:?}"
+  );
+}
