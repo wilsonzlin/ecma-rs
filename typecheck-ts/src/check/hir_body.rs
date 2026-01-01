@@ -1668,11 +1668,12 @@ impl<'a> Checker<'a> {
         "jsx is disabled",
         Span::new(self.file, loc_to_range(self.file, elem.loc)),
       ));
+      self.record_expr_type(elem.loc, prim.unknown);
       return prim.unknown;
     }
 
     let element_ty = self.jsx_element_type(elem.loc);
-    let mut props_ty = prim.unknown;
+    let actual_props_ty = self.jsx_actual_props_type(&elem.stx.attributes, &elem.stx.children);
 
     match &elem.stx.name {
       None => {
@@ -1687,8 +1688,8 @@ impl<'a> Checker<'a> {
         let tag = tag_buf.as_deref().unwrap_or_else(|| name.stx.name.as_str());
         let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
         if intrinsic_elements != prim.unknown {
-          let found = self.member_type(intrinsic_elements, tag);
-          if found == prim.unknown {
+          let expected_props_ty = self.member_type(intrinsic_elements, tag);
+          if expected_props_ty == prim.unknown {
             self
               .diagnostics
               .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
@@ -1696,7 +1697,7 @@ impl<'a> Checker<'a> {
                 Span::new(self.file, loc_to_range(self.file, name.loc)),
               ));
           } else {
-            props_ty = found;
+            self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
           }
         }
       }
@@ -1705,8 +1706,8 @@ impl<'a> Checker<'a> {
         if name.contains(':') || name.contains('-') {
           let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
           if intrinsic_elements != prim.unknown {
-            let found = self.member_type(intrinsic_elements, name);
-            if found == prim.unknown {
+            let expected_props_ty = self.member_type(intrinsic_elements, name);
+            if expected_props_ty == prim.unknown {
               self
                 .diagnostics
                 .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
@@ -1714,7 +1715,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, id.loc)),
                 ));
             } else {
-              props_ty = found;
+              self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
             }
           }
         } else {
@@ -1728,9 +1729,7 @@ impl<'a> Checker<'a> {
               ));
               prim.unknown
             });
-          props_ty = self
-            .jsx_component_props_type(component_ty)
-            .unwrap_or(prim.unknown);
+          self.check_jsx_component(component_ty, actual_props_ty, element_ty, elem.loc);
         }
       }
       Some(JsxElemName::Member(member)) => {
@@ -1743,8 +1742,8 @@ impl<'a> Checker<'a> {
           }
           let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
           if intrinsic_elements != prim.unknown {
-            let found = self.member_type(intrinsic_elements, &tag);
-            if found == prim.unknown {
+            let expected_props_ty = self.member_type(intrinsic_elements, &tag);
+            if expected_props_ty == prim.unknown {
               self
                 .diagnostics
                 .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
@@ -1752,7 +1751,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, member.loc)),
                 ));
             } else {
-              props_ty = found;
+              self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
             }
           }
         } else {
@@ -1771,123 +1770,189 @@ impl<'a> Checker<'a> {
           for segment in member.stx.path.iter() {
             current = self.member_type(current, segment);
           }
-          props_ty = self
-            .jsx_component_props_type(current)
-            .unwrap_or(prim.unknown);
+          self.check_jsx_component(current, actual_props_ty, element_ty, elem.loc);
         }
       }
     }
-
-    self.check_jsx_attrs(&elem.stx.attributes, props_ty);
-    self.check_jsx_children(&elem.stx.children, props_ty);
+    self.record_expr_type(elem.loc, element_ty);
     element_ty
   }
 
-  fn check_jsx_attrs(&mut self, attrs: &[JsxAttr], props_ty: TypeId) {
+  fn jsx_actual_props_type(&mut self, attrs: &[JsxAttr], children: &[JsxElemChild]) -> TypeId {
     let prim = self.store.primitive_ids();
+    let mut shape = Shape::new();
+    let mut spreads = Vec::new();
     for attr in attrs {
       match attr {
         JsxAttr::Named { name, value } => {
-          let key = &name.stx.name;
-          let expected = if props_ty == prim.unknown {
-            prim.unknown
+          let key = if let Some(namespace) = name.stx.namespace.as_ref() {
+            format!("{namespace}:{}", name.stx.name)
           } else {
-            self.member_type(props_ty, key)
+            name.stx.name.clone()
           };
-
-          match value {
-            None => {
-              // Boolean attributes (e.g. `<div hidden />`). Approximate as `true`.
-              if expected != prim.unknown && !self.relate.is_assignable(prim.boolean, expected) {
-                self.diagnostics.push(codes::TYPE_MISMATCH.error(
-                  "type mismatch",
-                  Span::new(self.file, loc_to_range(self.file, name.loc)),
-                ));
-              }
-            }
-            Some(JsxAttrVal::Text(text)) => {
-              if let Some(actual) = self.jsx_text_type(text) {
-                if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
-                  self.diagnostics.push(codes::TYPE_MISMATCH.error(
-                    "type mismatch",
-                    Span::new(self.file, loc_to_range(self.file, text.loc)),
-                  ));
-                }
-              }
-            }
+          let key = PropKey::String(self.store.intern_name(key));
+          let value_ty = match value {
+            None => self.store.intern_type(TypeKind::BooleanLiteral(true)),
+            Some(JsxAttrVal::Text(text)) => self.jsx_attr_text_type(text),
             Some(JsxAttrVal::Expression(expr)) => {
-              let actual = self.check_expr(&expr.stx.value);
-              if expected != prim.unknown {
-                self.check_assignable(&expr.stx.value, actual, expected);
+              if is_empty_jsx_expr_placeholder(&expr.stx.value) {
+                prim.unknown
+              } else {
+                self.check_expr(&expr.stx.value)
               }
             }
-            Some(JsxAttrVal::Element(elem)) => {
-              let actual = self.check_jsx_elem(elem);
-              if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
-                self.diagnostics.push(codes::TYPE_MISMATCH.error(
-                  "type mismatch",
-                  Span::new(self.file, loc_to_range(self.file, elem.loc)),
-                ));
-              }
-            }
-          }
+            Some(JsxAttrVal::Element(elem)) => self.check_jsx_elem(elem),
+          };
+          shape.properties.push(types_ts_interned::Property {
+            key,
+            data: PropData {
+              ty: value_ty,
+              optional: false,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
         }
         JsxAttr::Spread { value } => {
-          let actual = self.check_expr(&value.stx.value);
-          if props_ty != prim.unknown {
-            self.check_assignable(&value.stx.value, actual, props_ty);
-          }
+          spreads.push(self.check_expr(&value.stx.value));
         }
       }
     }
+
+    if let Some(children_ty) = self.jsx_children_prop_type(children) {
+      let key = PropKey::String(self.store.intern_name("children".to_string()));
+      shape.properties.push(types_ts_interned::Property {
+        key,
+        data: PropData {
+          ty: children_ty,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+
+    let shape_id = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape: shape_id });
+    let mut ty = self.store.intern_type(TypeKind::Object(obj));
+    if !spreads.is_empty() {
+      spreads.insert(0, ty);
+      ty = self.store.intersection(spreads);
+    }
+    ty
   }
 
-  fn check_jsx_children(&mut self, children: &[JsxElemChild], props_ty: TypeId) {
+  fn jsx_children_prop_type(&mut self, children: &[JsxElemChild]) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
-    let expected = if props_ty == prim.unknown {
-      prim.unknown
-    } else {
-      self.member_type(props_ty, "children")
-    };
+    let mut collected = Vec::new();
     for child in children {
       match child {
         JsxElemChild::Text(text) => {
-          let Some(actual) = self.jsx_text_type(text) else {
-            continue;
-          };
-          if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
-            self.diagnostics.push(codes::TYPE_MISMATCH.error(
-              "type mismatch",
-              Span::new(self.file, loc_to_range(self.file, text.loc)),
-            ));
+          if let Some(ty) = self.jsx_child_text_type(text) {
+            collected.push(ty);
           }
         }
         JsxElemChild::Expr(expr) => {
-          let actual = self.check_expr(&expr.stx.value);
-          if expected != prim.unknown {
-            self.check_assignable(&expr.stx.value, actual, expected);
+          if is_empty_jsx_expr_placeholder(&expr.stx.value) {
+            continue;
+          }
+          let expr_ty = self.check_expr(&expr.stx.value);
+          let ty = if expr.stx.spread {
+            self.spread_element_type(expr_ty)
+          } else {
+            expr_ty
+          };
+          if ty != prim.unknown {
+            collected.push(ty);
           }
         }
         JsxElemChild::Element(elem) => {
-          let actual = self.check_jsx_elem(elem);
-          if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
-            self.diagnostics.push(codes::TYPE_MISMATCH.error(
-              "type mismatch",
-              Span::new(self.file, loc_to_range(self.file, elem.loc)),
-            ));
-          }
+          collected.push(self.check_jsx_elem(elem));
         }
       }
     }
+    if collected.is_empty() {
+      None
+    } else {
+      Some(self.store.union(collected))
+    }
   }
 
-  fn jsx_text_type(&mut self, text: &Node<JsxText>) -> Option<TypeId> {
+  fn jsx_attr_text_type(&mut self, text: &Node<JsxText>) -> TypeId {
+    let name = self.store.intern_name(text.stx.value.clone());
+    self.store.intern_type(TypeKind::StringLiteral(name))
+  }
+
+  fn jsx_child_text_type(&mut self, text: &Node<JsxText>) -> Option<TypeId> {
     let trimmed = text.stx.value.trim();
     if trimmed.is_empty() {
       return None;
     }
     let name = self.store.intern_name(trimmed.to_string());
     Some(self.store.intern_type(TypeKind::StringLiteral(name)))
+  }
+
+  fn check_jsx_props_assignable(&mut self, loc: Loc, actual: TypeId, expected: TypeId) {
+    if matches!(
+      self.store.type_kind(actual),
+      TypeKind::Any | TypeKind::Unknown
+    ) || matches!(
+      self.store.type_kind(expected),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
+      return;
+    }
+    if self.relate.is_assignable(actual, expected) {
+      return;
+    }
+    self.diagnostics.push(codes::TYPE_MISMATCH.error(
+      "type mismatch",
+      Span::new(self.file, loc_to_range(self.file, loc)),
+    ));
+  }
+
+  fn check_jsx_component(
+    &mut self,
+    component_ty: TypeId,
+    actual_props_ty: TypeId,
+    element_ty: TypeId,
+    loc: Loc,
+  ) {
+    let span = Span::new(self.file, loc_to_range(self.file, loc));
+    let args = [actual_props_ty];
+    let has_call_sigs = !callable_signatures(self.store.as_ref(), component_ty).is_empty();
+    let resolution = if has_call_sigs {
+      resolve_call(
+        &self.store,
+        &self.relate,
+        component_ty,
+        &args,
+        None,
+        Some(element_ty),
+        span,
+        self.ref_expander,
+      )
+    } else {
+      resolve_construct(
+        &self.store,
+        &self.relate,
+        component_ty,
+        &args,
+        None,
+        Some(element_ty),
+        span,
+        self.ref_expander,
+      )
+    };
+    for diag in resolution.diagnostics {
+      self.diagnostics.push(diag);
+    }
   }
 
   fn resolve_type_ref(&mut self, path: &[&str]) -> Option<TypeId> {
@@ -1937,11 +2002,6 @@ impl<'a> Checker<'a> {
     let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_intrinsic_elements_ty = Some(ty);
     ty
-  }
-
-  fn jsx_component_props_type(&mut self, component_ty: TypeId) -> Option<TypeId> {
-    let sig = self.first_callable_signature(component_ty)?;
-    sig.params.first().map(|param| param.ty)
   }
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let prim = self.store.primitive_ids();
@@ -3361,6 +3421,10 @@ fn contains_range(outer: TextRange, inner: TextRange) -> bool {
 
 fn ranges_overlap(a: TextRange, b: TextRange) -> bool {
   a.start < b.end && b.start < a.end
+}
+
+fn is_empty_jsx_expr_placeholder(expr: &Node<AstExpr>) -> bool {
+  expr.loc.is_empty() && matches!(expr.stx.as_ref(), AstExpr::Id(id) if id.stx.name.is_empty())
 }
 
 fn span_for_stmt_list(stmts: &[Node<Stmt>], file: FileId) -> Option<TextRange> {
