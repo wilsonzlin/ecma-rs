@@ -4141,19 +4141,22 @@ impl ProgramState {
   }
 
   fn module_kind_from_sem_hir(file: &sem_ts::HirFile) -> sem_ts::ModuleKind {
-    if file.imports.is_empty()
-      && file.import_equals.is_empty()
-      && file.exports.is_empty()
-      && file.export_as_namespace.is_empty()
-      && file.ambient_modules.is_empty()
-      && file
+    let has_import_equals_require = file
+      .import_equals
+      .iter()
+      .any(|ie| matches!(ie.target, sem_ts::ImportEqualsTarget::Require { .. }));
+    let has_module_syntax = !file.imports.is_empty()
+      || !file.exports.is_empty()
+      || !file.export_as_namespace.is_empty()
+      || has_import_equals_require
+      || file
         .decls
         .iter()
-        .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
-    {
-      sem_ts::ModuleKind::Script
-    } else {
+        .any(|decl| !matches!(decl.exported, sem_ts::Exported::No));
+    if has_module_syntax {
       sem_ts::ModuleKind::Module
+    } else {
+      sem_ts::ModuleKind::Script
     }
   }
 

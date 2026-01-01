@@ -57,7 +57,41 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     .iter()
     .filter_map(|import| map_import_from_lower(import, &resolve_name))
     .collect();
-  let import_equals: Vec<sem_ts::ImportEquals> = Vec::new();
+  let import_equals: Vec<sem_ts::ImportEquals> = lowered
+    .hir
+    .imports
+    .iter()
+    .filter_map(|import| match &import.kind {
+      HirImportKind::ImportEquals(eq) => {
+        let local = resolve_name(eq.local.local);
+        let is_exported = eq
+          .local
+          .local_def
+          .and_then(|def_id| lowered.def_index.get(&def_id).copied())
+          .and_then(|idx| lowered.defs.get(idx))
+          .map(|def| def.is_exported || def.is_default_export)
+          .unwrap_or(false);
+        let span = import.span;
+        let target = match &eq.target {
+          hir_js::ImportEqualsTarget::Module(spec) => sem_ts::ImportEqualsTarget::Require {
+            specifier: spec.value.clone(),
+            specifier_span: span,
+          },
+          hir_js::ImportEqualsTarget::Path(path) => sem_ts::ImportEqualsTarget::EntityName {
+            path: path.iter().copied().map(resolve_name).collect(),
+            span,
+          },
+        };
+        Some(sem_ts::ImportEquals {
+          local,
+          local_span: span,
+          target,
+          is_exported,
+        })
+      }
+      _ => None,
+    })
+    .collect();
   let export_as_namespace: Vec<_> = lowered
     .hir
     .exports
@@ -86,10 +120,13 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     })
     .filter_map(|export| map_export_from_lower(export, lowered, &resolve_name))
     .collect();
+  let has_import_equals_require = import_equals
+    .iter()
+    .any(|ie| matches!(ie.target, sem_ts::ImportEqualsTarget::Require { .. }));
   let module_kind = if imports.is_empty()
-    && import_equals.is_empty()
     && exports.is_empty()
     && export_as_namespace.is_empty()
+    && !has_import_equals_require
     && decls
       .iter()
       .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
