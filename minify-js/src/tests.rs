@@ -411,6 +411,29 @@ fn hir_emitter_can_differ_from_ast_output() {
   assert_outputs_parse_to_same_ast(TopLevelMode::Global, Dialect::Js, &hir_output, &ast_output);
 }
 
+#[cfg(feature = "emit-minify")]
+#[test]
+fn hir_minify_preserves_decorators() {
+  let src = "@dec export class C {}";
+  let (output, backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Module).with_dialect(Dialect::Ts),
+    src,
+  );
+  assert_eq!(backend, EmitBackend::Hir);
+  assert!(
+    output.contains("@dec"),
+    "expected minified output to preserve decorators\nsrc:\n{src}\noutput:\n{output}"
+  );
+  parse_with_options(
+    &output,
+    ParseOptions {
+      dialect: Dialect::Js,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("minified output should parse as JavaScript");
+}
+
 #[test]
 fn readme_example_is_parseable() {
   let code = "const main = () => { let my_first_variable = 1; };";

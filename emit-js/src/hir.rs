@@ -11,11 +11,12 @@ use crate::{EmitError, EmitOptions, EmitResult, Emitter};
 use diagnostics::Diagnostic;
 use hir_js::{
   AssignOp, BinaryOp, Body, BodyId, ClassMember, ClassMemberKey, ClassMemberKind, ClassMethodKind,
-  DefData, DefId, Export, ExportAll, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed,
-  Expr, ExprId, ExprKind, FunctionBody, FunctionData, Import, ImportBinding, ImportEqualsTarget,
-  ImportEs, ImportKind, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
-  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, NameId, ObjectKey,
-  ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId, StmtKind,
+  Decorator, DefData, DefId, Export, ExportAll, ExportDefault, ExportDefaultValue, ExportKind,
+  ExportNamed, Expr, ExprId, ExprKind, FunctionBody, FunctionData, Import, ImportBinding,
+  ImportEqualsTarget, ImportEs, ImportKind, JsxAttr, JsxAttrValue, JsxChild, JsxElement,
+  JsxElementName, JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr,
+  NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId,
+  StmtKind,
   TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
@@ -187,7 +188,20 @@ impl<'a> HirContext<'a> {
   }
 }
 
+fn emit_decorators(em: &mut Emitter, ctx: &HirContext<'_>, decorators: &[Decorator]) -> EmitResult {
+  for deco in decorators {
+    em.write_punct("@");
+    let deco_body = ctx
+      .body(deco.body)
+      .ok_or_else(|| EmitError::unsupported("decorator body not found"))?;
+    emit_expr_with_min_prec(em, ctx, deco_body, deco.expr, Prec::LOWEST)?;
+    em.write_space();
+  }
+  Ok(())
+}
+
 fn emit_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult {
+  emit_decorators(em, ctx, &def.decorators)?;
   if def.is_exported || def.is_default_export {
     em.write_keyword("export");
   }
@@ -369,6 +383,14 @@ fn emit_export_default(
   ctx: &HirContext<'_>,
   default: &ExportDefault,
 ) -> EmitResult {
+  match &default.value {
+    ExportDefaultValue::Function { def, .. } | ExportDefaultValue::Class { def, .. } => {
+      if let Some(def_data) = ctx.def(*def) {
+        emit_decorators(em, ctx, &def_data.decorators)?;
+      }
+    }
+    ExportDefaultValue::Expr { .. } => {}
+  }
   em.write_keyword("export");
   em.write_keyword("default");
   match &default.value {
@@ -483,6 +505,19 @@ fn emit_class_member(
   class_body: &Body,
   member: &ClassMember,
 ) -> EmitResult {
+  let member_def = match &member.kind {
+    ClassMemberKind::Constructor { def, .. }
+    | ClassMemberKind::Method { def, .. }
+    | ClassMemberKind::Field { def, .. } => Some(*def),
+    ClassMemberKind::StaticBlock { .. } => None,
+  };
+  if let Some(def_id) = member_def {
+    let def = ctx
+      .def(def_id)
+      .ok_or_else(|| EmitError::unsupported("class member definition not found"))?;
+    emit_decorators(em, ctx, &def.decorators)?;
+  }
+
   match &member.kind {
     ClassMemberKind::StaticBlock { stmt } => {
       em.write_keyword("static");
@@ -854,6 +889,7 @@ fn emit_param_list(
     if idx > 0 {
       em.write_punct(",");
     }
+    emit_decorators(em, ctx, &param.decorators)?;
     if param.rest {
       em.write_punct("...");
     }
@@ -1512,10 +1548,13 @@ fn emit_expr_no_parens(
       )?;
     }
     ExprKind::ClassExpr {
+      def: def_id,
       body: body_id,
       name,
-      ..
     } => {
+      if let Some(def) = ctx.def(*def_id) {
+        emit_decorators(em, ctx, &def.decorators)?;
+      }
       let class_body = ctx
         .body(*body_id)
         .ok_or_else(|| EmitError::unsupported("class body not found"))?;
