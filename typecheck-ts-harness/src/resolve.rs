@@ -3,6 +3,7 @@ use crate::runner::HarnessFileSet;
 use serde_json::Value;
 use typecheck_ts::FileKey;
 
+const EXPORT_CONDITIONS: [&str; 4] = ["types", "default", "import", "require"];
 const EXTENSIONS: [&str; 11] = [
   "ts", "tsx", "d.ts", "mts", "d.mts", "cts", "d.cts", "js", "jsx", "mjs", "cjs",
 ];
@@ -57,10 +58,21 @@ fn resolve_non_relative(
 
   // c) Walk up `node_modules` directories starting from the importing file's directory.
   let from_name = files.name_for_key(from)?;
+  let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
+  let subpath = package_rest.trim_start_matches('/');
+  let has_subpath = !subpath.is_empty();
   let mut dir = virtual_parent_dir(&from_name);
   loop {
-    let node_modules_base = virtual_join(&virtual_join(&dir, "node_modules"), specifier);
-    if let Some(found) = resolve_as_file_or_directory(files, &node_modules_base) {
+    let package_dir = virtual_join(&virtual_join(&dir, "node_modules"), package_name);
+    if has_subpath {
+      if let Some(found) = resolve_via_exports(files, &package_dir, &format!("./{subpath}"), 0) {
+        return Some(found);
+      }
+      let entry = virtual_join(&package_dir, subpath);
+      if let Some(found) = resolve_as_file_or_directory(files, &entry) {
+        return Some(found);
+      }
+    } else if let Some(found) = resolve_as_file_or_directory(files, &package_dir) {
       return Some(found);
     }
 
@@ -104,7 +116,7 @@ fn resolve_as_file_or_directory_inner(
 
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
-    for ext in ["ts", "tsx"] {
+    for ext in ["ts", "tsx", "d.ts"] {
       let candidate = normalize_name(&format!("{trimmed}.{ext}"));
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
@@ -112,9 +124,11 @@ fn resolve_as_file_or_directory_inner(
     }
   } else if base_candidate.ends_with(".jsx") {
     let trimmed = base_candidate.trim_end_matches(".jsx");
-    let candidate = normalize_name(&format!("{trimmed}.tsx"));
-    if let Some(found) = files.resolve(&candidate) {
-      return Some(found);
+    for ext in ["tsx", "d.ts"] {
+      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      if let Some(found) = files.resolve(&candidate) {
+        return Some(found);
+      }
     }
   } else if base_candidate.ends_with(".mjs") {
     let trimmed = base_candidate.trim_end_matches(".mjs");
@@ -166,17 +180,105 @@ fn resolve_via_package_json(
   let package_key = files.resolve(&package_json)?;
   let raw = files.content(&package_key)?;
   let parsed: Value = serde_json::from_str(&raw).ok()?;
-  let types = parsed
-    .get("types")
-    .and_then(|v| v.as_str())
-    .or_else(|| parsed.get("typings").and_then(|v| v.as_str()))
-    .or_else(|| parsed.get("main").and_then(|v| v.as_str()))?;
-  if types.is_empty() {
+
+  if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
+    return resolve_package_json_entry(files, dir, entry, depth);
+  }
+
+  if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
+    return resolve_package_json_entry(files, dir, entry, depth);
+  }
+
+  if let Some(entry) = resolve_exports_entry(&parsed, ".") {
+    return resolve_package_json_entry(files, dir, &entry, depth);
+  }
+
+  if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
+    return resolve_package_json_entry(files, dir, entry, depth);
+  }
+
+  None
+}
+
+fn resolve_package_json_entry(
+  files: &HarnessFileSet,
+  dir: &str,
+  entry: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  if entry.is_empty() {
+    return None;
+  }
+  let entry = normalize_name(&virtual_join(dir, entry));
+  resolve_as_file_or_directory_inner(files, &entry, depth + 1)
+}
+
+fn resolve_via_exports(
+  files: &HarnessFileSet,
+  package_dir: &str,
+  subpath: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  let package_json = normalize_name(&virtual_join(package_dir, "package.json"));
+  let package_key = files.resolve(&package_json)?;
+  let raw = files.content(&package_key)?;
+  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let entry = resolve_exports_entry(&parsed, subpath)?;
+  resolve_package_json_entry(files, package_dir, &entry, depth)
+}
+
+fn resolve_exports_entry(parsed: &Value, subpath: &str) -> Option<String> {
+  let exports = parsed.get("exports")?;
+  resolve_exports_value(exports, subpath, 0)
+}
+
+fn resolve_exports_value(exports: &Value, subpath: &str, depth: usize) -> Option<String> {
+  if depth > 16 {
     return None;
   }
 
-  let entry = normalize_name(&virtual_join(dir, types));
-  resolve_as_file_or_directory_inner(files, &entry, depth + 1)
+  match exports {
+    Value::String(s) => (subpath == ".").then(|| s.clone()),
+    Value::Array(items) => items
+      .iter()
+      .find_map(|item| resolve_exports_value(item, subpath, depth + 1)),
+    Value::Object(map) => {
+      let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
+      if has_subpath_keys {
+        let target = map.get(subpath)?;
+        resolve_export_target(target, depth + 1)
+      } else {
+        (subpath == ".").then(|| resolve_export_target(exports, depth + 1))?
+      }
+    }
+    Value::Null => None,
+    _ => None,
+  }
+}
+
+fn resolve_export_target(value: &Value, depth: usize) -> Option<String> {
+  if depth > 16 {
+    return None;
+  }
+
+  match value {
+    Value::String(s) => Some(s.clone()),
+    Value::Array(items) => items
+      .iter()
+      .find_map(|item| resolve_export_target(item, depth + 1)),
+    Value::Object(map) => {
+      for cond in EXPORT_CONDITIONS {
+        if let Some(next) = map.get(cond) {
+          if let Some(resolved) = resolve_export_target(next, depth + 1) {
+            return Some(resolved);
+          }
+        }
+      }
+      None
+    }
+    Value::Null => None,
+    _ => None,
+  }
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {

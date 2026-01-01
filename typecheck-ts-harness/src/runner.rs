@@ -1616,6 +1616,82 @@ mod tests {
   }
 
   #[test]
+  fn resolves_bare_specifier_via_package_json_exports_root() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/package.json".to_string(),
+        content: r#"{ "name": "foo", "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } } }"#.to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/dist/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/foo/dist/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_via_package_json_exports_subpath() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo/bar\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/package.json".to_string(),
+        content: r#"{ "name": "foo", "exports": { "./bar": { "types": "./dist/bar.d.ts", "default": "./dist/bar.js" } } }"#.to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/dist/bar.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo/bar").expect("foo/bar should resolve");
+    let expected = file_set.resolve("/node_modules/foo/dist/bar.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_relative_js_specifier_via_d_ts_substitution() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import \"./foo.js\";".to_string(),
+      },
+      VirtualFile {
+        name: "/foo.d.ts".to_string(),
+        content: "export {};".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host
+      .resolve(&from, "./foo.js")
+      .expect("./foo.js should resolve");
+    let expected = file_set.resolve("/foo.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
   fn snapshots_preserve_extension_and_load_legacy_paths() {
     let tmp = tempdir().unwrap();
     let store = SnapshotStore {
