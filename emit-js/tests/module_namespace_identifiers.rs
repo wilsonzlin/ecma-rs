@@ -129,6 +129,14 @@ fn import_type_named_default_can_have_string_literal_alias() {
 }
 
 #[test]
+fn import_type_named_default_requires_as() {
+  roundtrip(
+    r#"import type { default as foo } from "mod";"#,
+    r#"import type{default as foo}from"mod";"#,
+  );
+}
+
+#[test]
 fn string_named_default_import_can_be_exported_as_default() {
   roundtrip(
     r#"import { default as "a-b" } from "mod";export { "a-b" as default };"#,
