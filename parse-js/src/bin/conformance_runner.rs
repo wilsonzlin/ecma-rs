@@ -197,13 +197,16 @@ fn has_module_directive(directives: &[HarnessDirective]) -> Option<bool> {
     })
 }
 
-fn contains_import_export(content: &str) -> bool {
+fn contains_import_export(content: &str, cancel: &Arc<AtomicBool>) -> Option<bool> {
   let mut lexer = Lexer::new(content);
   loop {
+    if cancel.load(AtomicOrdering::Relaxed) {
+      return None;
+    }
     let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
     match token.typ {
-      parse_js::token::TT::KeywordImport | parse_js::token::TT::KeywordExport => return true,
-      parse_js::token::TT::EOF => return false,
+      parse_js::token::TT::KeywordImport | parse_js::token::TT::KeywordExport => return Some(true),
+      parse_js::token::TT::EOF => return Some(false),
       _ => {}
     }
   }
@@ -231,7 +234,11 @@ fn should_parse(kind: &FileKind) -> bool {
   )
 }
 
-fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<HarnessDirective>) {
+fn split_virtual_files(
+  path: &Path,
+  source: &str,
+  cancel: &Arc<AtomicBool>,
+) -> Option<(Vec<VirtualFile>, Vec<HarnessDirective>)> {
   let mut global_directives: Vec<HarnessDirective> = Vec::new();
   let mut files: Vec<VirtualFile> = Vec::new();
 
@@ -239,6 +246,9 @@ fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<Harn
   let mut current_content: Vec<String> = Vec::new();
 
   for line in source.lines() {
+    if cancel.load(AtomicOrdering::Relaxed) {
+      return None;
+    }
     if let Some(directive) = parse_directive(line) {
       // Capture all directives for debugging purposes
       global_directives.push(directive.clone());
@@ -251,7 +261,8 @@ fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<Harn
           let content = current_content.join("\n");
           let kind = detect_file_kind(&name);
           let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-          let module = module_directive || contains_import_export(&content);
+          let module =
+            module_directive || contains_import_export(&content, cancel).unwrap_or(false);
           files.push(VirtualFile {
             name,
             content,
@@ -272,9 +283,12 @@ fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<Harn
   let final_name =
     current_name.unwrap_or_else(|| path.file_name().unwrap().to_string_lossy().to_string());
   let content = current_content.join("\n");
+  if cancel.load(AtomicOrdering::Relaxed) {
+    return None;
+  }
   let kind = detect_file_kind(&final_name);
   let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-  let module = module_directive || contains_import_export(&content);
+  let module = module_directive || contains_import_export(&content, cancel).unwrap_or(false);
   files.push(VirtualFile {
     name: final_name,
     content,
@@ -283,7 +297,7 @@ fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<Harn
     kind,
   });
 
-  (files, global_directives)
+  Some((files, global_directives))
 }
 
 fn discover_tests(dir: &Path) -> Vec<PathBuf> {
@@ -349,7 +363,9 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     return timeout_test_result(path, timeout_secs);
   }
 
-  let (mut virtual_files, directives) = split_virtual_files(path, &source);
+  let Some((mut virtual_files, directives)) = split_virtual_files(path, &source, cancel) else {
+    return timeout_test_result(path, timeout_secs);
+  };
   base_result.directives = directives;
   virtual_files
     .sort_by(|a, b| normalize_virtual_path(&a.name).cmp(&normalize_virtual_path(&b.name)));
