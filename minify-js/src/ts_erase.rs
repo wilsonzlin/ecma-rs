@@ -789,12 +789,15 @@ fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
 fn rewrite_enum_member_refs(
   expr: &mut Node<Expr>,
   enum_name: &str,
+  enum_alias: &str,
   member_names: &HashSet<String>,
-) {
+) -> bool {
   struct Rewriter<'a> {
     enum_name: &'a str,
+    enum_alias: &'a str,
     member_names: &'a HashSet<String>,
     shadowed: Vec<HashSet<String>>,
+    used_alias: bool,
   }
 
   impl<'a> Rewriter<'a> {
@@ -808,12 +811,18 @@ fn rewrite_enum_member_refs(
       self.shadowed.pop();
     }
 
-    fn replace_with_member_access(&self, expr: &mut Node<Expr>, member: String) {
+    fn replace_with_member_access(&mut self, expr: &mut Node<Expr>, member: String) {
       let loc = expr.loc;
       let assoc = std::mem::take(&mut expr.assoc);
+      let object_ident = if self.is_shadowed(self.enum_name) {
+        self.used_alias = true;
+        self.enum_alias
+      } else {
+        self.enum_name
+      };
       let mut replacement = ts_lower::member_expr(
         loc,
-        ts_lower::id(loc, self.enum_name.to_string()),
+        ts_lower::id(loc, object_ident.to_string()),
         ts_lower::MemberKey::Name(member),
       );
       replacement.assoc = assoc;
@@ -823,7 +832,7 @@ fn rewrite_enum_member_refs(
     fn collect_pat_declared(&self, pat: &Node<Pat>, out: &mut HashSet<String>) {
       match pat.stx.as_ref() {
         Pat::Id(id) => {
-          if self.member_names.contains(&id.stx.name) {
+          if self.member_names.contains(&id.stx.name) || id.stx.name == self.enum_name {
             out.insert(id.stx.name.clone());
           }
         }
@@ -947,7 +956,7 @@ fn rewrite_enum_member_refs(
               .as_ref()
               .map(|name| name.stx.name.clone())
             {
-              if self.member_names.contains(&name) {
+              if self.member_names.contains(&name) || name == self.enum_name {
                 out.insert(name);
               }
             }
@@ -959,7 +968,7 @@ fn rewrite_enum_member_refs(
               .as_ref()
               .map(|name| name.stx.name.clone())
             {
-              if self.member_names.contains(&name) {
+              if self.member_names.contains(&name) || name == self.enum_name {
                 out.insert(name);
               }
             }
@@ -1019,7 +1028,7 @@ fn rewrite_enum_member_refs(
         self.collect_pat_declared(&param.stx.pattern.stx.pat, &mut scope);
       }
       if let Some(name) = func_name {
-        if self.member_names.contains(name) {
+        if self.member_names.contains(name) || name == self.enum_name {
           scope.insert(name.to_string());
         }
       }
@@ -1342,7 +1351,7 @@ fn rewrite_enum_member_refs(
             .as_ref()
             .map(|name| name.stx.name.clone())
           {
-            if self.member_names.contains(&name) {
+            if self.member_names.contains(&name) || name == self.enum_name {
               let mut scope = HashSet::new();
               scope.insert(name);
               self.with_scope(scope, |rewriter| {
@@ -1468,10 +1477,13 @@ fn rewrite_enum_member_refs(
 
   let mut rewriter = Rewriter {
     enum_name,
+    enum_alias,
     member_names,
     shadowed: Vec::new(),
+    used_alias: false,
   };
   rewriter.rewrite_expr(expr);
+  rewriter.used_alias
 }
 
 fn enum_assign_stmt(loc: Loc, enum_ident: &str, member: &str, value: Node<Expr>) -> Node<Stmt> {
@@ -1578,6 +1590,8 @@ fn strip_enum_decl(
     ctx.top_level_value_bindings.insert(enum_name.clone());
   }
 
+  let enum_alias = format!("__minify_ts_enum_{enum_name}");
+  let mut used_enum_alias = false;
   let mut body = Vec::with_capacity(decl.stx.members.len());
   let mut next_auto: Option<f64> = Some(0.0);
   let mut last_numeric_member: Option<String> = None;
@@ -1590,7 +1604,7 @@ fn strip_enum_decl(
       .map(|expr| enum_value_kind(&enum_name, expr, &known_member_kinds))
       .unwrap_or(EnumValueKind::Number);
     if let Some(expr) = initializer.as_mut() {
-      rewrite_enum_member_refs(expr, &enum_name, &member_names);
+      used_enum_alias |= rewrite_enum_member_refs(expr, &enum_name, &enum_alias, &member_names);
     }
 
     match (kind, initializer) {
@@ -1641,6 +1655,19 @@ fn strip_enum_decl(
     }
 
     known_member_kinds.insert(member_name, kind);
+  }
+
+  if used_enum_alias {
+    body.insert(
+      0,
+      ts_lower::var_decl_stmt(
+        loc,
+        enum_alias,
+        Some(ts_lower::id(loc, enum_name.clone())),
+        false,
+        VarDeclMode::Var,
+      ),
+    );
   }
 
   let arg = enum_iife_arg(loc, &enum_name, parent_namespace);

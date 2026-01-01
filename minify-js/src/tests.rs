@@ -752,6 +752,107 @@ fn does_not_rewrite_shadowed_enum_member_references() {
 }
 
 #[test]
+fn rewrites_enum_member_references_using_alias_when_enum_name_shadowed() {
+  let src = r#"enum E { A = 1, B = ((E) => A)(0) }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 2);
+  let iife = match parsed.stx.body[1].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected enum IIFE expr stmt, got {other:?}"),
+  };
+  let call = match iife.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
+    {
+      Expr::Call(call) => call,
+      other => panic!("expected comma call rhs, got {other:?}"),
+    },
+    other => panic!("expected comma expression, got {other:?}"),
+  };
+  let func = match call.stx.callee.stx.as_ref() {
+    Expr::Func(func) => func,
+    other => panic!("expected function callee, got {other:?}"),
+  };
+  let body = match func.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+
+  assert_eq!(body.len(), 3);
+  let alias_stmt = body.first().expect("enum alias var decl statement");
+  let alias_decl = match alias_stmt.stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected enum alias var decl, got {other:?}"),
+  };
+  assert_eq!(alias_decl.stx.mode, VarDeclMode::Var);
+  let alias_declarator = alias_decl.stx.declarators.first().expect("alias declarator");
+  match alias_declarator.pattern.stx.pat.stx.as_ref() {
+    parse_js::ast::expr::pat::Pat::Id(id) => assert_eq!(id.stx.name, "__minify_ts_enum_E"),
+    other => panic!("expected identifier pattern, got {other:?}"),
+  };
+  let alias_init = alias_declarator
+    .initializer
+    .as_ref()
+    .expect("alias initializer");
+  match alias_init.stx.as_ref() {
+    Expr::Id(id) => assert_eq!(id.stx.name, "E"),
+    other => panic!("expected initializer identifier, got {other:?}"),
+  };
+
+  let b_stmt = body.get(2).expect("B member statement");
+  let expr_stmt = match b_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let outer_assign = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  let outer_left = match outer_assign.stx.left.stx.as_ref() {
+    Expr::ComputedMember(member) => member,
+    other => panic!("expected computed member assignment, got {other:?}"),
+  };
+  let name_assign = match outer_left.stx.member.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected inner assignment, got {other:?}"),
+  };
+  let value_expr = &name_assign.stx.right;
+  let call = match value_expr.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected call expression for B initializer, got {other:?}"),
+  };
+  let arrow = match call.stx.callee.stx.as_ref() {
+    Expr::ArrowFunc(arrow) => arrow,
+    other => panic!("expected arrow function callee, got {other:?}"),
+  };
+  let arrow_body = match arrow.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Expression(expr)) => expr,
+    other => panic!("expected arrow expression body, got {other:?}"),
+  };
+  let computed = match arrow_body.stx.as_ref() {
+    Expr::ComputedMember(member) => member,
+    other => panic!("expected computed member access, got {other:?}"),
+  };
+  match computed.stx.object.stx.as_ref() {
+    Expr::Id(id) => assert_eq!(id.stx.name, "__minify_ts_enum_E"),
+    other => panic!("expected enum alias identifier, got {other:?}"),
+  };
+  match computed.stx.member.stx.as_ref() {
+    Expr::LitStr(key) => assert_eq!(key.stx.value, "A"),
+    other => panic!("expected string literal member, got {other:?}"),
+  };
+}
+
+#[test]
 fn string_enum_aliases_do_not_emit_reverse_mappings() {
   let src = r#"enum S { A = "a", B = A }"#;
   let mut parsed = parse_with_options(
