@@ -198,6 +198,33 @@ fn preserves_default_export_in_reexports() {
 }
 
 #[test]
+fn preserves_default_as_named_reexport() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { default as foo } from \"mod\";",
+  );
+  assert_eq!(result, "export{default as foo}from\"mod\";");
+}
+
+#[test]
+fn preserves_named_as_default_reexport() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { foo as default } from \"mod\";",
+  );
+  assert_eq!(result, "export{foo as default}from\"mod\";");
+}
+
+#[test]
+fn export_list_default_alias_is_preserved() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { foo as default };",
+  );
+  assert_eq!(result, "const a=1;export{a as default};");
+}
+
+#[test]
 fn preserves_string_export_names_in_reexports() {
   let result = minified(
     TopLevelMode::Module,
