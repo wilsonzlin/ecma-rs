@@ -217,7 +217,7 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
   store: Arc<TypeStore>,
   expander: &'a E,
   conditional_assignability: Option<&'a dyn ConditionalAssignability>,
-  default_conditional_assignability: RelateCtx<'static>,
+  default_conditional_assignability: Option<RelateCtx<'static>>,
   caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
@@ -251,13 +251,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   pub fn with_caches(store: Arc<TypeStore>, expander: &'a E, caches: EvaluatorCaches) -> Self {
-    let default_conditional_assignability: RelateCtx<'static> =
-      RelateCtx::new(store.clone(), store.options());
     Self {
       store,
       expander,
       conditional_assignability: None,
-      default_conditional_assignability,
+      default_conditional_assignability: None,
       caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
@@ -561,9 +559,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
     let assignable = match self.conditional_assignability {
       Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
-      None => self
-        .default_conditional_assignability
-        .is_assignable_for_conditional(check_eval, extends_eval),
+      None => {
+        if self.default_conditional_assignability.is_none() {
+          self.default_conditional_assignability =
+            Some(RelateCtx::new(self.store.clone(), self.store.options()));
+        }
+        self
+          .default_conditional_assignability
+          .as_ref()
+          .expect("default conditional assignability must be initialized")
+          .is_assignable_for_conditional(check_eval, extends_eval)
+      }
     };
 
     let branch = if assignable {
