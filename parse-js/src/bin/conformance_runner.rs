@@ -14,6 +14,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
+use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -997,13 +998,21 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
 
   if let Some(json_path) = options.json_output.as_ref() {
     let serializable = serialize_results(&results);
-    if let Err(err) = fs::write(
-      json_path,
-      serde_json::to_string_pretty(&serializable).unwrap(),
-    ) {
-      eprintln!("Failed to write JSON output: {}", err);
-    } else {
-      println!("🧾 JSON results written to {}", json_path.display());
+    match fs::File::create(json_path) {
+      Ok(file) => {
+        let mut writer = BufWriter::new(file);
+        let result = serde_json::to_writer_pretty(&mut writer, &serializable)
+          .and_then(|()| writer.write_all(b"\n").map_err(serde_json::Error::io))
+          .and_then(|()| writer.flush().map_err(serde_json::Error::io));
+        if let Err(err) = result {
+          eprintln!("Failed to write JSON output: {}", err);
+        } else {
+          println!("🧾 JSON results written to {}", json_path.display());
+        }
+      }
+      Err(err) => {
+        eprintln!("Failed to write JSON output: {}", err);
+      }
     }
   }
 

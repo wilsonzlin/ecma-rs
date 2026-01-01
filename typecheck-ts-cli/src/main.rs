@@ -4,6 +4,7 @@ use diagnostics::{Diagnostic, FileId, Severity};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{mpsc, Arc, Mutex};
@@ -357,14 +358,13 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
         exports,
       },
     };
-    match serde_json::to_string_pretty(&output) {
-      Ok(serialized) => {
-        println!("{serialized}");
-      }
-      Err(err) => {
-        eprintln!("failed to serialize JSON: {err}");
-        return ExitCode::FAILURE;
-      }
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    if let Err(err) = serde_json::to_writer_pretty(&mut handle, &output)
+      .and_then(|()| writeln!(&mut handle).map_err(serde_json::Error::io))
+    {
+      eprintln!("failed to serialize JSON: {err}");
+      return ExitCode::FAILURE;
     }
   } else {
     let snapshot = snapshot_from_program(&program);
