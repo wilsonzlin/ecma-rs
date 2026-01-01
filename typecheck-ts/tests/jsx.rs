@@ -230,6 +230,48 @@ declare namespace JSX {
 }
 
 #[test]
+fn intrinsic_attribute_values_are_contextually_typed_for_call_signature_types() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+  options.no_implicit_any = true;
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface ClickHandler {
+    (ev: { x: number }): void;
+  }
+  interface IntrinsicElements {
+    div: { onClick?: ClickHandler };
+  }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+ <div onClick={(ev) => { const n: number = ev.x; }} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics (including implicit any) for contextually typed call-signature attrs, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn value_tag_intrinsic_attribute_values_are_contextually_typed() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;

@@ -1675,7 +1675,9 @@ impl<'a> Checker<'a> {
               if let Some(param) = sig.params.get(idx) {
                 let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
                 let contextual = match arg.stx.value.stx.as_ref() {
-                  AstExpr::ArrowFunc(_) | AstExpr::Func(_) if self.is_callable_like(param.ty) => {
+                  AstExpr::ArrowFunc(_) | AstExpr::Func(_)
+                    if self.first_callable_signature(param.ty).is_some() =>
+                  {
                     arg_ty
                   }
                   _ => self.contextual_arg_type(arg_ty, param.ty),
@@ -4040,24 +4042,19 @@ impl<'a> Checker<'a> {
         self.record_expr_type(expr.loc, ty);
         ty
       }
-      AstExpr::ArrowFunc(_) | AstExpr::Func(_) if self.is_callable_like(expected) => {
-        self.record_expr_type(expr.loc, expected);
-        expected
+      AstExpr::ArrowFunc(_) | AstExpr::Func(_) => {
+        if let Some(sig) = self.first_callable_signature(expected) {
+          let sig_id = self.store.intern_signature(sig);
+          let callable = self.store.intern_type(TypeKind::Callable {
+            overloads: vec![sig_id],
+          });
+          self.record_expr_type(expr.loc, callable);
+          callable
+        } else {
+          self.check_expr(expr)
+        }
       }
       _ => self.check_expr(expr),
-    }
-  }
-
-  fn is_callable_like(&self, ty: TypeId) -> bool {
-    match self.store.type_kind(ty) {
-      TypeKind::Callable { .. } => true,
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .is_some_and(|expanded| {
-          matches!(self.store.type_kind(expanded), TypeKind::Callable { .. })
-        }),
-      _ => false,
     }
   }
 
