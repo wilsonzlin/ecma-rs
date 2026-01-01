@@ -1,13 +1,13 @@
-use parse_js::ast::stmt::Stmt;
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{Diagnostic, FileId, TextRange};
+use parse_js::ast::stmt::Stmt;
 use std::sync::Arc;
 use std::thread;
+use typecheck_ts::check::type_expr::TypeLowerer;
 use typecheck_ts::db::{
   program_diagnostics as db_program_diagnostics, reset_parse_query_count,
   unresolved_module_diagnostics, TypecheckDb,
 };
-use typecheck_ts::check::type_expr::TypeLowerer;
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};

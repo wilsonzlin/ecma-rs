@@ -1697,9 +1697,8 @@ fn strip_enum_decl(
     && ctx.emitted_export_var.insert(enum_name.clone());
 
   let mut out = Vec::new();
-  let has_top_level_value_binding = parent_namespace.is_none()
-    && is_top_level
-    && ctx.top_level_value_bindings.contains(&enum_name);
+  let has_top_level_value_binding =
+    parent_namespace.is_none() && is_top_level && ctx.top_level_value_bindings.contains(&enum_name);
   if should_export_binding && has_top_level_value_binding {
     out.push(export_binding_stmt(loc, enum_name.clone()));
   }

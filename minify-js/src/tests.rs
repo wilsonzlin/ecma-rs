@@ -703,7 +703,10 @@ fn exports_namespaces_merged_with_existing_classes_without_var_redecls() {
     .expect("type erasure should succeed");
 
   assert_eq!(parsed.stx.body.len(), 3);
-  assert!(matches!(parsed.stx.body[0].stx.as_ref(), Stmt::ClassDecl(_)));
+  assert!(matches!(
+    parsed.stx.body[0].stx.as_ref(),
+    Stmt::ClassDecl(_)
+  ));
   let export_stmt = match parsed.stx.body[1].stx.as_ref() {
     Stmt::ExportList(stmt) => stmt,
     other => panic!("expected export list statement, got {other:?}"),
@@ -734,7 +737,10 @@ fn exports_namespaces_merged_with_existing_classes_without_var_redecls() {
       }
     }
   }
-  assert!(!found_var_decl, "should not introduce `var C;` for class-merged namespaces");
+  assert!(
+    !found_var_decl,
+    "should not introduce `var C;` for class-merged namespaces"
+  );
 }
 
 #[test]

@@ -590,10 +590,9 @@ fn union_canonicalization_is_span_stable_for_template_literal_types() {
 
 #[test]
 fn union_canonicalization_is_span_stable_for_mapped_types() {
-  let base = lower_from_source(
-    "type A = { [K in keyof Foo]: Foo[K] } | { [K in keyof Bar]: Bar[K] };",
-  )
-  .expect("lower");
+  let base =
+    lower_from_source("type A = { [K in keyof Foo]: Foo[K] } | { [K in keyof Bar]: Bar[K] };")
+      .expect("lower");
   let with_padding = lower_from_source(
     "type Z = string;\ntype A = { [K in keyof Foo]: Foo[K] } | { [K in keyof Bar]: Bar[K] };",
   )
@@ -993,10 +992,9 @@ fn intersection_canonicalization_is_span_stable_for_template_literal_types() {
 
 #[test]
 fn intersection_canonicalization_is_span_stable_for_mapped_types() {
-  let base = lower_from_source(
-    "type A = { [K in keyof Foo]: Foo[K] } & { [K in keyof Bar]: Bar[K] };",
-  )
-  .expect("lower");
+  let base =
+    lower_from_source("type A = { [K in keyof Foo]: Foo[K] } & { [K in keyof Bar]: Bar[K] };")
+      .expect("lower");
   let with_padding = lower_from_source(
     "type Z = string;\ntype A = { [K in keyof Foo]: Foo[K] } & { [K in keyof Bar]: Bar[K] };",
   )
@@ -1538,7 +1536,10 @@ fn union_member_template_literal_heads(result: &hir_js::LowerResult, alias: &str
     .collect()
 }
 
-fn union_member_mapped_constraint_base_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+fn union_member_mapped_constraint_base_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
