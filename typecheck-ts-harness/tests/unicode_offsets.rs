@@ -1,37 +1,14 @@
 #![cfg(feature = "with-node")]
 
+mod common;
+
 use serde_json::Map;
 use std::collections::HashMap;
-use std::path::PathBuf;
-use typecheck_ts_harness::tsc::{
-  node_available, typescript_available, TscRequest, TscRunner, TypeQuery,
-};
-
-fn runner_or_skip() -> Option<TscRunner> {
-  let node_path = PathBuf::from("node");
-
-  if !node_available(&node_path) {
-    eprintln!("skipping tsc unicode offset tests: node not available");
-    return None;
-  }
-
-  if !typescript_available(&node_path) {
-    eprintln!("skipping tsc unicode offset tests: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
-    return None;
-  }
-
-  match TscRunner::new(node_path) {
-    Ok(runner) => Some(runner),
-    Err(err) => {
-      eprintln!("skipping tsc unicode offset tests: {err}");
-      None
-    }
-  }
-}
+use typecheck_ts_harness::tsc::{TscRequest, TypeQuery};
 
 #[test]
 fn diagnostics_report_utf8_byte_offsets() {
-  let mut runner = match runner_or_skip() {
+  let mut runner = match common::runner_or_skip("tsc unicode offset tests") {
     Some(runner) => runner,
     None => return,
   };
@@ -63,7 +40,7 @@ fn diagnostics_report_utf8_byte_offsets() {
 
 #[test]
 fn auto_scanned_type_queries_use_utf8_byte_offsets() {
-  let mut runner = match runner_or_skip() {
+  let mut runner = match common::runner_or_skip("tsc unicode offset tests") {
     Some(runner) => runner,
     None => return,
   };
@@ -94,7 +71,7 @@ fn auto_scanned_type_queries_use_utf8_byte_offsets() {
 
 #[test]
 fn provided_type_queries_convert_utf8_offsets_for_typescript() {
-  let mut runner = match runner_or_skip() {
+  let mut runner = match common::runner_or_skip("tsc unicode offset tests") {
     Some(runner) => runner,
     None => return,
   };

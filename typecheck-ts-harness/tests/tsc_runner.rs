@@ -1,37 +1,14 @@
 #![cfg(feature = "with-node")]
 
+mod common;
+
 use serde_json::Map;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use typecheck_ts_harness::tsc::TscRequest;
-use typecheck_ts_harness::tsc::TscRunner;
-use typecheck_ts_harness::tsc::{node_available, typescript_available};
-
-fn runner_or_skip() -> Option<TscRunner> {
-  let node_path = PathBuf::from("node");
-
-  if !node_available(&node_path) {
-    eprintln!("skipping tsc runner tests: node not available");
-    return None;
-  }
-
-  if !typescript_available(&node_path) {
-    eprintln!("skipping tsc runner tests: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
-    return None;
-  }
-
-  match TscRunner::new(node_path) {
-    Ok(runner) => Some(runner),
-    Err(err) => {
-      eprintln!("skipping tsc runner tests: {err}");
-      None
-    }
-  }
-}
 
 #[test]
 fn reports_single_file_error() {
-  let mut runner = match runner_or_skip() {
+  let mut runner = match common::runner_or_skip("tsc runner tests") {
     Some(runner) => runner,
     None => return,
   };
@@ -64,7 +41,7 @@ fn reports_single_file_error() {
 
 #[test]
 fn resolves_relative_imports_across_files() {
-  let mut runner = match runner_or_skip() {
+  let mut runner = match common::runner_or_skip("tsc runner tests") {
     Some(runner) => runner,
     None => return,
   };

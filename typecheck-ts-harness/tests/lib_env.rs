@@ -6,7 +6,7 @@ use typecheck_ts::{FileKey, Host, HostError, Program};
 use typecheck_ts_harness::VirtualFile;
 
 #[cfg(feature = "with-node")]
-use std::path::PathBuf;
+mod common;
 #[cfg(feature = "with-node")]
 use serde_json::Map;
 #[cfg(feature = "with-node")]
@@ -15,7 +15,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 #[cfg(feature = "with-node")]
 use typecheck_ts_harness::tsc::{
-  node_available, typescript_available, TscDiagnostics, TscRequest, TscRunner,
+  TscDiagnostics, TscRequest, TscRunner,
 };
 
 #[derive(Clone)]
@@ -90,25 +90,7 @@ fn run_rust(files: Vec<VirtualFile>, options: CompilerOptions) -> Vec<typecheck_
 
 #[cfg(feature = "with-node")]
 fn runner_or_skip() -> Option<TscRunner> {
-  let node_path = PathBuf::from("node");
-
-  if !node_available(&node_path) {
-    eprintln!("skipping tsc lib env tests: node not available");
-    return None;
-  }
-
-  if !typescript_available(&node_path) {
-    eprintln!("skipping tsc lib env tests: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
-    return None;
-  }
-
-  match TscRunner::new(node_path) {
-    Ok(runner) => Some(runner),
-    Err(err) => {
-      eprintln!("skipping tsc lib env tests: {err}");
-      None
-    }
-  }
+  common::runner_or_skip("tsc lib env tests")
 }
 
 #[cfg(feature = "with-node")]
