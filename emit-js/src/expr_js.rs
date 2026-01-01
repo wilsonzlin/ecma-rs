@@ -130,7 +130,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::LitArr(arr) => emit_array_literal(em, arr)?,
     Expr::LitObj(obj) => emit_object_literal(em, obj)?,
     Expr::LitTemplate(template) => emit_template_literal(em, template)?,
-    Expr::JsxElem(_) => emit_expr_via_fmt(em, expr)?,
+    Expr::JsxElem(elem) => crate::jsx_emit::emit_jsx_elem(em, elem)?,
     Expr::Binary(binary) => emit_binary(em, binary, ctx)?,
     Expr::Cond(cond) => emit_conditional(em, cond, ctx)?,
     Expr::Call(call) => emit_call(em, call, ctx)?,

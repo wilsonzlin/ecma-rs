@@ -1,9 +1,10 @@
-use emit_js::{emit_expr, emit_jsx_elem, EmitOptions, Emitter};
+use emit_js::{emit_expr, emit_jsx_elem, emit_top_level_stmt, EmitOptions, Emitter};
 use parse_js::ast::expr::jsx::*;
 use parse_js::ast::expr::{Expr, IdExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::loc::Loc;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::fmt;
 
 fn id_expr(name: &str) -> Node<IdExpr> {
@@ -444,4 +445,60 @@ fn emits_adjacent_text_children_without_spaces() {
   );
 
   assert_eq!(emit_elem_to_string(&adjacent_text), "<div>ab</div>");
+}
+
+fn emit_tsx_top_level_to_string(source: &str, options: EmitOptions) -> String {
+  let parsed = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("source should parse as TSX");
+
+  let mut emitter = Emitter::new(options);
+  emit_top_level_stmt(&mut emitter, parsed.stx.as_ref()).expect("emit top level");
+  String::from_utf8(emitter.into_bytes()).expect("emitter output is UTF-8")
+}
+
+fn assert_emits_tsx_in_both_modes(source: &str, expected_minified: &str, expected_canonical: &str) {
+  let minified = emit_tsx_top_level_to_string(source, EmitOptions::minified());
+  assert_eq!(minified, expected_minified);
+  parse_with_options(
+    &minified,
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("minified output should parse as TSX");
+
+  let canonical = emit_tsx_top_level_to_string(source, EmitOptions::canonical());
+  assert_eq!(canonical, expected_canonical);
+  parse_with_options(
+    &canonical,
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("canonical output should parse as TSX");
+}
+
+#[test]
+fn emits_real_world_tsx_patterns_using_js_emitter_for_nested_exprs() {
+  // Regression test: JSX emission used to fall back to `expr.rs`, which rejects arrow functions with
+  // non-empty block bodies. Attribute/child expressions must use `expr_js` so common React patterns
+  // like `onClick={() => { ... }}` work.
+  let source = r#"
+    const a = <button onClick={() => { foo(); bar(); }}>Hi</button>;
+    const b = <div {...(cond ? getA() : getB())}>{x ? foo() : bar()}</div>;
+  "#;
+
+  assert_emits_tsx_in_both_modes(
+    source,
+    "const a=<button onClick={()=>{foo();bar();}}>Hi</button>;const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+    "const a=<button onClick={()=>{foo();bar();}}>Hi</button>;\nconst b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+  );
 }

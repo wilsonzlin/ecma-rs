@@ -9,6 +9,7 @@ mod js_expr;
 mod js_pat;
 mod js_stmt;
 mod jsx;
+mod jsx_emit;
 mod pat;
 mod precedence;
 mod stmt;
