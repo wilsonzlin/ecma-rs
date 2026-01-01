@@ -93,7 +93,7 @@ pub fn erase_types(
   source: &str,
   top_level: &mut Node<TopLevel>,
 ) -> Result<(), Vec<Diagnostic>> {
-  let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
+  let top_level_value_bindings = collect_top_level_value_bindings(source, &top_level.stx.body);
   let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
     collect_top_level_module_exports(source, &top_level.stx.body)
   } else {
@@ -336,9 +336,10 @@ fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) 
   }
 }
 
-fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
+fn collect_top_level_value_bindings(source: &str, stmts: &[Node<Stmt>]) -> HashSet<String> {
   let mut names = HashSet::new();
   for stmt in stmts {
+    let loc = stmt.loc;
     match stmt.stx.as_ref() {
       Stmt::FunctionDecl(func) => {
         if func.stx.function.stx.body.is_some() {
@@ -352,6 +353,44 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
           if let Some(name) = class.stx.name.as_ref().map(|name| name.stx.name.clone()) {
             names.insert(name);
           }
+        }
+      }
+      Stmt::VarDecl(decl) => {
+        for declarator in &decl.stx.declarators {
+          let mut bindings = Vec::new();
+          collect_pat_binding_names(&declarator.pattern.stx.pat, &mut bindings);
+          names.extend(bindings);
+        }
+      }
+      Stmt::Import(import) if !import.stx.type_only => {
+        if let Some(default) = import.stx.default.as_ref() {
+          let mut bindings = Vec::new();
+          collect_pat_binding_names(&default.stx.pat, &mut bindings);
+          names.extend(bindings);
+        }
+        if let Some(import_names) = import.stx.names.as_ref() {
+          match import_names {
+            ImportNames::All(pat) => {
+              let mut bindings = Vec::new();
+              collect_pat_binding_names(&pat.stx.pat, &mut bindings);
+              names.extend(bindings);
+            }
+            ImportNames::Specific(entries) => {
+              for entry in entries {
+                if entry.stx.type_only {
+                  continue;
+                }
+                let mut bindings = Vec::new();
+                collect_pat_binding_names(&entry.stx.alias.stx.pat, &mut bindings);
+                names.extend(bindings);
+              }
+            }
+          }
+        }
+      }
+      Stmt::ImportEqualsDecl(decl) => {
+        if !import_equals_is_type_only_in_source(source, loc) {
+          names.insert(decl.stx.name.clone());
         }
       }
       _ => {}
