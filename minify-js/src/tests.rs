@@ -282,12 +282,39 @@ fn optimizes_getters_in_object_literals() {
 }
 
 #[test]
+fn optimizes_setters_in_object_literals() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const o={set m(v){if(false){sideEffect()}let x=1;}};",
+  );
+  assert_eq!(result, "const o={set m(a){}};");
+}
+
+#[test]
 fn optimizes_static_blocks_in_class_decls() {
   let result = minified(
     TopLevelMode::Global,
     "class C{static{if(false){sideEffect()}let x=1;}}",
   );
   assert_eq!(result, "class C{static{}}");
+}
+
+#[test]
+fn optimizes_getters_in_class_expressions() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const C=class{get m(){if(false){sideEffect()}return 1;}};",
+  );
+  assert_eq!(result, "const C=class{get m(){return 1;}};");
+}
+
+#[test]
+fn optimizes_arrow_functions_in_class_field_initializers() {
+  let result = minified(
+    TopLevelMode::Global,
+    "class C{f=()=>{if(false){sideEffect()}return 1;}}",
+  );
+  assert_eq!(result, "class C{f=(()=>{return 1;});}");
 }
 
 #[test]
