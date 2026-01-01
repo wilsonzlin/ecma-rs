@@ -101,8 +101,13 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   `ts,tsx,d.ts`). Values are treated as file suffixes (leading `.` optional) and
   are matched using a longest-suffix-wins rule, so `types.d.ts` is **not**
   included by `--extensions ts` unless `d.ts` is also listed.
-- Timeouts apply per test case (default 10s) and kill only the offending test,
-  not the whole run.
+- Timeouts apply per test case (default 10s) and cancel only the offending test,
+  not the whole run:
+  - Rust typechecking is cooperatively cancelled via `typecheck_ts::Program::cancel()`
+    so timed-out cases stop doing work instead of continuing in the background.
+  - Live `tsc` checks are executed via a fixed-size worker pool; a timed-out request
+    kills the Node.js runner process so a blocked `read_line` unblocks and the
+    worker can recover on the next request.
 - Execution is parallel by default; cap worker threads with `--jobs <n>` (default
   is the CPU count). Combine with sharding for coarse-grained CI splits.
 - Comparison is configurable:
