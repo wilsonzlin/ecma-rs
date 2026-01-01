@@ -696,47 +696,34 @@ fn execute_case(
   // invoke tsc, we reset this clock after tsc completes so `diff_ms` does not
   // include `tsc_ms`.
   let mut diff_start = Instant::now();
+  let mut run_live_tsc = |unavailable: &str| {
+    if tsc_available {
+      let tsc_start = Instant::now();
+      let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
+      tsc_ms = Some(tsc_start.elapsed().as_millis());
+      diff_start = Instant::now();
+      tsc_raw = raw;
+      diag
+    } else {
+      EngineDiagnostics::crashed(unavailable)
+    }
+  };
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
-    CompareMode::Tsc => {
-      if tsc_available {
-        let tsc_start = Instant::now();
-        let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
-        tsc_ms = Some(tsc_start.elapsed().as_millis());
-        diff_start = Instant::now();
-        tsc_raw = raw;
-        diag
-      } else {
-        EngineDiagnostics::crashed("tsc unavailable")
+    CompareMode::Tsc => run_live_tsc("tsc unavailable"),
+    CompareMode::Snapshot if update_snapshots => run_live_tsc("tsc unavailable for snapshot update"),
+    CompareMode::Snapshot => match snapshots.load(&case.id) {
+      Ok(snapshot) => {
+        let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
+        let crashed = snapshot
+          .crash
+          .as_ref()
+          .map(|crash| EngineDiagnostics::crashed(crash.message.clone()));
+        tsc_raw = Some(snapshot);
+        crashed.unwrap_or_else(|| EngineDiagnostics::ok(normalized))
       }
-    }
-    CompareMode::Snapshot => {
-      if update_snapshots {
-        if tsc_available {
-          let tsc_start = Instant::now();
-          let (diag, raw) = run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options);
-          tsc_ms = Some(tsc_start.elapsed().as_millis());
-          diff_start = Instant::now();
-          tsc_raw = raw;
-          diag
-        } else {
-          EngineDiagnostics::crashed("tsc unavailable for snapshot update")
-        }
-      } else {
-        match snapshots.load(&case.id) {
-          Ok(snapshot) => {
-            let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
-            let crashed = snapshot
-              .crash
-              .as_ref()
-              .map(|crash| EngineDiagnostics::crashed(crash.message.clone()));
-            tsc_raw = Some(snapshot);
-            crashed.unwrap_or_else(|| EngineDiagnostics::ok(normalized))
-          }
-          Err(err) => EngineDiagnostics::crashed(format!("missing snapshot: {err}")),
-        }
-      }
-    }
+      Err(err) => EngineDiagnostics::crashed(format!("missing snapshot: {err}")),
+    },
     CompareMode::Auto => unreachable!("compare mode should be resolved before execution"),
   };
 
