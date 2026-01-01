@@ -10738,6 +10738,24 @@ impl ProgramState {
         let asserted = asserted.map(|ty| self.import_interned_type(ty));
         self.type_store.predicate(param, asserted, asserts)
       }
+      InternedKind::Callable { overloads } => {
+        let mut fns = Vec::new();
+        for sig_id in overloads {
+          let sig = store.signature(sig_id);
+          let params = sig
+            .params
+            .iter()
+            .map(|param| self.import_interned_type(param.ty))
+            .collect();
+          let ret = self.import_interned_type(sig.ret);
+          fns.push(self.type_store.function(params, ret));
+        }
+        if fns.is_empty() {
+          self.builtin.unknown
+        } else {
+          self.type_store.union(fns, &self.builtin)
+        }
+      }
       _ => self.builtin.unknown,
     }
   }
