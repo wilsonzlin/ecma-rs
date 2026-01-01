@@ -107,8 +107,20 @@ fn resolve_non_relative(
     virtual_join3_into(&mut package_dir, &dir, "node_modules", package_name);
     let package_dir_len = package_dir.len();
     if let Some(exports_subpath) = exports_subpath.as_deref() {
-      if let Some(found) = resolve_via_exports(files, &package_dir, exports_subpath, 0) {
-        return Some(found);
+      // Resolve via package.json exports if present.
+      virtual_join_into(&mut types_base, &package_dir, "package.json");
+      if let Some(package_key) = files.resolve(&types_base) {
+        if let Some(parsed) = files.package_json(&package_key) {
+          if let Some(exports) = parsed.get("exports") {
+            if let Some((target, star_match)) = select_exports_target(exports, exports_subpath) {
+              if let Some(found) =
+                resolve_json_target_to_file(files, &package_dir, target, star_match, 0)
+              {
+                return Some(found);
+              }
+            }
+          }
+        }
       }
       package_dir.push('/');
       package_dir.push_str(subpath);
@@ -369,20 +381,6 @@ fn resolve_package_json_entry(
   } else {
     resolve_as_file_or_directory_normalized(files, &joined, depth + 1)
   }
-}
-
-fn resolve_via_exports(
-  files: &HarnessFileSet,
-  package_dir: &str,
-  subpath: &str,
-  depth: usize,
-) -> Option<FileKey> {
-  let package_json = virtual_join(package_dir, "package.json");
-  let package_key = files.resolve(&package_json)?;
-  let parsed = files.package_json(&package_key)?;
-  let exports = parsed.get("exports")?;
-  let (target, star_match) = select_exports_target(exports, subpath)?;
-  resolve_json_target_to_file(files, package_dir, target, star_match, depth)
 }
 
 fn resolve_json_target_to_file(
