@@ -6,7 +6,8 @@ use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{
-  is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, TscRunnerPool,
+  is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, HarnessHost,
+  TscRunnerPool,
 };
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact, TypeFacts, TypeQuery,
@@ -24,8 +25,7 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind};
-use typecheck_ts::{FileKey, Host, HostError, Program};
+use typecheck_ts::Program;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -1551,7 +1551,7 @@ fn collect_rust_type_facts(
   normalization: &NormalizationOptions,
 ) -> NormalizedTypeFacts {
   let compiler_options = options.to_compiler_options();
-  let host = DifftscHost::new(file_set.clone(), compiler_options.clone());
+  let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_keys();
   let program = Program::new(host, roots);
   let _ = program.check();
@@ -1760,46 +1760,6 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
 
   files.sort_by(|a, b| a.name.cmp(&b.name));
   Ok(files)
-}
-
-#[derive(Clone)]
-struct DifftscHost {
-  files: HarnessFileSet,
-  compiler_options: CompilerOptions,
-}
-
-impl DifftscHost {
-  fn new(files: HarnessFileSet, compiler_options: CompilerOptions) -> Self {
-    Self {
-      files,
-      compiler_options,
-    }
-  }
-}
-
-impl Host for DifftscHost {
-  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-    self
-      .files
-      .content(file)
-      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-  }
-
-  fn file_kind(&self, file: &FileKey) -> FileKind {
-    let name = self
-      .files
-      .name_for_key(file)
-      .unwrap_or_else(|| file.as_str().to_string());
-    crate::file_kind::infer_file_kind(&name)
-  }
-
-  fn compiler_options(&self) -> CompilerOptions {
-    self.compiler_options.clone()
-  }
-
-  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    self.files.resolve_import(from, specifier)
-  }
 }
 
 fn is_source_file(path: &Path) -> bool {

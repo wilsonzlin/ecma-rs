@@ -1045,13 +1045,13 @@ fn summarize(results: &[TestResult]) -> Summary {
   summary
 }
 
-struct HarnessHost {
+pub(crate) struct HarnessHost {
   files: HarnessFileSet,
   compiler_options: CompilerOptions,
 }
 
 impl HarnessHost {
-  fn new(files: HarnessFileSet, compiler_options: CompilerOptions) -> Self {
+  pub(crate) fn new(files: HarnessFileSet, compiler_options: CompilerOptions) -> Self {
     Self {
       files,
       compiler_options,
