@@ -126,6 +126,40 @@ fn reports_constraint_violation() {
 }
 
 #[test]
+fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+
+  let sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![TypeParamDecl {
+      id: t_param,
+      constraint: Some(empty_object),
+      default: None,
+    }],
+    this_param: None,
+  };
+
+  let ok = infer_type_arguments_for_call(&store, &sig, &[primitives.number], None);
+  assert!(ok.diagnostics.is_empty());
+  assert_eq!(ok.substitutions.get(&t_param), Some(&primitives.number));
+
+  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.null], None);
+  assert_eq!(result.diagnostics.len(), 1);
+  let diag = &result.diagnostics[0];
+  assert_eq!(diag.param, t_param);
+  assert_eq!(diag.constraint, empty_object);
+  assert_eq!(diag.actual, primitives.null);
+
+  let expected = store.intersection(vec![primitives.null, empty_object]);
+  assert_eq!(result.substitutions.get(&t_param), Some(&expected));
+}
+
+#[test]
 fn infers_from_function_argument_structure() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

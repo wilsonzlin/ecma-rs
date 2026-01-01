@@ -357,6 +357,19 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
       .all(|member| is_assignable(store, *member, dst));
   }
 
+  if matches!(dst_kind, TypeKind::EmptyObject) {
+    if !store.options().strict_null_checks {
+      return true;
+    }
+    return !matches!(
+      src_kind,
+      TypeKind::Null | TypeKind::Undefined | TypeKind::Void
+    );
+  }
+  if matches!(src_kind, TypeKind::EmptyObject) {
+    return false;
+  }
+
   match (&src_kind, &dst_kind) {
     (TypeKind::Number, TypeKind::Number)
     | (TypeKind::String, TypeKind::String)
@@ -382,6 +395,13 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
             store,
           )
       };
+      if dst_shape.properties.is_empty()
+        && dst_shape.call_signatures.is_empty()
+        && dst_shape.construct_signatures.is_empty()
+        && dst_shape.indexers.is_empty()
+      {
+        return true;
+      }
       if let Some(idx) = dst_shape
         .indexers
         .iter()
@@ -401,6 +421,13 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
       }
       return true;
     }
+    (TypeKind::Tuple(_), TypeKind::Object(dst_obj)) => {
+      let dst_shape = store.shape(store.object(*dst_obj).shape);
+      return dst_shape.properties.is_empty()
+        && dst_shape.call_signatures.is_empty()
+        && dst_shape.construct_signatures.is_empty()
+        && dst_shape.indexers.is_empty();
+    }
     (
       TypeKind::Callable {
         overloads: src_overloads,
@@ -414,6 +441,13 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
         let dst_sig = store.signature(*dst_sig);
         return is_signature_assignable(store, &src_sig, &dst_sig);
       }
+    }
+    (TypeKind::Callable { .. }, TypeKind::Object(dst_obj)) => {
+      let dst_shape = store.shape(store.object(*dst_obj).shape);
+      return dst_shape.properties.is_empty()
+        && dst_shape.call_signatures.is_empty()
+        && dst_shape.construct_signatures.is_empty()
+        && dst_shape.indexers.is_empty();
     }
     (
       TypeKind::Ref {
