@@ -1810,52 +1810,7 @@ impl Host for DifftscHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
-    if !is_relative {
-      let normalized = normalize_name(specifier);
-      return self.files.resolve(&normalized);
-    }
-
-    let base = self.files.name_for_key(from)?;
-    let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
-    let joined = parent.join(specifier);
-    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
-
-    let mut candidates = Vec::new();
-    candidates.push(base_candidate.clone());
-
-    if base_candidate.ends_with(".js") {
-      let trimmed = base_candidate.trim_end_matches(".js");
-      candidates.push(format!("{trimmed}.ts"));
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if base_candidate.ends_with(".jsx") {
-      let trimmed = base_candidate.trim_end_matches(".jsx");
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if !has_known_extension(&base_candidate) {
-      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
-        candidates.push(format!("{base_candidate}.{ext}"));
-      }
-    }
-
-    let base_path = Path::new(&base_candidate);
-    for ext in [
-      "index.ts",
-      "index.tsx",
-      "index.d.ts",
-      "index.js",
-      "index.jsx",
-    ] {
-      let joined = base_path.join(ext);
-      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
-    }
-
-    for cand in candidates {
-      if let Some(found) = self.files.resolve(&cand) {
-        return Some(found);
-      }
-    }
-
-    None
+    self.files.resolve_import(from, specifier)
   }
 }
 
@@ -1886,14 +1841,6 @@ fn test_name_from_path(path: &Path) -> Result<String> {
     .and_then(|stem| stem.to_str())
     .map(|s| s.to_string())
     .context("test file missing stem")
-}
-
-fn has_known_extension(name: &str) -> bool {
-  name.ends_with(".d.ts")
-    || name.ends_with(".ts")
-    || name.ends_with(".tsx")
-    || name.ends_with(".js")
-    || name.ends_with(".jsx")
 }
 
 fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
