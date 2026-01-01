@@ -1932,7 +1932,92 @@ pub(crate) fn var_initializer_in_file(
     _ => {}
   }
 
-  let mut best: Option<(u64, (usize, usize, usize), VarInit)> = None;
+  fn find_pat_by_span(body: &hir_js::Body, pat: PatId, target: TextRange) -> Option<PatId> {
+    let pat_data = body.pats.get(pat.0 as usize)?;
+    if pat_data.span == target {
+      return Some(pat);
+    }
+    match &pat_data.kind {
+      PatKind::Ident(_) | PatKind::AssignTarget(_) => None,
+      PatKind::Array(arr) => {
+        for elem in arr.elements.iter() {
+          let Some(elem) = elem.as_ref() else {
+            continue;
+          };
+          if let Some(found) = find_pat_by_span(body, elem.pat, target) {
+            return Some(found);
+          }
+        }
+        if let Some(rest) = arr.rest {
+          if let Some(found) = find_pat_by_span(body, rest, target) {
+            return Some(found);
+          }
+        }
+        None
+      }
+      PatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          if let Some(found) = find_pat_by_span(body, prop.value, target) {
+            return Some(found);
+          }
+        }
+        if let Some(rest) = obj.rest {
+          if let Some(found) = find_pat_by_span(body, rest, target) {
+            return Some(found);
+          }
+        }
+        None
+      }
+      PatKind::Rest(inner) => find_pat_by_span(body, **inner, target),
+      PatKind::Assign { target: inner, .. } => find_pat_by_span(body, *inner, target),
+    }
+  }
+
+  fn collect_named_ident_pats(
+    lowered: &LowerResult,
+    body: &hir_js::Body,
+    pat: PatId,
+    name: &str,
+    traversal_idx: &mut usize,
+    out: &mut Vec<(PatId, TextRange, usize)>,
+  ) {
+    let Some(pat_data) = body.pats.get(pat.0 as usize) else {
+      return;
+    };
+    let idx = *traversal_idx;
+    *traversal_idx += 1;
+    if let PatKind::Ident(name_id) = &pat_data.kind {
+      if lowered.names.resolve(*name_id) == Some(name) {
+        out.push((pat, pat_data.span, idx));
+      }
+    }
+    match &pat_data.kind {
+      PatKind::Ident(_) | PatKind::AssignTarget(_) => {}
+      PatKind::Array(arr) => {
+        for elem in arr.elements.iter() {
+          let Some(elem) = elem.as_ref() else {
+            continue;
+          };
+          collect_named_ident_pats(lowered, body, elem.pat, name, traversal_idx, out);
+        }
+        if let Some(rest) = arr.rest {
+          collect_named_ident_pats(lowered, body, rest, name, traversal_idx, out);
+        }
+      }
+      PatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          collect_named_ident_pats(lowered, body, prop.value, name, traversal_idx, out);
+        }
+        if let Some(rest) = obj.rest {
+          collect_named_ident_pats(lowered, body, rest, name, traversal_idx, out);
+        }
+      }
+      PatKind::Rest(inner) => collect_named_ident_pats(lowered, body, **inner, name, traversal_idx, out),
+      PatKind::Assign { target, .. } => collect_named_ident_pats(lowered, body, *target, name, traversal_idx, out),
+    }
+  }
+
+  let mut best: Option<(u64, (usize, usize, usize, usize, u32), VarInit)> = None;
 
   for (body_order, (body_id, _)) in lowered.body_index.iter().enumerate() {
     let body = lowered.body(*body_id)?;
@@ -1945,41 +2030,46 @@ pub(crate) fn var_initializer_in_file(
         let Some(expr) = declarator.init else {
           continue;
         };
-        let pat = declarator.pat;
-        let pat_span = body.pats.get(pat.0 as usize).map(|p| p.span);
-        if let Some(span) = pat_span {
-          if span == def_span {
-            return Some(VarInit {
-              body: *body_id,
-              expr,
-              decl_kind: decl.kind,
-              pat: Some(pat),
-              span: Some(span),
-            });
-          }
+        if let Some(found_pat) = find_pat_by_span(body, declarator.pat, def_span) {
+          let span = body.pats.get(found_pat.0 as usize).map(|p| p.span)?;
+          return Some(VarInit {
+            body: *body_id,
+            expr,
+            decl_kind: decl.kind,
+            pat: Some(found_pat),
+            span: Some(span),
+          });
         }
-        if let (Some(name), Some(span)) = (def_name, pat_span) {
-          let pat_name = match body.pats.get(pat.0 as usize).map(|p| &p.kind) {
-            Some(PatKind::Ident(name_id)) => lowered.names.resolve(*name_id),
-            _ => None,
+
+        let Some(name) = def_name else {
+          continue;
+        };
+        let mut candidates = Vec::new();
+        let mut traversal_idx = 0usize;
+        collect_named_ident_pats(
+          lowered,
+          body,
+          declarator.pat,
+          name,
+          &mut traversal_idx,
+          &mut candidates,
+        );
+        for (candidate_pat, span, traversal_idx) in candidates {
+          let dist = span_distance(span, def_span);
+          let key = (dist, (body_order, stmt_idx, decl_idx, traversal_idx, candidate_pat.0));
+          let candidate = VarInit {
+            body: *body_id,
+            expr,
+            decl_kind: decl.kind,
+            pat: Some(candidate_pat),
+            span: Some(span),
           };
-          if pat_name == Some(name) {
-            let dist = span_distance(span, def_span);
-            let key = (dist, (body_order, stmt_idx, decl_idx));
-            let candidate = VarInit {
-              body: *body_id,
-              expr,
-              decl_kind: decl.kind,
-              pat: Some(pat),
-              span: Some(span),
-            };
-            let replace = best
-              .as_ref()
-              .map(|current| key < (current.0, current.1))
-              .unwrap_or(true);
-            if replace {
-              best = Some((dist, (body_order, stmt_idx, decl_idx), candidate));
-            }
+          let replace = best
+            .as_ref()
+            .map(|current| key < (current.0, current.1))
+            .unwrap_or(true);
+          if replace {
+            best = Some((dist, (body_order, stmt_idx, decl_idx, traversal_idx, candidate_pat.0), candidate));
           }
         }
       }

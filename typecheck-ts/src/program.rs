@@ -7972,66 +7972,100 @@ impl ProgramState {
     var: &VarDecl,
     sem_builder: &mut SemHirBuilder,
   ) -> Vec<(DefId, (String, SymbolBinding), Option<String>)> {
+    fn collect_bound_names(
+      state: &mut ProgramState,
+      file: FileId,
+      pat: &Node<Pat>,
+      out: &mut Vec<(String, TextRange)>,
+    ) {
+      match pat.stx.as_ref() {
+        Pat::Id(id) => {
+          out.push((id.stx.name.clone(), loc_to_span(file, id.loc).range));
+        }
+        Pat::Arr(arr) => {
+          for elem in arr.stx.elements.iter() {
+            let Some(elem) = elem.as_ref() else {
+              continue;
+            };
+            collect_bound_names(state, file, &elem.target, out);
+          }
+          if let Some(rest) = arr.stx.rest.as_ref() {
+            collect_bound_names(state, file, rest, out);
+          }
+        }
+        Pat::Obj(obj) => {
+          for prop in obj.stx.properties.iter() {
+            collect_bound_names(state, file, &prop.stx.target, out);
+          }
+          if let Some(rest) = obj.stx.rest.as_ref() {
+            collect_bound_names(state, file, rest, out);
+          }
+        }
+        Pat::AssignTarget(_) => {
+          state.diagnostics.push(
+            codes::UNSUPPORTED_PATTERN.error("unsupported pattern", loc_to_span(file, pat.loc)),
+          );
+        }
+      }
+    }
+
     let mut defs = Vec::new();
     for declarator in var.declarators.iter() {
       let pat = &declarator.pattern;
-      let name = match pat.stx.pat.stx.as_ref() {
-        Pat::Id(id) => id.stx.name.clone(),
-        _ => {
-          self.diagnostics.push(
-            codes::UNSUPPORTED_PATTERN.error("unsupported pattern", loc_to_span(file, pat.loc)),
-          );
-          continue;
-        }
+      let type_ann = match pat.stx.pat.stx.as_ref() {
+        Pat::Id(_) => declarator
+          .type_annotation
+          .as_ref()
+          .map(|t| self.type_from_type_expr(t)),
+        _ => None,
       };
-      let type_ann = declarator
-        .type_annotation
-        .as_ref()
-        .map(|t| self.type_from_type_expr(t));
-      let def_span = loc_to_span(file, pat.stx.pat.loc).range;
-      let symbol = self.alloc_symbol();
-      let def_id = self.alloc_def();
-      self.record_symbol(file, def_span, symbol);
-      self.def_data.insert(
-        def_id,
-        DefData {
-          name: name.clone(),
-          file,
-          span: def_span,
-          symbol,
-          export: var.export,
-          kind: DefKind::Var(VarData {
-            typ: type_ann,
-            init: None,
-            body: BodyId(u32::MAX),
-            mode: var.mode,
-          }),
-        },
-      );
-      self.record_def_symbol(def_id, symbol);
-      defs.push((
-        def_id,
-        (
-          name.clone(),
-          SymbolBinding {
+      let mut names = Vec::new();
+      collect_bound_names(self, file, &pat.stx.pat, &mut names);
+      for (name, def_span) in names {
+        let symbol = self.alloc_symbol();
+        let def_id = self.alloc_def();
+        self.record_symbol(file, def_span, symbol);
+        self.def_data.insert(
+          def_id,
+          DefData {
+            name: name.clone(),
+            file,
+            span: def_span,
             symbol,
-            def: Some(def_id),
-            type_id: type_ann,
+            export: var.export,
+            kind: DefKind::Var(VarData {
+              typ: type_ann,
+              init: None,
+              body: BodyId(u32::MAX),
+              mode: var.mode,
+            }),
           },
-        ),
-        if var.export { Some(name.clone()) } else { None },
-      ));
-      sem_builder.add_decl(
-        def_id,
-        name.clone(),
-        sem_ts::DeclKind::Var,
-        if var.export {
-          sem_ts::Exported::Named
-        } else {
-          sem_ts::Exported::No
-        },
-        def_span,
-      );
+        );
+        self.record_def_symbol(def_id, symbol);
+        defs.push((
+          def_id,
+          (
+            name.clone(),
+            SymbolBinding {
+              symbol,
+              def: Some(def_id),
+              type_id: type_ann,
+            },
+          ),
+          if var.export { Some(name.clone()) } else { None },
+        ));
+        sem_builder.add_decl(
+          def_id,
+          name.clone(),
+          sem_ts::DeclKind::Var,
+          if var.export {
+            sem_ts::Exported::Named
+          } else {
+            sem_ts::Exported::No
+          },
+          def_span,
+        );
+      }
     }
     defs
   }
@@ -10296,10 +10330,11 @@ impl ProgramState {
                 VarDeclMode::Const => HirVarDeclKind::Const,
                 VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
               });
-          let mut init_span_for_const = None;
-          let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
-          let annotated_raw = declared_ann.or(var.typ);
-          let annotated = annotated_raw;
+           let mut init_span_for_const = None;
+           let mut init_pat_is_root = true;
+           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
+           let annotated_raw = declared_ann.or(var.typ);
+           let annotated = annotated_raw;
           if std::env::var("DEBUG_VAR_DECL").is_ok() {
             let describe = |ty: Option<TypeId>, state: &ProgramState| -> String {
               let Some(ty) = ty else {
@@ -10336,45 +10371,81 @@ impl ProgramState {
             }
             self.def_types.entry(def).or_insert(annotated);
           }
-          let mut inferred = if let Some(t) = annotated {
-            t
-          } else if let Some(init) = init {
-            if self.checking_bodies.contains(&init.body) {
-              self.builtin.unknown
-            } else {
-              self.body_results.remove(&init.body);
-              let res = self.check_body(init.body)?;
-              init_span_for_const = res.expr_span(init.expr);
-              if let Some(init_ty) = res.expr_type(init.expr) {
-                if let Some(store) = self.interned_store.as_ref() {
-                  let init_ty = store.canon(init_ty);
-                  self
-                    .interned_def_types
-                    .entry(def)
+           let mut inferred = if let Some(t) = annotated {
+             t
+           } else if let Some(init) = init {
+             if self.checking_bodies.contains(&init.body) {
+               self.builtin.unknown
+             } else {
+               self.body_results.remove(&init.body);
+               let res = self.check_body(init.body)?;
+               init_span_for_const = res.expr_span(init.expr);
+               init_pat_is_root = init
+                 .pat
+                 .map(|pat| {
+                   let meta = match self.body_map.get(&init.body) {
+                     Some(meta) => meta,
+                     None => return false,
+                   };
+                   let hir_id = match meta.hir {
+                     Some(id) => id,
+                     None => return false,
+                   };
+                   let lowered = match self.hir_lowered.get(&meta.file) {
+                     Some(lowered) => lowered,
+                     None => return false,
+                   };
+                   let hir_body = match lowered.body(hir_id) {
+                     Some(body) => body,
+                     None => return false,
+                   };
+                   for stmt in hir_body.stmts.iter() {
+                     if let hir_js::StmtKind::Var(decl) = &stmt.kind {
+                       for declarator in decl.declarators.iter() {
+                         if declarator.init == Some(init.expr) {
+                           return declarator.pat == pat;
+                         }
+                       }
+                     }
+                   }
+                   false
+                 })
+                 .unwrap_or(true);
+               let init_ty_from_pat = init
+                 .pat
+                 .and_then(|pat| res.pat_type(pat))
+                 .filter(|ty| !self.is_unknown_type_id(*ty));
+               let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
+               if let Some(init_ty) = init_ty {
+                 if let Some(store) = self.interned_store.as_ref() {
+                   let init_ty = store.canon(init_ty);
+                   self
+                     .interned_def_types
+                     .entry(def)
                     .and_modify(|existing| {
                       *existing =
                         ProgramState::merge_interned_decl_types(store, *existing, init_ty);
                     })
-                    .or_insert(init_ty);
-                }
-                self.import_interned_type(init_ty)
-              } else {
-                self.builtin.unknown
-              }
-            }
-          } else if let Some((_, store_ty)) = ns_entry {
+                   .or_insert(init_ty);
+                 }
+                 self.import_interned_type(init_ty)
+               } else {
+                 self.builtin.unknown
+               }
+             }
+           } else if let Some((_, store_ty)) = ns_entry {
             store_ty
           } else if let Some(raw) = annotated_raw {
             raw
           } else {
             self.builtin.unknown
           };
-          if matches!(decl_kind, HirVarDeclKind::Const) {
-            if let Some(init_span) = init_span_for_const {
-              if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
-                let res = self.check_body(file_body)?;
-                let top_ty = res
-                  .expr_spans()
+           if matches!(decl_kind, HirVarDeclKind::Const) && init_pat_is_root {
+             if let Some(init_span) = init_span_for_const {
+               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
+                 let res = self.check_body(file_body)?;
+                 let top_ty = res
+                   .expr_spans()
                   .iter()
                   .enumerate()
                   .find(|(_, span)| **span == init_span)
