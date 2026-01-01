@@ -20,7 +20,7 @@ use num_cpus;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -707,10 +707,22 @@ fn run_single_test(
   let rust = run_rust(&file_set, &harness_options);
   let mut expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   sort_diagnostics(&mut expected);
+  let compare_type_facts = tsc_diags.type_facts.is_some();
+  let export_queries: &[ExportTypeFact] = tsc_diags
+    .type_facts
+    .as_ref()
+    .map(|facts| facts.exports.as_slice())
+    .unwrap_or(&[]);
   let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
   let marker_queries = marker_queries_from_type_facts(&tsc_diags.type_facts);
-  let actual_types = if rust.status == EngineStatus::Ok {
-    collect_rust_type_facts(&file_set, &harness_options, &marker_queries, normalization)
+  let actual_types = if rust.status == EngineStatus::Ok && compare_type_facts {
+    collect_rust_type_facts(
+      &file_set,
+      &harness_options,
+      export_queries,
+      &marker_queries,
+      normalization,
+    )
   } else {
     NormalizedTypeFacts::default()
   };
@@ -735,7 +747,9 @@ fn run_single_test(
   sort_diagnostics(&mut actual);
 
   let diff = diff_diagnostics(&expected, &actual, normalization);
-  let type_diff = diff_type_facts(&expected_types, &actual_types);
+  let type_diff = compare_type_facts
+    .then(|| diff_type_facts(&expected_types, &actual_types))
+    .flatten();
   let status = if diff.is_some() || type_diff.is_some() {
     CaseStatus::Mismatch
   } else {
@@ -1550,6 +1564,7 @@ fn baseline_option_mismatch_notes(
 fn collect_rust_type_facts(
   file_set: &HarnessFileSet,
   options: &HarnessOptions,
+  export_queries: &[ExportTypeFact],
   markers: &[TypeQuery],
   normalization: &NormalizationOptions,
 ) -> NormalizedTypeFacts {
@@ -1559,32 +1574,49 @@ fn collect_rust_type_facts(
   let program = Program::new(host, roots);
   let _ = program.check();
   let facts = TypeFacts {
-    exports: collect_export_type_facts(&program, file_set),
+    exports: collect_export_type_facts(&program, file_set, export_queries),
     markers: collect_marker_type_facts(&program, file_set, markers),
   };
   normalize_type_facts(&Some(facts), normalization)
 }
 
-fn collect_export_type_facts(program: &Program, file_set: &HarnessFileSet) -> Vec<ExportTypeFact> {
+fn collect_export_type_facts(
+  program: &Program,
+  file_set: &HarnessFileSet,
+  expected: &[ExportTypeFact],
+) -> Vec<ExportTypeFact> {
+  let mut cache: HashMap<typecheck_ts::FileId, typecheck_ts::ExportMap> = HashMap::new();
+  let mut seen: HashSet<(String, String)> = HashSet::new();
   let mut facts = Vec::new();
-  for key in file_set.root_keys() {
-    let Some(file_id) = program.file_id(&key) else {
+
+  for export in expected {
+    if !seen.insert((export.file.clone(), export.name.clone())) {
+      continue;
+    }
+    let normalized = normalize_name(&export.file);
+    let Some(file_key) = file_set.resolve(&normalized) else {
       continue;
     };
-    let name = file_set
-      .name_for_key(&key)
-      .unwrap_or_else(|| key.to_string());
-    let exports = program.exports_of(file_id);
-    for (export_name, entry) in exports {
-      if let Some(ty) = entry.type_id {
-        facts.push(ExportTypeFact {
-          file: name.clone(),
-          name: export_name.clone(),
-          type_str: program.display_type(ty).to_string(),
-        });
-      }
-    }
+    let Some(file_id) = program.file_id(&file_key) else {
+      continue;
+    };
+
+    let exports = cache
+      .entry(file_id)
+      .or_insert_with(|| program.exports_of(file_id));
+    let Some(entry) = exports.get(&export.name) else {
+      continue;
+    };
+    let Some(ty) = entry.type_id else {
+      continue;
+    };
+    facts.push(ExportTypeFact {
+      file: export.file.clone(),
+      name: export.name.clone(),
+      type_str: program.display_type(ty).to_string(),
+    });
   }
+
   facts
 }
 
@@ -1805,6 +1837,7 @@ mod tests {
   use crate::diagnostic_norm::{DiagnosticCode, DiagnosticEngine, NormalizedDiagnostic};
   use crate::tsc::{TscDiagnostic, TscMetadata};
   use serde_json::Value;
+  use typecheck_ts::lib_support::CompilerOptions;
 
   #[test]
   fn determines_test_name_for_d_ts() {
@@ -2043,6 +2076,40 @@ span mismatches:
     let diff = diff_type_facts(&expected, &actual).expect("diff");
     assert_eq!(diff.unexpected_markers.len(), 1);
     assert_eq!(diff.unexpected_markers[0].offset, 2);
+  }
+
+  #[test]
+  fn export_type_facts_follow_expected_queries() {
+    let files = vec![VirtualFile {
+      name: "a.ts".to_string(),
+      content: r#"export function f() { return 1; }
+export const v = 1;
+export interface Foo { x: number }
+    "#
+      .to_string(),
+    }];
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+    let program = Program::new(host, file_set.root_keys());
+    let _ = program.check();
+
+    let expected = vec![
+      ExportTypeFact {
+        file: "a.ts".to_string(),
+        name: "f".to_string(),
+        type_str: String::new(),
+      },
+      ExportTypeFact {
+        file: "a.ts".to_string(),
+        name: "v".to_string(),
+        type_str: String::new(),
+      },
+    ];
+    let mut exports = collect_export_type_facts(&program, &file_set, &expected);
+    exports.sort_by(|a, b| a.name.cmp(&b.name));
+    assert_eq!(exports.len(), 2);
+    assert_eq!(exports[0].name, "f");
+    assert_eq!(exports[1].name, "v");
   }
 
   #[test]

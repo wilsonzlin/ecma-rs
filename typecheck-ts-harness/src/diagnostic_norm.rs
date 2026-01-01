@@ -406,17 +406,14 @@ pub fn normalize_type_string(raw: &str) -> String {
             if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
               let rest = raw[idx + ch.len_utf8()..].trim();
               let is_rest = raw.trim_start().starts_with("...");
-              return if is_rest {
-                format!("...{rest}")
-              } else {
-                rest.to_string()
-              };
+              let rest = normalize_type_string(rest);
+              return if is_rest { format!("...{rest}") } else { rest };
             }
           }
           _ => {}
         }
       }
-      raw.trim().to_string()
+      normalize_type_string(raw.trim())
     }
 
     let mut normalized = Vec::new();
@@ -429,8 +426,30 @@ pub fn normalize_type_string(raw: &str) -> String {
     normalized.join(", ")
   }
 
+  fn strip_trailing_object_semicolons(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut iter = raw.chars().peekable();
+    while let Some(ch) = iter.next() {
+      if ch == ';' {
+        let mut lookahead = iter.clone();
+        while let Some(next) = lookahead.peek() {
+          if next.is_whitespace() {
+            lookahead.next();
+            continue;
+          }
+          break;
+        }
+        if matches!(lookahead.peek(), Some('}')) {
+          continue;
+        }
+      }
+      out.push(ch);
+    }
+    out
+  }
+
   let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-  let normalized = collapsed.trim().to_string();
+  let normalized = strip_trailing_object_semicolons(collapsed.trim());
   let tighten = |s: String| s.replace("< ", "<").replace(" >", ">");
 
   if let Some(parts) = split_top_level(&normalized, '|') {
@@ -569,6 +588,14 @@ mod tests {
     assert_eq!(
       normalize_type_string("(a: number, b: string)=>Promise< string >"),
       "(number, string) => Promise<string>".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("(string | number) => number | string"),
+      "(number | string) => number | string".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("{ a: number; b: string; }"),
+      "{ a: number; b: string }".to_string()
     );
     assert_eq!(
       normalize_type_string("Promise< string | number >"),
