@@ -734,8 +734,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::Union(members) if distributive => {
         let mut results = Vec::new();
         for member in members {
-          let member_distributive =
-            matches!(self.store.type_kind(member), TypeKind::TypeParam(_));
+          let member_distributive = matches!(self.store.type_kind(member), TypeKind::TypeParam(_));
           let mut inner_subst = subst.clone();
           if let Some(param) = raw_check_param {
             inner_subst = inner_subst.with(param, member);

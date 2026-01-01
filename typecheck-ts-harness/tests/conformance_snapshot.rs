@@ -1,6 +1,6 @@
+use globset::{Glob, GlobSetBuilder};
 use std::path::PathBuf;
 use std::time::Duration;
-use globset::{Glob, GlobSetBuilder};
 use typecheck_ts_harness::runner::EngineStatus;
 use typecheck_ts_harness::{
   run_conformance, CompareMode, ConformanceOptions, FailOn, Filter, DEFAULT_EXTENSIONS,

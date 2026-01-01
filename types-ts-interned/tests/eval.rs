@@ -112,7 +112,10 @@ fn distributive_conditional_preserves_distributivity_for_type_param_members() {
   let mut saw_conditional = false;
   for member in members {
     if let TypeKind::Conditional {
-      distributive, check, extends, ..
+      distributive,
+      check,
+      extends,
+      ..
     } = store.type_kind(member)
     {
       saw_conditional = true;
