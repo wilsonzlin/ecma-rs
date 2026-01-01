@@ -4690,43 +4690,43 @@ impl ProgramState {
             )
             .expect("reparse locals");
             sem_ts::locals::bind_ts_locals(&mut owned, file, is_module)
-           };
-           self.local_semantics.insert(file, locals);
-           self.asts.insert(file, Arc::clone(&ast));
-           self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
-           let lower_span = QuerySpan::enter(
-             QueryKind::LowerHir,
-             query_span!(
-               "typecheck_ts.lower_hir",
-               Some(file.0),
+          };
+          self.local_semantics.insert(file, locals);
+          self.asts.insert(file, Arc::clone(&ast));
+          self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
+          let lower_span = QuerySpan::enter(
+            QueryKind::LowerHir,
+            query_span!(
+              "typecheck_ts.lower_hir",
+              Some(file.0),
               Option::<u32>::None,
               Option::<u32>::None,
               false
             ),
             None,
             false,
-             Some(self.query_stats.clone()),
-           );
-           let lowered = db::lower_hir(&self.typecheck_db, file);
-           let Some(lowered) = lowered.lowered else {
-             if let Some(span) = lower_span {
-               span.finish(None);
-             }
-             continue;
-           };
-           self.hir_lowered.insert(file, Arc::clone(&lowered));
-           let _bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
-           let _ = self.align_definitions_with_hir(file, lowered.as_ref());
-           self.map_hir_bodies(file, lowered.as_ref());
-           self.check_cancelled()?;
-           if let Some(span) = lower_span {
-             span.finish(None);
-           }
-         }
-         Err(err) => {
-           let _ = err;
-         }
-       }
+            Some(self.query_stats.clone()),
+          );
+          let lowered = db::lower_hir(&self.typecheck_db, file);
+          let Some(lowered) = lowered.lowered else {
+            if let Some(span) = lower_span {
+              span.finish(None);
+            }
+            continue;
+          };
+          self.hir_lowered.insert(file, Arc::clone(&lowered));
+          let _bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
+          let _ = self.align_definitions_with_hir(file, lowered.as_ref());
+          self.map_hir_bodies(file, lowered.as_ref());
+          self.check_cancelled()?;
+          if let Some(span) = lower_span {
+            span.finish(None);
+          }
+        }
+        Err(err) => {
+          let _ = err;
+        }
+      }
       self.current_file = prev_file;
     }
     if !self.hir_lowered.is_empty() {
@@ -5969,23 +5969,23 @@ impl ProgramState {
             )
             .expect("reparse lib locals");
             sem_ts::locals::bind_ts_locals(&mut owned, file_id, true)
-           };
-           self.local_semantics.insert(file_id, locals);
-           self.asts.insert(file_id, Arc::clone(&ast));
-           self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);
-           let lowered = db::lower_hir(&self.typecheck_db, file_id);
-           let Some(lowered) = lowered.lowered else {
-             continue;
-           };
-           self.hir_lowered.insert(file_id, Arc::clone(&lowered));
-           let _bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, queue);
-           let _ = self.align_definitions_with_hir(file_id, lowered.as_ref());
-           self.map_hir_bodies(file_id, lowered.as_ref());
-         }
-         Err(err) => {
-           let _ = err;
-         }
-       }
+          };
+          self.local_semantics.insert(file_id, locals);
+          self.asts.insert(file_id, Arc::clone(&ast));
+          self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);
+          let lowered = db::lower_hir(&self.typecheck_db, file_id);
+          let Some(lowered) = lowered.lowered else {
+            continue;
+          };
+          self.hir_lowered.insert(file_id, Arc::clone(&lowered));
+          let _bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, queue);
+          let _ = self.align_definitions_with_hir(file_id, lowered.as_ref());
+          self.map_hir_bodies(file_id, lowered.as_ref());
+        }
+        Err(err) => {
+          let _ = err;
+        }
+      }
     }
     Ok(())
   }

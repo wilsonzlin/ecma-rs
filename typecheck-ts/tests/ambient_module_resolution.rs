@@ -39,7 +39,8 @@ impl Host for ModuleHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    self.edges
+    self
+      .edges
       .get(&(from.clone(), specifier.to_string()))
       .cloned()
   }
