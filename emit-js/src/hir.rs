@@ -679,12 +679,7 @@ fn emit_class_member_key(
   Ok(())
 }
 
-fn emit_jsx_expr(
-  em: &mut Emitter,
-  ctx: &HirContext<'_>,
-  body: &Body,
-  expr: ExprId,
-) -> EmitResult {
+fn emit_jsx_expr(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, expr: ExprId) -> EmitResult {
   match &ctx.expr(body, expr).kind {
     ExprKind::Jsx(elem) => emit_jsx_elem(em, ctx, body, elem),
     _ => Err(EmitError::unsupported("expected jsx element expression")),
