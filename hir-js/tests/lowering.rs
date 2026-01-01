@@ -54,8 +54,17 @@ fn def_ids_are_sorted_and_stable() {
     .collect();
   let kinds: Vec<_> = result.defs.iter().map(|def| def.path.kind).collect();
 
-  assert_eq!(names, vec!["f", "a", "b"]);
-  assert_eq!(kinds, vec![DefKind::Function, DefKind::Var, DefKind::Var]);
+  assert_eq!(names, vec!["f", "a", "b", "a", "b"]);
+  assert_eq!(
+    kinds,
+    vec![
+      DefKind::Function,
+      DefKind::VarDeclarator,
+      DefKind::VarDeclarator,
+      DefKind::Var,
+      DefKind::Var,
+    ]
+  );
 
   let ast_again = parse(source).expect("parse");
   let (result_again, diagnostics_again) =
@@ -196,20 +205,40 @@ fn nested_defs_use_scoped_paths() {
     .find(|d| {
       d.path.kind == DefKind::Var
         && base.names.resolve(d.name) == Some("x")
-        && d.parent == Some(namespace.id)
+        && d
+          .parent
+          .and_then(|parent| base.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator && parent.parent == Some(namespace.id)
+          })
     })
     .expect("nested x");
   let top_level_x = base
     .defs
     .iter()
     .find(|d| {
-      d.path.kind == DefKind::Var && base.names.resolve(d.name) == Some("x") && d.parent.is_none()
+      d.path.kind == DefKind::Var
+        && base.names.resolve(d.name) == Some("x")
+        && d
+          .parent
+          .and_then(|parent| base.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator && parent.parent.is_none()
+          })
     })
     .expect("top-level x");
 
   assert_ne!(nested_x.path, top_level_x.path);
-  assert_eq!(nested_x.parent, Some(namespace.id));
-  assert_eq!(top_level_x.parent, None);
+  let nested_decl = base
+    .def(nested_x.parent.expect("nested x declarator parent"))
+    .expect("nested x declarator def");
+  assert_eq!(nested_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(nested_decl.parent, Some(namespace.id));
+  let top_level_decl = base
+    .def(top_level_x.parent.expect("top-level x declarator parent"))
+    .expect("top-level x declarator def");
+  assert_eq!(top_level_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(top_level_decl.parent, None);
 
   let variant_source = "const y = 0;\nnamespace A { export const x = 1; }\nconst x = 2;";
   let variant_ast = parse(variant_source).expect("parse variant");
@@ -226,7 +255,13 @@ fn nested_defs_use_scoped_paths() {
     .find(|d| {
       d.path.kind == DefKind::Var
         && variant.names.resolve(d.name) == Some("x")
-        && d.parent == Some(variant_namespace.id)
+        && d
+          .parent
+          .and_then(|parent| variant.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator
+              && parent.parent == Some(variant_namespace.id)
+          })
     })
     .expect("variant nested x");
   let variant_top_x = variant
@@ -235,7 +270,12 @@ fn nested_defs_use_scoped_paths() {
     .find(|d| {
       d.path.kind == DefKind::Var
         && variant.names.resolve(d.name) == Some("x")
-        && d.parent.is_none()
+        && d
+          .parent
+          .and_then(|parent| variant.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator && parent.parent.is_none()
+          })
     })
     .expect("variant top-level x");
 
@@ -257,7 +297,16 @@ fn nested_disambiguators_are_scoped() {
   let base_top_x = base
     .defs
     .iter()
-    .find(|d| d.path.kind == DefKind::Var && base.names.resolve(d.name) == Some("x"))
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && base.names.resolve(d.name) == Some("x")
+        && d
+          .parent
+          .and_then(|parent| base.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator && parent.parent.is_none()
+          })
+    })
     .expect("base top-level x");
   let variant_top_x = variant
     .defs
@@ -265,7 +314,12 @@ fn nested_disambiguators_are_scoped() {
     .find(|d| {
       d.path.kind == DefKind::Var
         && variant.names.resolve(d.name) == Some("x")
-        && d.parent.is_none()
+        && d
+          .parent
+          .and_then(|parent| variant.def(parent))
+          .is_some_and(|parent| {
+            parent.path.kind == DefKind::VarDeclarator && parent.parent.is_none()
+          })
     })
     .expect("variant top-level x");
 
@@ -301,7 +355,12 @@ fn nested_disambiguators_are_scoped() {
         .find(|d| {
           d.path.kind == DefKind::Var
             && variant.names.resolve(d.name) == Some("x")
-            && d.parent == Some(ns.id)
+            && d
+              .parent
+              .and_then(|parent| variant.def(parent))
+              .is_some_and(|parent| {
+                parent.path.kind == DefKind::VarDeclarator && parent.parent == Some(ns.id)
+              })
         })
         .expect("namespace member x")
     })
@@ -334,7 +393,11 @@ fn nested_defs_are_parented_to_enclosing_function() {
   let other = find_def(DefKind::Function, "other");
 
   let a = find_def(DefKind::Var, "a");
-  assert_eq!(a.parent, Some(outer.id), "a should be nested under outer");
+  let a_decl = result
+    .def(a.parent.expect("a should have declarator parent"))
+    .expect("a declarator def");
+  assert_eq!(a_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(a_decl.parent, Some(outer.id), "a should be nested under outer");
 
   let inner = find_def(DefKind::Function, "inner");
   assert_eq!(
@@ -368,6 +431,51 @@ fn nested_defs_are_parented_to_enclosing_function() {
     other_arrow.parent,
     Some(other.id),
     "arrow in other should be parented to other"
+  );
+}
+
+#[test]
+fn destructuring_var_declarator_has_single_initializer_body() {
+  let source = "const {a,b} = foo();";
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let initializer_bodies = result
+    .bodies
+    .iter()
+    .filter(|body| body.kind == BodyKind::Initializer)
+    .count();
+  assert_eq!(initializer_bodies, 1, "expected a single initializer body");
+
+  let find_var = |name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == DefKind::Var && result.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} var def"))
+  };
+
+  let a = find_var("a");
+  let b = find_var("b");
+  let a_parent = a.parent.expect("a should have declarator parent");
+  let b_parent = b.parent.expect("b should have declarator parent");
+  assert_eq!(
+    a_parent, b_parent,
+    "a and b should share a declarator parent"
+  );
+
+  let declarator = result.def(a_parent).expect("declarator def");
+  assert_eq!(declarator.path.kind, DefKind::VarDeclarator);
+  assert!(
+    declarator.body.is_some(),
+    "declarator def should own the initializer body"
+  );
+  assert!(
+    a.body.is_none(),
+    "binding def should not own initializer body"
+  );
+  assert!(
+    b.body.is_none(),
+    "binding def should not own initializer body"
   );
 }
 
@@ -517,6 +625,66 @@ fn nested_def_ids_in_class_method_bodies_do_not_shift_across_unrelated_edits() {
   assert_eq!(
     base_arrow.path, variant_arrow.path,
     "arrow DefPath in D.m() should remain stable"
+  );
+}
+
+#[test]
+fn destructuring_var_declarator_ids_are_stable_under_unrelated_insertions() {
+  let base_source = "const {a,b} = foo(); const x = 1;";
+  let variant_source = "const {a,b} = foo(); const y = 2; const x = 1;";
+
+  let base = lower_from_source_with_kind(FileKind::Ts, base_source).expect("lower base");
+  let variant = lower_from_source_with_kind(FileKind::Ts, variant_source).expect("lower variant");
+
+  let base_a = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Var && base.names.resolve(def.name) == Some("a"))
+    .expect("base a def");
+  let base_b = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Var && base.names.resolve(def.name) == Some("b"))
+    .expect("base b def");
+  let base_decl_id = base_a.parent.expect("base a parent");
+  assert_eq!(
+    base_b.parent,
+    Some(base_decl_id),
+    "base a/b should share declarator parent"
+  );
+  let base_decl = base.def(base_decl_id).expect("base declarator def");
+  let base_body = base_decl.body.expect("base declarator body");
+
+  let variant_a = variant
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Var && variant.names.resolve(def.name) == Some("a"))
+    .expect("variant a def");
+  let variant_b = variant
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Var && variant.names.resolve(def.name) == Some("b"))
+    .expect("variant b def");
+  let variant_decl_id = variant_a.parent.expect("variant a parent");
+  assert_eq!(
+    variant_b.parent,
+    Some(variant_decl_id),
+    "variant a/b should share declarator parent"
+  );
+  let variant_decl = variant
+    .def(variant_decl_id)
+    .expect("variant declarator def");
+  let variant_body = variant_decl.body.expect("variant declarator body");
+
+  assert_eq!(base_a.id, variant_a.id, "binding def id changed for a");
+  assert_eq!(base_b.id, variant_b.id, "binding def id changed for b");
+  assert_eq!(
+    base_decl_id, variant_decl_id,
+    "declarator DefId changed under unrelated insertion"
+  );
+  assert_eq!(
+    base_body, variant_body,
+    "declarator BodyId changed under unrelated insertion"
   );
 }
 
@@ -1712,7 +1880,15 @@ fn nested_exports_do_not_create_file_exports() {
     let def = result
       .defs
       .iter()
-      .find(|def| result.names.resolve(def.path.name) == Some(name))
+      .find(|def| {
+        result.names.resolve(def.path.name) == Some(name)
+          && def.path.kind
+            == if name == "x" {
+              DefKind::Var
+            } else {
+              DefKind::Function
+            }
+      })
       .unwrap_or_else(|| panic!("expected {} definition", name));
     assert!(
       def.is_exported,
@@ -1736,7 +1912,11 @@ fn namespace_members_have_parent_and_export_flag() {
 
   let ns = find_def(DefKind::Namespace, "NS");
   let x = find_def(DefKind::Var, "x");
-  assert_eq!(x.parent, Some(ns.id), "x should belong to NS");
+  let x_decl = result
+    .def(x.parent.expect("x should have declarator parent"))
+    .expect("x declarator def");
+  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(x_decl.parent, Some(ns.id), "x should belong to NS");
   assert!(x.is_exported, "x should be marked exported from NS");
 
   let f = find_def(DefKind::Function, "f");
@@ -1799,8 +1979,17 @@ fn namespace_type_info_members_exclude_nested_function_locals() {
   );
 
   assert_eq!(f.parent, Some(ns.id), "f should be a direct namespace member");
-  assert_eq!(y.parent, Some(ns.id), "y should be a direct namespace member");
-  assert_eq!(x.parent, Some(f.id), "x should be scoped to function f");
+  let y_decl = result
+    .def(y.parent.expect("y should have declarator parent"))
+    .expect("y declarator def");
+  assert_eq!(y_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(y_decl.parent, Some(ns.id), "y should be a direct namespace member");
+
+  let x_decl = result
+    .def(x.parent.expect("x should have declarator parent"))
+    .expect("x declarator def");
+  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(x_decl.parent, Some(f.id), "x should be scoped to function f");
   assert_eq!(g.parent, Some(f.id), "g should be scoped to function f");
 }
 
@@ -1836,7 +2025,11 @@ fn module_type_info_members_exclude_nested_function_locals() {
   );
 
   assert_eq!(f.parent, Some(module.id), "f should be a direct module member");
-  assert_eq!(x.parent, Some(f.id), "x should be scoped to function f");
+  let x_decl = result
+    .def(x.parent.expect("x should have declarator parent"))
+    .expect("x declarator def");
+  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(x_decl.parent, Some(f.id), "x should be scoped to function f");
 }
 
 #[test]

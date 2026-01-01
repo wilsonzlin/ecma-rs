@@ -168,6 +168,7 @@ fn emit_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult
   match def.path.kind {
     hir_js::DefKind::Function => emit_function_decl(em, ctx, def),
     hir_js::DefKind::Var => emit_var_def(em, ctx, def),
+    hir_js::DefKind::VarDeclarator => emit_var_def(em, ctx, def),
     _ => Err(EmitError::unsupported(
       "definition kind not supported for HIR emission",
     )),

@@ -2513,17 +2513,31 @@ fn body_by_name<'a>(
     .iter()
     .find(|d| d.path.kind == kind && lowered.names.resolve(d.path.name) == Some(name))
     .expect("definition present");
+
   if let Some(body_id) = def.body {
-    if let Some(body) = lowered.bodies.get(body_id.0 as usize) {
-      return body.as_ref();
+    return lowered
+      .body(body_id)
+      .unwrap_or_else(|| panic!("body available for {}", name));
+  }
+
+  if kind == DefKind::Var {
+    if let Some(parent) = def.parent.and_then(|id| lowered.def(id)) {
+      if parent.path.kind == DefKind::VarDeclarator {
+        if let Some(body_id) = parent.body {
+          return lowered
+            .body(body_id)
+            .unwrap_or_else(|| panic!("body available for {}", name));
+        }
+      }
     }
   }
+
   lowered
     .bodies
     .iter()
     .find(|b| b.owner == def.id)
-    .or_else(|| lowered.bodies.first())
     .map(|b| b.as_ref())
+    .or_else(|| lowered.body(lowered.root_body()))
     .unwrap_or_else(|| panic!("body available for {}", name))
 }
 

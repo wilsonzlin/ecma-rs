@@ -750,11 +750,19 @@ pub fn lower_file(file: FileId, file_kind: FileKind, ast: &Node<TopLevel>) -> Lo
 }
 
 fn collect_namespace_members(def_id: DefId, defs: &[DefData]) -> Vec<DefId> {
-  let mut members: Vec<DefId> = defs
-    .iter()
-    .filter(|def| def.parent == Some(def_id))
-    .map(|def| def.id)
-    .collect();
+  let mut members: Vec<DefId> = Vec::new();
+  for def in defs.iter().filter(|def| def.parent == Some(def_id)) {
+    if def.path.kind == DefKind::VarDeclarator {
+      members.extend(
+        defs
+          .iter()
+          .filter(|child| child.parent == Some(def.id) && child.path.kind == DefKind::Var)
+          .map(|child| child.id),
+      );
+    } else {
+      members.push(def.id);
+    }
+  }
   members.sort();
   members
 }
@@ -3429,38 +3437,46 @@ fn collect_var_decl<'a>(
     _ => VarDeclKind::Var,
   };
   for declarator in var_decl.stx.declarators.iter() {
+    let declarator_raw = RawNode(declarator as *const _ as *const ());
     let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
-    if pat_names.is_empty() {
-      let anon = names.intern("<anon>");
+
+    let (decl_name, decl_name_text) = pat_names
+      .first()
+      .map(|(id, _)| (*id, names.resolve(*id).unwrap().to_string()))
+      .unwrap_or_else(|| {
+        let name = names.intern("<var_decl>");
+        (name, names.resolve(name).unwrap().to_string())
+      });
+
+    let mut declarator_desc = DefDescriptor::new(
+      DefKind::VarDeclarator,
+      decl_name,
+      decl_name_text,
+      ctx.to_range(declarator.pattern.loc),
+      is_item,
+      ambient,
+      in_global,
+      DefSource::Var(declarator, kind),
+    );
+    declarator_desc.parent = parent;
+    declarator_desc.node = Some(declarator_raw);
+    declarator_desc.is_exported = var_decl.stx.export;
+    descriptors.push(declarator_desc);
+
+    for (id, span) in pat_names {
       let mut desc = DefDescriptor::new(
         DefKind::Var,
-        anon,
-        names.resolve(anon).unwrap().to_string(),
-        ctx.to_range(declarator.pattern.loc),
+        id,
+        names.resolve(id).unwrap().to_string(),
+        span,
         is_item,
         ambient,
         in_global,
-        DefSource::Var(declarator, kind),
+        DefSource::None,
       );
-      desc.parent = parent;
+      desc.parent = Some(declarator_raw);
       desc.is_exported = var_decl.stx.export;
       descriptors.push(desc);
-    } else {
-      for (id, span) in pat_names {
-        let mut desc = DefDescriptor::new(
-          DefKind::Var,
-          id,
-          names.resolve(id).unwrap().to_string(),
-          span,
-          is_item,
-          ambient,
-          in_global,
-          DefSource::Var(declarator, kind),
-        );
-        desc.parent = parent;
-        desc.is_exported = var_decl.stx.export;
-        descriptors.push(desc);
-      }
     }
 
     collect_exprs_from_pat(

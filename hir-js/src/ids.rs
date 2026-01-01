@@ -161,6 +161,7 @@ pub enum DefKind {
   Getter,
   Setter,
   StaticBlock,
+  VarDeclarator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

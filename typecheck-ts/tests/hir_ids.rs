@@ -88,7 +88,14 @@ fn program_ids_match_hir_lowering() {
     );
     assert_eq!(
       program.body_of_def(def.id),
-      def.body,
+      def.body.or_else(|| {
+        (def.path.kind == hir_js::DefKind::Var)
+          .then(|| def.parent)
+          .flatten()
+          .and_then(|parent| lowered.def(parent))
+          .filter(|parent| parent.path.kind == hir_js::DefKind::VarDeclarator)
+          .and_then(|parent| parent.body)
+      }),
       "program body_of_def should use lowered body"
     );
   }
