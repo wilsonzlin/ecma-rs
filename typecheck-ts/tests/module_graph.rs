@@ -28,3 +28,35 @@ fn reachable_files_are_stable_and_cycle_safe() {
   let reordered = program_reordered.reachable_files();
   assert_eq!(reachable, reordered);
 }
+
+#[test]
+fn reachable_files_include_type_import_deps() {
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    include_dom: false,
+    no_default_lib: true,
+    ..Default::default()
+  });
+  // Use deterministic test IDs (`file{N}.ts` -> `FileId(N)`) so we can assert
+  // exact ordering.
+  let entry = FileKey::new("file0.ts");
+  let dep = FileKey::new("file1.ts");
+
+  host.insert(
+    entry.clone(),
+    r#"
+type Foo = import("./file1").Foo;
+type Bar = typeof import("./file1").Foo;
+"#,
+  );
+  host.insert(dep.clone(), "export interface Foo {}");
+
+  host.link(entry.clone(), "./file1", dep.clone());
+
+  let program = Program::new(host, vec![entry]);
+  let reachable = program.reachable_files();
+  assert_eq!(
+    reachable,
+    vec![FileId(0), FileId(1)],
+    "module graph should include deps introduced only via import() types"
+  );
+}
