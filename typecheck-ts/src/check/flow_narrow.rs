@@ -321,7 +321,7 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       (store.union(truthy), store.union(falsy))
     }
     TypeKind::Never => (primitives.never, primitives.never),
-    TypeKind::Any | TypeKind::Unknown => (ty, ty),
+    TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject => (ty, ty),
     TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
     TypeKind::BooleanLiteral(false) => (primitives.never, ty),
     TypeKind::BooleanLiteral(true) => (ty, primitives.never),

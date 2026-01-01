@@ -127,6 +127,15 @@ pub enum TypeKind {
     index: TypeId,
   },
   KeyOf(TypeId),
+  /// The TypeScript `{}` type literal with no members.
+  ///
+  /// Semantics:
+  /// - With `strictNullChecks: true`: all types except `null` and `undefined`.
+  /// - With `strictNullChecks: false`: behaves like the top type (everything).
+  ///
+  /// This is intentionally distinct from the `object` keyword, which excludes
+  /// primitives and is represented separately as an (empty) structural object.
+  EmptyObject,
 }
 
 impl TypeKind {
@@ -164,6 +173,7 @@ impl TypeKind {
       TypeKind::TemplateLiteral(_) => 29,
       TypeKind::IndexedAccess { .. } => 30,
       TypeKind::KeyOf(_) => 31,
+      TypeKind::EmptyObject => 32,
     }
   }
 }

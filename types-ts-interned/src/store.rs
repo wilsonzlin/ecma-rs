@@ -1213,6 +1213,7 @@ impl TypeStore {
       TypeKind::Void => json!({ "kind": "void" }),
       TypeKind::Null => json!({ "kind": "null" }),
       TypeKind::Undefined => json!({ "kind": "undefined" }),
+      TypeKind::EmptyObject => json!({ "kind": "empty_object" }),
       TypeKind::Boolean => json!({ "kind": "boolean" }),
       TypeKind::Number => json!({ "kind": "number" }),
       TypeKind::String => json!({ "kind": "string" }),

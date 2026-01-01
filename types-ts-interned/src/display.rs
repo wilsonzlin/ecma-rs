@@ -143,6 +143,7 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Void => write!(f, "void"),
       TypeKind::Null => write!(f, "null"),
       TypeKind::Undefined => write!(f, "undefined"),
+      TypeKind::EmptyObject => write!(f, "{{}}"),
       TypeKind::Boolean => write!(f, "boolean"),
       TypeKind::Number => write!(f, "number"),
       TypeKind::String => write!(f, "string"),

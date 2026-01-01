@@ -71,6 +71,29 @@ fn primitives_and_special_types() {
 }
 
 #[test]
+fn number_assignable_to_empty_object() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  let object_keyword = object_type(&store, Shape::new());
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  assert!(ctx.is_assignable(primitives.number, empty_object));
+  assert!(!ctx.is_assignable(primitives.number, object_keyword));
+}
+
+#[test]
+fn null_not_assignable_to_empty_object_under_strict_null_checks() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  assert!(!ctx.is_assignable(primitives.null, empty_object));
+  assert!(!ctx.is_assignable(primitives.undefined, empty_object));
+}
+
+#[test]
 fn type_params_treated_as_unknown() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

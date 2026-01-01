@@ -989,11 +989,21 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::Unknown, TypeKind::Unknown) => Some(true),
       (_, TypeKind::Unknown) => Some(true),
       (TypeKind::Unknown, _) => Some(false),
+      (TypeKind::EmptyObject, _) => {
+        Some(matches!(dst, TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject))
+      }
       (TypeKind::Never, _) => Some(true),
       (_, TypeKind::Never) => Some(matches!(src, TypeKind::Never)),
       (TypeKind::Void, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::Undefined) | (TypeKind::Undefined, TypeKind::Void) => Some(true),
       (TypeKind::Void, _) => Some(false),
+      (_, TypeKind::EmptyObject) => {
+        if !opts.strict_null_checks {
+          Some(true)
+        } else {
+          Some(!matches!(src, TypeKind::Null | TypeKind::Undefined))
+        }
+      }
       (TypeKind::Null, _)
       | (TypeKind::Undefined, _)
       | (_, TypeKind::Null)

@@ -465,6 +465,9 @@ impl TypeLowerer {
   }
 
   fn lower_object_type(&mut self, obj: &Node<TypeObjectLiteral>) -> TypeId {
+    if obj.stx.members.is_empty() {
+      return self.store.intern_type(TypeKind::EmptyObject);
+    }
     let shape = self.lower_type_members(&obj.stx.members);
     let shape = self.store.intern_shape(shape);
     let obj = self.store.intern_object(ObjectType { shape });

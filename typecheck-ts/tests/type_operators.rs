@@ -182,6 +182,15 @@ fn lowers_this_type() {
 }
 
 #[test]
+fn lowers_empty_object_type_literal() {
+  let alias = parse_type_alias("type T = {};");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+  assert!(matches!(store.type_kind(ty), TypeKind::EmptyObject));
+}
+
+#[test]
 fn captures_type_predicate_details() {
   let alias = parse_type_alias("type Pred = (value: unknown) => value is string;");
   let store = TypeStore::new();
