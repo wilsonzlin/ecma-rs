@@ -6,6 +6,7 @@ use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, TextRange};
 use parse_js::ast::class_or_object::ObjMemberType;
+use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -915,7 +916,47 @@ impl DeclarePass {
         self.walk_expr(&mut mem.stx.object);
         self.walk_expr(&mut mem.stx.member);
       }
+      AstExpr::JsxElem(elem) => self.walk_jsx_elem(elem),
+      AstExpr::JsxExprContainer(container) => self.walk_expr(&mut container.stx.value),
+      AstExpr::JsxSpreadAttr(attr) => self.walk_expr(&mut attr.stx.value),
       _ => {}
+    }
+  }
+
+  fn walk_jsx_elem(&mut self, elem: &mut Node<parse_js::ast::expr::jsx::JsxElem>) {
+    self.mark_scope(&mut elem.assoc);
+
+    for attr in elem.stx.attributes.iter_mut() {
+      match attr {
+        JsxAttr::Named { name, value } => {
+          self.mark_scope(&mut name.assoc);
+          if let Some(value) = value {
+            match value {
+              JsxAttrVal::Expression(container) => {
+                self.mark_scope(&mut container.assoc);
+                self.walk_expr(&mut container.stx.value);
+              }
+              JsxAttrVal::Element(child) => self.walk_jsx_elem(child),
+              JsxAttrVal::Text(text) => self.mark_scope(&mut text.assoc),
+            }
+          }
+        }
+        JsxAttr::Spread { value } => {
+          self.mark_scope(&mut value.assoc);
+          self.walk_expr(&mut value.stx.value);
+        }
+      }
+    }
+
+    for child in elem.stx.children.iter_mut() {
+      match child {
+        JsxElemChild::Element(child) => self.walk_jsx_elem(child),
+        JsxElemChild::Expr(container) => {
+          self.mark_scope(&mut container.assoc);
+          self.walk_expr(&mut container.stx.value);
+        }
+        JsxElemChild::Text(text) => self.mark_scope(&mut text.assoc),
+      }
     }
   }
 
@@ -1618,8 +1659,67 @@ impl<'a> ResolvePass<'a> {
         self.walk_expr(&mut mem.stx.object);
         self.walk_expr(&mut mem.stx.member);
       }
+      AstExpr::JsxElem(elem) => self.walk_jsx_elem(elem),
+      AstExpr::JsxExprContainer(container) => self.walk_expr(&mut container.stx.value),
+      AstExpr::JsxSpreadAttr(attr) => self.walk_expr(&mut attr.stx.value),
       _ => {}
     }
+  }
+
+  fn walk_jsx_elem(&mut self, elem: &mut Node<parse_js::ast::expr::jsx::JsxElem>) {
+    self.push_scope_from_assoc(&elem.assoc);
+
+    if let Some(name) = &mut elem.stx.name {
+      match name {
+        JsxElemName::Id(id) => {
+          let span = span_for_name(id.loc, &id.stx.name);
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+          id.assoc.set(ResolvedSymbol(sym));
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+          }
+        }
+        JsxElemName::Member(member) => {
+          let id = &mut member.stx.base;
+          let span = span_for_name(id.loc, &id.stx.name);
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+          id.assoc.set(ResolvedSymbol(sym));
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+          }
+        }
+        JsxElemName::Name(_) => {}
+      }
+    }
+
+    for attr in elem.stx.attributes.iter_mut() {
+      match attr {
+        JsxAttr::Named { value, .. } => {
+          if let Some(value) = value {
+            match value {
+              JsxAttrVal::Expression(container) => self.walk_expr(&mut container.stx.value),
+              JsxAttrVal::Element(child) => self.walk_jsx_elem(child),
+              JsxAttrVal::Text(_) => {}
+            }
+          }
+        }
+        JsxAttr::Spread { value } => self.walk_expr(&mut value.stx.value),
+      }
+    }
+
+    for child in elem.stx.children.iter_mut() {
+      match child {
+        JsxElemChild::Element(child) => self.walk_jsx_elem(child),
+        JsxElemChild::Expr(container) => self.walk_expr(&mut container.stx.value),
+        JsxElemChild::Text(_) => {}
+      }
+    }
+
+    self.pop_scope_from_assoc(&elem.assoc);
   }
 
   fn walk_func(&mut self, func: &mut Node<Func>) {
@@ -2234,7 +2334,47 @@ impl DeclareTablesPass {
         self.walk_expr(&mem.stx.object);
         self.walk_expr(&mem.stx.member);
       }
+      AstExpr::JsxElem(elem) => self.walk_jsx_elem(elem),
+      AstExpr::JsxExprContainer(container) => self.walk_expr(&container.stx.value),
+      AstExpr::JsxSpreadAttr(attr) => self.walk_expr(&attr.stx.value),
       _ => {}
+    }
+  }
+
+  fn walk_jsx_elem(&mut self, elem: &Node<parse_js::ast::expr::jsx::JsxElem>) {
+    self.mark_scope(elem);
+
+    for attr in elem.stx.attributes.iter() {
+      match attr {
+        JsxAttr::Named { name, value } => {
+          self.mark_scope(name);
+          if let Some(value) = value {
+            match value {
+              JsxAttrVal::Expression(container) => {
+                self.mark_scope(container);
+                self.walk_expr(&container.stx.value);
+              }
+              JsxAttrVal::Element(child) => self.walk_jsx_elem(child),
+              JsxAttrVal::Text(text) => self.mark_scope(text),
+            }
+          }
+        }
+        JsxAttr::Spread { value } => {
+          self.mark_scope(value);
+          self.walk_expr(&value.stx.value);
+        }
+      }
+    }
+
+    for child in elem.stx.children.iter() {
+      match child {
+        JsxElemChild::Element(child) => self.walk_jsx_elem(child),
+        JsxElemChild::Expr(container) => {
+          self.mark_scope(container);
+          self.walk_expr(&container.stx.value);
+        }
+        JsxElemChild::Text(text) => self.mark_scope(text),
+      }
     }
   }
 
@@ -2905,8 +3045,67 @@ impl<'a> ResolveTablesPass<'a> {
         self.walk_expr(&mem.stx.object);
         self.walk_expr(&mem.stx.member);
       }
+      AstExpr::JsxElem(elem) => self.walk_jsx_elem(elem),
+      AstExpr::JsxExprContainer(container) => self.walk_expr(&container.stx.value),
+      AstExpr::JsxSpreadAttr(attr) => self.walk_expr(&attr.stx.value),
       _ => {}
     }
+  }
+
+  fn walk_jsx_elem(&mut self, elem: &Node<parse_js::ast::expr::jsx::JsxElem>) {
+    self.push_scope_for_node(elem);
+
+    if let Some(name) = &elem.stx.name {
+      match name {
+        JsxElemName::Id(id) => {
+          let span = span_for_name(id.loc, &id.stx.name);
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+        JsxElemName::Member(member) => {
+          let id = &member.stx.base;
+          let span = span_for_name(id.loc, &id.stx.name);
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+        JsxElemName::Name(_) => {}
+      }
+    }
+
+    for attr in elem.stx.attributes.iter() {
+      match attr {
+        JsxAttr::Named { value, .. } => {
+          if let Some(value) = value {
+            match value {
+              JsxAttrVal::Expression(container) => self.walk_expr(&container.stx.value),
+              JsxAttrVal::Element(child) => self.walk_jsx_elem(child),
+              JsxAttrVal::Text(_) => {}
+            }
+          }
+        }
+        JsxAttr::Spread { value } => self.walk_expr(&value.stx.value),
+      }
+    }
+
+    for child in elem.stx.children.iter() {
+      match child {
+        JsxElemChild::Element(child) => self.walk_jsx_elem(child),
+        JsxElemChild::Expr(container) => self.walk_expr(&container.stx.value),
+        JsxElemChild::Text(_) => {}
+      }
+    }
+
+    self.pop_scope_for_node(elem);
   }
 
   fn walk_func(&mut self, func: &Node<Func>) {
@@ -3119,4 +3318,47 @@ fn span_for_name(loc: parse_js::loc::Loc, name: &str) -> TextRange {
   let end = range.start;
   let start = end.saturating_sub(len);
   TextRange::new(start, end)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::bind_ts_locals;
+  use diagnostics::FileId;
+  use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+  use std::collections::HashSet;
+
+  #[test]
+  fn locals_resolve_identifiers_inside_jsx_expression_containers() {
+    let source = "const foo = 1; const el = <div>{foo}</div>;";
+    let mut ast = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Tsx,
+        source_type: SourceType::Module,
+      },
+    )
+    .expect("parse TSX source");
+    let locals = bind_ts_locals(&mut ast, FileId(0), true);
+
+    let occs: Vec<u32> = source
+      .match_indices("foo")
+      .map(|(idx, _)| idx as u32)
+      .collect();
+    assert_eq!(occs.len(), 2, "expected declaration + JSX usage of foo");
+
+    let decl_symbol = locals
+      .resolve_expr_at_offset(occs[0])
+      .map(|(_, id)| id)
+      .expect("declaration should resolve");
+    let jsx_symbol = locals
+      .resolve_expr_at_offset(occs[1])
+      .map(|(_, id)| id)
+      .expect("JSX expression container should resolve");
+
+    assert_eq!(decl_symbol, jsx_symbol);
+
+    // Sanity check: we should only have one unique symbol for these occurrences.
+    let uniq: HashSet<_> = [decl_symbol, jsx_symbol].into_iter().collect();
+    assert_eq!(uniq.len(), 1);
+  }
 }
