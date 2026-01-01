@@ -585,7 +585,7 @@ fn run_single_test(
   normalization: &NormalizationOptions,
 ) -> CaseReport {
   let baseline_path = baselines_root.join(format!("{}.json", test.name));
-  let notes = Vec::new();
+  let mut notes = Vec::new();
   let harness_options = harness_options_from_files(&test.files);
   let tsc_options = harness_options.to_tsc_options_map();
   let type_queries = collect_type_queries(&test.files);
@@ -689,6 +689,7 @@ fn run_single_test(
         };
       }
     };
+    notes.extend(baseline_option_mismatch_notes(&tsc_options, &baseline.metadata.options));
     let expected = normalize_tsc_diagnostics_with_options(&baseline.diagnostics, normalization);
     let actual = normalize_tsc_diagnostics_with_options(
       &live_tsc.as_ref().expect("live tsc required").diagnostics,
@@ -749,6 +750,7 @@ fn run_single_test(
       }
     }
   };
+  notes.extend(baseline_option_mismatch_notes(&tsc_options, &tsc_diags.metadata.options));
 
   let file_set = HarnessFileSet::new(&test.files);
   let rust = run_rust(&file_set, &harness_options);
@@ -1557,11 +1559,16 @@ fn collect_type_queries(files: &[VirtualFile]) -> Vec<TypeQuery> {
 }
 
 fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
-  let mut ordered: Vec<_> = files.iter().collect();
-  ordered.sort_by(|a, b| normalize_name(&a.name).cmp(&normalize_name(&b.name)));
+  let mut ordered: Vec<(String, &VirtualFile)> = files
+    .iter()
+    .map(|file| (normalize_name(&file.name), file))
+    .collect();
+  ordered.sort_by(|(a_norm, a_file), (b_norm, b_file)| {
+    a_norm.cmp(b_norm).then_with(|| a_file.name.cmp(&b_file.name))
+  });
 
   let mut directives = Vec::new();
-  for file in ordered {
+  for (_normalized, file) in ordered {
     for (idx, raw_line) in file.content.split_inclusive('\n').enumerate() {
       let line_number = idx + 1;
       let line = raw_line.trim_end_matches(|c| c == '\n' || c == '\r');
@@ -1572,6 +1579,32 @@ fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
   }
 
   HarnessOptions::from_directives(&directives)
+}
+
+fn baseline_option_mismatch_notes(
+  computed: &Map<String, Value>,
+  baseline: &Map<String, Value>,
+) -> Vec<String> {
+  let mut mismatches = Vec::new();
+  for (key, expected) in computed {
+    let Some(actual) = baseline.get(key) else {
+      continue;
+    };
+    let matches = match (expected, actual) {
+      (Value::Bool(a), Value::Bool(b)) => a == b,
+      (Value::String(a), Value::String(b)) => a == b,
+      (Value::Number(a), Value::Number(b)) => a == b,
+      (Value::Array(a), Value::Array(b)) => a == b,
+      _ => continue,
+    };
+    if !matches {
+      mismatches.push(format!(
+        "baseline option {key} differs (computed={expected}, baseline={actual})"
+      ));
+    }
+  }
+  mismatches.sort();
+  mismatches
 }
 
 fn collect_rust_type_facts(
