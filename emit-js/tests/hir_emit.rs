@@ -114,6 +114,29 @@ fn deterministic_emission() {
   );
 }
 
+#[test]
+fn do_while_emits_trailing_semicolon() {
+  // The trailing semicolon is required for a `do...while` statement to be
+  // parseable when immediately followed by another statement in minified output
+  // (no newline for ASI).
+  roundtrip(FileKind::Js, "function f(){do{}while(false);x();}");
+}
+
+#[test]
+fn for_header_parentheses_are_preserved_in_hir_emission() {
+  // These mirror `tests/for_header_parentheses.rs`, but exercise the HIR
+  // emission path (lower → emit_hir_file_to_string → parse).
+  let cases = [
+    "function f(){for ((let[x]=y);;){ }}",
+    "function f(){for ((using[x]=y);;){ }}",
+    "function f(){for ((let) in obj) {}}",
+    "function f(){for ((let) of arr) {}}",
+  ];
+  for case in cases {
+    roundtrip(FileKind::Js, case);
+  }
+}
+
 fn assert_no_missing(lowered: &hir_js::LowerResult) {
   for body in lowered.bodies.iter() {
     let body = body.as_ref();

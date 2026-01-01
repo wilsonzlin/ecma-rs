@@ -1062,7 +1062,14 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       if let Some(init) = init {
         match init {
           hir_js::ForInit::Expr(expr) => {
-            emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?
+            let needs_parens = for_init_expr_needs_parens(ctx, body, *expr);
+            if needs_parens {
+              em.write_punct("(");
+            }
+            emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+            if needs_parens {
+              em.write_punct(")");
+            }
           }
           hir_js::ForInit::Var(decl) => emit_var_decl(em, ctx, body, decl, false)?,
         }
@@ -1091,7 +1098,16 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       }
       em.write_punct("(");
       match left {
-        hir_js::ForHead::Pat(pat) => emit_pat(em, ctx, body, *pat, true)?,
+        hir_js::ForHead::Pat(pat) => {
+          let needs_parens = for_inof_assign_needs_parens(ctx, body, *pat);
+          if needs_parens {
+            em.write_punct("(");
+          }
+          emit_pat(em, ctx, body, *pat, true)?;
+          if needs_parens {
+            em.write_punct(")");
+          }
+        }
         hir_js::ForHead::Var(decl) => emit_var_decl(em, ctx, body, decl, false)?,
       }
       if *is_for_of {
@@ -1964,6 +1980,195 @@ fn expr_stmt_needs_parens(expr: &Expr) -> bool {
       }
       | ExprKind::ClassExpr { .. }
   )
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContextualKeyword {
+  Let,
+  Using,
+  AwaitUsing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum NextTokenAfterKeyword {
+  None,
+  Brace,
+  Bracket,
+  IdentLike,
+  In,
+  Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ContextualKeywordStart {
+  kind: ContextualKeyword,
+  next: NextTokenAfterKeyword,
+}
+
+fn contextual_keyword_from_name(name: &str) -> Option<ContextualKeyword> {
+  match name {
+    "let" => Some(ContextualKeyword::Let),
+    "using" => Some(ContextualKeyword::Using),
+    _ => None,
+  }
+}
+
+fn contextual_keyword_start_from_expr(
+  ctx: &HirContext<'_>,
+  body: &Body,
+  expr_id: ExprId,
+) -> Option<ContextualKeywordStart> {
+  let expr = ctx.expr(body, expr_id);
+  match &expr.kind {
+    ExprKind::Ident(name) => contextual_keyword_from_name(ctx.name(*name)).map(|kind| {
+      ContextualKeywordStart {
+        kind,
+        next: NextTokenAfterKeyword::None,
+      }
+    }),
+    ExprKind::Await { expr } => {
+      if let Some(child_start) = contextual_keyword_start_from_expr(ctx, body, *expr) {
+        if child_start.kind == ContextualKeyword::Using {
+          Some(ContextualKeywordStart {
+            kind: ContextualKeyword::AwaitUsing,
+            next: child_start.next,
+          })
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+    ExprKind::Unary {
+      op: UnaryOp::Await,
+      expr,
+    } => {
+      if let Some(child_start) = contextual_keyword_start_from_expr(ctx, body, *expr) {
+        if child_start.kind == ContextualKeyword::Using {
+          Some(ContextualKeywordStart {
+            kind: ContextualKeyword::AwaitUsing,
+            next: child_start.next,
+          })
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+    ExprKind::Member(member) => propagate_keyword_start(
+      ctx,
+      body,
+      member.object,
+      match (&member.property, member.optional) {
+        (ObjectKey::Computed(_), false) => NextTokenAfterKeyword::Bracket,
+        _ => NextTokenAfterKeyword::Other,
+      },
+    ),
+    ExprKind::Call(call) => {
+      if call.is_new {
+        None
+      } else {
+        propagate_keyword_start(ctx, body, call.callee, NextTokenAfterKeyword::Other)
+      }
+    }
+    ExprKind::Binary { op, left, .. } => propagate_keyword_start(
+      ctx,
+      body,
+      *left,
+      if *op == BinaryOp::In {
+        NextTokenAfterKeyword::In
+      } else {
+        NextTokenAfterKeyword::Other
+      },
+    ),
+    ExprKind::Assignment { target, .. } => {
+      propagate_keyword_start_from_pat(ctx, body, *target, NextTokenAfterKeyword::Other)
+    }
+    ExprKind::Conditional { test, .. } => {
+      propagate_keyword_start(ctx, body, *test, NextTokenAfterKeyword::Other)
+    }
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => {
+      propagate_keyword_start(ctx, body, *expr, NextTokenAfterKeyword::Other)
+    }
+    _ => None,
+  }
+}
+
+fn propagate_keyword_start(
+  ctx: &HirContext<'_>,
+  body: &Body,
+  expr_id: ExprId,
+  fallback_next: NextTokenAfterKeyword,
+) -> Option<ContextualKeywordStart> {
+  contextual_keyword_start_from_expr(ctx, body, expr_id).map(|mut start| {
+    if start.next == NextTokenAfterKeyword::None {
+      start.next = fallback_next;
+    }
+    start
+  })
+}
+
+fn contextual_keyword_start_from_pat(
+  ctx: &HirContext<'_>,
+  body: &Body,
+  pat_id: PatId,
+) -> Option<ContextualKeywordStart> {
+  let pat = ctx.pat(body, pat_id);
+  match &pat.kind {
+    PatKind::Ident(name) => contextual_keyword_from_name(ctx.name(*name)).map(|kind| {
+      ContextualKeywordStart {
+        kind,
+        next: NextTokenAfterKeyword::None,
+      }
+    }),
+    PatKind::AssignTarget(expr) => contextual_keyword_start_from_expr(ctx, body, *expr),
+    PatKind::Assign { target, .. } => contextual_keyword_start_from_pat(ctx, body, *target),
+    PatKind::Rest(inner) => contextual_keyword_start_from_pat(ctx, body, **inner),
+    PatKind::Array(_) | PatKind::Object(_) => None,
+  }
+}
+
+fn propagate_keyword_start_from_pat(
+  ctx: &HirContext<'_>,
+  body: &Body,
+  pat_id: PatId,
+  fallback_next: NextTokenAfterKeyword,
+) -> Option<ContextualKeywordStart> {
+  contextual_keyword_start_from_pat(ctx, body, pat_id).map(|mut start| {
+    if start.next == NextTokenAfterKeyword::None {
+      start.next = fallback_next;
+    }
+    start
+  })
+}
+
+fn for_init_expr_needs_parens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  contextual_keyword_start_from_expr(ctx, body, expr_id).map_or(false, |start| match start.kind {
+    ContextualKeyword::AwaitUsing => true,
+    ContextualKeyword::Let | ContextualKeyword::Using => matches!(
+      start.next,
+      NextTokenAfterKeyword::Brace | NextTokenAfterKeyword::Bracket | NextTokenAfterKeyword::IdentLike
+    ),
+  })
+}
+
+fn for_inof_assign_needs_parens(ctx: &HirContext<'_>, body: &Body, pat_id: PatId) -> bool {
+  contextual_keyword_start_from_pat(ctx, body, pat_id).map_or(false, |start| match start.kind {
+    ContextualKeyword::AwaitUsing => true,
+    ContextualKeyword::Let | ContextualKeyword::Using => matches!(
+      start.next,
+      NextTokenAfterKeyword::Brace
+        | NextTokenAfterKeyword::Bracket
+        | NextTokenAfterKeyword::IdentLike
+        | NextTokenAfterKeyword::In
+        | NextTokenAfterKeyword::None
+    ),
+  })
 }
 
 fn binary_operator(op: BinaryOp) -> OperatorName {
