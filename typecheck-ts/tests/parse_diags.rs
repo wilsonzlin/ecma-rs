@@ -280,7 +280,8 @@ fn unresolved_type_reference_span_covers_type_arguments() {
   let unresolved = diagnostics
     .iter()
     .find(|diag| {
-      diag.code.as_str() == codes::UNRESOLVED_TYPE_REFERENCE.as_str() && diag.message.contains("Foo")
+      diag.code.as_str() == codes::UNRESOLVED_TYPE_REFERENCE.as_str()
+        && diag.message.contains("Foo")
     })
     .expect("expected UNRESOLVED_TYPE_REFERENCE diagnostic for Foo from TypeLowerer");
   assert_diag_covers_substring(
