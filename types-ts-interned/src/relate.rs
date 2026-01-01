@@ -252,6 +252,38 @@ impl<'a> RelateCtx<'a> {
     hooks: RelateHooks<'a>,
     cache: RelationCache,
   ) -> Self {
+    Self::with_hooks_cache_and_normalizer_caches(
+      store,
+      options,
+      hooks,
+      cache,
+      EvaluatorCaches::new(CacheConfig::default()),
+    )
+  }
+
+  /// Create a new [`RelateCtx`] with explicit relation and normalization caches.
+  ///
+  /// This is primarily useful for parallel type checking. A checker can create
+  /// an [`EvaluatorCaches`] instance once and clone it into multiple
+  /// per-thread [`RelateCtx`] instances, allowing `TypeEvaluator` normalization
+  /// work to be reused across contexts.
+  ///
+  /// ## Correctness requirements
+  ///
+  /// `normalizer_caches` memoizes results of [`RelateCtx::normalize_type`] (via
+  /// [`TypeEvaluator`]) and is keyed only by [`TypeId`]. It must therefore only
+  /// be shared between `RelateCtx` instances that:
+  /// - use the same [`TypeStore`] (or an equivalent store containing all
+  ///   referenced types), and
+  /// - use semantically equivalent `options` and `hooks` (notably the reference
+  ///   expander and conditional-type assignability rules).
+  pub fn with_hooks_cache_and_normalizer_caches(
+    store: Arc<TypeStore>,
+    options: TypeOptions,
+    hooks: RelateHooks<'a>,
+    cache: RelationCache,
+    normalizer_caches: EvaluatorCaches,
+  ) -> Self {
     let store_options = store.options();
     debug_assert_eq!(
       options.exact_optional_property_types, store_options.exact_optional_property_types,
@@ -275,7 +307,7 @@ impl<'a> RelateCtx<'a> {
       options,
       hooks,
       cache,
-      normalizer_caches: EvaluatorCaches::new(CacheConfig::default()),
+      normalizer_caches,
       in_progress: RefCell::new(HashSet::new()),
       reason_budget: RefCell::new(ReasonBudget::default()),
     }
