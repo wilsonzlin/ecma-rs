@@ -94,6 +94,10 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   `**/es2020/**`, `optionalChaining`).
 - Shards are zero-based (`i/n`) and are applied after sorting cases by id; run
   each shard in a separate process/job for parallelism.
+- `--extensions <csv>` controls which test files are discovered (default:
+  `ts,tsx,d.ts`). Values are treated as file suffixes (leading `.` optional) and
+  are matched using a longest-suffix-wins rule, so `types.d.ts` is **not**
+  included by `--extensions ts` unless `d.ts` is also listed.
 - Timeouts apply per test case (default 10s) and kill only the offending test,
   not the whole run.
 - Execution is parallel by default; cap worker threads with `--jobs <n>` (default

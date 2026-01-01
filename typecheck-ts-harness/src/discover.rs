@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use walkdir::WalkDir;
 
 pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "d.ts"];
+const SPECIAL_SUFFIXES: &[&str] = &[".d.tsx", ".d.ts", ".d.mts", ".d.cts"];
 
 #[derive(Debug, Clone)]
 pub struct TestCase {
@@ -104,7 +105,8 @@ pub fn discover_conformance_tests(
   }
 
   let mut cases = Vec::new();
-  let normalized_extensions = normalize_extensions(extensions);
+  let allowed_suffixes = normalize_extensions(extensions);
+  let candidate_suffixes = build_candidate_suffixes(&allowed_suffixes);
 
   for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
     if !entry.file_type().is_file() {
@@ -117,7 +119,7 @@ pub fn discover_conformance_tests(
       None => continue,
     };
 
-    if !has_allowed_extension(file_name, &normalized_extensions) {
+    if !has_allowed_extension(file_name, &allowed_suffixes, &candidate_suffixes) {
       continue;
     }
 
@@ -154,15 +156,37 @@ fn normalize_extensions(extensions: &[String]) -> Vec<String> {
     }
 
     let needle = format!(".{trimmed}");
-    if !normalized.contains(&needle) {
-      normalized.push(needle);
-    }
+    normalized.push(needle);
   }
+  normalized.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+  normalized.dedup();
   normalized
 }
 
-fn has_allowed_extension(file_name: &str, extensions: &[String]) -> bool {
-  extensions.iter().any(|ext| file_name.ends_with(ext))
+fn build_candidate_suffixes(allowed_suffixes: &[String]) -> Vec<String> {
+  let mut candidates = allowed_suffixes.to_vec();
+  for suffix in SPECIAL_SUFFIXES {
+    if !candidates.iter().any(|s| s == suffix) {
+      candidates.push((*suffix).to_string());
+    }
+  }
+
+  candidates.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+  candidates.dedup();
+  candidates
+}
+
+fn has_allowed_extension(
+  file_name: &str,
+  allowed_suffixes: &[String],
+  candidates: &[String],
+) -> bool {
+  for suffix in candidates {
+    if file_name.ends_with(suffix) {
+      return allowed_suffixes.iter().any(|allowed| allowed == suffix);
+    }
+  }
+  false
 }
 
 fn normalize_id(root: &Path, path: &Path) -> String {
@@ -274,6 +298,32 @@ mod tests {
     let cases = discover_conformance_tests(root, &Filter::All, &default_extensions()).unwrap();
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].id, "types.d.ts");
+  }
+
+  #[test]
+  fn declaration_files_do_not_match_ts_extension() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("main.ts"), "const x = 1;").unwrap();
+    fs::write(root.join("types.d.ts"), "declare const value: string;").unwrap();
+
+    let extensions = vec!["ts".to_string()];
+    let cases = discover_conformance_tests(root, &Filter::All, &extensions).unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].id, "main.ts");
+  }
+
+  #[test]
+  fn declaration_files_are_discovered_when_enabled() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("main.ts"), "const x = 1;").unwrap();
+    fs::write(root.join("types.d.ts"), "declare const value: string;").unwrap();
+
+    let extensions = vec!["ts".to_string(), "d.ts".to_string()];
+    let cases = discover_conformance_tests(root, &Filter::All, &extensions).unwrap();
+    let ids: Vec<_> = cases.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, vec!["main.ts", "types.d.ts"]);
   }
 
   #[test]
