@@ -577,6 +577,26 @@ fn union_dedups_duplicate_function_types_ignoring_param_names() {
 }
 
 #[test]
+fn union_dedups_type_predicate_function_types_ignoring_param_names() {
+  let result = lower_from_source(
+    "type A = ((x: unknown) => x is string) | ((y: unknown) => y is string);",
+  )
+  .expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+}
+
+#[test]
 fn union_dedups_tuple_types_ignoring_labels() {
   let result = lower_from_source("type A = ([x: string] | [y: string]);").expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");

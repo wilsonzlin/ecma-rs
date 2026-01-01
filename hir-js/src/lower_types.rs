@@ -1352,7 +1352,11 @@ impl<'a> TypeLowerer<'a> {
       }),
       TypeExprKind::TypePredicate(pred) => TypeSortKey::TypePredicate(TypePredicateKey {
         asserts: pred.asserts,
-        parameter: self.name_id_to_string(pred.parameter),
+        parameter: if self.names.resolve(pred.parameter) == Some("this") {
+          TypePredicateParamKey::This
+        } else {
+          TypePredicateParamKey::Name(self.name_id_to_string(pred.parameter))
+        },
         type_annotation: pred
           .type_annotation
           .map(|ty| Box::new(self.type_expr_sort_key(ty, cache, in_progress))),
@@ -1393,8 +1397,48 @@ impl<'a> TypeLowerer<'a> {
         .iter()
         .map(|param| self.fn_param_sort_key(param, cache, in_progress))
         .collect(),
-      return_type: return_type.map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
+      return_type: return_type
+        .map(|id| Box::new(self.signature_return_type_sort_key(id, params, cache, in_progress))),
     }
+  }
+
+  fn signature_return_type_sort_key(
+    &self,
+    id: TypeExprId,
+    params: &[TypeFnParam],
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> TypeSortKey {
+    let expr = &self.arenas.type_exprs[id.0 as usize];
+    match &expr.kind {
+      TypeExprKind::TypePredicate(pred) => TypeSortKey::TypePredicate(TypePredicateKey {
+        asserts: pred.asserts,
+        parameter: self.type_predicate_parameter_key(pred.parameter, params),
+        type_annotation: pred
+          .type_annotation
+          .map(|ty| Box::new(self.type_expr_sort_key(ty, cache, in_progress))),
+      }),
+      _ => self.type_expr_sort_key(id, cache, in_progress),
+    }
+  }
+
+  fn type_predicate_parameter_key(
+    &self,
+    parameter: NameId,
+    params: &[TypeFnParam],
+  ) -> TypePredicateParamKey {
+    if self.names.resolve(parameter) == Some("this") {
+      return TypePredicateParamKey::This;
+    }
+
+    if let Some(index) = params
+      .iter()
+      .position(|param| param.name == Some(parameter))
+    {
+      return TypePredicateParamKey::ParamIndex(index as u32);
+    }
+
+    TypePredicateParamKey::Name(self.name_id_to_string(parameter))
   }
 
   fn fn_param_sort_key(
@@ -1717,8 +1761,15 @@ struct TemplateLiteralSpanKey {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TypePredicateKey {
   asserts: bool,
-  parameter: String,
+  parameter: TypePredicateParamKey,
   type_annotation: Option<Box<TypeSortKey>>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum TypePredicateParamKey {
+  This,
+  ParamIndex(u32),
+  Name(String),
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
