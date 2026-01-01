@@ -128,7 +128,7 @@ function listVirtualSubdirectories(dirName, virtualDirectories) {
       children.add(path.posix.join(dirName, next));
     }
   }
-  return Array.from(children);
+  return Array.from(children).sort();
 }
 
 function categoryToString(category) {
@@ -167,7 +167,9 @@ function computeLineStarts(text) {
 
 function collectTypeQueries(files) {
   const queries = [];
-  for (const [rawName, text] of Object.entries(files || {})) {
+  const entries = Object.entries(files || {});
+  entries.sort(([a], [b]) => a.localeCompare(b));
+  for (const [rawName, text] of entries) {
     const normalized = normalizePath(rawName);
     const lineStarts = computeLineStarts(text);
     const lines = text.split(/\r?\n/);
@@ -317,7 +319,9 @@ function parseOptions(rawOptions) {
 function createInMemoryHost(files, options) {
   const defaultHost = ts.createCompilerHost(options, true);
   const normalizedFiles = new Map();
-  for (const [rawName, text] of Object.entries(files || {})) {
+  const entries = Object.entries(files || {});
+  entries.sort(([a], [b]) => a.localeCompare(b));
+  for (const [rawName, text] of entries) {
     normalizedFiles.set(toAbsolute(rawName), text);
   }
   const virtualDirectories = collectVirtualDirectories(normalizedFiles.keys());
