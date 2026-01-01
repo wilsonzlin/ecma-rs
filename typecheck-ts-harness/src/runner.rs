@@ -406,6 +406,12 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   let tsc_available = node_available(&opts.node_path) && typescript_available(&opts.node_path);
   let snapshot_store = SnapshotStore::new(&opts.root);
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
+  if opts.update_snapshots && !tsc_available {
+    return Err(crate::HarnessError::Typecheck(
+      "cannot update snapshots: tsc unavailable (install Node.js and the `typescript` npm package)"
+        .to_string(),
+    ));
+  }
   if let Some(builder) = profile_builder.as_mut() {
     builder.set_compare_mode(compare_mode);
   }
