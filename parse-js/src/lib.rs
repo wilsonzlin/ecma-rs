@@ -1,8 +1,10 @@
 use ast::node::Node;
 use ast::stx::TopLevel;
-use error::SyntaxResult;
+use error::{SyntaxError, SyntaxErrorType, SyntaxResult};
 use lex::Lexer;
 use parse::Parser;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Dialect {
@@ -59,6 +61,9 @@ pub mod parse;
 pub mod token;
 pub mod util;
 
+#[derive(Debug)]
+struct ParseCancelled;
+
 /// Parse JavaScript or TypeScript source as UTF-8 and return the top-level AST.
 ///
 /// Spans and diagnostics are expressed in UTF-8 byte offsets. Callers starting
@@ -77,4 +82,35 @@ pub fn parse_with_options(source: &str, opts: ParseOptions) -> SyntaxResult<Node
   let lexer = Lexer::new(source);
   let mut parser = Parser::new(lexer, opts);
   parser.parse_top_level()
+}
+
+/// Parse JavaScript or TypeScript source with explicit [`ParseOptions`], allowing
+/// cooperative cancellation via `cancel`.
+///
+/// This is primarily intended for long-running conformance suites where a
+/// misbehaving input could otherwise stall the whole runner. Cancellation is
+/// best-effort: the parser checks `cancel` during tokenization/parsing and
+/// returns [`SyntaxErrorType::Cancelled`] once observed.
+pub fn parse_with_options_cancellable(
+  source: &str,
+  opts: ParseOptions,
+  cancel: Arc<AtomicBool>,
+) -> SyntaxResult<Node<TopLevel>> {
+  let lexer = Lexer::new(source);
+  let mut parser = Parser::new_cancellable(lexer, opts, Some(cancel));
+
+  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| parser.parse_top_level()));
+  match result {
+    Ok(result) => result,
+    Err(payload) => {
+      if payload.is::<ParseCancelled>() {
+        return Err(SyntaxError::new(
+          SyntaxErrorType::Cancelled,
+          loc::Loc(source.len(), source.len()),
+          None,
+        ));
+      }
+      std::panic::resume_unwind(payload)
+    }
+  }
 }

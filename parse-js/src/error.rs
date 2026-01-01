@@ -26,6 +26,7 @@ use std::fmt::Display;
 /// - `PS0013`: [`SyntaxErrorType::RequiredTokenNotFound`]
 /// - `PS0014`: [`SyntaxErrorType::TryStatementHasNoCatchOrFinally`]
 /// - `PS0015`: [`SyntaxErrorType::UnexpectedEnd`]
+/// - `PS0016`: [`SyntaxErrorType::Cancelled`]
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SyntaxErrorType {
   ExpectedNotFound,
@@ -43,6 +44,7 @@ pub enum SyntaxErrorType {
   RequiredTokenNotFound(TT),
   TryStatementHasNoCatchOrFinally,
   UnexpectedEnd,
+  Cancelled,
 }
 
 #[derive(Clone)]
@@ -135,6 +137,7 @@ impl SyntaxErrorType {
       SyntaxErrorType::RequiredTokenNotFound(_) => "PS0013",
       SyntaxErrorType::TryStatementHasNoCatchOrFinally => "PS0014",
       SyntaxErrorType::UnexpectedEnd => "PS0015",
+      SyntaxErrorType::Cancelled => "PS0016",
     }
   }
 
@@ -170,6 +173,7 @@ impl SyntaxErrorType {
       SyntaxErrorType::UnexpectedEnd => actual_token
         .map(|tok| format!("unexpected end before {:?}", tok))
         .unwrap_or_else(|| "unexpected end of input".into()),
+      SyntaxErrorType::Cancelled => "parsing cancelled".into(),
     }
   }
 

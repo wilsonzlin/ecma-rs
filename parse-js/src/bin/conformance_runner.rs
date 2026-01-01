@@ -7,15 +7,16 @@ use diagnostics::{
 };
 use parse_js;
 use parse_js::lex::{lex_next, LexMode, Lexer};
-use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use parse_js::error::SyntaxErrorType;
+use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Serialize)]
@@ -316,8 +317,11 @@ fn load_failure_paths(path: &Path) -> HashSet<String> {
     .collect()
 }
 
-fn run_test(path: &Path) -> TestResult {
+fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestResult {
   let start = Instant::now();
+  if cancel.load(AtomicOrdering::Relaxed) {
+    return timeout_test_result(path, timeout_secs);
+  }
   let mut base_result = empty_test_result(path);
 
   let source = match fs::read_to_string(path) {
@@ -341,12 +345,19 @@ fn run_test(path: &Path) -> TestResult {
     }
   };
 
+  if cancel.load(AtomicOrdering::Relaxed) {
+    return timeout_test_result(path, timeout_secs);
+  }
+
   let (mut virtual_files, directives) = split_virtual_files(path, &source);
   base_result.directives = directives;
   virtual_files
     .sort_by(|a, b| normalize_virtual_path(&a.name).cmp(&normalize_virtual_path(&b.name)));
 
   for vf in virtual_files {
+    if cancel.load(AtomicOrdering::Relaxed) {
+      return timeout_test_result(path, timeout_secs);
+    }
     let should_parse = should_parse(&vf.kind);
     let normalized_name = normalize_virtual_path(&vf.name);
     let file_id = base_result
@@ -371,7 +382,10 @@ fn run_test(path: &Path) -> TestResult {
         },
       };
 
-      if let Err(err) = parse_with_options(&vf.content, opts) {
+      if let Err(err) = parse_with_options_cancellable(&vf.content, opts, Arc::clone(cancel)) {
+        if err.typ == SyntaxErrorType::Cancelled {
+          return timeout_test_result(path, timeout_secs);
+        }
         diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
       }
     }
@@ -400,59 +414,185 @@ fn run_test(path: &Path) -> TestResult {
   base_result
 }
 
-fn run_test_with_timeout(path: &Path, timeout_secs: u64) -> TestResult {
-  let path_buf = path.to_path_buf();
-  let start = Instant::now();
-  let (tx, rx) = std::sync::mpsc::channel();
+struct TimeoutManager {
+  inner: Arc<TimeoutManagerInner>,
+  next_id: AtomicUsize,
+  thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
 
-  std::thread::spawn(move || {
-    let result = std::panic::catch_unwind(|| run_test(&path_buf));
-    let _ = tx.send(result);
-  });
+struct TimeoutManagerInner {
+  state: Mutex<TimeoutManagerState>,
+  cv: Condvar,
+}
 
-  match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
-    Ok(result) => match result {
-      Ok(mut r) => {
-        r.duration = start.elapsed();
-        r.duration_ms = r.duration.as_millis();
-        r
+struct TimeoutManagerState {
+  active: HashMap<usize, TimeoutEntry>,
+  shutdown: bool,
+}
+
+struct TimeoutEntry {
+  deadline: Instant,
+  cancel: Arc<AtomicBool>,
+  cancelled: bool,
+}
+
+struct TimeoutGuard {
+  id: usize,
+  inner: Arc<TimeoutManagerInner>,
+}
+
+impl TimeoutManager {
+  fn new() -> Self {
+    let inner = Arc::new(TimeoutManagerInner {
+      state: Mutex::new(TimeoutManagerState {
+        active: HashMap::new(),
+        shutdown: false,
+      }),
+      cv: Condvar::new(),
+    });
+    let thread_inner = Arc::clone(&inner);
+    let handle = std::thread::spawn(move || timeout_thread(thread_inner));
+    Self {
+      inner,
+      next_id: AtomicUsize::new(1),
+      thread: Mutex::new(Some(handle)),
+    }
+  }
+
+  fn register(&self, deadline: Instant, cancel: Arc<AtomicBool>) -> TimeoutGuard {
+    let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.insert(
+      id,
+      TimeoutEntry {
+        deadline,
+        cancel,
+        cancelled: false,
+      },
+    );
+    self.inner.cv.notify_one();
+    TimeoutGuard {
+      id,
+      inner: Arc::clone(&self.inner),
+    }
+  }
+}
+
+impl Drop for TimeoutManager {
+  fn drop(&mut self) {
+    {
+      let mut state = self.inner.state.lock().unwrap();
+      state.shutdown = true;
+      self.inner.cv.notify_one();
+    }
+
+    if let Some(handle) = self.thread.lock().unwrap().take() {
+      let _ = handle.join();
+    }
+  }
+}
+
+impl Drop for TimeoutGuard {
+  fn drop(&mut self) {
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.remove(&self.id);
+    self.inner.cv.notify_one();
+  }
+}
+
+fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
+  let mut guard = inner.state.lock().unwrap();
+  loop {
+    if guard.shutdown {
+      return;
+    }
+
+    let now = Instant::now();
+    let mut next_deadline: Option<Instant> = None;
+
+    for entry in guard.active.values_mut() {
+      if entry.cancelled {
+        continue;
       }
-      Err(panic_err) => {
-        let mut result = empty_test_result(path);
-        let file_id = result
-          .files_store
-          .insert(normalize_path(path), String::new());
-        result.diagnostics.push(Diagnostic::error(
-          "CONF0002",
-          format!("runner panicked: {:?}", panic_err),
-          Span {
-            file: file_id,
-            range: TextRange::new(0, 0),
-          },
-        ));
-        sort_diagnostics(&mut result.diagnostics);
-        result.duration = start.elapsed();
-        result.duration_ms = result.duration.as_millis();
-        result
+      if now >= entry.deadline {
+        entry.cancelled = true;
+        entry.cancel.store(true, AtomicOrdering::Relaxed);
+        continue;
       }
+
+      next_deadline = match next_deadline {
+        Some(existing) => Some(existing.min(entry.deadline)),
+        None => Some(entry.deadline),
+      };
+    }
+
+    if let Some(deadline) = next_deadline {
+      let wait_for = deadline
+        .checked_duration_since(now)
+        .unwrap_or_else(|| Duration::from_millis(0));
+      let (new_guard, _) = inner.cv.wait_timeout(guard, wait_for).unwrap();
+      guard = new_guard;
+    } else {
+      guard = inner.cv.wait(guard).unwrap();
+    }
+  }
+}
+
+fn timeout_test_result(path: &Path, timeout_secs: u64) -> TestResult {
+  let mut result = empty_test_result(path);
+  let file_id = result
+    .files_store
+    .insert(normalize_path(path), String::new());
+  result.diagnostics.push(Diagnostic::error(
+    "CONF0003",
+    format!("timeout after {} seconds", timeout_secs),
+    Span {
+      file: file_id,
+      range: TextRange::new(0, 0),
     },
-    Err(_) => {
+  ));
+  sort_diagnostics(&mut result.diagnostics);
+  result.duration = Duration::from_secs(timeout_secs);
+  result.duration_ms = result.duration.as_millis();
+  result.timed_out = true;
+  result
+}
+
+fn run_test_with_timeout(path: &Path, timeout_secs: u64, timeouts: &TimeoutManager) -> TestResult {
+  let start = Instant::now();
+  let cancel = Arc::new(AtomicBool::new(false));
+  let deadline = start + Duration::from_secs(timeout_secs);
+  let _guard = timeouts.register(deadline, Arc::clone(&cancel));
+  let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    run_test(path, &cancel, timeout_secs)
+  }));
+
+  match result {
+    Ok(mut result) => {
+      if result.timed_out {
+        result.duration = Duration::from_secs(timeout_secs);
+      } else {
+        result.duration = start.elapsed();
+      }
+      result.duration_ms = result.duration.as_millis();
+      result
+    }
+    Err(panic_err) => {
       let mut result = empty_test_result(path);
       let file_id = result
         .files_store
         .insert(normalize_path(path), String::new());
       result.diagnostics.push(Diagnostic::error(
-        "CONF0003",
-        format!("timeout after {} seconds", timeout_secs),
+        "CONF0002",
+        format!("runner panicked: {:?}", panic_err),
         Span {
           file: file_id,
           range: TextRange::new(0, 0),
         },
       ));
       sort_diagnostics(&mut result.diagnostics);
-      result.duration = Duration::from_secs(timeout_secs);
+      result.duration = start.elapsed();
       result.duration_ms = result.duration.as_millis();
-      result.timed_out = true;
       result
     }
   }
@@ -720,6 +860,7 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   let failed = Arc::new(AtomicUsize::new(0));
   let processed = Arc::new(AtomicUsize::new(0));
   let total = tests.len();
+  let timeout_manager = Arc::new(TimeoutManager::new());
 
   let processed_clone = Arc::clone(&processed);
   let progress_handle = std::thread::spawn(move || loop {
@@ -739,7 +880,7 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   let results: Vec<TestResult> = tests
     .par_iter()
     .map(|test_path| {
-      let result = run_test_with_timeout(test_path, options.timeout_secs);
+      let result = run_test_with_timeout(test_path, options.timeout_secs, timeout_manager.as_ref());
 
       let current = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
       if current % 100 == 0 {

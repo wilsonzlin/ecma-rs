@@ -12,6 +12,9 @@ use crate::Dialect;
 use crate::ParseOptions;
 use crate::SourceType;
 use expr::pat::ParsePatternRules;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering as AtomicOrdering;
+use std::sync::Arc;
 
 pub mod class_or_object;
 pub mod drive;
@@ -144,6 +147,7 @@ pub struct Parser<'a> {
   next_tok_i: usize,
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
+  cancel: Option<Arc<AtomicBool>>,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -155,12 +159,21 @@ pub struct Parser<'a> {
 // - Makes free functions truly separate independent utility functions.
 impl<'a> Parser<'a> {
   pub fn new(lexer: Lexer<'a>, options: ParseOptions) -> Parser<'a> {
+    Self::new_cancellable(lexer, options, None)
+  }
+
+  pub fn new_cancellable(
+    lexer: Lexer<'a>,
+    options: ParseOptions,
+    cancel: Option<Arc<AtomicBool>>,
+  ) -> Parser<'a> {
     Parser {
       lexer,
       buf: Vec::new(),
       next_tok_i: 0,
       options,
       allow_bare_ts_type_args: false,
+      cancel,
     }
   }
 
@@ -233,6 +246,14 @@ impl<'a> Parser<'a> {
     self.next_tok_i = checkpoint.next_tok_i;
   }
 
+  fn panic_if_cancelled(&self) {
+    if let Some(cancel) = self.cancel.as_ref() {
+      if cancel.load(AtomicOrdering::Relaxed) {
+        std::panic::panic_any(crate::ParseCancelled);
+      }
+    }
+  }
+
   fn reset_to(&mut self, n: usize) {
     self.next_tok_i = n;
     self.buf.truncate(n);
@@ -243,6 +264,7 @@ impl<'a> Parser<'a> {
   }
 
   fn forward<K: FnOnce(&Token) -> bool>(&mut self, mode: LexMode, keep: K) -> (bool, Token) {
+    self.panic_if_cancelled();
     if self
       .buf
       .get(self.next_tok_i)
