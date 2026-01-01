@@ -15,10 +15,7 @@ fn reports_single_file_error() {
   };
 
   let mut files = HashMap::new();
-  files.insert(
-    "main.ts".to_string(),
-    Arc::from("const value: string = 1;"),
-  );
+  files.insert("main.ts".to_string(), Arc::from("const value: string = 1;"));
 
   let request = TscRequest {
     root_names: vec!["main.ts".to_string()],

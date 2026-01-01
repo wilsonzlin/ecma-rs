@@ -690,7 +690,9 @@ fn build_skipped_result(case: TestCase) -> TestResult {
   }
 }
 
-fn load_case_for_run(case: TestCasePath) -> std::result::Result<TestCase, (TestCasePath, crate::HarnessError)> {
+fn load_case_for_run(
+  case: TestCasePath,
+) -> std::result::Result<TestCase, (TestCasePath, crate::HarnessError)> {
   let content = match crate::read_utf8_file(&case.path) {
     Ok(content) => content,
     Err(err) => return Err((case, err.into())),
@@ -1027,7 +1029,9 @@ fn execute_case(
       diagnostics,
       query_stats,
     } => (diagnostics, query_stats),
-    RustRunResult::Cancelled => return build_timeout_result(id, path, harness_options, notes, timeout),
+    RustRunResult::Cancelled => {
+      return build_timeout_result(id, path, harness_options, notes, timeout)
+    }
   };
   if Instant::now() >= deadline {
     return build_timeout_result(id, path, harness_options, notes, timeout);

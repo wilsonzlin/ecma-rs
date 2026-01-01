@@ -532,7 +532,10 @@ impl ProgramTimeoutGuard {
     let handle = std::thread::Builder::new()
       .name("typecheck-ts-cli-timeout".into())
       .spawn(move || {
-        if matches!(done_rx.recv_timeout(timeout), Err(mpsc::RecvTimeoutError::Timeout)) {
+        if matches!(
+          done_rx.recv_timeout(timeout),
+          Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
           program.cancel();
         }
       })

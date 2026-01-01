@@ -2055,7 +2055,10 @@ impl<'a> Checker<'a> {
   }
 
   fn check_jsx_props(&mut self, loc: Loc, actual: &JsxActualProps, expected: TypeId) {
-    if matches!(self.store.type_kind(expected), TypeKind::Any | TypeKind::Unknown) {
+    if matches!(
+      self.store.type_kind(expected),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
       return;
     }
     if !actual.has_spread && !self.type_accepts_props(expected, &actual.props) {
@@ -2081,7 +2084,10 @@ impl<'a> Checker<'a> {
   }
 
   fn jsx_apply_intrinsic_attributes(&mut self, expected: TypeId) -> TypeId {
-    if matches!(self.store.type_kind(expected), TypeKind::Any | TypeKind::Unknown) {
+    if matches!(
+      self.store.type_kind(expected),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
       return expected;
     }
     let intrinsic = self.jsx_intrinsic_attributes_type();
@@ -2331,8 +2337,7 @@ impl<'a> Checker<'a> {
       return id;
     }
     let fallback = self.store.intern_name("children".to_string());
-    let Some(children_attr_ty) = self.resolve_type_ref(&["JSX", "ElementChildrenAttribute"])
-    else {
+    let Some(children_attr_ty) = self.resolve_type_ref(&["JSX", "ElementChildrenAttribute"]) else {
       self.jsx_children_prop_name = Some(fallback);
       return fallback;
     };
@@ -4034,7 +4039,10 @@ impl<'a> Checker<'a> {
         let mut object_members: Vec<TypeId> = Vec::new();
         for member in expanded_members.iter().copied() {
           match self.store.type_kind(member) {
-            TypeKind::Object(_) | TypeKind::Union(_) | TypeKind::Intersection(_) | TypeKind::Mapped(_) => {
+            TypeKind::Object(_)
+            | TypeKind::Union(_)
+            | TypeKind::Intersection(_)
+            | TypeKind::Mapped(_) => {
               object_members.push(member);
             }
             TypeKind::Ref { def, args } => {

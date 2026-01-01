@@ -499,7 +499,9 @@ declare namespace JSX {
 
   let entry = FileKey::new("entry.tsx");
   let source = "const el = <div>hi</div>;";
-  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
 
@@ -588,7 +590,9 @@ const ok = <div key="x" id="y" />;
 const ok2 = <Foo x={1} key="k" />;
 const bad = <div key={123} />;
 "#;
-  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
 

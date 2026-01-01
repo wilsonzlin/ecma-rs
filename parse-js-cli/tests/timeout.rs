@@ -24,4 +24,3 @@ fn timeout_flag_cancels_parsing() {
     "expected timeout note in stderr, got: {stderr}"
   );
 }
-

@@ -257,9 +257,7 @@ fn intersection_target_allows_combined_props() {
 
 #[test]
 fn intersection_target_reports_excess_property() {
-  let diagnostics = run(
-    "let x: { foo: number } & { bar: number } = { foo: 1, bar: 2, baz: 3 };",
-  );
+  let diagnostics = run("let x: { foo: number } & { bar: number } = { foo: 1, bar: 2, baz: 3 };");
   assert_eq!(
     diagnostics.len(),
     1,

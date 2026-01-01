@@ -83,26 +83,27 @@ fn main() {
       } else {
         let cancel = Arc::clone(&cancel);
         Some(std::thread::spawn(move || {
-          if matches!(done_rx.recv_timeout(timeout), Err(mpsc::RecvTimeoutError::Timeout)) {
+          if matches!(
+            done_rx.recv_timeout(timeout),
+            Err(mpsc::RecvTimeoutError::Timeout)
+          ) {
             cancel.store(true, Ordering::Relaxed);
           }
         }))
       };
 
-      let parsed = match parse_with_options_cancellable(
-        &source,
-        ParseOptions::default(),
-        Arc::clone(&cancel),
-      ) {
-        Ok(parsed) => parsed,
-        Err(err) => {
-          let mut diagnostic = err.to_diagnostic(file);
-          if err.typ == parse_js::error::SyntaxErrorType::Cancelled {
-            diagnostic = diagnostic.with_note(format!("timed out after {secs} seconds"));
+      let parsed =
+        match parse_with_options_cancellable(&source, ParseOptions::default(), Arc::clone(&cancel))
+        {
+          Ok(parsed) => parsed,
+          Err(err) => {
+            let mut diagnostic = err.to_diagnostic(file);
+            if err.typ == parse_js::error::SyntaxErrorType::Cancelled {
+              diagnostic = diagnostic.with_note(format!("timed out after {secs} seconds"));
+            }
+            exit_with_diagnostic(&provider, diagnostic);
           }
-          exit_with_diagnostic(&provider, diagnostic);
-        }
-      };
+        };
 
       let _ = done_tx.send(());
       if let Some(handle) = timeout_thread {
