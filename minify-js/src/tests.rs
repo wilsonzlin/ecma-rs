@@ -264,6 +264,33 @@ fn optimizes_static_blocks_in_class_expressions() {
 }
 
 #[test]
+fn optimizes_nested_arrows_inside_arrow_expression_bodies() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const f=()=>()=>{if(false){sideEffect()}return 1;};",
+  );
+  assert_eq!(result, "const f=()=>()=>{return 1;};");
+}
+
+#[test]
+fn optimizes_getters_in_object_literals() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const o={get m(){if(false){sideEffect()}return 1;}};",
+  );
+  assert_eq!(result, "const o={get m(){return 1;}};");
+}
+
+#[test]
+fn optimizes_static_blocks_in_class_decls() {
+  let result = minified(
+    TopLevelMode::Global,
+    "class C{static{if(false){sideEffect()}let x=1;}}",
+  );
+  assert_eq!(result, "class C{static{}}");
+}
+
+#[test]
 fn removes_unused_var_decls_with_pure_initializers() {
   let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
   assert_eq!(result, "console.log(2);");
