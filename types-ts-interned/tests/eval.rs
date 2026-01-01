@@ -953,6 +953,215 @@ fn conditional_respects_strict_function_types_option() {
 }
 
 #[test]
+fn conditional_respects_exact_optional_property_types_option() {
+  let loose_store = TypeStore::new();
+  let loose_primitives = loose_store.primitive_ids();
+  let foo = loose_store.intern_name("foo");
+  let num_or_undef = loose_store.union(vec![loose_primitives.number, loose_primitives.undefined]);
+
+  let src_obj = loose_store.intern_type(TypeKind::Object(loose_store.intern_object(ObjectType {
+    shape: loose_store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: num_or_undef,
+          optional: true,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+
+  let dst_obj = loose_store.intern_type(TypeKind::Object(loose_store.intern_object(ObjectType {
+    shape: loose_store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: loose_primitives.number,
+          optional: true,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+
+  // Without `exactOptionalPropertyTypes`, optional properties implicitly include
+  // `undefined` in assignability checks.
+  let cond = loose_store.intern_type(TypeKind::Conditional {
+    check: src_obj,
+    extends: dst_obj,
+    true_ty: loose_primitives.number,
+    false_ty: loose_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(loose_store.evaluate(cond), loose_primitives.number);
+
+  let exact_store = TypeStore::with_options(TypeOptions {
+    exact_optional_property_types: true,
+    ..TypeOptions::default()
+  });
+  let exact_primitives = exact_store.primitive_ids();
+  let foo = exact_store.intern_name("foo");
+  let num_or_undef = exact_store.union(vec![exact_primitives.number, exact_primitives.undefined]);
+
+  let src_obj = exact_store.intern_type(TypeKind::Object(exact_store.intern_object(ObjectType {
+    shape: exact_store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: num_or_undef,
+          optional: true,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+
+  let dst_obj = exact_store.intern_type(TypeKind::Object(exact_store.intern_object(ObjectType {
+    shape: exact_store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: exact_primitives.number,
+          optional: true,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+
+  // With `exactOptionalPropertyTypes`, `undefined` is not implicitly included in
+  // optional property assignability.
+  let cond = exact_store.intern_type(TypeKind::Conditional {
+    check: src_obj,
+    extends: dst_obj,
+    true_ty: exact_primitives.number,
+    false_ty: exact_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(exact_store.evaluate(cond), exact_primitives.boolean);
+}
+
+#[test]
+fn conditional_respects_no_unchecked_indexed_access_option() {
+  let strict_store = TypeStore::new();
+  let strict_primitives = strict_store.primitive_ids();
+  let num_or_undef =
+    strict_store.union(vec![strict_primitives.number, strict_primitives.undefined]);
+
+  // src: { [key: string]: number | undefined }
+  let src = strict_store.intern_type(TypeKind::Object(strict_store.intern_object(ObjectType {
+    shape: strict_store.intern_shape(Shape {
+      properties: Vec::new(),
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: vec![Indexer {
+        key_type: strict_primitives.string,
+        value_type: num_or_undef,
+        readonly: false,
+      }],
+    }),
+  })));
+
+  // dst: { [key: string]: number }
+  let dst = strict_store.intern_type(TypeKind::Object(strict_store.intern_object(ObjectType {
+    shape: strict_store.intern_shape(Shape {
+      properties: Vec::new(),
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: vec![Indexer {
+        key_type: strict_primitives.string,
+        value_type: strict_primitives.number,
+        readonly: false,
+      }],
+    }),
+  })));
+
+  let cond = strict_store.intern_type(TypeKind::Conditional {
+    check: src,
+    extends: dst,
+    true_ty: strict_primitives.number,
+    false_ty: strict_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(strict_store.evaluate(cond), strict_primitives.boolean);
+
+  let unchecked_store = TypeStore::with_options(TypeOptions {
+    no_unchecked_indexed_access: true,
+    ..TypeOptions::default()
+  });
+  let prim = unchecked_store.primitive_ids();
+  let num_or_undef = unchecked_store.union(vec![prim.number, prim.undefined]);
+
+  let src = unchecked_store.intern_type(TypeKind::Object(unchecked_store.intern_object(
+    ObjectType {
+      shape: unchecked_store.intern_shape(Shape {
+        properties: Vec::new(),
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: vec![Indexer {
+          key_type: prim.string,
+          value_type: num_or_undef,
+          readonly: false,
+        }],
+      }),
+    },
+  )));
+
+  let dst = unchecked_store.intern_type(TypeKind::Object(unchecked_store.intern_object(
+    ObjectType {
+      shape: unchecked_store.intern_shape(Shape {
+        properties: Vec::new(),
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: vec![Indexer {
+          key_type: prim.string,
+          value_type: prim.number,
+          readonly: false,
+        }],
+      }),
+    },
+  )));
+
+  let cond = unchecked_store.intern_type(TypeKind::Conditional {
+    check: src,
+    extends: dst,
+    true_ty: prim.number,
+    false_ty: prim.boolean,
+    distributive: false,
+  });
+  assert_eq!(unchecked_store.evaluate(cond), prim.number);
+}
+
+#[test]
 fn conditional_uses_tuple_vs_array_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
