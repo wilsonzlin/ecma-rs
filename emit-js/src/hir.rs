@@ -1996,7 +1996,11 @@ fn expr_stmt_needs_parens(expr: &Expr) -> bool {
 fn arrow_concise_body_needs_parens(expr: &Expr) -> bool {
   matches!(
     expr.kind,
-    ExprKind::Object(_) | ExprKind::Binary { op: BinaryOp::Comma, .. }
+    ExprKind::Object(_)
+      | ExprKind::Binary {
+        op: BinaryOp::Comma,
+        ..
+      }
   )
 }
 

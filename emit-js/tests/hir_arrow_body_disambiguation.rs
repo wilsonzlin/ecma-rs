@@ -39,7 +39,10 @@ fn parenthesizes_object_literal_bodies() {
 
 #[test]
 fn parenthesizes_comma_bodies() {
-  assert_roundtrip("function f(){return x=>(a,b);}", "function f(){return(x)=>(a,b);}");
+  assert_roundtrip(
+    "function f(){return x=>(a,b);}",
+    "function f(){return(x)=>(a,b);}",
+  );
 }
 
 #[test]
@@ -49,4 +52,3 @@ fn parenthesizes_arrow_in_member_chain() {
     "function f(){return((x)=>({a:1})).prop;}",
   );
 }
-
