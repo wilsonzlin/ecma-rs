@@ -13,7 +13,9 @@ use hir_js::{
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock, ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::class_or_object::{
+  ClassMember, ClassOrObjKey, ClassOrObjVal, ClassStaticBlock, ObjMemberType,
+};
 use parse_js::ast::expr::jsx::{
   JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxName, JsxText,
 };

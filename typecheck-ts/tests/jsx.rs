@@ -197,7 +197,8 @@ const bad = <Foo x={"no"} />;
   );
   assert!(
     diagnostics.iter().any(|d| {
-      d.code.as_str() == codes::TYPE_MISMATCH.as_str() || d.code.as_str() == codes::NO_OVERLOAD.as_str()
+      d.code.as_str() == codes::TYPE_MISMATCH.as_str()
+        || d.code.as_str() == codes::NO_OVERLOAD.as_str()
     }),
     "expected a prop type error for bad JSX usage, got {diagnostics:?}"
   );
@@ -228,9 +229,9 @@ const c = <My-Tag />;
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
   assert!(
-    !diagnostics.iter().any(|d| {
-      d.code.as_str() == codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.as_str()
-    }),
+    !diagnostics
+      .iter()
+      .any(|d| { d.code.as_str() == codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.as_str() }),
     "did not expect unknown intrinsic elements, got {diagnostics:?}"
   );
 }
@@ -290,4 +291,3 @@ const ok = <Foo.Bar x={1} />;
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
 }
-
