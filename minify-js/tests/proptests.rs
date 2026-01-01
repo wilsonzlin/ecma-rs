@@ -71,6 +71,11 @@ fn ts_statement() -> impl Strategy<Value = String> {
       "const checked: number = (maybe as any) satisfies number ? 1 : 2;".to_string(),
       "class Box<T> implements Iterable<T> { constructor(private value: T) {} *[Symbol.iterator](): Iterator<T> { yield this.value; } }".to_string(),
       "export default function identity<U>(value: U): U { return value; }".to_string(),
+      "export enum E { A, B = 5, C }".to_string(),
+      "export namespace N { export const x = 1; }".to_string(),
+      "export namespace A.B { export const x = 1; }".to_string(),
+      "class C {} export namespace C { export const x = 1; }".to_string(),
+      "const enum CE { A = 1, B = A } const value = CE.B;".to_string(),
     ]),
   ]
 }
@@ -83,6 +88,8 @@ fn tsx_statement() -> impl Strategy<Value = String> {
         .to_string(),
       r#"export const header = <Header title={"Title" as string} />;"#.to_string(),
       r#"const list = <>{items.map(item => <Item value={item as number} />)}</>;"#.to_string(),
+      r#"enum E { A = 1, B = (() => <div data-x={A}>{A}</div>)(), C }"#.to_string(),
+      r#"enum E { A = 1, B = (() => <A />)(), C }"#.to_string(),
     ]),
     ident().prop_map(|name| format!(
       "const {name}: JSX.Element = <section>{{{name} as const}}</section>;"
