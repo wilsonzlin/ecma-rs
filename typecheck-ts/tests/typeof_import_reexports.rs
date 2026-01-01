@@ -19,10 +19,7 @@ fn typeof_import_module_namespace_includes_reexports() {
   let root = FileKey::new("root.ts");
   let dep = FileKey::new("dep.ts");
 
-  host.insert(
-    root.clone(),
-    Arc::from(r#"export { value } from "./dep";"#),
-  );
+  host.insert(root.clone(), Arc::from(r#"export { value } from "./dep";"#));
   host.insert(dep.clone(), Arc::from("export const value: number = 1;"));
   host.insert(
     entry.clone(),
@@ -43,7 +40,10 @@ type U = M["value"];
     "expected no diagnostics, got {diagnostics:?}"
   );
 
-  assert_eq!(type_alias_kind(&program, &entry, "U"), TypeKindSummary::Number);
+  assert_eq!(
+    type_alias_kind(&program, &entry, "U"),
+    TypeKindSummary::Number
+  );
 }
 
 #[test]
@@ -74,7 +74,10 @@ type U = M["ns"]["value"];
     "expected no diagnostics, got {diagnostics:?}"
   );
 
-  assert_eq!(type_alias_kind(&program, &entry, "U"), TypeKindSummary::Number);
+  assert_eq!(
+    type_alias_kind(&program, &entry, "U"),
+    TypeKindSummary::Number
+  );
 }
 
 #[test]
@@ -105,6 +108,8 @@ type U = Ns["value"];
     "expected no diagnostics, got {diagnostics:?}"
   );
 
-  assert_eq!(type_alias_kind(&program, &entry, "U"), TypeKindSummary::Number);
+  assert_eq!(
+    type_alias_kind(&program, &entry, "U"),
+    TypeKindSummary::Number
+  );
 }
-
