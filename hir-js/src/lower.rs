@@ -647,23 +647,28 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     }
 
     if let Some(body) = body {
-      let body_arc = lower_body_from_source(
-        def_id,
-        body.id,
-        &desc.source,
-        &def_lookup,
-        &mut decorator_store,
-        &mut names,
-        &mut types,
-        &mut span_map,
-        &mut ctx,
-      )
-      .map(Arc::new)
-      .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind, desc.span)));
-      let idx = bodies.len();
-      body_ids.push(body.id);
-      body_index.insert(body.id, idx);
-      bodies.push(body_arc);
+      // Some definitions (notably variable declarators) are synthesized from
+      // nested syntax and can be referenced by multiple `DefData` entries. Make
+      // sure each `BodyId` is lowered and stored exactly once.
+      if !body_index.contains_key(&body.id) {
+        let body_arc = lower_body_from_source(
+          def_id,
+          body.id,
+          &desc.source,
+          &def_lookup,
+          &mut decorator_store,
+          &mut names,
+          &mut types,
+          &mut span_map,
+          &mut ctx,
+        )
+        .map(Arc::new)
+        .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind, desc.span)));
+        let idx = bodies.len();
+        body_ids.push(body.id);
+        body_index.insert(body.id, idx);
+        bodies.push(body_arc);
+      }
     }
 
     def_data.decorators = decorator_store.by_def.remove(&def_id).unwrap_or_default();
@@ -2458,7 +2463,7 @@ fn lower_jsx_attr_value(
     jsx::JsxAttrVal::Expression(expr) => {
       JsxAttrValue::Expression(lower_jsx_expr_container(expr, builder, ctx))
     }
-    jsx::JsxAttrVal::Element(elem) => JsxAttrValue::Element(lower_jsx_elem(elem, builder, ctx)),
+    jsx::JsxAttrVal::Element(elem) => JsxAttrValue::Element(lower_jsx_elem_as_expr(elem, builder, ctx)),
   }
 }
 
@@ -2468,7 +2473,7 @@ fn lower_jsx_child(
   ctx: &mut LoweringContext,
 ) -> JsxChild {
   match child {
-    jsx::JsxElemChild::Element(elem) => JsxChild::Element(lower_jsx_elem(elem, builder, ctx)),
+    jsx::JsxElemChild::Element(elem) => JsxChild::Element(lower_jsx_elem_as_expr(elem, builder, ctx)),
     jsx::JsxElemChild::Expr(expr) => JsxChild::Expr(lower_jsx_expr_container(expr, builder, ctx)),
     jsx::JsxElemChild::Text(text) => JsxChild::Text(text.stx.value.clone()),
   }
@@ -2499,9 +2504,11 @@ fn lower_jsx_elem_as_expr(
   elem: &Node<jsx::JsxElem>,
   builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
-) -> ExprId {
-  let kind = ExprKind::Jsx(lower_jsx_elem(elem, builder, ctx));
-  builder.alloc_expr(ctx.to_range(elem.loc), kind)
+) -> JsxElement {
+  let lowered = lower_jsx_elem(elem, builder, ctx);
+  let kind = ExprKind::Jsx(lowered.clone());
+  builder.alloc_expr(ctx.to_range(elem.loc), kind);
+  lowered
 }
 
 fn lower_pat(
@@ -3196,6 +3203,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
+      // Mark the AST node so parameters can resolve their parent `DefId`.
       desc.node = Some(func_raw);
       desc.is_exported = af.stx.export;
       descriptors.push(desc);

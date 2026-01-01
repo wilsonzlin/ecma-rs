@@ -1,3 +1,15 @@
+//! High-level HIR data structures produced by `hir-js`.
+//!
+//! ## ID stability
+//!
+//! `DefId`/`BodyId` are designed to be stable-ish across unrelated edits for
+//! definition-grade items (modules, classes, functions, etc.).
+//!
+//! For now, `hir-js` also lowers parameters and many local bindings as
+//! `DefId`s. These ids are deterministic but *not* intended to be stable across
+//! edits. Lowering scopes them under the owning definition so they do not
+//! perturb module-level disambiguators.
+
 use crate::ids::BodyId;
 use crate::ids::DefId;
 use crate::ids::DefPath;

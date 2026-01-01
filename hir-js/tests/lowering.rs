@@ -698,6 +698,115 @@ fn destructuring_var_declarator_ids_are_stable_under_unrelated_insertions() {
 }
 
 #[test]
+fn params_and_locals_are_scoped_to_their_enclosing_def() {
+  let source = "function outer(a, { b }) { const x = 1; function inner(c) { const y = 2; } }";
+  let lowered = lower_from_source(source).expect("lower");
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    lowered
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && lowered.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {kind:?} {name} definition"))
+  };
+
+  let outer = find_def(DefKind::Function, "outer");
+  let inner = find_def(DefKind::Function, "inner");
+
+  let params: Vec<_> = lowered
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Param)
+    .collect();
+  assert_eq!(params.len(), 3, "expected a, b, c params");
+
+  for param in params {
+    let name = lowered.names.resolve(param.name).unwrap_or("<unknown>");
+    let expected_parent = match name {
+      "a" | "b" => outer.id,
+      "c" => inner.id,
+      other => panic!("unexpected param {other}"),
+    };
+    assert_eq!(param.parent, Some(expected_parent), "{name} parent");
+  }
+
+  let x = find_def(DefKind::Var, "x");
+  let x_decl = lowered
+    .def(x.parent.expect("x should have declarator parent"))
+    .expect("x declarator def");
+  assert_eq!(x_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(x_decl.parent, Some(outer.id));
+
+  let y = find_def(DefKind::Var, "y");
+  let y_decl = lowered
+    .def(y.parent.expect("y should have declarator parent"))
+    .expect("y declarator def");
+  assert_eq!(y_decl.path.kind, DefKind::VarDeclarator);
+  assert_eq!(y_decl.parent, Some(inner.id));
+}
+
+#[test]
+fn locals_do_not_affect_top_level_disambiguators() {
+  // The local `x` appears earlier in the source file than the top-level `x`. If
+  // locals are not scoped under their owning def, the top-level disambiguator
+  // shifts when the local is introduced.
+  let base_source = "function f() {}\nconst x = 0;";
+  let variant_source = "function f() { const x = 1; }\nconst x = 0;";
+
+  let base = lower_from_source(base_source).expect("lower base");
+  let variant = lower_from_source(variant_source).expect("lower variant");
+
+  let base_offset = base_source
+    .find("const x = 0")
+    .expect("base const x location")
+    + "const ".len();
+  let base_decl = base
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::VarDeclarator && d.span.start == base_offset as u32)
+    .expect("base top-level x declarator");
+
+  let variant_offset = variant_source
+    .find("const x = 0")
+    .expect("variant const x location")
+    + "const ".len();
+  let variant_decl = variant
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::VarDeclarator && d.span.start == variant_offset as u32)
+    .expect("variant top-level x declarator");
+
+  assert_eq!(base_decl.path, variant_decl.path, "DefPath should remain stable");
+  assert_eq!(base_decl.id, variant_decl.id, "DefId should remain stable");
+
+  let func = variant
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Function && variant.names.resolve(d.name) == Some("f"))
+    .expect("function f");
+  let local_offset = variant_source
+    .find("const x = 1")
+    .expect("local const x location")
+    + "const ".len();
+  let local_decl = variant
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::VarDeclarator && d.span.start == local_offset as u32)
+    .expect("local x declarator");
+  assert_eq!(local_decl.parent, Some(func.id));
+  let local_x = variant
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && variant.names.resolve(d.name) == Some("x")
+        && d.parent == Some(local_decl.id)
+    })
+    .expect("local x binding");
+  assert_eq!(local_x.parent, Some(local_decl.id));
+}
+
+#[test]
 fn lowering_is_deterministic_for_nested_defs() {
   let source = r#"
     namespace A {

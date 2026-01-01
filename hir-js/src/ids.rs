@@ -7,7 +7,7 @@ use std::cell::Cell;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-/// Stable identifier for a lowered definition.
+/// Stable-ish identifier for a lowered definition.
 ///
 /// `DefId` values are derived from hashing a [`DefPath`] with a deterministic,
 /// platform-independent hasher and truncating the result to 32 bits. Because
@@ -16,6 +16,11 @@ use serde::{Deserialize, Serialize};
 /// an unused value is found. The list of definition descriptors is sorted
 /// before allocation, so collision handling is deterministic for a given
 /// source file.
+///
+/// `hir-js` currently assigns `DefId`s to body-local bindings (parameters and
+/// local variables) for short-term compatibility. These defs are always scoped
+/// under their owning definition via [`DefPath::parent`], so their
+/// disambiguators do not interfere with module-level `DefId` stability.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DefId(pub u32);
