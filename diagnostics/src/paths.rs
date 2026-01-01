@@ -15,59 +15,71 @@ use std::path::Path;
 
 /// Normalize a path-like string into a canonical, forward-slashed virtual path.
 pub fn normalize_ts_path(raw: &str) -> String {
-  let mut path = raw.replace('\\', "/");
-  if let Some(stripped) = path.strip_prefix("//?/") {
-    path = stripped.to_string();
+  let raw = raw
+    .strip_prefix(r"\\?\")
+    .or_else(|| raw.strip_prefix("//?/"))
+    .unwrap_or(raw);
+
+  let bytes = raw.as_bytes();
+  let mut start = 0;
+  while start < bytes.len() && (bytes[start] == b'/' || bytes[start] == b'\\') {
+    start += 1;
   }
-  let mut rooted = path.starts_with('/');
-  let mut rest = path.trim_start_matches('/');
+  let mut rest = &raw[start..];
 
   // Extract an optional drive letter (e.g. c: or C:).
   let mut drive = None;
   if rest.len() >= 2 {
     let bytes = rest.as_bytes();
     if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
-      let mut prefix = rest[..2].to_string();
-      prefix.make_ascii_lowercase();
-      drive = Some(prefix);
+      drive = Some(bytes[0].to_ascii_lowercase() as char);
       rest = &rest[2..];
-      rest = rest.trim_start_matches('/');
-      rooted = true;
+      let bytes = rest.as_bytes();
+      let mut start = 0;
+      while start < bytes.len() && (bytes[start] == b'/' || bytes[start] == b'\\') {
+        start += 1;
+      }
+      rest = &rest[start..];
     }
   }
 
-  // Treat bare relative inputs as rooted at `/` for determinism.
-  if !rooted {
-    rooted = true;
+  // Split on either slash flavor so we don't need to allocate a normalized intermediate.
+  let mut components: Vec<&str> = Vec::new();
+  let bytes = rest.as_bytes();
+  let mut segment_start = 0;
+  for idx in 0..=bytes.len() {
+    if idx == bytes.len() || bytes[idx] == b'/' || bytes[idx] == b'\\' {
+      let part = &rest[segment_start..idx];
+      segment_start = idx + 1;
+      if part.is_empty() || part == "." {
+        continue;
+      }
+      if part == ".." {
+        components.pop();
+        continue;
+      }
+      components.push(part);
+    }
   }
 
-  let mut components = Vec::new();
-  for part in rest.split('/') {
-    if part.is_empty() || part == "." {
-      continue;
-    }
-    if part == ".." {
-      components.pop();
-      continue;
-    }
-    components.push(part);
-  }
-
-  let mut normalized = String::new();
+  let mut normalized = String::with_capacity(raw.len() + 1);
   if let Some(drive) = drive {
-    normalized.push_str(&drive);
+    normalized.push(drive);
+    normalized.push(':');
     normalized.push('/');
-  } else if rooted {
-    normalized.push('/');
-  }
-
-  normalized.push_str(&components.join("/"));
-
-  if normalized.is_empty() {
-    "/".to_string()
   } else {
-    normalized
+    // Treat bare relative inputs as rooted at `/` for determinism.
+    normalized.push('/');
   }
+
+  for (idx, part) in components.iter().enumerate() {
+    if idx > 0 {
+      normalized.push('/');
+    }
+    normalized.push_str(part);
+  }
+
+  normalized
 }
 
 /// Convenience wrapper for normalizing OS paths into virtual paths.
