@@ -1796,9 +1796,11 @@ mod tests {
 
     let ts = store.path_for("foo.ts");
     let tsx = store.path_for("foo.tsx");
+    let d_ts = store.path_for("foo.d.ts");
     assert_ne!(ts, tsx);
     assert_eq!(ts.file_name().unwrap(), "foo.ts.json");
     assert_eq!(tsx.file_name().unwrap(), "foo.tsx.json");
+    assert_eq!(d_ts.file_name().unwrap(), "foo.d.ts.json");
 
     let legacy_path = store.legacy_path_for("foo.ts");
     let payload = TscDiagnostics {
