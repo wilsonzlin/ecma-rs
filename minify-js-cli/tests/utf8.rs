@@ -1,6 +1,58 @@
+use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+fn reap_child_with_timeout(
+  child: &mut std::process::Child,
+  timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait()? {
+      Some(status) => return Ok(Some(status)),
+      None => {
+        if Instant::now() >= deadline {
+          return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+    }
+  }
+}
+
+fn wait_with_output_timeout(
+  mut child: std::process::Child,
+  timeout: Duration,
+) -> std::io::Result<Option<Output>> {
+  let mut stdout = child.stdout.take().expect("child stdout");
+  let mut stderr = child.stderr.take().expect("child stderr");
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait()? {
+      Some(status) => {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        let _ = stderr.read_to_end(&mut err);
+        return Ok(Some(Output {
+          status,
+          stdout: out,
+          stderr: err,
+        }));
+      }
+      None => {
+        if Instant::now() >= deadline {
+          let _ = child.kill();
+          let _ = reap_child_with_timeout(&mut child, Duration::from_millis(200));
+          return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+    }
+  }
+}
 
 fn binary_path() -> String {
   let names = ["minify-js", "minify-js-cli"];
@@ -57,7 +109,9 @@ fn rejects_invalid_utf8_input() {
     stdin.write_all(&[0xFF]).expect("write invalid utf-8");
   }
 
-  let output = child.wait_with_output().expect("wait for output");
+  let output = wait_with_output_timeout(child, Duration::from_secs(5))
+    .expect("wait for output")
+    .expect("minify-js timed out");
   assert!(!output.status.success(), "expected non-zero exit status");
   let stderr = String::from_utf8_lossy(&output.stderr);
   assert!(
