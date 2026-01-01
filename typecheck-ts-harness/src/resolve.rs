@@ -299,56 +299,52 @@ fn resolve_as_file_or_directory_normalized(
     }
   }
 
+  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
   if !is_source_root(base_candidate) {
-    if let Some(found) = resolve_via_package_json(files, base_candidate, depth) {
-      return Some(found);
-    }
-  }
+    virtual_join_into(&mut scratch, base_candidate, "package.json");
+    if let Some(package_key) = files.resolve(&scratch) {
+      if let Some(parsed) = files.package_json(&package_key) {
+        if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
+          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+            return Some(found);
+          }
+        }
 
-  let mut index_candidate = String::with_capacity(base_candidate.len() + 1 + 11);
-  index_candidate.push_str(base_candidate);
-  if !base_candidate.ends_with('/') {
-    index_candidate.push('/');
-  }
-  let prefix_len = index_candidate.len();
-  for index in INDEX_FILES {
-    index_candidate.truncate(prefix_len);
-    index_candidate.push_str(index);
-    if let Some(found) = files.resolve(&index_candidate) {
-      return Some(found);
-    }
-  }
+        if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
+          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+            return Some(found);
+          }
+        }
 
-  None
-}
+        if let Some(exports) = parsed.get("exports") {
+          if let Some((target, star_match)) = select_exports_target(exports, ".") {
+            if let Some(found) =
+              resolve_json_target_to_file(files, base_candidate, target, star_match, depth)
+            {
+              return Some(found);
+            }
+          }
+        }
 
-fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> Option<FileKey> {
-  let package_json = virtual_join(dir, "package.json");
-  let package_key = files.resolve(&package_json)?;
-  let parsed = files.package_json(&package_key)?;
-
-  if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
-    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
-      return Some(found);
-    }
-  }
-
-  if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
-    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
-      return Some(found);
-    }
-  }
-
-  if let Some(exports) = parsed.get("exports") {
-    if let Some((target, star_match)) = select_exports_target(exports, ".") {
-      if let Some(found) = resolve_json_target_to_file(files, dir, target, star_match, depth) {
-        return Some(found);
+        if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
+          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+            return Some(found);
+          }
+        }
       }
     }
   }
 
-  if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
-    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
+  scratch.clear();
+  scratch.push_str(base_candidate);
+  if !base_candidate.ends_with('/') {
+    scratch.push('/');
+  }
+  let prefix_len = scratch.len();
+  for index in INDEX_FILES {
+    scratch.truncate(prefix_len);
+    scratch.push_str(index);
+    if let Some(found) = files.resolve(&scratch) {
       return Some(found);
     }
   }
