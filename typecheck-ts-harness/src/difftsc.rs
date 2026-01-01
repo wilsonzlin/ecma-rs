@@ -11,8 +11,8 @@ use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, 
 #[cfg(feature = "with-node")]
 use crate::tsc::typescript_available;
 use crate::tsc::{
-  apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact,
-  TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
+  node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact, TypeFacts, TypeQuery,
+  TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
@@ -1675,13 +1675,10 @@ fn build_request(
   root_names.sort();
   root_names.dedup();
 
-  let mut options = base_options.clone();
-  apply_default_tsc_options(&mut options);
-
   TscRequest {
     root_names,
     files,
-    options,
+    options: base_options.clone(),
     diagnostics_only: false,
     type_queries: type_queries.to_vec(),
   }

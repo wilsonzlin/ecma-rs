@@ -11,6 +11,7 @@ mod file_kind;
 pub mod multifile;
 pub mod profile;
 pub mod runner;
+mod serde_helpers;
 pub mod tsc;
 
 pub const DEFAULT_PROFILE_OUT: &str = "typecheck_profile.json";

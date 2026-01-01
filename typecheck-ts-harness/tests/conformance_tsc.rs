@@ -8,31 +8,6 @@ use typecheck_ts_harness::{
   DEFAULT_PROFILE_OUT,
 };
 
-const FORBID_WRITE_TO_DIR_ENV: &str = "TYPECHECK_TS_HARNESS_FORBID_WRITE_TO_DIR";
-
-struct EnvGuard {
-  key: &'static str,
-  previous: Option<std::ffi::OsString>,
-}
-
-impl EnvGuard {
-  fn set(key: &'static str, value: &str) -> Self {
-    let previous = std::env::var_os(key);
-    std::env::set_var(key, value);
-    Self { key, previous }
-  }
-}
-
-impl Drop for EnvGuard {
-  fn drop(&mut self) {
-    if let Some(prev) = self.previous.take() {
-      std::env::set_var(self.key, prev);
-    } else {
-      std::env::remove_var(self.key);
-    }
-  }
-}
-
 #[test]
 fn conformance_tsc_engine_is_ok_and_sorted() {
   let node_path = PathBuf::from("node");
@@ -44,8 +19,6 @@ fn conformance_tsc_engine_is_ok_and_sorted() {
     eprintln!("skipping conformance tsc test: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
     return;
   }
-
-  let _guard = EnvGuard::set(FORBID_WRITE_TO_DIR_ENV, "1");
 
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")

@@ -257,16 +257,12 @@ pub struct ExpectationOutcome {
   pub expectation: ExpectationKind,
   #[serde(default)]
   pub expected: bool,
-  #[serde(default, skip_serializing_if = "is_false")]
+  #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
   pub from_manifest: bool,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub reason: Option<String>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub tracking_issue: Option<String>,
-}
-
-fn is_false(value: &bool) -> bool {
-  !*value
 }
 
 fn build_test_options(

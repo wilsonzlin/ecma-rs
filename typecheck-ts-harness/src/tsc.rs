@@ -30,14 +30,10 @@ pub struct TscRequest {
   /// When set, the runner will skip collecting type facts (exports/markers) and
   /// only return diagnostics. This avoids expensive `checker.typeToString` work
   /// for large conformance suites that only diff diagnostics.
-  #[serde(default, skip_serializing_if = "is_false")]
+  #[serde(default, skip_serializing_if = "crate::serde_helpers::is_false")]
   pub diagnostics_only: bool,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub type_queries: Vec<TypeQuery>,
-}
-
-fn is_false(value: &bool) -> bool {
-  !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
