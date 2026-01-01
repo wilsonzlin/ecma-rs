@@ -8,6 +8,7 @@ pub mod difftsc;
 pub mod directives;
 pub mod discover;
 pub mod expectations;
+mod file_kind;
 pub mod multifile;
 pub mod profile;
 pub mod runner;

@@ -26,7 +26,7 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use typecheck_ts::lib_support::CompilerOptions;
+use typecheck_ts::lib_support::{CompilerOptions, FileKind};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 use walkdir::WalkDir;
 
@@ -1737,6 +1737,14 @@ impl Host for DifftscHost {
       .files
       .content(file)
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    let name = self
+      .files
+      .name_for_key(file)
+      .unwrap_or_else(|| file.as_str().to_string());
+    crate::file_kind::infer_file_kind(&name)
   }
 
   fn compiler_options(&self) -> CompilerOptions {

@@ -20,7 +20,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
-use typecheck_ts::lib_support::CompilerOptions;
+use typecheck_ts::lib_support::{CompilerOptions, FileKind};
 use typecheck_ts::{FileKey, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
@@ -902,6 +902,14 @@ impl Host for HarnessHost {
       .ok_or_else(|| HostError::new(format!("missing file {}", file.as_str())))
   }
 
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    let name = self
+      .files
+      .name_for_key(file)
+      .unwrap_or_else(|| file.as_str().to_string());
+    crate::file_kind::infer_file_kind(&name)
+  }
+
   fn compiler_options(&self) -> CompilerOptions {
     self.compiler_options.clone()
   }
@@ -1256,4 +1264,32 @@ mod tests {
 
     assert_eq!(program.compiler_options(), compiler_options);
   }
-}
+
+  #[test]
+  fn harness_host_uses_tsx_parser_for_tsx_inputs() {
+    let files = vec![VirtualFile {
+      name: "case.tsx".to_string(),
+      content: "const el = <div />;\n".to_string(),
+    }];
+
+    let file_set = HarnessFileSet::new(&files);
+    let diagnostics = run_rust(&file_set, &HarnessOptions::default());
+    assert_eq!(diagnostics.status, EngineStatus::Ok, "{:?}", diagnostics.error);
+
+    let parse_diags: Vec<_> = diagnostics
+      .diagnostics
+      .iter()
+      .filter(|diag| {
+        matches!(
+          diag.code.as_ref(),
+          Some(crate::diagnostic_norm::DiagnosticCode::Rust(code)) if code.starts_with("PS")
+        )
+      })
+      .collect();
+
+    assert!(
+      parse_diags.is_empty(),
+      "expected no parse-js diagnostics for TSX input, got: {parse_diags:?}"
+    );
+  }
+} 
