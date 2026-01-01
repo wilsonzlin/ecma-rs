@@ -545,6 +545,30 @@ fn var_decl_is_exported(ctx: &HirContext<'_>, body: &Body, decl: &VarDecl) -> bo
     .any(|declarator| pat_contains_exported_binding(ctx, body, declarator.pat))
 }
 
+fn def_is_root_export(ctx: &HirContext<'_>, mut def_id: DefId) -> bool {
+  loop {
+    let Some(def) = ctx.def(def_id) else {
+      return false;
+    };
+    if !def.is_exported {
+      return false;
+    }
+
+    let Some(parent) = def.parent else {
+      return true;
+    };
+    let Some(parent_def) = ctx.def(parent) else {
+      return false;
+    };
+    if parent_def.path.kind == hir_js::DefKind::VarDeclarator {
+      def_id = parent;
+      continue;
+    }
+
+    return false;
+  }
+}
+
 fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatId) -> bool {
   let pat = ctx.pat(body, pat_id);
   match &pat.kind {
@@ -552,10 +576,7 @@ fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatI
       let Some(def_id) = ctx.lowered.hir.span_map.def_at_offset(pat.span.start) else {
         return false;
       };
-      let Some(def) = ctx.def(def_id) else {
-        return false;
-      };
-      def.is_exported && def.parent.is_none()
+      def_is_root_export(ctx, def_id)
     }
     PatKind::Array(array) => {
       array

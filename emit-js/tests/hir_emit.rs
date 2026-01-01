@@ -33,6 +33,8 @@ fn roundtrip_matrix() {
     "function loops(flag){ for (let i = 0; i < 3; i++) items[i] = i; while(flag){ if(flag){ break; } } do action(); while(check()); }",
     "function branch(v){ switch(v){ case 1: return 'one'+v; default: return String(v||0); } }",
     "const obj = {value:1,get v(){ return this.value; },set v(x){ this.value = x; },['x'+1]:2,...rest};",
+    "export const x = 1;",
+    "export const {a,b} = foo();",
   ];
   for case in cases {
     roundtrip(case);
