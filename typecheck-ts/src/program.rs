@@ -9083,9 +9083,7 @@ impl ProgramState {
       // spurious "unknown identifier" diagnostics; use an interned `unknown`
       // type as a safe fallback so downstream type operations don't panic on
       // non-interned `TypeId`s.
-      let ty = result
-        .pat_type(PatId(pat_id.0))
-        .unwrap_or(unknown);
+      let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {

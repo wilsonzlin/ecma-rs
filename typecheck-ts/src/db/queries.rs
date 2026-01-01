@@ -1128,7 +1128,18 @@ pub mod body_check {
           );
         }
         if let Some(rest) = arr.rest {
-          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file, unknown, seen);
+          record_pat(
+            ctx,
+            rest,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+            unknown,
+            seen,
+          );
         }
       }
       HirPatKind::Object(obj) => {
@@ -1147,7 +1158,18 @@ pub mod body_check {
           );
         }
         if let Some(rest) = obj.rest {
-          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file, unknown, seen);
+          record_pat(
+            ctx,
+            rest,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+            unknown,
+            seen,
+          );
         }
       }
       HirPatKind::Rest(inner) => {
