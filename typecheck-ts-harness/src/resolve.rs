@@ -1,5 +1,6 @@
 use crate::multifile::normalize_name;
 use crate::runner::HarnessFileSet;
+use serde_json::Value;
 use typecheck_ts::FileKey;
 
 const EXTENSIONS: [&str; 11] = [
@@ -83,6 +84,18 @@ fn resolve_non_relative(
 }
 
 fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<FileKey> {
+  resolve_as_file_or_directory_inner(files, base, 0)
+}
+
+fn resolve_as_file_or_directory_inner(
+  files: &HarnessFileSet,
+  base: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  if depth > 16 {
+    return None;
+  }
+
   let base_candidate = normalize_name(base);
 
   if let Some(found) = files.resolve(&base_candidate) {
@@ -128,6 +141,12 @@ fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<Fi
     }
   }
 
+  if !has_known_extension(&base_candidate) {
+    if let Some(found) = resolve_via_package_json(files, &base_candidate, depth) {
+      return Some(found);
+    }
+  }
+
   for index in INDEX_FILES {
     let joined = normalize_name(&virtual_join(&base_candidate, index));
     if let Some(found) = files.resolve(&joined) {
@@ -136,6 +155,28 @@ fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<Fi
   }
 
   None
+}
+
+fn resolve_via_package_json(
+  files: &HarnessFileSet,
+  dir: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  let package_json = normalize_name(&virtual_join(dir, "package.json"));
+  let package_key = files.resolve(&package_json)?;
+  let raw = files.content(&package_key)?;
+  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let types = parsed
+    .get("types")
+    .and_then(|v| v.as_str())
+    .or_else(|| parsed.get("typings").and_then(|v| v.as_str()))
+    .or_else(|| parsed.get("main").and_then(|v| v.as_str()))?;
+  if types.is_empty() {
+    return None;
+  }
+
+  let entry = normalize_name(&virtual_join(dir, types));
+  resolve_as_file_or_directory_inner(files, &entry, depth + 1)
 }
 
 fn is_relative_specifier(specifier: &str) -> bool {

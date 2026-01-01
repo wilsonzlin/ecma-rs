@@ -1584,6 +1584,32 @@ mod tests {
   }
 
   #[test]
+  fn resolves_bare_specifier_via_package_json_types() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/package.json".to_string(),
+        content: r#"{ "name": "foo", "types": "types.d.ts" }"#.to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/types.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/foo/types.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
   fn snapshots_preserve_extension_and_load_legacy_paths() {
     let tmp = tempdir().unwrap();
     let store = SnapshotStore {
