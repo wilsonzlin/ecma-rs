@@ -2508,4 +2508,75 @@ echo '{"diagnostics":[]}'
     let second = pool.run(&file_set, &options, second_deadline);
     assert!(second.is_ok(), "expected runner to recover: {second:?}");
   }
+
+  #[test]
+  fn timeout_guard_cancels_program_when_deadline_passed() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use typecheck_ts::FatalError;
+
+    let manager = TimeoutManager::new();
+    let deadline = Instant::now() - Duration::from_millis(1);
+    let guard = manager.register("deadline_passed".to_string(), deadline);
+
+    let file_set = HarnessFileSet::new(&[VirtualFile {
+      name: "case.ts".to_string(),
+      content: "const x = 1;\n".to_string(),
+    }]);
+    let mut compiler_options = CompilerOptions::default();
+    compiler_options.no_default_lib = true;
+    compiler_options.include_dom = false;
+    let host = HarnessHost::new(file_set.clone(), compiler_options);
+    let roots = file_set.root_keys();
+    let program = Arc::new(Program::new(host, roots));
+
+    guard.set_program(Arc::clone(&program));
+
+    assert!(matches!(
+      program.check_fallible(),
+      Err(FatalError::Cancelled)
+    ));
+  }
+
+  #[test]
+  fn timeout_manager_thread_cancels_program_after_deadline() {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+    use typecheck_ts::FatalError;
+
+    let manager = TimeoutManager::new();
+    let deadline = Instant::now() + Duration::from_millis(50);
+    let guard = manager.register("deadline_future".to_string(), deadline);
+
+    let file_set = HarnessFileSet::new(&[VirtualFile {
+      name: "case.ts".to_string(),
+      content: "const x = 1;\n".to_string(),
+    }]);
+    let mut compiler_options = CompilerOptions::default();
+    compiler_options.no_default_lib = true;
+    compiler_options.include_dom = false;
+    let host = HarnessHost::new(file_set.clone(), compiler_options);
+    let roots = file_set.root_keys();
+    let program = Arc::new(Program::new(host, roots));
+
+    guard.set_program(Arc::clone(&program));
+
+    // Allow the timeout thread to fire, then poll until the cancellation is
+    // observed (avoid flakiness from thread scheduling jitter).
+    std::thread::sleep(Duration::from_millis(60));
+    let max_wait = Instant::now() + Duration::from_secs(2);
+    loop {
+      match program.check_fallible() {
+        Err(FatalError::Cancelled) => break,
+        Ok(_) => {
+          assert!(
+            Instant::now() < max_wait,
+            "program was not cancelled after deadline"
+          );
+          std::thread::sleep(Duration::from_millis(10));
+        }
+        Err(other) => panic!("unexpected fatal error: {other}"),
+      }
+    }
+  }
 }
