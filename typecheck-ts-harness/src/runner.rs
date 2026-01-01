@@ -19,8 +19,8 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
@@ -851,8 +851,7 @@ fn execute_case(
   let roots = file_set.root_keys();
   let program = Arc::new(Program::new(host, roots));
   timeout_guard.set_program(Arc::clone(&program));
-  let (rust, query_stats) =
-    run_rust_with_profile(&program, &file_set, collect_query_stats);
+  let (rust, query_stats) = run_rust_with_profile(&program, &file_set, collect_query_stats);
   let rust_ms = rust_start.elapsed().as_millis();
   if Instant::now() >= deadline {
     return build_timeout_result(&case, timeout);
@@ -1373,10 +1372,15 @@ impl TscRunnerPool {
     }
 
     let (reply_tx, reply_rx) = mpsc::channel();
-    self.workers[worker_idx].cancel.store(false, Ordering::Relaxed);
+    self.workers[worker_idx]
+      .cancel
+      .store(false, Ordering::Relaxed);
     if self.workers[worker_idx]
       .tx
-      .send(TscWorkerCommand::Run { request, reply: reply_tx })
+      .send(TscWorkerCommand::Run {
+        request,
+        reply: reply_tx,
+      })
       .is_err()
     {
       self.availability.release(worker_idx);
@@ -1384,7 +1388,9 @@ impl TscRunnerPool {
     }
 
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
-      self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+      self.workers[worker_idx]
+        .cancel
+        .store(true, Ordering::Relaxed);
       self.workers[worker_idx].kill_switch.kill();
       return Err(TscPoolError::Timeout);
     };
@@ -1393,12 +1399,16 @@ impl TscRunnerPool {
       Ok(Ok(diags)) => Ok(diags),
       Ok(Err(err)) => Err(TscPoolError::Crashed(err)),
       Err(mpsc::RecvTimeoutError::Timeout) => {
-        self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+        self.workers[worker_idx]
+          .cancel
+          .store(true, Ordering::Relaxed);
         self.workers[worker_idx].kill_switch.kill();
         Err(TscPoolError::Timeout)
       }
       Err(mpsc::RecvTimeoutError::Disconnected) => {
-        self.workers[worker_idx].cancel.store(true, Ordering::Relaxed);
+        self.workers[worker_idx]
+          .cancel
+          .store(true, Ordering::Relaxed);
         self.workers[worker_idx].kill_switch.kill();
         Err(TscPoolError::Crashed("tsc worker disconnected".to_string()))
       }
@@ -1530,7 +1540,9 @@ fn run_tsc_request(
   request: TscRequest,
   cancel: &AtomicBool,
 ) -> std::result::Result<TscDiagnostics, String> {
-  match std::panic::catch_unwind(AssertUnwindSafe(|| runner.check_cancellable(request, cancel))) {
+  match std::panic::catch_unwind(AssertUnwindSafe(|| {
+    runner.check_cancellable(request, cancel)
+  })) {
     Ok(Ok(diags)) => Ok(diags),
     Ok(Err(err)) => Err(err.to_string()),
     Err(_) => Err("tsc runner panicked".to_string()),

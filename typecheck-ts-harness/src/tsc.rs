@@ -228,7 +228,10 @@ impl TscRunner {
     Self::with_kill_switch(node_path, TscKillSwitch::new())
   }
 
-  pub(crate) fn with_kill_switch(node_path: PathBuf, kill_switch: TscKillSwitch) -> anyhow::Result<Self> {
+  pub(crate) fn with_kill_switch(
+    node_path: PathBuf,
+    kill_switch: TscKillSwitch,
+  ) -> anyhow::Result<Self> {
     let mut runner = Self {
       node_path,
       kill_switch,
@@ -254,7 +257,11 @@ impl TscRunner {
     self.check_inner(request, cancel)
   }
 
-  fn check_inner(&mut self, request: TscRequest, cancel: &AtomicBool) -> anyhow::Result<TscDiagnostics> {
+  fn check_inner(
+    &mut self,
+    request: TscRequest,
+    cancel: &AtomicBool,
+  ) -> anyhow::Result<TscDiagnostics> {
     let mut attempts = 0;
     loop {
       attempts += 1;
@@ -414,7 +421,10 @@ impl TscRunner {
     Ok(Self)
   }
 
-  pub(crate) fn with_kill_switch(_node_path: PathBuf, _kill_switch: TscKillSwitch) -> anyhow::Result<Self> {
+  pub(crate) fn with_kill_switch(
+    _node_path: PathBuf,
+    _kill_switch: TscKillSwitch,
+  ) -> anyhow::Result<Self> {
     Ok(Self)
   }
 
