@@ -195,6 +195,106 @@ fn distributive_conditional_any_is_union_of_branches() {
 }
 
 #[test]
+fn conditional_with_unresolved_type_param_is_preserved() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tp = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: tp,
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let result = store.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
+fn conditional_with_unresolved_nested_type_param_is_preserved() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tp = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let key = store.intern_name("a");
+  let shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(key),
+      data: PropData {
+        ty: tp,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let check_obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape }),
+  ));
+
+  let shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(key),
+      data: PropData {
+        ty: primitives.string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let extends_obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape }),
+  ));
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: check_obj,
+    extends: extends_obj,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let result = store.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
+fn conditional_with_unresolved_ref_is_preserved() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let unresolved = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: Vec::new(),
+  });
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: unresolved,
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let result = store.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
 fn distributive_conditional_substitutes_extends_per_member() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

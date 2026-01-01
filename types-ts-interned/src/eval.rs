@@ -560,12 +560,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     }
 
     let extends_eval = self.evaluate_with_subst(extends, subst, depth + 1);
-
     // Conditional types are only reducible once their operands are known.
     //
     // When we cannot prove assignability (most notably due to unsubstituted type
-    // parameters or `infer` placeholders) we must defer evaluation instead of
-    // incorrectly collapsing to the false branch.
+    // parameters, unresolved refs, or `infer` placeholders) we must defer
+    // evaluation instead of incorrectly collapsing to the false branch.
     //
     // Note: This logic is intentionally conservative to match TypeScript's
     // behavior for generic conditional types.
@@ -583,7 +582,6 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         distributive,
       });
     }
-
     let assignable = match self.conditional_assignability {
       Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
       None => {
@@ -669,9 +667,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::Callable { overloads } => overloads
         .into_iter()
         .any(|sig| self.conditional_signature_is_indeterminate(sig, subst, depth + 1, visited)),
-      TypeKind::Ref { args, .. } => args
-        .into_iter()
-        .any(|arg| self.conditional_is_indeterminate_operand_inner(arg, subst, depth + 1, visited)),
+      TypeKind::Ref { .. } => true,
       TypeKind::Predicate { asserted, .. } => asserted.is_some_and(|asserted| {
         self.conditional_is_indeterminate_operand_inner(asserted, subst, depth + 1, visited)
       }),
