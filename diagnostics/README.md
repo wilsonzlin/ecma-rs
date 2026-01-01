@@ -31,6 +31,7 @@ Reserved, non-exhaustive prefixes:
 - `TC####`: `typecheck-ts` type checker
 - `OPT####`: `optimize-js`
 - `MINIFY####`: `minify-js`
+- `EMIT####`: `emit-js` emitter
 - `HOST####`: Host/environment failures
 - `ICE####`: Internal compiler errors
 
