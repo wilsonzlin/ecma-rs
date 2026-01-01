@@ -87,7 +87,8 @@ fn resolve_non_relative(
     resolved.push_str(subpath);
     resolved
   });
-  let types_specifier = types_fallback_specifier(specifier);
+  let mut types_specifier: Option<String> = None;
+  let mut types_specifier_checked = false;
   let mut dir = virtual_parent_dir(from_name);
   loop {
     let package_dir = virtual_join3(&dir, "node_modules", package_name);
@@ -108,6 +109,10 @@ fn resolve_non_relative(
       return Some(found);
     }
 
+    if !types_specifier_checked {
+      types_specifier = types_fallback_specifier(specifier);
+      types_specifier_checked = true;
+    }
     if let Some(types_specifier) = types_specifier.as_deref() {
       let types_base = virtual_join3(&dir, "node_modules/@types", types_specifier);
       if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
