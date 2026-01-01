@@ -27,7 +27,8 @@ use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
   ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
-  TypeDisplay, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeStore,
+  SignatureId, TypeDisplay, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl,
+  TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -5660,6 +5661,7 @@ impl<'a> FlowBodyChecker<'a> {
         .ref_expander
         .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
         .and_then(|expanded| self.object_prop_type(expanded, key)),
+      TypeKind::Callable { .. } => self.callable_prop_type(obj, key),
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for prop in shape.properties.iter() {
@@ -5672,6 +5674,9 @@ impl<'a> FlowBodyChecker<'a> {
             return Some(prop.data.ty);
           }
         }
+        if key == "call" && !shape.call_signatures.is_empty() {
+          return Some(self.build_call_method_type(shape.call_signatures.clone()));
+        }
         shape
           .indexers
           .first()
@@ -5682,6 +5687,44 @@ impl<'a> FlowBodyChecker<'a> {
       TypeKind::Array { ty, .. } => Some(ty),
       _ => None,
     }
+  }
+
+  fn callable_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
+    if key != "call" {
+      return None;
+    }
+    let sigs = callable_signatures(&self.store, obj);
+    if sigs.is_empty() {
+      return None;
+    }
+    Some(self.build_call_method_type(sigs))
+  }
+
+  fn build_call_method_type(&self, sigs: Vec<SignatureId>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let mut overloads = Vec::new();
+    for sig_id in sigs {
+      let sig = self.store.signature(sig_id);
+      let this_arg = sig.this_param.unwrap_or(prim.any);
+      let mut params = Vec::with_capacity(sig.params.len() + 1);
+      params.push(SigParam {
+        name: None,
+        ty: this_arg,
+        optional: false,
+        rest: false,
+      });
+      params.extend(sig.params.clone());
+      let call_sig = Signature {
+        params,
+        ret: sig.ret,
+        type_params: sig.type_params.clone(),
+        this_param: None,
+      };
+      overloads.push(self.store.intern_signature(call_sig));
+    }
+    overloads.sort();
+    overloads.dedup();
+    self.store.intern_type(TypeKind::Callable { overloads })
   }
 
   fn switch_case_falls_through(&self, case: Option<&SwitchCase>) -> bool {

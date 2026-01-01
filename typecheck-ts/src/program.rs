@@ -928,11 +928,61 @@ impl Program {
 
   pub fn type_at_fallible(&self, file: FileId, offset: u32) -> Result<Option<TypeId>, FatalError> {
     self.with_interned_state(|state| {
-      let (body, expr) = match state.expr_at(file, offset) {
+      const TYPE_AT_TRIVIA_LOOKAROUND: usize = 32;
+
+      let mut offset = offset;
+      let index = db::file_span_index(&state.typecheck_db, file);
+      let mut expr_at = state.expr_at(file, offset);
+      let mut pat_at = index.pat_at(offset);
+
+      if expr_at.is_none() && pat_at.is_none() {
+        if let Ok(text) = state.load_text(file, &self.host) {
+          let bytes = text.as_bytes();
+          let start = (offset as usize).min(bytes.len());
+
+          let mut found = None;
+          for step in 1..=TYPE_AT_TRIVIA_LOOKAROUND {
+            if start < step {
+              break;
+            }
+            let cand = start - step;
+            let Ok(cand_u32) = cand.try_into() else {
+              break;
+            };
+            if state.expr_at(file, cand_u32).is_some() || index.pat_at(cand_u32).is_some() {
+              found = Some(cand_u32);
+              break;
+            }
+          }
+
+          if found.is_none() {
+            for step in 1..=TYPE_AT_TRIVIA_LOOKAROUND {
+              let cand = start + step;
+              if cand >= bytes.len() {
+                break;
+              }
+              let Ok(cand_u32) = cand.try_into() else {
+                break;
+              };
+              if state.expr_at(file, cand_u32).is_some() || index.pat_at(cand_u32).is_some() {
+                found = Some(cand_u32);
+                break;
+              }
+            }
+          }
+
+          if let Some(adj) = found {
+            offset = adj;
+            expr_at = state.expr_at(file, offset);
+            pat_at = index.pat_at(offset);
+          }
+        }
+      }
+
+      let (body, expr) = match expr_at {
         Some(res) => res,
         None => {
-          let index = db::file_span_index(&state.typecheck_db, file);
-          let Some(result) = index.pat_at(offset) else {
+          let Some(result) = pat_at else {
             return Ok(None);
           };
           let (body, pat) = result.id;

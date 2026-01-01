@@ -327,3 +327,20 @@ fn type_at_handles_construct_signatures() {
   let ty = program.type_at(file_id, offset).expect("type at m");
   assert_eq!(program.display_type(ty).to_string(), "string");
 }
+
+#[test]
+fn type_at_recovers_from_trivia_offsets() {
+  let mut host = MemoryHost::default();
+  let source =
+    "declare function m(this: { x: number }, y: number): number;\nconst r = m.call({ x: 1 }, 2);";
+  let file = FileKey::new("trivia.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+
+  let offset = source.find("= m").expect("assignment operator") as u32 + 1;
+
+  let ty = program.type_at(file_id, offset).expect("type at trivia");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
