@@ -4,9 +4,8 @@ use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
-  lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
-  BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
-  ExprKind as HirExprKind, FileKind as HirFileKind, LowerResult, NameId, PatId as HirPatId,
+  BinaryOp as HirBinaryOp, BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind,
+  ExportKind as HirExportKind, ExprKind as HirExprKind, LowerResult, NameId, PatId as HirPatId,
   PatKind as HirPatKind, VarDeclKind as HirVarDeclKind,
 };
 use ordered_float::OrderedFloat;
@@ -55,7 +54,6 @@ use crate::files::{FileOrigin, FileRegistry};
 use crate::profile::{
   CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector, QueryTimer,
 };
-use crate::sem_hir::sem_hir_from_lower;
 #[cfg(feature = "serde")]
 use crate::snapshot::{
   DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
@@ -2386,20 +2384,6 @@ struct FileState {
   export_all: Vec<ExportAll>,
 }
 
-struct HostResolver {
-  host: Arc<dyn Host>,
-  registry: FileRegistry,
-}
-
-impl sem_ts::Resolver for HostResolver {
-  fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    let from_key = self.registry.lookup_key(FileId(from.0))?;
-    let target_key = self.host.resolve(&from_key, specifier)?;
-    let target_id = self.registry.lookup_id(&target_key)?;
-    Some(sem_ts::FileId(target_id.0))
-  }
-}
-
 fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
   match kind {
     FileKind::Dts => sem_ts::FileKind::Dts,
@@ -3749,8 +3733,7 @@ struct ProgramState {
   body_map: HashMap<BodyId, BodyMeta>,
   body_owners: HashMap<BodyId, DefId>,
   body_parents: HashMap<BodyId, BodyId>,
-  hir_lowered: HashMap<FileId, LowerResult>,
-  sem_hir: HashMap<FileId, sem_ts::HirFile>,
+  hir_lowered: HashMap<FileId, Arc<LowerResult>>,
   local_semantics: HashMap<FileId, sem_ts::locals::TsLocalSemantics>,
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
@@ -3862,7 +3845,6 @@ impl ProgramState {
       body_owners: HashMap::new(),
       body_parents: HashMap::new(),
       hir_lowered: HashMap::new(),
-      sem_hir: HashMap::new(),
       local_semantics: HashMap::new(),
       semantics: None,
       qualified_def_members: Arc::new(HashMap::new()),
@@ -4032,7 +4014,7 @@ impl ProgramState {
       lowered: self
         .hir_lowered
         .iter()
-        .map(|(file, lowered)| (*file, Arc::new(lowered.clone())))
+        .map(|(file, lowered)| (*file, Arc::clone(lowered)))
         .collect(),
       body_info,
       body_parents: self.body_parents.clone(),
@@ -4694,11 +4676,8 @@ impl ProgramState {
       .set_cancellation_flag(Arc::clone(&self.cancelled));
     let libs = self.collect_libraries(host.as_ref());
     self.check_cancelled()?;
-    let lib_ids: Vec<FileId> = libs
-      .iter()
-      .map(|l| self.intern_file_key(l.key.clone(), FileOrigin::Lib))
-      .collect();
-    self.process_libs(&libs, host)?;
+    let mut lib_queue = VecDeque::new();
+    self.process_libs(&libs, host, &mut lib_queue)?;
     let mut root_ids: Vec<FileId> = roots
       .iter()
       .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
@@ -4707,6 +4686,7 @@ impl ProgramState {
     self.root_ids = root_ids.clone();
     self.sync_typecheck_roots();
     let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
+    queue.extend(lib_queue);
     let mut seen: HashSet<FileId> = HashSet::new();
     while let Some(file) = queue.pop_front() {
       self.check_cancelled()?;
@@ -4773,19 +4753,6 @@ impl ProgramState {
           self.local_semantics.insert(file, locals);
           self.asts.insert(file, Arc::clone(&ast));
           self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
-          let (lowered, _lower_diags) = lower_hir_with_diagnostics(
-            file,
-            match file_kind {
-              FileKind::Dts => HirFileKind::Dts,
-              FileKind::Js => HirFileKind::Js,
-              FileKind::Jsx => HirFileKind::Jsx,
-              FileKind::Ts => HirFileKind::Ts,
-              FileKind::Tsx => HirFileKind::Tsx,
-            },
-            &ast,
-          );
-          self.hir_lowered.insert(file, lowered.clone());
-          let sem_hir = sem_hir_from_lower(ast.as_ref(), &lowered);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
             query_span!(
@@ -4799,16 +4766,21 @@ impl ProgramState {
             false,
             Some(self.query_stats.clone()),
           );
-          let mut bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
-          let id_mapping = self.align_definitions_with_hir(file, &lowered);
-          ProgramState::remap_sem_hir_ids(&mut bound_sem_hir, &id_mapping);
-          self.map_hir_bodies(file, &lowered);
+          let lowered = db::lower_hir(&self.typecheck_db, file);
+          let Some(lowered) = lowered.lowered else {
+            if let Some(span) = lower_span {
+              span.finish(None);
+            }
+            continue;
+          };
+          self.hir_lowered.insert(file, Arc::clone(&lowered));
+          let _bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
+          let _ = self.align_definitions_with_hir(file, lowered.as_ref());
+          self.map_hir_bodies(file, lowered.as_ref());
           self.check_cancelled()?;
           if let Some(span) = lower_span {
             span.finish(None);
           }
-          let merged_sem_hir = ProgramState::merge_sem_hir(sem_hir, bound_sem_hir);
-          self.sem_hir.insert(file, merged_sem_hir);
         }
         Err(err) => {
           let _ = err;
@@ -4816,10 +4788,12 @@ impl ProgramState {
       }
       self.current_file = prev_file;
     }
-    if !self.sem_hir.is_empty() {
+    if !self.hir_lowered.is_empty() {
       self.check_cancelled()?;
-      let sem_roots: Vec<_> = self.hir_lowered.keys().copied().collect();
-      self.compute_semantics(host, &sem_roots, &lib_ids)?;
+      let ts_semantics = db::ts_semantics(&self.typecheck_db);
+      self.check_cancelled()?;
+      self.semantics = Some(Arc::clone(&ts_semantics.semantics));
+      self.push_semantic_diagnostics(ts_semantics.diagnostics.as_ref().clone());
     }
     self.check_cancelled()?;
     self.resolve_reexports();
@@ -5237,7 +5211,7 @@ impl ProgramState {
 
     let lowered_by_file: HashMap<FileId, &LowerResult> = lowered_entries
       .iter()
-      .map(|(file, lowered)| (*file, lowered))
+      .map(|(file, lowered)| (*file, lowered.as_ref()))
       .collect();
 
     let mut namespace_parents: HashMap<DefId, DefId> = HashMap::new();
@@ -6028,7 +6002,12 @@ impl ProgramState {
     dts_libs
   }
 
-  fn process_libs(&mut self, libs: &[LibFile], host: &Arc<dyn Host>) -> Result<(), FatalError> {
+  fn process_libs(
+    &mut self,
+    libs: &[LibFile],
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) -> Result<(), FatalError> {
     for lib in libs {
       self.check_cancelled()?;
       let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
@@ -6052,17 +6031,14 @@ impl ProgramState {
           };
           self.local_semantics.insert(file_id, locals);
           self.asts.insert(file_id, Arc::clone(&ast));
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
-          let _ = lower_diags;
-          self.hir_lowered.insert(file_id, lowered.clone());
-          let mut queue = VecDeque::new();
-          let mut bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, &mut queue);
-          let sem_hir = sem_hir_from_lower(ast.as_ref(), &lowered);
-          let id_mapping = self.align_definitions_with_hir(file_id, &lowered);
-          self.map_hir_bodies(file_id, &lowered);
-          ProgramState::remap_sem_hir_ids(&mut bound_sem_hir, &id_mapping);
-          let merged_sem_hir = ProgramState::merge_sem_hir(sem_hir, bound_sem_hir);
-          self.sem_hir.insert(file_id, merged_sem_hir);
+          let lowered = db::lower_hir(&self.typecheck_db, file_id);
+          let Some(lowered) = lowered.lowered else {
+            continue;
+          };
+          self.hir_lowered.insert(file_id, Arc::clone(&lowered));
+          let _bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, queue);
+          let _ = self.align_definitions_with_hir(file_id, lowered.as_ref());
+          self.map_hir_bodies(file_id, lowered.as_ref());
         }
         Err(err) => {
           let _ = err;
@@ -6091,41 +6067,6 @@ impl ProgramState {
     self.update_typecheck_roots(&roots);
   }
 
-  fn prime_module_resolve_inputs(&mut self) {
-    let mut seen = HashSet::new();
-    for (file, sem_hir) in self.sem_hir.iter() {
-      let Some(file_key) = self.file_key_for_id(*file) else {
-        continue;
-      };
-      let mut record = |spec: &str| {
-        if !seen.insert((*file, spec.to_string())) {
-          return;
-        }
-        let target = self
-          .host
-          .resolve(&file_key, spec)
-          .and_then(|key| self.file_registry.lookup_id(&key));
-        self
-          .typecheck_db
-          .set_module_resolution(*file, Arc::<str>::from(spec), target);
-      };
-      for import in sem_hir.imports.iter() {
-        record(&import.specifier);
-      }
-      for export in sem_hir.exports.iter() {
-        match export {
-          sem_ts::Export::Named(named) => {
-            if let Some(specifier) = named.specifier.as_ref() {
-              record(specifier);
-            }
-          }
-          sem_ts::Export::All(all) => record(&all.specifier),
-          sem_ts::Export::ExportAssignment { .. } => {}
-        }
-      }
-    }
-  }
-
   fn program_diagnostics(
     &mut self,
     host: &Arc<dyn Host>,
@@ -6139,7 +6080,6 @@ impl ProgramState {
     self.ensure_interned_types(host, roots)?;
     self.body_results.clear();
     self.sync_typecheck_roots();
-    self.prime_module_resolve_inputs();
     self.set_extra_diagnostics_input();
 
     let body_ids: Vec<_> = {
@@ -6246,63 +6186,6 @@ impl ProgramState {
   fn recompute_global_bindings(&mut self) {
     self.global_bindings = crate::db::global_bindings(self);
   }
-
-  fn compute_semantics(
-    &mut self,
-    host: &Arc<dyn Host>,
-    roots: &[FileId],
-    libs: &[FileId],
-  ) -> Result<(), FatalError> {
-    self.check_cancelled()?;
-    let resolver = HostResolver {
-      host: Arc::clone(host),
-      registry: self.file_registry.clone(),
-    };
-    let mut sem_roots: Vec<sem_ts::FileId> = roots
-      .iter()
-      .chain(libs.iter())
-      .map(|f| sem_ts::FileId(f.0))
-      .collect();
-    sem_roots.sort();
-    sem_roots.dedup();
-    let (semantics, diags) = sem_ts::bind_ts_program_with_cancellation(
-      &sem_roots,
-      &resolver,
-      |file| {
-        let id = FileId(file.0);
-        self
-          .sem_hir
-          .get(&id)
-          .cloned()
-          .map(Arc::new)
-          .unwrap_or_else(|| {
-            let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
-              sem_ts::FileKind::Dts
-            } else {
-              sem_ts::FileKind::Ts
-            };
-            Arc::new(sem_ts::HirFile {
-              file_id: file,
-              module_kind: sem_ts::ModuleKind::Module,
-              file_kind,
-              decls: Vec::new(),
-              imports: Vec::new(),
-              type_imports: Vec::new(),
-              import_equals: Vec::new(),
-              exports: Vec::new(),
-              export_as_namespace: Vec::new(),
-              ambient_modules: Vec::new(),
-            })
-          })
-      },
-      Some(self.cancelled.as_ref()),
-    );
-    self.check_cancelled()?;
-    self.semantics = Some(Arc::new(semantics));
-    self.push_semantic_diagnostics(diags);
-    Ok(())
-  }
-
   /// Remap bound definitions to the stable IDs produced by HIR lowering while
   /// preserving existing symbols and cached types.
   ///

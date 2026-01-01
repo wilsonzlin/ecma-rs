@@ -25,10 +25,10 @@ use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
 use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
+use crate::lower_metrics;
 use crate::parse_metrics;
 use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
 use crate::queries::parse as parser;
-use crate::sem_hir::sem_hir_from_lower;
 use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
 use crate::FileKey;
 use crate::{BodyId, DefId, ExprId, TypeId};
@@ -1248,6 +1248,7 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
   let _timer = db
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::LowerHir, false));
+  lower_metrics::record_lower_call();
   let parsed = parse_for(db, file);
   panic_if_cancelled(db);
   let file_kind = file.kind(db);
@@ -1277,7 +1278,7 @@ fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   let lowered = lower_hir_for(db, file);
   let parsed = parse_for(db, file);
   match (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
-    (Some(ast), Some(lowered)) => sem_hir_from_lower(ast, lowered),
+    (Some(ast), Some(lowered)) => sem_ts::from_hir_js::lower_to_ts_hir(ast, lowered),
     _ => empty_sem_hir(file.file_id(db), lowered.file_kind),
   }
 }
