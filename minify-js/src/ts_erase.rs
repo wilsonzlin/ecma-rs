@@ -20,7 +20,7 @@ use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::{EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
@@ -707,6 +707,58 @@ fn is_template_literal_without_substitutions(expr: &Node<Expr>) -> bool {
     .all(|part| matches!(part, LitTemplatePart::String(_)))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EnumValueKind {
+  Number,
+  String,
+  Unknown,
+}
+
+fn enum_value_kind(
+  enum_name: &str,
+  expr: &Node<Expr>,
+  known: &HashMap<String, EnumValueKind>,
+) -> EnumValueKind {
+  if matches!(expr.stx.as_ref(), Expr::LitStr(_)) || is_template_literal_without_substitutions(expr)
+  {
+    return EnumValueKind::String;
+  }
+  if eval_number_expr(expr).is_some() {
+    return EnumValueKind::Number;
+  }
+  match expr.stx.as_ref() {
+    Expr::Id(id) => known
+      .get(&id.stx.name)
+      .copied()
+      .unwrap_or(EnumValueKind::Unknown),
+    Expr::Member(member) => {
+      if let Expr::Id(left) = member.stx.left.stx.as_ref() {
+        if left.stx.name == enum_name {
+          return known
+            .get(&member.stx.right)
+            .copied()
+            .unwrap_or(EnumValueKind::Unknown);
+        }
+      }
+      EnumValueKind::Unknown
+    }
+    Expr::ComputedMember(member) => {
+      if let Expr::Id(left) = member.stx.object.stx.as_ref() {
+        if left.stx.name == enum_name {
+          if let Expr::LitStr(key) = member.stx.member.stx.as_ref() {
+            return known
+              .get(&key.stx.value)
+              .copied()
+              .unwrap_or(EnumValueKind::Unknown);
+          }
+        }
+      }
+      EnumValueKind::Unknown
+    }
+    _ => EnumValueKind::Unknown,
+  }
+}
+
 fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
   match expr.stx.as_ref() {
     Expr::LitNum(num) => Some(num.stx.value.0),
@@ -718,6 +770,145 @@ fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
     }
     _ => None,
   }
+}
+
+fn rewrite_enum_member_refs(
+  expr: &mut Node<Expr>,
+  enum_name: &str,
+  member_names: &HashSet<String>,
+) {
+  fn replace_with_member_access(expr: &mut Node<Expr>, enum_name: &str, member: String) {
+    let loc = expr.loc;
+    let assoc = std::mem::take(&mut expr.assoc);
+    let mut replacement = ts_lower::member_expr(
+      loc,
+      ts_lower::id(loc, enum_name.to_string()),
+      ts_lower::MemberKey::Name(member),
+    );
+    replacement.assoc = assoc;
+    *expr = replacement;
+  }
+
+  fn visit(expr: &mut Node<Expr>, enum_name: &str, member_names: &HashSet<String>) {
+    if let Some(member) = match expr.stx.as_ref() {
+      Expr::Id(id) if member_names.contains(&id.stx.name) => Some(id.stx.name.clone()),
+      _ => None,
+    } {
+      replace_with_member_access(expr, enum_name, member);
+      return;
+    }
+
+    match expr.stx.as_mut() {
+      Expr::Id(_) => {}
+      Expr::Binary(bin) => {
+        visit(&mut bin.stx.left, enum_name, member_names);
+        visit(&mut bin.stx.right, enum_name, member_names);
+      }
+      Expr::Unary(unary) => {
+        visit(&mut unary.stx.argument, enum_name, member_names);
+      }
+      Expr::UnaryPostfix(unary) => {
+        visit(&mut unary.stx.argument, enum_name, member_names);
+      }
+      Expr::Call(call) => {
+        visit(&mut call.stx.callee, enum_name, member_names);
+        for arg in call.stx.arguments.iter_mut() {
+          visit(&mut arg.stx.value, enum_name, member_names);
+        }
+      }
+      Expr::Member(member) => {
+        visit(&mut member.stx.left, enum_name, member_names);
+      }
+      Expr::ComputedMember(member) => {
+        visit(&mut member.stx.object, enum_name, member_names);
+        visit(&mut member.stx.member, enum_name, member_names);
+      }
+      Expr::Cond(cond) => {
+        visit(&mut cond.stx.test, enum_name, member_names);
+        visit(&mut cond.stx.consequent, enum_name, member_names);
+        visit(&mut cond.stx.alternate, enum_name, member_names);
+      }
+      Expr::Import(import) => {
+        visit(&mut import.stx.module, enum_name, member_names);
+        if let Some(attrs) = import.stx.attributes.as_mut() {
+          visit(attrs, enum_name, member_names);
+        }
+      }
+      Expr::TaggedTemplate(tagged) => {
+        visit(&mut tagged.stx.function, enum_name, member_names);
+        for part in tagged.stx.parts.iter_mut() {
+          if let LitTemplatePart::Substitution(expr) = part {
+            visit(expr, enum_name, member_names);
+          }
+        }
+      }
+      Expr::LitArr(arr) => {
+        for elem in arr.stx.elements.iter_mut() {
+          if let LitArrElem::Single(expr) | LitArrElem::Rest(expr) = elem {
+            visit(expr, enum_name, member_names);
+          }
+        }
+      }
+      Expr::LitObj(obj) => {
+        for member in obj.stx.members.iter_mut() {
+          match &mut member.stx.typ {
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                visit(expr, enum_name, member_names);
+              }
+              match val {
+                ClassOrObjVal::Prop(Some(expr)) => visit(expr, enum_name, member_names),
+                ClassOrObjVal::Prop(None)
+                | ClassOrObjVal::IndexSignature(_)
+                | ClassOrObjVal::Getter(_)
+                | ClassOrObjVal::Setter(_)
+                | ClassOrObjVal::Method(_)
+                | ClassOrObjVal::StaticBlock(_) => {}
+              }
+            }
+            ObjMemberType::Rest { val } => visit(val, enum_name, member_names),
+            ObjMemberType::Shorthand { .. } => {}
+          }
+        }
+      }
+      Expr::LitTemplate(tpl) => {
+        for part in tpl.stx.parts.iter_mut() {
+          if let LitTemplatePart::Substitution(expr) = part {
+            visit(expr, enum_name, member_names);
+          }
+        }
+      }
+      Expr::ArrowFunc(_) | Expr::Func(_) | Expr::Class(_) => {
+        // Do not rewrite inside nested scopes.
+      }
+      Expr::JsxElem(_)
+      | Expr::JsxExprContainer(_)
+      | Expr::JsxSpreadAttr(_)
+      | Expr::JsxName(_)
+      | Expr::JsxText(_)
+      | Expr::JsxMember(_)
+      | Expr::IdPat(_)
+      | Expr::ArrPat(_)
+      | Expr::ObjPat(_)
+      | Expr::ImportMeta(_)
+      | Expr::NewTarget(_)
+      | Expr::Super(_)
+      | Expr::This(_)
+      | Expr::LitBool(_)
+      | Expr::LitNull(_)
+      | Expr::LitNum(_)
+      | Expr::LitBigInt(_)
+      | Expr::LitRegex(_)
+      | Expr::LitStr(_) => {}
+      Expr::TypeAssertion(_)
+      | Expr::NonNullAssertion(_)
+      | Expr::SatisfiesExpr(_) => {
+        // These should have been erased already.
+      }
+    }
+  }
+
+  visit(expr, enum_name, member_names);
 }
 
 fn enum_assign_stmt(loc: Loc, enum_ident: &str, member: &str, value: Node<Expr>) -> Node<Stmt> {
@@ -796,6 +987,12 @@ fn strip_enum_decl(
   }
 
   let enum_name = decl.stx.name.clone();
+  let member_names: HashSet<String> = decl
+    .stx
+    .members
+    .iter()
+    .map(|member| member.stx.name.clone())
+    .collect();
   let should_export_var = parent_namespace.is_none()
     && is_top_level
     && matches!(ctx.top_level_mode, TopLevelMode::Module)
@@ -811,59 +1008,73 @@ fn strip_enum_decl(
     should_export_var,
     VarDeclMode::Var,
   ));
+  if parent_namespace.is_none() && is_top_level {
+    ctx.top_level_value_bindings.insert(enum_name.clone());
+  }
 
   let mut body = Vec::with_capacity(decl.stx.members.len());
   let mut next_auto: Option<f64> = Some(0.0);
   let mut last_numeric_member: Option<String> = None;
+  let mut known_member_kinds: HashMap<String, EnumValueKind> = HashMap::new();
   for member in decl.stx.members {
     let member_name = member.stx.name.clone();
-    let initializer = member.stx.initializer.map(|expr| strip_expr(ctx, expr));
-    let is_string = initializer
+    let mut initializer = member.stx.initializer.map(|expr| strip_expr(ctx, expr));
+    let kind = initializer
       .as_ref()
-      .is_some_and(|expr| matches!(expr.stx.as_ref(), Expr::LitStr(_)) || is_template_literal_without_substitutions(expr));
-
-    if is_string {
-      let initializer = initializer.expect("string members must have initializer");
-      body.push(enum_assign_stmt(loc, &enum_name, &member_name, initializer));
-      next_auto = None;
-      last_numeric_member = None;
-      continue;
+      .map(|expr| enum_value_kind(&enum_name, expr, &known_member_kinds))
+      .unwrap_or(EnumValueKind::Number);
+    if let Some(expr) = initializer.as_mut() {
+      rewrite_enum_member_refs(expr, &enum_name, &member_names);
     }
 
-    let value_expr = match initializer {
-      Some(expr) => {
-        next_auto = eval_number_expr(&expr).map(|v| v + 1.0);
-        expr
+    match (kind, initializer) {
+      (EnumValueKind::String, Some(expr)) => {
+        body.push(enum_assign_stmt(loc, &enum_name, &member_name, expr));
+        next_auto = None;
+        last_numeric_member = None;
       }
-      None => match (next_auto, last_numeric_member.as_ref()) {
-        (Some(value), _) => {
-          next_auto = Some(value + 1.0);
-          ts_lower::number(loc, value)
-        }
-        (None, Some(prev)) => ts_lower::binary_expr(
+      (_, Some(expr)) => {
+        next_auto = eval_number_expr(&expr).map(|v| v + 1.0);
+        body.push(enum_reverse_mapping_stmt(
           loc,
-          OperatorName::Addition,
-          ts_lower::member_expr(
+          &enum_name,
+          &member_name,
+          expr,
+        ));
+        last_numeric_member = Some(member_name.clone());
+      }
+      (_, None) => {
+        let value_expr = match (next_auto, last_numeric_member.as_ref()) {
+          (Some(value), _) => {
+            next_auto = Some(value + 1.0);
+            ts_lower::number(loc, value)
+          }
+          (None, Some(prev)) => ts_lower::binary_expr(
             loc,
-            ts_lower::id(loc, enum_name.clone()),
-            ts_lower::MemberKey::Name(prev.to_string()),
+            OperatorName::Addition,
+            ts_lower::member_expr(
+              loc,
+              ts_lower::id(loc, enum_name.clone()),
+              ts_lower::MemberKey::Name(prev.to_string()),
+            ),
+            ts_lower::number(loc, 1.0),
           ),
-          ts_lower::number(loc, 1.0),
-        ),
-        (None, None) => {
-          next_auto = Some(1.0);
-          ts_lower::number(loc, 0.0)
-        }
-      },
-    };
+          (None, None) => {
+            next_auto = Some(1.0);
+            ts_lower::number(loc, 0.0)
+          }
+        };
+        body.push(enum_reverse_mapping_stmt(
+          loc,
+          &enum_name,
+          &member_name,
+          value_expr,
+        ));
+        last_numeric_member = Some(member_name.clone());
+      }
+    }
 
-    body.push(enum_reverse_mapping_stmt(
-      loc,
-      &enum_name,
-      &member_name,
-      value_expr,
-    ));
-    last_numeric_member = Some(member_name);
+    known_member_kinds.insert(member_name, kind);
   }
 
   let arg = enum_iife_arg(loc, &enum_name, parent_namespace);
@@ -1068,6 +1279,9 @@ fn strip_namespace_decl(
       should_export_var,
       VarDeclMode::Var,
     ));
+    if parent_namespace.is_none() && is_top_level {
+      ctx.top_level_value_bindings.insert(namespace_name.clone());
+    }
   }
 
   let body = strip_namespace_body(ctx, decl.stx.body, &namespace_name);
