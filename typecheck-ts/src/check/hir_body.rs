@@ -2318,6 +2318,19 @@ impl<'a> Checker<'a> {
           } else {
             self.check_expr(expr)
           };
+          if expected_elem != prim.unknown {
+            if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+              if self.has_excess_properties(obj, expected_elem) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, obj.loc),
+                  },
+                ));
+              }
+            }
+          }
           let stored = if expected_elem != prim.unknown {
             self.contextual_widen_container(expr_ty, expected_elem)
           } else {
@@ -2336,6 +2349,19 @@ impl<'a> Checker<'a> {
         let mut out = Vec::new();
         for expr in elems.into_iter() {
           let expr_ty = self.check_expr_with_expected(expr, expected_elem);
+          if expected_elem != prim.unknown {
+            if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+              if self.has_excess_properties(obj, expected_elem) {
+                self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                  "excess property",
+                  Span {
+                    file: self.file,
+                    range: loc_to_range(self.file, obj.loc),
+                  },
+                ));
+              }
+            }
+          }
           let stored = self.contextual_widen_container(expr_ty, expected_elem);
           out.push(stored);
         }

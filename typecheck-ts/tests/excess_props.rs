@@ -133,3 +133,27 @@ fn satisfies_checks_excess_properties() {
     diagnostics[0]
   );
 }
+
+#[test]
+fn contextual_array_literal_element_checks_excess_properties() {
+  let diagnostics = run("let xs: { foo: number }[] = [{ foo: 1, bar: 2 }];");
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
+
+#[test]
+fn contextual_tuple_literal_element_checks_excess_properties() {
+  let diagnostics = run("let xs: [{ foo: number }] = [{ foo: 1, bar: 2 }];");
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
