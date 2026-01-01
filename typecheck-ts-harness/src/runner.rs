@@ -684,14 +684,8 @@ fn build_timeout_result(case: &TestCase, timeout: Duration) -> TestResult {
     rust_ms: None,
     tsc_ms: None,
     diff_ms: None,
-    rust: EngineDiagnostics::timeout(Some(format!(
-      "timed out after {}ms",
-      timeout.as_millis()
-    ))),
-    tsc: EngineDiagnostics::timeout(Some(format!(
-      "timed out after {}ms",
-      timeout.as_millis()
-    ))),
+    rust: EngineDiagnostics::timeout(Some(format!("timed out after {}ms", timeout.as_millis()))),
+    tsc: EngineDiagnostics::timeout(Some(format!("timed out after {}ms", timeout.as_millis()))),
     options: build_test_options(&case.options, &tsc_options),
     query_stats: None,
     notes: case.notes.clone(),
