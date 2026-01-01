@@ -513,7 +513,7 @@ fn type_imports_in_lib_files_queue_dependencies() {
       key: lib.clone(),
       name: Arc::from("custom.d.ts"),
       kind: FileKind::Dts,
-      text: Arc::from(r#"export type FromDep = import("./dep").Thing;"#),
+      text: Arc::from(r#"export interface FromDep { value: import("./dep").Thing; }"#),
     })
     .link(lib.clone(), "./dep", dep.clone());
 
