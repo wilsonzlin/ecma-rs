@@ -333,6 +333,33 @@ fn type_only_import_does_not_become_side_effect_import() {
 }
 
 #[test]
+fn type_only_default_import_with_string_alias_is_removed() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import type { default as "a-b" } from "mod";export const x=1;"#,
+  );
+  assert_eq!(result, "export const x=1;");
+}
+
+#[test]
+fn type_only_default_export_with_string_alias_is_removed() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"export type { default as "a-b" } from "mod";export const x=1;"#,
+  );
+  assert_eq!(result, "export const x=1;");
+}
+
+#[test]
+fn type_only_export_star_as_default_is_removed() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"export type * as default from "mod";export const x=1;"#,
+  );
+  assert_eq!(result, "export const x=1;");
+}
+
+#[test]
 fn preserves_module_import_export_attributes() {
   let result = minified(
     TopLevelMode::Module,
