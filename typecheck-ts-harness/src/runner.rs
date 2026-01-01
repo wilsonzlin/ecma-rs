@@ -482,9 +482,8 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   };
   let needs_tsc_check =
     opts.update_snapshots || matches!(requested_compare, CompareMode::Auto | CompareMode::Tsc);
-  let tsc_available = needs_tsc_check
-    && node_available(&opts.node_path)
-    && typescript_available(&opts.node_path);
+  let tsc_available =
+    needs_tsc_check && node_available(&opts.node_path) && typescript_available(&opts.node_path);
   let compare_mode = resolve_compare_mode(requested_compare, tsc_available, &snapshot_store);
   if opts.update_snapshots && !tsc_available {
     return Err(crate::HarnessError::Typecheck(
