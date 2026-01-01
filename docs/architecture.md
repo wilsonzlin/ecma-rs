@@ -132,7 +132,7 @@ other crates use this for structured errors and spans.
 - SSA-based optimizer and decompiler for JS.
 - Pipeline: parse → `hir-js` lowering + semantic analysis (`JsSymbols`/`VarAnalysis`) → IL →
   CFG/SSA → opt passes (value numbering, DCE, CFG prune) → optional
-  decompilation (`program_to_ast` / `program_to_js` with the `emit` feature).
+  decompilation (`program_to_ast` / `program_to_js` via `emit-js`).
 - Legacy AST lowering has been removed in favor of the single HIR pipeline.
 - Diagnostics use shared `Span`/`TextRange`; deterministic tests enforce stable
   symbol/CFG ordering.
