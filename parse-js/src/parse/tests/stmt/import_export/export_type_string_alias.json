@@ -1,0 +1,19 @@
+{
+  "$t": "ExportList",
+  "attributes": null,
+  "from": null,
+  "names": {
+    "Specific": [
+      {
+        "alias": {
+          "name": "a-b"
+        },
+        "exportable": {
+          "Ident": "Foo"
+        },
+        "type_only": false
+      }
+    ]
+  },
+  "type_only": true
+}
