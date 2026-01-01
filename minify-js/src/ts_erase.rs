@@ -643,7 +643,7 @@ fn strip_class_decl(
     let expr = take_expr(&mut decorator.stx.expression);
     decorator.stx.expression = strip_expr(ctx, expr);
   }
-  strip_class_members(ctx, &mut class_decl.stx.members);
+  strip_class_members(ctx, &mut class_decl.stx.members, class_decl.stx.extends.is_some());
   Some(new_node(loc, assoc, Stmt::ClassDecl(class_decl)))
 }
 
@@ -2248,14 +2248,18 @@ fn strip_class_expr(ctx: &mut StripContext<'_>, class: Node<ClassExpr>) -> Node<
     let expr = take_expr(&mut decorator.stx.expression);
     decorator.stx.expression = strip_expr(ctx, expr);
   }
-  strip_class_members(ctx, &mut class.stx.members);
+  strip_class_members(ctx, &mut class.stx.members, class.stx.extends.is_some());
   class
 }
 
-fn strip_class_members(ctx: &mut StripContext<'_>, members: &mut Vec<Node<ClassMember>>) {
+fn strip_class_members(
+  ctx: &mut StripContext<'_>,
+  members: &mut Vec<Node<ClassMember>>,
+  is_derived: bool,
+) {
   let mut new_members = Vec::with_capacity(members.len());
   for member in members.drain(..) {
-    if let Some(stripped) = strip_class_member(ctx, member) {
+    if let Some(stripped) = strip_class_member(ctx, member, is_derived) {
       new_members.push(stripped);
     }
   }
@@ -2265,8 +2269,56 @@ fn strip_class_members(ctx: &mut StripContext<'_>, members: &mut Vec<Node<ClassM
 fn strip_class_member(
   ctx: &mut StripContext<'_>,
   member: Node<ClassMember>,
+  is_derived: bool,
 ) -> Option<Node<ClassMember>> {
+  fn param_property_names(params: &[Node<ParamDecl>]) -> Vec<(String, Loc)> {
+    let mut out = Vec::new();
+    for param in params {
+      if param.stx.accessibility.is_some() || param.stx.readonly {
+        if let Pat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref() {
+          out.push((id.stx.name.clone(), param.loc));
+        }
+      }
+    }
+    out
+  }
+
+  fn super_call_insert_after(stmts: &[Node<Stmt>]) -> Option<usize> {
+    for (idx, stmt) in stmts.iter().enumerate() {
+      let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+        continue;
+      };
+      let Expr::Call(call) = expr_stmt.stx.expr.stx.as_ref() else {
+        continue;
+      };
+      if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_)) {
+        return Some(idx + 1);
+      }
+    }
+    None
+  }
+
+  fn constructor_param_property_assignments(props: Vec<(String, Loc)>) -> Vec<Node<Stmt>> {
+    props
+      .into_iter()
+      .map(|(name, loc)| {
+        ts_lower::member_assignment_stmt(
+          loc,
+          Node::new(loc, Expr::This(Node::new(loc, ThisExpr {}))),
+          ts_lower::MemberKey::Name(name.clone()),
+          ts_lower::id(loc, name),
+        )
+      })
+      .collect()
+  }
+
   let mut member = member;
+  let is_constructor = !member.stx.static_
+    && matches!(
+      &member.stx.key,
+      ClassOrObjKey::Direct(key) if key.stx.key == "constructor"
+    );
+  let mut ctor_param_props = None;
   match &mut member.stx.val {
     ClassOrObjVal::IndexSignature(_) => return None,
     ClassOrObjVal::Getter(get) => {
@@ -2280,6 +2332,9 @@ fn strip_class_member(
       }
     }
     ClassOrObjVal::Method(method) => {
+      if is_constructor {
+        ctor_param_props = Some(param_property_names(&method.stx.func.stx.parameters));
+      }
       if !strip_func(ctx, &mut method.stx.func.stx) {
         return None;
       }
@@ -2292,6 +2347,23 @@ fn strip_class_member(
     }
     ClassOrObjVal::StaticBlock(block) => strip_stmts(ctx, &mut block.stx.body, false),
   }
+
+  if let Some(props) = ctor_param_props {
+    if !props.is_empty() {
+      if let ClassOrObjVal::Method(method) = &mut member.stx.val {
+        if let Some(FuncBody::Block(stmts)) = method.stx.func.stx.body.as_mut() {
+          let insert_at = if is_derived {
+            super_call_insert_after(stmts).unwrap_or(stmts.len())
+          } else {
+            0
+          };
+          let assignments = constructor_param_property_assignments(props);
+          stmts.splice(insert_at..insert_at, assignments);
+        }
+      }
+    }
+  }
+
   member.stx.type_annotation = None;
   member.stx.optional = false;
   member.stx.definite_assignment = false;
