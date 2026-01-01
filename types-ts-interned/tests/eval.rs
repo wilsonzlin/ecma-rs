@@ -2193,6 +2193,103 @@ fn indexed_access_intersection_indexer_key_requires_all_members() {
 }
 
 #[test]
+fn indexed_access_string_numeric_key_matches_numeric_property() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::Number(0),
+      data: PropData {
+        ty: primitives.string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let index_ty = store.intern_type(TypeKind::StringLiteral(store.intern_name("0")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: index_ty,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(indexed);
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
+fn indexed_access_number_key_matches_string_numeric_property() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(store.intern_name("0")),
+      data: PropData {
+        ty: primitives.string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let index_ty = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(0.0)));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: index_ty,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(indexed);
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
+fn array_indexed_access_accepts_string_numeric_literal() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let array_ty = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+  let index_ty = store.intern_type(TypeKind::StringLiteral(store.intern_name("0")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: array_ty,
+    index: index_ty,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(indexed);
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
 fn mapped_type_preserves_symbol_indexer() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

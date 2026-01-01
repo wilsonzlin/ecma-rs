@@ -2604,7 +2604,12 @@ impl<'a> RelateCtx<'a> {
     mode: RelationMode,
     depth: usize,
   ) -> Option<&'b Indexer> {
-    let key_kind = self.prop_key_kind(name);
+    let mut key_kind = self.prop_key_kind(name);
+    if matches!(key_kind, PropKeyKind::String)
+      && parse_canonical_index_string(self.store.as_ref(), name).is_some()
+    {
+      key_kind = PropKeyKind::Number;
+    }
     shape
       .indexers
       .iter()
@@ -2619,7 +2624,13 @@ impl<'a> RelateCtx<'a> {
     mode: RelationMode,
     depth: usize,
   ) -> bool {
-    self.indexer_key_accepts_prop_kind(idx.key_type, self.prop_key_kind(key), mode, depth)
+    let mut key_kind = self.prop_key_kind(key);
+    if matches!(key_kind, PropKeyKind::String)
+      && parse_canonical_index_string(self.store.as_ref(), key).is_some()
+    {
+      key_kind = PropKeyKind::Number;
+    }
+    self.indexer_key_accepts_prop_kind(idx.key_type, key_kind, mode, depth)
   }
 
   fn find_matching_indexer<'b>(
@@ -2722,11 +2733,27 @@ impl<'a> RelateCtx<'a> {
   }
 
   fn find_property<'b>(&self, shape: &'b Shape, key: &PropKey) -> Option<&'b Property> {
-    shape
-      .properties
-      .binary_search_by(|p| self.store.compare_prop_keys(&p.key, key))
-      .ok()
-      .map(|idx| &shape.properties[idx])
+    let lookup = |key: &PropKey| {
+      shape
+        .properties
+        .binary_search_by(|p| self.store.compare_prop_keys(&p.key, key))
+        .ok()
+        .map(|idx| &shape.properties[idx])
+    };
+
+    if let Some(hit) = lookup(key) {
+      return Some(hit);
+    }
+
+    match key {
+      PropKey::String(_) => parse_canonical_index_string(self.store.as_ref(), key)
+        .and_then(|idx| lookup(&PropKey::Number(idx))),
+      PropKey::Number(idx) if *idx >= 0 => {
+        let name = self.store.intern_name(idx.to_string());
+        lookup(&PropKey::String(name))
+      }
+      _ => None,
+    }
   }
 
   fn expand_ref(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
@@ -2734,6 +2761,29 @@ impl<'a> RelateCtx<'a> {
       .hooks
       .expander
       .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, args))
+  }
+}
+
+fn parse_canonical_index_string(store: &TypeStore, key: &PropKey) -> Option<i64> {
+  let PropKey::String(id) = key else {
+    return None;
+  };
+  parse_canonical_index_str(&store.name(*id))
+}
+
+fn parse_canonical_index_str(s: &str) -> Option<i64> {
+  if s == "0" {
+    return Some(0);
+  }
+  let bytes = s.as_bytes();
+  let first = *bytes.first()?;
+  if first == b'0' {
+    return None;
+  }
+  if bytes.iter().all(|c| c.is_ascii_digit()) {
+    s.parse().ok()
+  } else {
+    None
   }
 }
 

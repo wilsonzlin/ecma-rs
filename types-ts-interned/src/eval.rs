@@ -1196,6 +1196,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         TypeKind::NumberLiteral(_) | TypeKind::Number => {
           self.evaluate_with_subst(ty, subst, depth + 1)
         }
+        TypeKind::StringLiteral(id) => {
+          let key = PropKey::String(id);
+          if parse_canonical_index_string(self.store.as_ref(), &key).is_some() {
+            self.evaluate_with_subst(ty, subst, depth + 1)
+          } else {
+            self.store.primitive_ids().unknown
+          }
+        }
         _ => self.store.primitive_ids().unknown,
       },
       TypeKind::Tuple(elems) => match self.store.type_kind(index_eval) {
@@ -1238,6 +1246,40 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             ty
           } else {
             self.store.primitive_ids().undefined
+          }
+        }
+        TypeKind::StringLiteral(id) => {
+          let key = PropKey::String(id);
+          match parse_canonical_index_string(self.store.as_ref(), &key) {
+            Some(idx) => match usize::try_from(idx) {
+              Ok(idx) => {
+                if let Some(elem) = elems.get(idx) {
+                  let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
+                  if elem.optional && !options.exact_optional_property_types {
+                    ty = self
+                      .store
+                      .union(vec![ty, self.store.primitive_ids().undefined]);
+                  }
+                  ty
+                } else {
+                  self.store.primitive_ids().undefined
+                }
+              }
+              Err(_) => self.store.primitive_ids().undefined,
+            },
+            None => {
+              let mut members = Vec::new();
+              for elem in elems {
+                let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
+                if elem.optional && !options.exact_optional_property_types {
+                  ty = self
+                    .store
+                    .union(vec![ty, self.store.primitive_ids().undefined]);
+                }
+                members.push(ty);
+              }
+              self.store.union(members)
+            }
           }
         }
         _ => {
@@ -1514,7 +1556,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   ) {
     for prop in shape.properties.iter() {
       if match (key, &prop.key) {
-        (Key::Literal(a), b) => a == b,
+        (Key::Literal(a), b) => prop_keys_equal_for_lookup(self.store.as_ref(), a, b),
         (Key::String, PropKey::String(_)) => true,
         (Key::Number, PropKey::Number(_)) => true,
         (Key::Symbol, PropKey::Symbol(_)) => true,
@@ -1563,7 +1605,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::String | TypeKind::StringLiteral(_) => {
         matches!(key, PropKey::String(_) | PropKey::Number(_))
       }
-      TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(key, PropKey::Number(_)),
+      TypeKind::Number | TypeKind::NumberLiteral(_) => match key {
+        PropKey::Number(_) => true,
+        PropKey::String(_) => parse_canonical_index_string(self.store.as_ref(), key).is_some(),
+        _ => false,
+      },
       TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(key, PropKey::Symbol(_)),
       TypeKind::Union(members) => members
         .iter()
@@ -1686,4 +1732,42 @@ enum TemplateStringComputation {
 
 struct MappedKeyTypes {
   original: TypeId,
+}
+
+fn prop_keys_equal_for_lookup(store: &TypeStore, a: &PropKey, b: &PropKey) -> bool {
+  if a == b {
+    return true;
+  }
+  match (a, b) {
+    (PropKey::String(_), PropKey::Number(num)) => {
+      parse_canonical_index_string(store, a) == Some(*num)
+    }
+    (PropKey::Number(num), PropKey::String(_)) => {
+      parse_canonical_index_string(store, b) == Some(*num)
+    }
+    _ => false,
+  }
+}
+
+fn parse_canonical_index_string(store: &TypeStore, key: &PropKey) -> Option<i64> {
+  let PropKey::String(id) = key else {
+    return None;
+  };
+  parse_canonical_index_str(&store.name(*id))
+}
+
+fn parse_canonical_index_str(s: &str) -> Option<i64> {
+  if s == "0" {
+    return Some(0);
+  }
+  let bytes = s.as_bytes();
+  let first = *bytes.first()?;
+  if first == b'0' {
+    return None;
+  }
+  if bytes.iter().all(|c| c.is_ascii_digit()) {
+    s.parse().ok()
+  } else {
+    None
+  }
 }
