@@ -35,7 +35,24 @@ pub(crate) fn resolve_module_specifier(
 
 fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> Option<FileKey> {
   let base = files.name_for_key(from)?;
-  let joined = virtual_join(virtual_parent_dir_str(base), specifier);
+  let parent = virtual_parent_dir_str(base);
+
+  if let Some(entry) = specifier.strip_prefix("./") {
+    if entry.is_empty() {
+      return resolve_as_file_or_directory_normalized(files, parent, 0);
+    }
+
+    let joined = virtual_join(parent, entry);
+    // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
+    // Fall back to the normalizing path to preserve resolution behaviour.
+    return if entry.starts_with('/') || subpath_needs_normalization(entry) {
+      resolve_as_file_or_directory_inner(files, &joined, 0)
+    } else {
+      resolve_as_file_or_directory_normalized(files, &joined, 0)
+    };
+  }
+
+  let joined = virtual_join(parent, specifier);
   resolve_as_file_or_directory(files, &joined)
 }
 
@@ -174,10 +191,12 @@ fn resolve_as_file_or_directory_normalized(
 
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
+    let mut candidate = String::with_capacity(trimmed.len() + 1 + 4);
+    candidate.push_str(trimmed);
+    candidate.push('.');
+    let prefix_len = candidate.len();
     for ext in ["ts", "tsx", "d.ts"] {
-      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
-      candidate.push_str(trimmed);
-      candidate.push('.');
+      candidate.truncate(prefix_len);
       candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
@@ -185,10 +204,12 @@ fn resolve_as_file_or_directory_normalized(
     }
   } else if base_candidate.ends_with(".jsx") {
     let trimmed = base_candidate.trim_end_matches(".jsx");
+    let mut candidate = String::with_capacity(trimmed.len() + 1 + 4);
+    candidate.push_str(trimmed);
+    candidate.push('.');
+    let prefix_len = candidate.len();
     for ext in ["tsx", "d.ts"] {
-      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
-      candidate.push_str(trimmed);
-      candidate.push('.');
+      candidate.truncate(prefix_len);
       candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
@@ -196,10 +217,12 @@ fn resolve_as_file_or_directory_normalized(
     }
   } else if base_candidate.ends_with(".mjs") {
     let trimmed = base_candidate.trim_end_matches(".mjs");
+    let mut candidate = String::with_capacity(trimmed.len() + 1 + 5);
+    candidate.push_str(trimmed);
+    candidate.push('.');
+    let prefix_len = candidate.len();
     for ext in ["mts", "d.mts"] {
-      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
-      candidate.push_str(trimmed);
-      candidate.push('.');
+      candidate.truncate(prefix_len);
       candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
@@ -207,20 +230,24 @@ fn resolve_as_file_or_directory_normalized(
     }
   } else if base_candidate.ends_with(".cjs") {
     let trimmed = base_candidate.trim_end_matches(".cjs");
+    let mut candidate = String::with_capacity(trimmed.len() + 1 + 5);
+    candidate.push_str(trimmed);
+    candidate.push('.');
+    let prefix_len = candidate.len();
     for ext in ["cts", "d.cts"] {
-      let mut candidate = String::with_capacity(trimmed.len() + 1 + ext.len());
-      candidate.push_str(trimmed);
-      candidate.push('.');
+      candidate.truncate(prefix_len);
       candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
       }
     }
-  } else if !is_source_root(&base_candidate) {
+  } else if !is_source_root(base_candidate) {
+    let mut candidate = String::with_capacity(base_candidate.len() + 1 + 5);
+    candidate.push_str(base_candidate);
+    candidate.push('.');
+    let prefix_len = candidate.len();
     for ext in EXTENSIONS {
-      let mut candidate = String::with_capacity(base_candidate.len() + 1 + ext.len());
-      candidate.push_str(base_candidate);
-      candidate.push('.');
+      candidate.truncate(prefix_len);
       candidate.push_str(ext);
       if let Some(found) = files.resolve(&candidate) {
         return Some(found);
@@ -228,15 +255,22 @@ fn resolve_as_file_or_directory_normalized(
     }
   }
 
-  if !is_source_root(&base_candidate) {
-    if let Some(found) = resolve_via_package_json(files, &base_candidate, depth) {
+  if !is_source_root(base_candidate) {
+    if let Some(found) = resolve_via_package_json(files, base_candidate, depth) {
       return Some(found);
     }
   }
 
+  let mut index_candidate = String::with_capacity(base_candidate.len() + 1 + 11);
+  index_candidate.push_str(base_candidate);
+  if !base_candidate.ends_with('/') {
+    index_candidate.push('/');
+  }
+  let prefix_len = index_candidate.len();
   for index in INDEX_FILES {
-    let joined = virtual_join(base_candidate, index);
-    if let Some(found) = files.resolve(&joined) {
+    index_candidate.truncate(prefix_len);
+    index_candidate.push_str(index);
+    if let Some(found) = files.resolve(&index_candidate) {
       return Some(found);
     }
   }
@@ -287,8 +321,22 @@ fn resolve_package_json_entry(
   if entry.is_empty() {
     return None;
   }
-  let entry = normalize_name(&virtual_join(dir, entry));
-  resolve_as_file_or_directory_normalized(files, &entry, depth + 1)
+
+  // Most `package.json` entries are written as `./foo/bar`. Strip the leading `./` so the joined
+  // path is already normalized and we can skip an extra `normalize_name` allocation.
+  let entry = entry.strip_prefix("./").unwrap_or(entry);
+  if entry.is_empty() {
+    return resolve_as_file_or_directory_normalized(files, dir, depth + 1);
+  }
+
+  let joined = virtual_join(dir, entry);
+  // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
+  // Fall back to the normalizing path to preserve resolution behaviour.
+  if entry.starts_with('/') || subpath_needs_normalization(entry) {
+    resolve_as_file_or_directory_inner(files, &joined, depth + 1)
+  } else {
+    resolve_as_file_or_directory_normalized(files, &joined, depth + 1)
+  }
 }
 
 fn resolve_via_exports(
