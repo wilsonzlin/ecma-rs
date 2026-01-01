@@ -68,8 +68,7 @@ fn resolve_non_relative(
   let types_specifier = types_fallback_specifier(specifier);
   let mut dir = virtual_parent_dir(from_name);
   loop {
-    let node_modules_dir = virtual_join(&dir, "node_modules");
-    let package_dir = virtual_join(&node_modules_dir, package_name);
+    let package_dir = virtual_join3(&dir, "node_modules", package_name);
     if let Some(exports_subpath) = exports_subpath.as_deref() {
       if let Some(found) = resolve_via_exports(files, &package_dir, exports_subpath, 0) {
         return Some(found);
@@ -83,7 +82,7 @@ fn resolve_non_relative(
     }
 
     if let Some(types_specifier) = types_specifier.as_deref() {
-      let types_base = virtual_join3(&node_modules_dir, "@types", types_specifier);
+      let types_base = virtual_join3(&dir, "node_modules/@types", types_specifier);
       if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
         return Some(found);
       }
@@ -509,14 +508,20 @@ fn types_fallback_specifier(specifier: &str) -> Option<String> {
     return None;
   }
 
-  let mapped = if let Some(stripped) = package.strip_prefix('@') {
+  if let Some(stripped) = package.strip_prefix('@') {
     let (scope, name) = stripped.split_once('/')?;
-    format!("{scope}__{name}")
+    let mut mapped = String::with_capacity(scope.len() + 2 + name.len() + rest.len());
+    mapped.push_str(scope);
+    mapped.push_str("__");
+    mapped.push_str(name);
+    mapped.push_str(rest);
+    Some(mapped)
   } else {
-    package.to_string()
-  };
-
-  Some(format!("{mapped}{rest}"))
+    let mut mapped = String::with_capacity(package.len() + rest.len());
+    mapped.push_str(package);
+    mapped.push_str(rest);
+    Some(mapped)
+  }
 }
 
 fn split_package_name(specifier: &str) -> Option<(&str, &str)> {
