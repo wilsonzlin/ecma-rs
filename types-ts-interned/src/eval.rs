@@ -138,19 +138,61 @@ impl KeySet {
     }
   }
 
-  #[allow(dead_code)]
   fn intersect(self, other: Self, store: &TypeStore) -> Self {
     match (self, other) {
+      // `Unknown` represents the broadest `keyof` result (`string | number | symbol`).
+      // When intersecting keys (e.g. `keyof (A | B)`), that acts like a universal
+      // set: intersecting it with a concrete key set yields the concrete set.
+      (KeySet::Unknown, other) | (other, KeySet::Unknown) => other,
       (KeySet::Known(a), KeySet::Known(b)) => {
+        let a_set: AHashSet<Key> = a.iter().cloned().collect();
+        let b_set: AHashSet<Key> = b.iter().cloned().collect();
+
+        let a_has_string = a_set.contains(&Key::String);
+        let a_has_number = a_set.contains(&Key::Number);
+        let a_has_symbol = a_set.contains(&Key::Symbol);
+        let b_has_string = b_set.contains(&Key::String);
+        let b_has_number = b_set.contains(&Key::Number);
+        let b_has_symbol = b_set.contains(&Key::Symbol);
+
+        let literal_in_set =
+          |key: &Key, set: &AHashSet<Key>, has_string: bool, has_number: bool, has_symbol: bool| {
+            match key {
+              Key::Literal(PropKey::String(_)) => has_string || set.contains(key),
+              Key::Literal(PropKey::Number(_)) => has_number || set.contains(key),
+              Key::Literal(PropKey::Symbol(_)) => has_symbol || set.contains(key),
+              _ => set.contains(key),
+            }
+          };
+
+        // Build candidates from all literal keys that appear in either set, then
+        // keep those that are present in both sets. Broad keys (`string`,
+        // `number`, `symbol`) are handled separately below.
         let mut out = Vec::new();
-        for key in a {
-          if b.iter().any(|k| k == &key) {
-            out.push(key);
+        for key in a
+          .iter()
+          .chain(b.iter())
+          .filter(|key| matches!(key, Key::Literal(_)))
+        {
+          if literal_in_set(key, &a_set, a_has_string, a_has_number, a_has_symbol)
+            && literal_in_set(key, &b_set, b_has_string, b_has_number, b_has_symbol)
+          {
+            out.push(key.clone());
           }
         }
+
+        if a_has_string && b_has_string {
+          out.push(Key::String);
+        }
+        if a_has_number && b_has_number {
+          out.push(Key::Number);
+        }
+        if a_has_symbol && b_has_symbol {
+          out.push(Key::Symbol);
+        }
+
         KeySet::known(out, store)
       }
-      _ => KeySet::Unknown,
     }
   }
 }
@@ -1194,11 +1236,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
   fn keys_from_type_id(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> KeySet {
     match self.store.type_kind(ty) {
-      TypeKind::Union(members) => members
-        .into_iter()
-        .fold(KeySet::known(Vec::new(), &self.store), |acc, member| {
-          acc.union(self.keys_from_type(member, subst, depth + 1), &self.store)
-        }),
+      TypeKind::Union(members) => {
+        let mut iter = members.into_iter();
+        let Some(first) = iter.next() else {
+          return KeySet::known(Vec::new(), &self.store);
+        };
+        let mut acc = self.keys_from_type(first, subst, depth + 1);
+        for member in iter {
+          acc = acc.intersect(self.keys_from_type(member, subst, depth + 1), &self.store);
+        }
+        acc
+      }
       TypeKind::Intersection(members) => {
         let mut acc = KeySet::known(Vec::new(), &self.store);
         for member in members {

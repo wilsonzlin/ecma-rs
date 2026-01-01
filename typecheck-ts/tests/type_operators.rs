@@ -94,22 +94,7 @@ fn eval_keyof_union_collects_member_keys() {
   let mut lowerer = TypeLowerer::new(store.clone());
   let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
   let evaluated = store.evaluate(ty);
-  let mut names: Vec<_> = match store.type_kind(evaluated) {
-    TypeKind::Union(members) => members
-      .into_iter()
-      .map(|m| match store.type_kind(m) {
-        TypeKind::StringLiteral(id) => store.name(id),
-        other => panic!("unexpected member {:?}", other),
-      })
-      .collect(),
-    TypeKind::StringLiteral(id) => vec![store.name(id)],
-    other => panic!("unexpected kind {:?}", other),
-  };
-  names.sort();
-  assert_eq!(
-    names,
-    vec!["a".to_string(), "b".to_string(), "c".to_string()]
-  );
+  assert!(matches!(store.type_kind(evaluated), TypeKind::Never));
 }
 
 #[test]
@@ -129,7 +114,6 @@ fn eval_indexed_access_with_union_key() {
 fn indexed_access_over_union_distributes() {
   let store = TypeStore::new();
   let name_a = store.intern_name("a");
-  let name_b = store.intern_name("b");
 
   let left_shape = store.intern_shape(Shape {
     properties: vec![Property {
@@ -150,7 +134,7 @@ fn indexed_access_over_union_distributes() {
   });
   let right_shape = store.intern_shape(Shape {
     properties: vec![Property {
-      key: PropKey::String(name_b),
+      key: PropKey::String(name_a),
       data: PropData {
         ty: store.primitive_ids().number,
         optional: false,
