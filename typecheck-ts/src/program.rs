@@ -24,7 +24,7 @@ use parse_js::ast::type_expr::{
 };
 use parse_js::loc::Loc;
 use parse_js::{
-  parse_with_options as parse_js_with_options, Dialect as ParseDialect,
+  parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
 #[cfg(feature = "serde")]
@@ -4749,7 +4749,7 @@ impl ProgramState {
           let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
             sem_ts::locals::bind_ts_locals(locals_ast, file, is_module)
           } else {
-            let mut owned = parse_js_with_options(
+            let mut owned = match parse_js_with_options_cancellable(
               text.as_ref(),
               JsParseOptions {
                 dialect: match file_kind {
@@ -4764,8 +4764,16 @@ impl ProgramState {
                   _ => JsSourceType::Module,
                 },
               },
-            )
-            .expect("reparse locals");
+              Arc::clone(&self.cancelled),
+            ) {
+              Ok(ast) => ast,
+              Err(err) => {
+                if matches!(err.typ, parse_js::error::SyntaxErrorType::Cancelled) {
+                  return Err(FatalError::Cancelled);
+                }
+                panic!("reparse locals failed unexpectedly: {err}");
+              }
+            };
             sem_ts::locals::bind_ts_locals(&mut owned, file, is_module)
           };
           self.local_semantics.insert(file, locals);
@@ -6112,14 +6120,22 @@ impl ProgramState {
           let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
             sem_ts::locals::bind_ts_locals(locals_ast, file_id, true)
           } else {
-            let mut owned = parse_js_with_options(
+            let mut owned = match parse_js_with_options_cancellable(
               lib.text.as_ref(),
               JsParseOptions {
                 dialect: ParseDialect::Dts,
                 source_type: JsSourceType::Module,
               },
-            )
-            .expect("reparse lib locals");
+              Arc::clone(&self.cancelled),
+            ) {
+              Ok(ast) => ast,
+              Err(err) => {
+                if matches!(err.typ, parse_js::error::SyntaxErrorType::Cancelled) {
+                  return Err(FatalError::Cancelled);
+                }
+                panic!("reparse lib locals failed unexpectedly: {err}");
+              }
+            };
             sem_ts::locals::bind_ts_locals(&mut owned, file_id, true)
           };
           self.local_semantics.insert(file_id, locals);
