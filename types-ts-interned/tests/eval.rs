@@ -1326,6 +1326,109 @@ fn conditional_respects_private_member_origin_by_default() {
 }
 
 #[test]
+fn conditional_respects_protected_member_origin_by_default() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key = store.intern_name("p");
+  let make_obj = |declared_on: DefId| {
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(key),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: Some(Accessibility::Protected),
+            is_method: false,
+            origin: None,
+            declared_on: Some(declared_on),
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    })))
+  };
+
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_obj(DefId(1)),
+    extends: make_obj(DefId(1)),
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), true_ty);
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: make_obj(DefId(1)),
+    extends: make_obj(DefId(2)),
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), false_ty);
+}
+
+#[test]
+fn conditional_treats_private_and_protected_members_as_incompatible() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key = store.intern_name("x");
+  let make_obj = |accessibility| {
+    store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(key),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: Some(accessibility),
+            is_method: false,
+            origin: None,
+            declared_on: Some(DefId(1)),
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    })))
+  };
+
+  let private_obj = make_obj(Accessibility::Private);
+  let protected_obj = make_obj(Accessibility::Protected);
+
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: private_obj,
+    extends: protected_obj,
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), false_ty);
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: protected_obj,
+    extends: private_obj,
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), false_ty);
+}
+
+#[test]
 fn conditional_uses_tuple_vs_array_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
