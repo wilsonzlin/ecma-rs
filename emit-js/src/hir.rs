@@ -6,13 +6,16 @@ use crate::precedence::{
 use crate::{EmitError, EmitOptions, EmitResult, Emitter};
 use diagnostics::Diagnostic;
 use hir_js::{
-  AssignOp, BinaryOp, Body, BodyId, DefData, DefId, Export, ExportAll, ExportDefault,
-  ExportDefaultValue, ExportKind, ExportNamed, Expr, ExprId, ExprKind, FunctionBody, FunctionData,
-  Import, ImportBinding, ImportEqualsTarget, ImportEs, ImportKind, Literal, LowerResult,
-  MemberExpr, NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt,
-  StmtId, StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
+  AssignOp, BinaryOp, Body, BodyId, ClassMember, ClassMemberKey, ClassMemberKind, ClassMethodKind,
+  DefData, DefId, Export, ExportAll, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed,
+  Expr, ExprId, ExprKind, FunctionBody, FunctionData, Import, ImportBinding, ImportEqualsTarget,
+  ImportEs, ImportKind, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
+  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, NameId, ObjectKey,
+  ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId, StmtKind,
+  TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
+use std::fmt::Write;
 
 /// Emit a lowered HIR file to a string using the provided options.
 pub fn emit_hir_file_to_string(
@@ -65,6 +68,29 @@ pub fn emit_hir_file(em: &mut Emitter, lowered: &LowerResult) -> EmitResult {
     });
   }
   for export in &ctx.lowered.hir.exports {
+    // `hir-js` records exported declarations both as root-body statements with
+    // `DefData::{is_exported,is_default_export}` set and as explicit `Export`
+    // entries. Since `emit_def` already emits `export`/`export default` on the
+    // declaration itself, emitting the corresponding `ExportDefault` entries
+    // would duplicate output (e.g. `export default class ...export default class ...`).
+    //
+    // Named exports have their own filtering in `emit_export_named` (based on
+    // `ExportSpecifier::local_def`), but default-exported class/function
+    // declarations need special casing here.
+    if let ExportKind::Default(default) = &export.kind {
+      let def_id = match &default.value {
+        ExportDefaultValue::Function { def, .. } | ExportDefaultValue::Class { def, .. } => {
+          Some(*def)
+        }
+        ExportDefaultValue::Expr { .. } => None,
+      };
+      if let Some(def_id) = def_id {
+        if ctx.def(def_id).is_some_and(|def| def.is_default_export) {
+          continue;
+        }
+      }
+    }
+
     items.push(ItemWithSpan {
       start: export.span.start,
       kind: 1,
@@ -167,8 +193,8 @@ fn emit_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult
 
   match def.path.kind {
     hir_js::DefKind::Function => emit_function_decl(em, ctx, def),
-    hir_js::DefKind::Var => emit_var_def(em, ctx, def),
-    hir_js::DefKind::VarDeclarator => emit_var_def(em, ctx, def),
+    hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator => emit_var_def(em, ctx, def),
+    hir_js::DefKind::Class => emit_class_decl(em, ctx, def),
     _ => Err(EmitError::unsupported(
       "definition kind not supported for HIR emission",
     )),
@@ -356,9 +382,12 @@ fn emit_export_default(
         .ok_or_else(|| EmitError::unsupported("function metadata missing for export default"))?;
       emit_function_like(em, ctx, name.map(|n| ctx.name(n)), func, body)
     }
-    ExportDefaultValue::Class { .. } => Err(EmitError::unsupported(
-      "class default exports are not supported in HIR emission",
-    )),
+    ExportDefaultValue::Class { body, name, .. } => {
+      let body = ctx
+        .body(*body)
+        .ok_or_else(|| EmitError::unsupported("class body not found for export default"))?;
+      emit_class_like(em, ctx, body, name.map(|n| ctx.name(n)), true)
+    }
   }
 }
 
@@ -395,6 +424,326 @@ fn emit_function_decl(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> 
     .as_ref()
     .ok_or_else(|| EmitError::unsupported("function metadata missing"))?;
   emit_function_like(em, ctx, Some(ctx.name(def.name)), func, body)
+}
+
+fn emit_class_decl(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult {
+  let Some(body_id) = def.body else {
+    return Ok(());
+  };
+  let body = ctx
+    .body(body_id)
+    .ok_or_else(|| EmitError::unsupported("class body not found"))?;
+  emit_class_like(em, ctx, body, Some(ctx.name(def.name)), false)
+}
+
+fn emit_class_like(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  name: Option<&str>,
+  allow_anonymous: bool,
+) -> EmitResult {
+  let Some(class) = body.class.as_ref() else {
+    return Err(EmitError::unsupported(
+      "class metadata missing for emission",
+    ));
+  };
+
+  em.write_keyword("class");
+  if let Some(name) = name {
+    em.write_identifier(name);
+  } else if !allow_anonymous {
+    return Err(EmitError::unsupported("class declaration missing name"));
+  }
+
+  if let Some(extends) = class.extends {
+    em.write_keyword("extends");
+    emit_expr_with_min_prec(em, ctx, body, extends, Prec::LOWEST)?;
+  }
+
+  em.write_punct("{");
+  for member in &class.members {
+    emit_class_member(em, ctx, body, member)?;
+  }
+  em.write_punct("}");
+  Ok(())
+}
+
+fn emit_class_member(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  class_body: &Body,
+  member: &ClassMember,
+) -> EmitResult {
+  match &member.kind {
+    ClassMemberKind::StaticBlock { stmt } => {
+      em.write_keyword("static");
+      emit_stmt(em, ctx, class_body, *stmt)
+    }
+    ClassMemberKind::Field {
+      initializer, key, ..
+    } => {
+      if member.static_ {
+        em.write_keyword("static");
+      }
+      emit_class_member_key(em, ctx, class_body, key)?;
+      if let Some(init_body) = initializer {
+        let init_body = ctx
+          .body(*init_body)
+          .ok_or_else(|| EmitError::unsupported("class field initializer body missing"))?;
+        let expr = init_body
+          .root_stmts
+          .iter()
+          .find_map(|stmt_id| match &ctx.stmt(init_body, *stmt_id).kind {
+            StmtKind::Expr(expr) => Some(*expr),
+            _ => None,
+          })
+          .ok_or_else(|| EmitError::unsupported("class field initializer expression missing"))?;
+        em.write_punct("=");
+        emit_expr_with_min_prec(
+          em,
+          ctx,
+          init_body,
+          expr,
+          Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+        )?;
+      }
+      em.write_semicolon();
+      Ok(())
+    }
+    ClassMemberKind::Constructor { body, .. } => {
+      if member.static_ {
+        return Err(EmitError::unsupported(
+          "static class constructors are invalid",
+        ));
+      }
+      let body_id = body.ok_or_else(|| EmitError::unsupported("constructor body missing"))?;
+      let ctor_body = ctx
+        .body(body_id)
+        .ok_or_else(|| EmitError::unsupported("constructor body not found"))?;
+      let func = ctor_body
+        .function
+        .as_ref()
+        .ok_or_else(|| EmitError::unsupported("constructor metadata missing"))?;
+      em.write_identifier("constructor");
+      emit_param_list(em, ctx, ctor_body, &func.params)?;
+      emit_function_body(em, ctx, ctor_body, &func.body, true)
+    }
+    ClassMemberKind::Method {
+      body, key, kind, ..
+    } => {
+      if member.static_ {
+        em.write_keyword("static");
+      }
+      match kind {
+        ClassMethodKind::Getter => em.write_keyword("get"),
+        ClassMethodKind::Setter => em.write_keyword("set"),
+        ClassMethodKind::Method => {}
+      }
+
+      let body_id = body.ok_or_else(|| EmitError::unsupported("class method body missing"))?;
+      let method_body = ctx
+        .body(body_id)
+        .ok_or_else(|| EmitError::unsupported("class method body not found"))?;
+      let func = method_body
+        .function
+        .as_ref()
+        .ok_or_else(|| EmitError::unsupported("class method metadata missing"))?;
+
+      if matches!(kind, ClassMethodKind::Method) {
+        if func.async_ {
+          em.write_keyword("async");
+        }
+        if func.generator {
+          em.write_punct("*");
+        }
+      }
+
+      emit_class_member_key(em, ctx, class_body, key)?;
+      emit_param_list(em, ctx, method_body, &func.params)?;
+      emit_function_body(em, ctx, method_body, &func.body, true)
+    }
+  }
+}
+
+fn emit_class_member_key(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  key: &ClassMemberKey,
+) -> EmitResult {
+  match key {
+    ClassMemberKey::Ident(name) => em.write_identifier(ctx.name(*name)),
+    ClassMemberKey::Private(name) => em.write_str(ctx.name(*name)),
+    ClassMemberKey::String(value) => emit_string(em, value),
+    ClassMemberKey::Number(value) => em.write_number(value),
+    ClassMemberKey::Computed(expr) => {
+      em.write_punct("[");
+      emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+      em.write_punct("]");
+    }
+  }
+  Ok(())
+}
+
+fn emit_jsx_elem(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  elem: &JsxElement,
+) -> EmitResult {
+  match &elem.name {
+    Some(name) => {
+      em.write_char('<')?;
+      emit_jsx_elem_name(em, ctx, name)?;
+      for attr in &elem.attributes {
+        em.write_char(' ')?;
+        emit_jsx_attr(em, ctx, body, attr)?;
+      }
+      if elem.children.is_empty() {
+        em.write_str("/>");
+        return Ok(());
+      }
+      em.write_char('>')?;
+      emit_jsx_children(em, ctx, body, &elem.children)?;
+      em.write_str("</");
+      emit_jsx_elem_name(em, ctx, name)?;
+      em.write_char('>')?;
+      Ok(())
+    }
+    None => {
+      em.write_str("<>");
+      emit_jsx_children(em, ctx, body, &elem.children)?;
+      em.write_str("</>");
+      Ok(())
+    }
+  }
+}
+
+fn emit_jsx_elem_name(em: &mut Emitter, ctx: &HirContext<'_>, name: &JsxElementName) -> EmitResult {
+  match name {
+    JsxElementName::Ident(id) => {
+      em.write_str(ctx.name(*id));
+      Ok(())
+    }
+    JsxElementName::Name(name) => emit_jsx_name(em, name),
+    JsxElementName::Member(member) => emit_jsx_member_expr(em, ctx, member),
+  }
+}
+
+fn emit_jsx_member_expr(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  member: &JsxMemberExpr,
+) -> EmitResult {
+  em.write_str(ctx.name(member.base));
+  for segment in &member.path {
+    em.write_char('.')?;
+    em.write_str(ctx.name(*segment));
+  }
+  Ok(())
+}
+
+fn emit_jsx_name(em: &mut Emitter, name: &JsxName) -> EmitResult {
+  if let Some(namespace) = &name.namespace {
+    em.write_str(namespace);
+    em.write_char(':')?;
+  }
+  em.write_str(&name.name);
+  Ok(())
+}
+
+fn emit_jsx_attr(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  attr: &JsxAttr,
+) -> EmitResult {
+  match attr {
+    JsxAttr::Named { name, value } => {
+      emit_jsx_name(em, name)?;
+      if let Some(value) = value {
+        em.write_char('=')?;
+        emit_jsx_attr_value(em, ctx, body, value)?;
+      }
+      Ok(())
+    }
+    JsxAttr::Spread { expr } => {
+      em.write_str("{...");
+      emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+      em.write_char('}')?;
+      Ok(())
+    }
+  }
+}
+
+fn emit_jsx_attr_value(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  value: &JsxAttrValue,
+) -> EmitResult {
+  match value {
+    JsxAttrValue::Text(text) => crate::jsx::escape_jsx_string_literal(em, text),
+    JsxAttrValue::Expression(expr) => emit_jsx_expr_container(em, ctx, body, expr),
+    JsxAttrValue::Element(elem) => emit_jsx_elem(em, ctx, body, elem),
+  }
+}
+
+fn emit_jsx_expr_container(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  container: &JsxExprContainer,
+) -> EmitResult {
+  if container.expr.is_none() {
+    em.write_str("{}");
+    return Ok(());
+  }
+  em.write_char('{')?;
+  if container.spread {
+    em.write_str("...");
+  }
+  if let Some(expr) = container.expr {
+    emit_expr_with_min_prec(em, ctx, body, expr, Prec::LOWEST)?;
+  }
+  em.write_char('}')?;
+  Ok(())
+}
+
+fn emit_jsx_children(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  children: &[JsxChild],
+) -> EmitResult {
+  let mut idx = 0;
+  while idx < children.len() {
+    match &children[idx] {
+      JsxChild::Text(text) => {
+        let mut combined = text.clone();
+        idx += 1;
+        while idx < children.len() {
+          if let JsxChild::Text(next) = &children[idx] {
+            combined.push_str(next);
+            idx += 1;
+          } else {
+            break;
+          }
+        }
+        crate::jsx::escape_jsx_child_text(em, &combined)?;
+      }
+      JsxChild::Element(elem) => {
+        emit_jsx_elem(em, ctx, body, elem)?;
+        idx += 1;
+      }
+      JsxChild::Expr(expr) => {
+        emit_jsx_expr_container(em, ctx, body, expr)?;
+        idx += 1;
+      }
+    }
+  }
+  Ok(())
 }
 
 fn emit_function_like(
@@ -572,11 +921,50 @@ fn def_is_root_export(ctx: &HirContext<'_>, mut def_id: DefId) -> bool {
 fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatId) -> bool {
   let pat = ctx.pat(body, pat_id);
   match &pat.kind {
-    PatKind::Ident(_) => {
-      let Some(def_id) = ctx.lowered.hir.span_map.def_at_offset(pat.span.start) else {
-        return false;
-      };
-      def_is_root_export(ctx, def_id)
+    PatKind::Ident(name) => {
+      // `VarDecl` statements in HIR do not record whether they were preceded by
+      // an `export` keyword, so we infer that by looking up the definition that
+      // corresponds to the binding pattern.
+      //
+      // Most of the time `SpanMap::def_at_offset` returns the correct def, but
+      // TypeScript lowering (e.g. enums/namespaces) can synthesize multiple defs
+      // with the exact same span start (notably the `var` binding, its
+      // `VarDeclarator` wrapper, and the IIFE parameter that shadows it). In
+      // those cases, the span map tie-breaker may return a non-binding def (like
+      // the parameter), causing us to drop `export` on the `var` declaration and
+      // silently change module exports.
+      //
+      // To keep emission correct, validate that the span map lookup refers to
+      // the expected var def, and fall back to a direct scan for a matching var
+      // binding when it doesn't.
+
+      if let Some(def_id) = ctx.lowered.hir.span_map.def_at_offset(pat.span.start) {
+        if let Some(def) = ctx.def(def_id) {
+          if matches!(
+            def.path.kind,
+            hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
+          )
+            && def.name == *name
+            && def.span == pat.span
+            && def_is_root_export(ctx, def_id)
+          {
+            return true;
+          }
+        }
+      }
+      ctx
+        .lowered
+        .defs
+        .iter()
+        .any(|def| {
+          matches!(
+            def.path.kind,
+            hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
+          )
+            && def.name == *name
+            && def.span == pat.span
+            && def_is_root_export(ctx, def.id)
+        })
     }
     PatKind::Array(array) => {
       array
@@ -1019,7 +1407,7 @@ fn expr_prec(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> Result<Prec,
     | ExprKind::Ident(_)
     | ExprKind::ImportMeta
     | ExprKind::NewTarget => PRIMARY_PRECEDENCE,
-    ExprKind::Jsx(_) => return Err(EmitError::unsupported("jsx expressions are not supported")),
+    ExprKind::Jsx(_) => PRIMARY_PRECEDENCE,
     ExprKind::TypeAssertion { .. } | ExprKind::NonNull { .. } | ExprKind::Satisfies { .. } => {
       CALL_MEMBER_PRECEDENCE
     }
@@ -1095,8 +1483,15 @@ fn emit_expr_no_parens(
         body,
       )?;
     }
-    ExprKind::ClassExpr { .. } => {
-      return Err(EmitError::unsupported("class emission is not implemented"))
+    ExprKind::ClassExpr {
+      body: body_id,
+      name,
+      ..
+    } => {
+      let class_body = ctx
+        .body(*body_id)
+        .ok_or_else(|| EmitError::unsupported("class body not found"))?;
+      emit_class_like(em, ctx, class_body, name.map(|n| ctx.name(n)), true)?;
     }
     ExprKind::Template(tmpl) => emit_template_literal(em, ctx, body, tmpl)?,
     ExprKind::TaggedTemplate { tag, template } => {
@@ -1152,7 +1547,7 @@ fn emit_expr_no_parens(
     }
     ExprKind::ImportMeta => em.write_str("import.meta"),
     ExprKind::NewTarget => em.write_str("new.target"),
-    ExprKind::Jsx(_) => return Err(EmitError::unsupported("JSX emission is not supported")),
+    ExprKind::Jsx(jsx) => emit_jsx_elem(em, ctx, body, jsx)?,
   }
   Ok(())
 }

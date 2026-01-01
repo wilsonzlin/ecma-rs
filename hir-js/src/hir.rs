@@ -570,6 +570,57 @@ pub enum DefTypeInfo {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ClassBody {
+  pub extends: Option<ExprId>,
+  pub members: Vec<ClassMember>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassMember {
+  pub span: TextRange,
+  pub static_: bool,
+  pub kind: ClassMemberKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassMemberKind {
+  Constructor {
+    def: DefId,
+    body: Option<BodyId>,
+  },
+  Method {
+    def: DefId,
+    body: Option<BodyId>,
+    key: ClassMemberKey,
+    kind: ClassMethodKind,
+  },
+  Field {
+    def: DefId,
+    initializer: Option<BodyId>,
+    key: ClassMemberKey,
+  },
+  StaticBlock {
+    stmt: StmtId,
+  },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassMethodKind {
+  Method,
+  Getter,
+  Setter,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassMemberKey {
+  Ident(NameId),
+  Private(NameId),
+  String(String),
+  Number(String),
+  Computed(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Body {
   pub owner: DefId,
   /// Span covering this body in the source file.
@@ -584,6 +635,8 @@ pub struct Body {
   /// Metadata for function-like bodies. Only populated when `kind` is
   /// [`BodyKind::Function`].
   pub function: Option<FunctionData>,
+  /// Class-specific metadata. Only populated when `kind` is [`BodyKind::Class`].
+  pub class: Option<ClassBody>,
   /// Reserved for the checker; filled in by later phases.
   pub expr_types: Option<Vec<()>>,
 }
@@ -1035,18 +1088,59 @@ pub enum ForHead {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct JsxElement {
-  pub kind: JsxElementKind,
+  pub name: Option<JsxElementName>,
+  pub attributes: Vec<JsxAttr>,
+  pub children: Vec<JsxChild>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum JsxElementKind {
-  Element(NameId),
-  Member(Vec<NameId>),
-  Fragment,
+pub enum JsxElementName {
+  Ident(NameId),
+  Name(JsxName),
+  Member(JsxMemberExpr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsxName {
+  pub namespace: Option<String>,
+  pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsxMemberExpr {
+  pub base: NameId,
+  pub path: Vec<NameId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsxAttr {
+  Named {
+    name: JsxName,
+    value: Option<JsxAttrValue>,
+  },
+  Spread {
+    expr: ExprId,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsxAttrValue {
+  Expression(JsxExprContainer),
   Text(String),
-  Expr(ExprId),
-  Spread(ExprId),
-  Name(NameId),
+  Element(JsxElement),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsxExprContainer {
+  pub spread: bool,
+  pub expr: Option<ExprId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsxChild {
+  Element(JsxElement),
+  Expr(JsxExprContainer),
+  Text(String),
 }
 
 impl HirFile {

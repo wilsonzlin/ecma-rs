@@ -678,6 +678,7 @@ pub mod body_check {
           pats: Vec::new(),
           root_stmts: Vec::new(),
           function: None,
+          class: None,
           expr_types: None,
         });
         _synthetic.as_ref()

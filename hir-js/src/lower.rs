@@ -1,13 +1,15 @@
 use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
-  CallArg, CallExpr, CatchClause, Decorator, DefData, DefTypeInfo, Export, ExportAlias, ExportAll,
-  ExportAsNamespace, ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed,
-  ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile,
-  Import, ImportBinding, ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed,
-  JsxElement, JsxElementKind, Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey,
-  ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind,
-  SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
-  VarDeclarator,
+  CallArg, CallExpr, CatchClause, ClassBody, ClassMember as HirClassMember, ClassMemberKey,
+  ClassMemberKind as HirClassMemberKind, ClassMethodKind, Decorator, DefData, DefTypeInfo, Export,
+  ExportAlias, ExportAll, ExportAsNamespace, ExportAssignment, ExportDefault, ExportDefaultValue,
+  ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit,
+  FunctionBody, FunctionData, HirFile, Import, ImportBinding, ImportEquals, ImportEqualsTarget,
+  ImportEs, ImportKind, ImportNamed, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
+  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, ModuleSpecifier,
+  ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt,
+  StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl,
+  VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -777,6 +779,7 @@ fn empty_body(owner: DefId, kind: BodyKind, span: TextRange) -> Body {
     pats: Vec::new(),
     root_stmts: Vec::new(),
     function: None,
+    class: None,
     expr_types: None,
   }
 }
@@ -875,6 +878,7 @@ fn lower_body_from_source(
       body_id,
       ctx.to_range(class.loc),
       &class.stx.decorators,
+      class.stx.extends.as_ref(),
       &class.stx.members,
       def_lookup,
       decorator_store,
@@ -888,6 +892,7 @@ fn lower_body_from_source(
       body_id,
       ctx.to_range(class.loc),
       &class.stx.decorators,
+      class.stx.extends.as_ref(),
       &class.stx.members,
       def_lookup,
       decorator_store,
@@ -1191,6 +1196,7 @@ fn lower_class_body<'a>(
   body_id: BodyId,
   class_span: TextRange,
   decorators: &'a [Node<AstDecorator>],
+  extends: Option<&Node<AstExpr>>,
   members: &'a [Node<ClassMember>],
   def_lookup: &DefLookup,
   decorator_store: &mut DecoratorStore,
@@ -1229,6 +1235,7 @@ fn lower_class_body<'a>(
     end = end.max(range.end);
   }
   let span = TextRange::new(start, end);
+
   let mut builder = BodyBuilder::new(
     owner,
     span,
@@ -1239,6 +1246,10 @@ fn lower_class_body<'a>(
     types,
     span_map,
   );
+
+  let extends = extends.map(|expr| lower_expr(expr, &mut builder, ctx));
+  let mut class_members: Vec<HirClassMember> = Vec::new();
+  let mut static_blocks: HashMap<RawNode, usize> = HashMap::new();
 
   let mut items: Vec<ClassEvalItem<'a>> = Vec::new();
 
@@ -1280,6 +1291,102 @@ fn lower_class_body<'a>(
   }
 
   for member in members {
+    let member_span = ctx.to_range(member.loc);
+    match &member.stx.val {
+      ClassOrObjVal::StaticBlock(block) => {
+        static_blocks.insert(RawNode::from(block), class_members.len());
+        class_members.push(HirClassMember {
+          span: member_span,
+          static_: true,
+          kind: HirClassMemberKind::StaticBlock {
+            stmt: StmtId(u32::MAX),
+          },
+        });
+      }
+      ClassOrObjVal::Prop(_) => {
+        let def = builder
+          .def_lookup
+          .def_for_node(member)
+          .unwrap_or(DefId(u32::MAX));
+        let initializer = builder.def_lookup.body_for(def);
+        let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
+        class_members.push(HirClassMember {
+          span: member_span,
+          static_: member.stx.static_,
+          kind: HirClassMemberKind::Field {
+            def,
+            initializer,
+            key,
+          },
+        });
+      }
+      ClassOrObjVal::Method(method) => {
+        let def = builder
+          .def_lookup
+          .def_for_node(method)
+          .unwrap_or(DefId(u32::MAX));
+        let body = builder.def_lookup.body_for(def);
+        let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
+        let is_constructor = matches!(&member.stx.key, ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor")
+          && !member.stx.static_;
+        if is_constructor {
+          class_members.push(HirClassMember {
+            span: member_span,
+            static_: false,
+            kind: HirClassMemberKind::Constructor { def, body },
+          });
+        } else {
+          class_members.push(HirClassMember {
+            span: member_span,
+            static_: member.stx.static_,
+            kind: HirClassMemberKind::Method {
+              def,
+              body,
+              key,
+              kind: ClassMethodKind::Method,
+            },
+          });
+        }
+      }
+      ClassOrObjVal::Getter(getter) => {
+        let def = builder
+          .def_lookup
+          .def_for_node(getter)
+          .unwrap_or(DefId(u32::MAX));
+        let body = builder.def_lookup.body_for(def);
+        let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
+        class_members.push(HirClassMember {
+          span: member_span,
+          static_: member.stx.static_,
+          kind: HirClassMemberKind::Method {
+            def,
+            body,
+            key,
+            kind: ClassMethodKind::Getter,
+          },
+        });
+      }
+      ClassOrObjVal::Setter(setter) => {
+        let def = builder
+          .def_lookup
+          .def_for_node(setter)
+          .unwrap_or(DefId(u32::MAX));
+        let body = builder.def_lookup.body_for(def);
+        let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
+        class_members.push(HirClassMember {
+          span: member_span,
+          static_: member.stx.static_,
+          kind: HirClassMemberKind::Method {
+            def,
+            body,
+            key,
+            kind: ClassMethodKind::Setter,
+          },
+        });
+      }
+      ClassOrObjVal::IndexSignature(_) => {}
+    }
+
     let member_def = match &member.stx.val {
       ClassOrObjVal::Method(method) => def_lookup.def_for_node(method),
       ClassOrObjVal::Getter(getter) => def_lookup.def_for_node(getter),
@@ -1366,11 +1473,46 @@ fn lower_class_body<'a>(
         }
         let stmt_id = builder.alloc_stmt(item.range, StmtKind::Block(block_stmts));
         builder.root_stmt(stmt_id);
+
+        if let Some(idx) = static_blocks.get(&RawNode::from(node)).copied() {
+          if let HirClassMemberKind::StaticBlock { stmt } = &mut class_members[idx].kind {
+            *stmt = stmt_id;
+          }
+        }
       }
     }
   }
 
+  builder.class = Some(ClassBody {
+    extends,
+    members: class_members,
+  });
+
   builder.finish_with_id(body_id)
+}
+
+fn lower_class_member_key(
+  key: &parse_js::ast::class_or_object::ClassOrObjKey,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> ClassMemberKey {
+  use parse_js::token::TT;
+  match key {
+    parse_js::ast::class_or_object::ClassOrObjKey::Direct(direct) => match direct.stx.tt {
+      TT::LiteralString | TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => {
+        ClassMemberKey::String(direct.stx.key.clone())
+      }
+      TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
+        ClassMemberKey::Number(direct.stx.key.clone())
+      }
+      TT::PrivateMember => ClassMemberKey::Private(builder.intern_name(&direct.stx.key)),
+      _ => ClassMemberKey::Ident(builder.intern_name(&direct.stx.key)),
+    },
+    parse_js::ast::class_or_object::ClassOrObjKey::Computed(expr) => {
+      let expr_id = lower_expr(expr, builder, ctx);
+      ClassMemberKey::Computed(expr_id)
+    }
+  }
 }
 
 fn lower_stmt(
@@ -1915,31 +2057,6 @@ fn lower_expr(
     AstExpr::ImportMeta(_) => ExprKind::ImportMeta,
     AstExpr::NewTarget(_) => ExprKind::NewTarget,
     AstExpr::JsxElem(elem) => ExprKind::Jsx(lower_jsx_elem(elem, builder, ctx)),
-    AstExpr::JsxExprContainer(container) => {
-      let expr_id = lower_expr(&container.stx.value, builder, ctx);
-      ExprKind::Jsx(JsxElement {
-        kind: JsxElementKind::Expr(expr_id),
-      })
-    }
-    AstExpr::JsxMember(member) => {
-      let mut parts = Vec::new();
-      parts.push(builder.intern_name(&member.stx.base.stx.name));
-      for segment in member.stx.path.iter() {
-        parts.push(builder.intern_name(segment));
-      }
-      ExprKind::Jsx(JsxElement {
-        kind: JsxElementKind::Member(parts),
-      })
-    }
-    AstExpr::JsxName(name) => ExprKind::Jsx(JsxElement {
-      kind: JsxElementKind::Name(builder.intern_name(&name.stx.name)),
-    }),
-    AstExpr::JsxSpreadAttr(attr) => ExprKind::Jsx(JsxElement {
-      kind: JsxElementKind::Spread(lower_expr(&attr.stx.value, builder, ctx)),
-    }),
-    AstExpr::JsxText(text) => ExprKind::Jsx(JsxElement {
-      kind: JsxElementKind::Text(text.stx.value.clone()),
-    }),
     AstExpr::ArrPat(arr) => {
       let kind = lower_arr_pat(arr, builder, ctx);
       let _ = builder.alloc_pat(ctx.to_range(arr.loc), kind);
@@ -2261,56 +2378,121 @@ fn lower_jsx_elem(
   builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
 ) -> JsxElement {
-  for attr in elem.stx.attributes.iter() {
-    match attr {
-      jsx::JsxAttr::Named { value, .. } => {
-        let Some(value) = value else {
-          continue;
-        };
-        match value {
-          jsx::JsxAttrVal::Expression(container) => {
-            let _ = lower_expr(&container.stx.value, builder, ctx);
-          }
-          jsx::JsxAttrVal::Element(child) => {
-            let _ = lower_jsx_elem_as_expr(child, builder, ctx);
-          }
-          jsx::JsxAttrVal::Text(_) => {}
-        }
-      }
-      jsx::JsxAttr::Spread { value } => {
-        let _ = lower_expr(&value.stx.value, builder, ctx);
-      }
+  let name = match &elem.stx.name {
+    Some(jsx::JsxElemName::Id(id)) => {
+      Some(JsxElementName::Ident(builder.intern_name(&id.stx.name)))
     }
-  }
-
-  for child in elem.stx.children.iter() {
-    match child {
-      jsx::JsxElemChild::Expr(container) => {
-        let _ = lower_expr(&container.stx.value, builder, ctx);
-      }
-      jsx::JsxElemChild::Element(child) => {
-        let _ = lower_jsx_elem_as_expr(child, builder, ctx);
-      }
-      jsx::JsxElemChild::Text(_) => {}
-    }
-  }
-
-  let kind = match &elem.stx.name {
-    Some(jsx::JsxElemName::Id(id)) => JsxElementKind::Element(builder.intern_name(&id.stx.name)),
-    Some(jsx::JsxElemName::Name(name)) => {
-      JsxElementKind::Element(builder.intern_name(&name.stx.name))
-    }
-    Some(jsx::JsxElemName::Member(member)) => {
-      let mut parts = Vec::new();
-      parts.push(builder.intern_name(&member.stx.base.stx.name));
-      for segment in member.stx.path.iter() {
-        parts.push(builder.intern_name(segment));
-      }
-      JsxElementKind::Member(parts)
-    }
-    None => JsxElementKind::Fragment,
+    Some(jsx::JsxElemName::Name(name)) => Some(JsxElementName::Name(lower_jsx_name(name))),
+    Some(jsx::JsxElemName::Member(member)) => Some(JsxElementName::Member(lower_jsx_member_expr(
+      member, builder,
+    ))),
+    None => None,
   };
-  JsxElement { kind }
+
+  let attributes = elem
+    .stx
+    .attributes
+    .iter()
+    .map(|attr| lower_jsx_attr(attr, builder, ctx))
+    .collect();
+  let children = elem
+    .stx
+    .children
+    .iter()
+    .map(|child| lower_jsx_child(child, builder, ctx))
+    .collect();
+
+  JsxElement {
+    name,
+    attributes,
+    children,
+  }
+}
+
+fn lower_jsx_name(name: &Node<jsx::JsxName>) -> JsxName {
+  JsxName {
+    namespace: name.stx.namespace.clone(),
+    name: name.stx.name.clone(),
+  }
+}
+
+fn lower_jsx_member_expr(
+  member: &Node<jsx::JsxMemberExpr>,
+  builder: &mut BodyBuilder<'_>,
+) -> JsxMemberExpr {
+  let base = builder.intern_name(&member.stx.base.stx.name);
+  let path = member
+    .stx
+    .path
+    .iter()
+    .map(|segment| builder.intern_name(segment))
+    .collect();
+  JsxMemberExpr { base, path }
+}
+
+fn lower_jsx_attr(
+  attr: &jsx::JsxAttr,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> JsxAttr {
+  match attr {
+    jsx::JsxAttr::Named { name, value } => JsxAttr::Named {
+      name: lower_jsx_name(name),
+      value: value
+        .as_ref()
+        .map(|value| lower_jsx_attr_value(value, builder, ctx)),
+    },
+    jsx::JsxAttr::Spread { value } => JsxAttr::Spread {
+      expr: lower_expr(&value.stx.value, builder, ctx),
+    },
+  }
+}
+
+fn lower_jsx_attr_value(
+  value: &jsx::JsxAttrVal,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> JsxAttrValue {
+  match value {
+    jsx::JsxAttrVal::Text(text) => JsxAttrValue::Text(text.stx.value.clone()),
+    jsx::JsxAttrVal::Expression(expr) => {
+      JsxAttrValue::Expression(lower_jsx_expr_container(expr, builder, ctx))
+    }
+    jsx::JsxAttrVal::Element(elem) => JsxAttrValue::Element(lower_jsx_elem(elem, builder, ctx)),
+  }
+}
+
+fn lower_jsx_child(
+  child: &jsx::JsxElemChild,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> JsxChild {
+  match child {
+    jsx::JsxElemChild::Element(elem) => JsxChild::Element(lower_jsx_elem(elem, builder, ctx)),
+    jsx::JsxElemChild::Expr(expr) => JsxChild::Expr(lower_jsx_expr_container(expr, builder, ctx)),
+    jsx::JsxElemChild::Text(text) => JsxChild::Text(text.stx.value.clone()),
+  }
+}
+
+fn lower_jsx_expr_container(
+  container: &Node<jsx::JsxExprContainer>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> JsxExprContainer {
+  let expr = if is_empty_jsx_expr_placeholder(&container.stx.value) {
+    None
+  } else {
+    Some(lower_expr(&container.stx.value, builder, ctx))
+  };
+
+  JsxExprContainer {
+    spread: container.stx.spread,
+    expr,
+  }
+}
+
+fn is_empty_jsx_expr_placeholder(expr: &Node<AstExpr>) -> bool {
+  expr.loc.is_empty() && matches!(expr.stx.as_ref(), AstExpr::Id(id) if id.stx.name.is_empty())
 }
 
 fn lower_jsx_elem_as_expr(
@@ -2350,6 +2532,7 @@ struct BodyBuilder<'a> {
   pats: Vec<Pat>,
   root_stmts: Vec<StmtId>,
   function: Option<FunctionData>,
+  class: Option<ClassBody>,
   def_lookup: &'a DefLookup,
   names: &'a mut NameInterner,
   types: &'a mut crate::hir::TypeArenasByDef,
@@ -2377,6 +2560,7 @@ impl<'a> BodyBuilder<'a> {
       pats: Vec::new(),
       root_stmts: Vec::new(),
       function: None,
+      class: None,
       def_lookup,
       names,
       types,
@@ -2422,6 +2606,7 @@ impl<'a> BodyBuilder<'a> {
       pats: self.pats,
       root_stmts: self.root_stmts,
       function: self.function,
+      class: self.class,
       expr_types: None,
     }
   }
@@ -2591,6 +2776,17 @@ fn collect_stmt<'a>(
         for decorator in class_decl.stx.decorators.iter() {
           collect_expr(
             &decorator.stx.expression,
+            descriptors,
+            module_items,
+            names,
+            decl_ambient,
+            in_global,
+            ctx,
+          );
+        }
+        if let Some(extends) = class_decl.stx.extends.as_ref() {
+          collect_expr(
+            extends,
             descriptors,
             module_items,
             names,
@@ -3233,6 +3429,17 @@ fn collect_class_members<'a>(
     let span = ctx.to_range(member.loc);
     let member_raw = RawNode::from(member);
     let is_static = member.stx.static_;
+    if let ClassOrObjKey::Computed(expr) = &member.stx.key {
+      collect_expr(
+        expr,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+    }
     match &member.stx.val {
       ClassOrObjVal::Method(method) => {
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
@@ -4076,6 +4283,17 @@ fn collect_expr<'a>(
         for decorator in class_expr.stx.decorators.iter() {
           collect_expr(
             &decorator.stx.expression,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
+        if let Some(extends) = class_expr.stx.extends.as_ref() {
+          collect_expr(
+            extends,
             descriptors,
             module_items,
             names,

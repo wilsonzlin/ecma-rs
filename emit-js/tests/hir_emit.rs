@@ -1,65 +1,173 @@
 use emit_js::{emit_hir_file_to_string, EmitOptions};
-use hir_js::{lower_from_source_with_kind, Body, ExprKind, FileKind, PatKind, StmtKind};
-use parse_js::parse;
+use hir_js::{
+  lower_from_source_with_kind, Body, ClassMemberKey, ExprKind, FileKind, FunctionBody, JsxAttr,
+  JsxAttrValue, JsxChild, JsxElement, JsxExprContainer, PatKind, StmtKind,
+};
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use serde_json::Value;
 use std::collections::HashSet;
 
 mod util;
 
-fn syntax_value(source: &str) -> Value {
-  let ast = parse(source).expect("parse source");
-  util::serialize_without_locs(&ast)
-}
-
-fn roundtrip(source: &str) {
-  let lowered = lower_from_source_with_kind(FileKind::Js, source)
-    .unwrap_or_else(|err| panic!("failed to lower {source}: {err:?}"));
-  assert_no_missing(&lowered);
-  let emitted =
-    emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit lowered program");
-  let original = syntax_value(source);
-  let reparsed = syntax_value(&emitted);
-  assert_eq!(
-    original, reparsed,
-    "roundtrip via HIR changed syntax\nsource: {source}\nemitted: {emitted}"
-  );
-}
-
-#[test]
-fn roundtrip_matrix() {
-  let cases = [
-    "function add(a,b){ return a + b * 2; }",
-    "const pick = (arr = [1,2]) => arr?.[0] ?? null;",
-    "function loops(flag){ for (let i = 0; i < 3; i++) items[i] = i; while(flag){ if(flag){ break; } } do action(); while(check()); }",
-    "function branch(v){ switch(v){ case 1: return 'one'+v; default: return String(v||0); } }",
-    "const obj = {value:1,get v(){ return this.value; },set v(x){ this.value = x; },['x'+1]:2,...rest};",
-    "export const x = 1;",
-    "export const {a,b} = foo();",
-  ];
-  for case in cases {
-    roundtrip(case);
+fn dialect_for(file_kind: FileKind) -> Dialect {
+  match file_kind {
+    FileKind::Js => Dialect::Js,
+    FileKind::Jsx => Dialect::Jsx,
+    FileKind::Ts => Dialect::Ts,
+    FileKind::Tsx => Dialect::Tsx,
+    FileKind::Dts => Dialect::Dts,
   }
 }
 
-#[test]
-fn deterministic_emission() {
-  let source = "const pick = (arr = [1,2]) => arr?.[0] ?? null;";
-  let lowered = lower_from_source_with_kind(FileKind::Js, source).expect("lower source");
+fn syntax_value(file_kind: FileKind, source: &str) -> Value {
+  let ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: dialect_for(file_kind),
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse source");
+  util::serialize_without_locs(&ast)
+}
+
+fn roundtrip(file_kind: FileKind, source: &str) {
+  let lowered = lower_from_source_with_kind(file_kind, source)
+    .unwrap_or_else(|err| panic!("failed to lower {source}: {err:?}"));
   assert_no_missing(&lowered);
   let emitted1 =
     emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit first pass");
   let emitted2 =
     emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit second pass");
   assert_eq!(emitted1, emitted2, "HIR emission must be deterministic");
+
+  let original = syntax_value(file_kind, source);
+  let reparsed = syntax_value(file_kind, &emitted1);
+  assert_eq!(
+    original, reparsed,
+    "roundtrip via HIR changed syntax\nsource: {source}\nemitted: {emitted1}"
+  );
+}
+
+#[test]
+fn roundtrip_matrix() {
+  let cases = [
+    (
+      FileKind::Js,
+      "function add(a,b){ return a + b * 2; }",
+    ),
+    (
+      FileKind::Js,
+      "const pick = (arr = [1,2]) => arr?.[0] ?? null;",
+    ),
+    (
+      FileKind::Js,
+      "function loops(flag){ for (let i = 0; i < 3; i++) items[i] = i; while(flag){ if(flag){ break; } } do action(); while(check()); }",
+    ),
+    (
+      FileKind::Js,
+      "function branch(v){ switch(v){ case 1: return 'one'+v; default: return String(v||0); } }",
+    ),
+    (
+      FileKind::Js,
+      "const obj = {value:1,get v(){ return this.value; },set v(x){ this.value = x; },['x'+1]:2,...rest};",
+    ),
+    (
+      FileKind::Js,
+      "export const x = 1;",
+    ),
+    (
+      FileKind::Js,
+      "export const {a,b} = foo();",
+    ),
+    (
+      FileKind::Js,
+      "class Foo extends Bar{static x=1;y=2;#p;constructor(v){this.y=v}get value(){return this.y}set value(v){this.y=v}['m'+1](){return Foo.x}static#s=3;static{Foo.x++}}",
+    ),
+    (
+      FileKind::Js,
+      "const C=class extends Foo{static['x'+1](){return 1}};",
+    ),
+    (
+      FileKind::Js,
+      "export default class Defaulted extends Foo{static{}}",
+    ),
+    (
+      FileKind::Jsx,
+      "const el=<Foo.Bar a=\"b\" b={x} {...props}>{}{x}<span>t</span>{...items}<></></Foo.Bar>;",
+    ),
+    (
+      FileKind::Tsx,
+      "export default function App(){return <><div>{value}</div></>}",
+    ),
+  ];
+  for (kind, case) in cases {
+    roundtrip(kind, case);
+  }
+}
+
+#[test]
+fn deterministic_emission() {
+  roundtrip(
+    FileKind::Js,
+    "const pick = (arr = [1,2]) => arr?.[0] ?? null;",
+  );
 }
 
 fn assert_no_missing(lowered: &hir_js::LowerResult) {
   for body in lowered.bodies.iter() {
     let body = body.as_ref();
     let mut visited = HashSet::new();
-    for stmt in &body.root_stmts {
-      visit_stmt(body, *stmt, &mut visited);
+    visit_body(body, &mut visited);
+  }
+}
+
+fn visit_body(body: &Body, visited: &mut HashSet<hir_js::ExprId>) {
+  for stmt in &body.root_stmts {
+    visit_stmt(body, *stmt, visited);
+  }
+
+  if let Some(func) = &body.function {
+    for param in &func.params {
+      visit_pat(body, param.pat, visited);
+      if let Some(default) = param.default {
+        visit_expr(body, default, visited);
+      }
     }
+    match &func.body {
+      FunctionBody::Expr(expr) => visit_expr(body, *expr, visited),
+      FunctionBody::Block(stmts) => {
+        for stmt in stmts {
+          visit_stmt(body, *stmt, visited);
+        }
+      }
+    }
+  }
+
+  if let Some(class) = &body.class {
+    if let Some(extends) = class.extends {
+      visit_expr(body, extends, visited);
+    }
+    for member in &class.members {
+      match &member.kind {
+        hir_js::ClassMemberKind::Field { key, .. }
+        | hir_js::ClassMemberKind::Method { key, .. } => {
+          visit_class_member_key(body, key, visited);
+        }
+        hir_js::ClassMemberKind::Constructor { .. } => {}
+        hir_js::ClassMemberKind::StaticBlock { stmt } => visit_stmt(body, *stmt, visited),
+      }
+    }
+  }
+}
+
+fn visit_class_member_key(
+  body: &Body,
+  key: &ClassMemberKey,
+  visited: &mut HashSet<hir_js::ExprId>,
+) {
+  if let ClassMemberKey::Computed(expr) = key {
+    visit_expr(body, *expr, visited);
   }
 }
 
@@ -310,6 +418,7 @@ fn visit_expr(body: &Body, expr_id: hir_js::ExprId, visited: &mut HashSet<hir_js
         visit_expr(body, *attrs, visited);
       }
     }
+    ExprKind::Jsx(elem) => visit_jsx_elem(body, elem, visited),
     ExprKind::Literal(_)
     | ExprKind::Ident(_)
     | ExprKind::This
@@ -320,8 +429,53 @@ fn visit_expr(body: &Body, expr_id: hir_js::ExprId, visited: &mut HashSet<hir_js
     | ExprKind::ClassExpr { .. }
     | ExprKind::TypeAssertion { .. }
     | ExprKind::NonNull { .. }
-    | ExprKind::Satisfies { .. }
-    | ExprKind::Jsx(_) => {}
+    | ExprKind::Satisfies { .. } => {}
     ExprKind::Missing => unreachable!("missing expressions should be caught earlier"),
+  }
+}
+
+fn visit_jsx_elem(body: &Body, elem: &JsxElement, visited: &mut HashSet<hir_js::ExprId>) {
+  for attr in &elem.attributes {
+    visit_jsx_attr(body, attr, visited);
+  }
+  for child in &elem.children {
+    visit_jsx_child(body, child, visited);
+  }
+}
+
+fn visit_jsx_attr(body: &Body, attr: &JsxAttr, visited: &mut HashSet<hir_js::ExprId>) {
+  match attr {
+    JsxAttr::Named { value, .. } => {
+      if let Some(value) = value {
+        visit_jsx_attr_value(body, value, visited);
+      }
+    }
+    JsxAttr::Spread { expr } => visit_expr(body, *expr, visited),
+  }
+}
+
+fn visit_jsx_attr_value(body: &Body, value: &JsxAttrValue, visited: &mut HashSet<hir_js::ExprId>) {
+  match value {
+    JsxAttrValue::Text(_) => {}
+    JsxAttrValue::Expression(expr) => visit_jsx_expr_container(body, expr, visited),
+    JsxAttrValue::Element(elem) => visit_jsx_elem(body, elem, visited),
+  }
+}
+
+fn visit_jsx_child(body: &Body, child: &JsxChild, visited: &mut HashSet<hir_js::ExprId>) {
+  match child {
+    JsxChild::Element(elem) => visit_jsx_elem(body, elem, visited),
+    JsxChild::Expr(expr) => visit_jsx_expr_container(body, expr, visited),
+    JsxChild::Text(_) => {}
+  }
+}
+
+fn visit_jsx_expr_container(
+  body: &Body,
+  expr: &JsxExprContainer,
+  visited: &mut HashSet<hir_js::ExprId>,
+) {
+  if let Some(expr) = expr.expr {
+    visit_expr(body, expr, visited);
   }
 }
