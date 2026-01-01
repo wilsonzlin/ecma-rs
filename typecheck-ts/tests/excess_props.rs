@@ -167,3 +167,33 @@ fn contextual_tuple_literal_element_checks_excess_properties() {
     diagnostics[0]
   );
 }
+
+#[test]
+fn call_argument_nested_contextual_object_literal_checks_excess_properties() {
+  let diagnostics = run(
+    "function takes(obj: { nested: { foo: number } }) {}\n\
+     takes({ nested: { foo: 1, bar: 2 } });",
+  );
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
+
+#[test]
+fn call_argument_array_literal_element_checks_excess_properties() {
+  let diagnostics = run(
+    "function takes(xs: { foo: number }[]) {}\n\
+     takes([{ foo: 1, bar: 2 }]);",
+  );
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
