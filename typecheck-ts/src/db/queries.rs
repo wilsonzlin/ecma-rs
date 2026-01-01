@@ -1186,13 +1186,12 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
   let cancelled_flag = cancelled(db);
   let lowered = parsed.ast.as_ref().map(|ast| {
     panic_if_cancelled(db);
-    let (lowered, mut lower_diags) =
-      lower_file_with_diagnostics_with_cancellation(
-        file.file_id(db),
-        map_hir_file_kind(file_kind),
-        ast,
-        Some(Arc::clone(&cancelled_flag)),
-      );
+    let (lowered, mut lower_diags) = lower_file_with_diagnostics_with_cancellation(
+      file.file_id(db),
+      map_hir_file_kind(file_kind),
+      ast,
+      Some(Arc::clone(&cancelled_flag)),
+    );
     diagnostics.append(&mut lower_diags);
     Arc::new(lowered)
   });
@@ -1361,14 +1360,14 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     &roots,
     &resolver,
     |file| {
-    sem_hirs.get(&file).cloned().unwrap_or_else(|| {
-      Arc::new(empty_sem_hir(
-        FileId(file.0),
-        db.file_input(FileId(file.0))
-          .map(|input| input.kind(db))
-          .unwrap_or(FileKind::Ts),
-      ))
-    })
+      sem_hirs.get(&file).cloned().unwrap_or_else(|| {
+        Arc::new(empty_sem_hir(
+          FileId(file.0),
+          db.file_input(FileId(file.0))
+            .map(|input| input.kind(db))
+            .unwrap_or(FileKind::Ts),
+        ))
+      })
     },
     Some(cancelled_flag.as_ref()),
   );

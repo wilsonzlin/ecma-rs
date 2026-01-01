@@ -165,11 +165,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       return None;
     };
 
-    let DefTypeInfo::Class {
-      type_params,
-      ..
-    } = info
-    else {
+    let DefTypeInfo::Class { type_params, .. } = info else {
       self.current_arenas = None;
       return None;
     };
@@ -319,15 +315,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = type_annotation
             .map(|t| self.lower_type_expr(t, names))
             .unwrap_or(unknown);
-          let accessibility = member
-            .accessibility
-            .map(|a| match a {
-              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-              hir_js::ClassMemberAccessibility::Protected => {
-                types_ts_interned::Accessibility::Protected
-              }
-              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-            });
+          let accessibility = member.accessibility.map(|a| match a {
+            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+            hir_js::ClassMemberAccessibility::Protected => {
+              types_ts_interned::Accessibility::Protected
+            }
+            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+          });
           let prop = Property {
             key,
             data: PropData {
@@ -355,15 +349,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = self.store.intern_type(TypeKind::Callable {
             overloads: vec![sig_id],
           });
-          let accessibility = member
-            .accessibility
-            .map(|a| match a {
-              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-              hir_js::ClassMemberAccessibility::Protected => {
-                types_ts_interned::Accessibility::Protected
-              }
-              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-            });
+          let accessibility = member.accessibility.map(|a| match a {
+            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+            hir_js::ClassMemberAccessibility::Protected => {
+              types_ts_interned::Accessibility::Protected
+            }
+            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+          });
           let prop = Property {
             key,
             data: PropData {
@@ -389,15 +381,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let ty = return_type
             .map(|t| self.lower_type_expr(t, names))
             .unwrap_or(unknown);
-          let accessibility = member
-            .accessibility
-            .map(|a| match a {
-              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-              hir_js::ClassMemberAccessibility::Protected => {
-                types_ts_interned::Accessibility::Protected
-              }
-              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-            });
+          let accessibility = member.accessibility.map(|a| match a {
+            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+            hir_js::ClassMemberAccessibility::Protected => {
+              types_ts_interned::Accessibility::Protected
+            }
+            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+          });
           let prop = Property {
             key,
             data: PropData {
@@ -421,15 +411,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
             continue;
           };
           let ty = self.lower_type_expr(parameter.ty, names);
-          let accessibility = member
-            .accessibility
-            .map(|a| match a {
-              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
-              hir_js::ClassMemberAccessibility::Protected => {
-                types_ts_interned::Accessibility::Protected
-              }
-              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
-            });
+          let accessibility = member.accessibility.map(|a| match a {
+            hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+            hir_js::ClassMemberAccessibility::Protected => {
+              types_ts_interned::Accessibility::Protected
+            }
+            hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+          });
           let prop = Property {
             key,
             data: PropData {
@@ -451,11 +439,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
-    let instance_obj = self.store.intern_type(TypeKind::Object(
-      self.store.intern_object(ObjectType {
+    let instance_obj = self
+      .store
+      .intern_type(TypeKind::Object(self.store.intern_object(ObjectType {
         shape: self.store.intern_shape(instance_shape),
-      }),
-    ));
+      })));
     let mut instance_parts = vec![instance_obj];
     if let Some(ext) = extends {
       instance_parts.push(self.lower_type_expr(*ext, names));
@@ -487,11 +475,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
     static_shape.construct_signatures.extend(ctor_sig_ids);
 
-    let value = self.store.intern_type(TypeKind::Object(
-      self.store.intern_object(ObjectType {
+    let value = self
+      .store
+      .intern_type(TypeKind::Object(self.store.intern_object(ObjectType {
         shape: self.store.intern_shape(static_shape),
-      }),
-    ));
+      })));
 
     (instance, value)
   }
@@ -502,9 +490,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     names: &hir_js::NameInterner,
   ) -> Option<PropKey> {
     match name {
-      hir_js::PropertyName::Ident(id) => {
-        Some(PropKey::String(self.store.intern_name(names.resolve(*id)?.to_string())))
-      }
+      hir_js::PropertyName::Ident(id) => Some(PropKey::String(
+        self.store.intern_name(names.resolve(*id)?.to_string()),
+      )),
       hir_js::PropertyName::String(s) => Some(PropKey::String(self.store.intern_name(s.clone()))),
       hir_js::PropertyName::Number(n) => Some(PropKey::Number(n.parse::<i64>().ok()?)),
       hir_js::PropertyName::Computed => None,
@@ -1122,7 +1110,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .map(|(_, def)| *def)
       .or_else(|| {
         self.def_by_name.and_then(|map| {
-          map.iter()
+          map
+            .iter()
             .find(|((_, def_name), _)| def_name == &name)
             .map(|(_, def)| *def)
         })

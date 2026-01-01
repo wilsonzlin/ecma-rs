@@ -5,8 +5,8 @@ use diagnostics::FileId;
 use hir_js::{lower_from_source, BodyKind};
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
-use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::check::hir_body::check_body;
+use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::{
   parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, Program, TypeKindSummary,
 };

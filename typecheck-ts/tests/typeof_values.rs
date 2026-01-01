@@ -90,7 +90,12 @@ const a = e.A;
   let enum_object_ty = program.type_of_def_interned(enum_object_def);
   let enum_member_ty = program
     .property_type(enum_object_ty, PropertyKey::String("A".to_string()))
-    .unwrap_or_else(|| panic!("expected enum object to have property A, got {}", program.display_type(enum_object_ty)));
+    .unwrap_or_else(|| {
+      panic!(
+        "expected enum object to have property A, got {}",
+        program.display_type(enum_object_ty)
+      )
+    });
   match program.interned_type_kind(enum_member_ty) {
     TypeKind::Number | TypeKind::NumberLiteral(_) => {}
     other => panic!("expected enum member to be number, got {:?}", other),

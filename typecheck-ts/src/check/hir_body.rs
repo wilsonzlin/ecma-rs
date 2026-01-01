@@ -13,8 +13,8 @@ use hir_js::{
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock};
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -303,7 +303,12 @@ impl AstIndex {
     }
   }
 
-  fn index_var_decl(&mut self, decl: &Node<VarDecl>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
+  fn index_var_decl(
+    &mut self,
+    decl: &Node<VarDecl>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
     for declarator in decl.stx.declarators.iter() {
       let pat_span = loc_to_range(file, declarator.pattern.loc);
       self
@@ -323,7 +328,12 @@ impl AstIndex {
     }
   }
 
-  fn index_function(&mut self, func: &Node<Func>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
+  fn index_function(
+    &mut self,
+    func: &Node<Func>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
     let func_span = loc_to_range(file, func.loc);
     if let Some(body) = &func.stx.body {
       let body_span = match body {
@@ -359,7 +369,12 @@ impl AstIndex {
     }
   }
 
-  fn index_expr(&mut self, expr: &Node<AstExpr>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
+  fn index_expr(
+    &mut self,
+    expr: &Node<AstExpr>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
     let span = loc_to_range(file, expr.loc);
     self.exprs.insert(span, expr as *const _);
     match expr.stx.as_ref() {
@@ -453,8 +468,7 @@ impl AstIndex {
       | AstExpr::JsxSpreadAttr(..)
       | AstExpr::JsxText(..)
       | AstExpr::LitRegex(..)
-      | AstExpr::NewTarget(..)
-      => {}
+      | AstExpr::NewTarget(..) => {}
     }
   }
 
@@ -479,7 +493,8 @@ impl AstIndex {
       ClassOrObjVal::Prop(None) => {}
       ClassOrObjVal::IndexSignature(_) => {}
       ClassOrObjVal::StaticBlock(block) => {
-        let span = span_for_stmt_list(&block.stx.body, file).unwrap_or(loc_to_range(file, block.loc));
+        let span =
+          span_for_stmt_list(&block.stx.body, file).unwrap_or(loc_to_range(file, block.loc));
         self.class_static_blocks.push(ClassStaticBlockInfo {
           span,
           block: block as *const _,
@@ -533,18 +548,7 @@ pub fn check_body(
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id,
-    body,
-    names,
-    file,
-    ast_index,
-    store,
-    caches,
-    bindings,
-    resolver,
-    None,
-    None,
-    None,
+    body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, None,
   )
 }
 
@@ -673,10 +677,9 @@ pub fn check_body_with_expander(
       }
     }
     BodyKind::Unknown => {
-      checker.diagnostics.push(codes::MISSING_BODY.error(
-        "missing body for checker",
-        Span::new(file, body_range),
-      ));
+      checker
+        .diagnostics
+        .push(codes::MISSING_BODY.error("missing body for checker", Span::new(file, body_range)));
     }
   }
 
@@ -851,7 +854,9 @@ impl<'a> Checker<'a> {
         }
         let len = init_range.end.saturating_sub(init_range.start);
         let replace = match best {
-          Some((best_len, best_span, _)) => len < best_len || (len == best_len && span.start < best_span.start),
+          Some((best_len, best_span, _)) => {
+            len < best_len || (len == best_len && span.start < best_span.start)
+          }
           None => true,
         };
         if replace {
@@ -863,9 +868,10 @@ impl<'a> Checker<'a> {
       self.check_cancelled();
       if let Some(init) = info.initializer {
         let init = unsafe { &*init };
-        let annotation = info.type_annotation.map(|ann| unsafe { &*ann }).map(|ann| {
-          self.lowerer.lower_type_expr(ann)
-        });
+        let annotation = info
+          .type_annotation
+          .map(|ann| unsafe { &*ann })
+          .map(|ann| self.lowerer.lower_type_expr(ann));
         let init_ty = match annotation {
           Some(expected) => self.check_expr_with_expected(init, expected),
           None => self.check_expr(init),
@@ -893,7 +899,9 @@ impl<'a> Checker<'a> {
       }
       let len = span.end.saturating_sub(span.start);
       let replace = match best_expr {
-        Some((best_len, best_span, _)) => len < best_len || (len == best_len && span.start < best_span.start),
+        Some((best_len, best_span, _)) => {
+          len < best_len || (len == best_len && span.start < best_span.start)
+        }
         None => true,
       };
       if replace {
@@ -1250,7 +1258,11 @@ impl<'a> Checker<'a> {
       AstExpr::Unary(un) => {
         if matches!(un.stx.operator, OperatorName::New) {
           let (callee_expr, arg_exprs, span_loc) = match un.stx.argument.stx.as_ref() {
-            AstExpr::Call(call) => (&call.stx.callee, Some(call.stx.arguments.as_slice()), call.loc),
+            AstExpr::Call(call) => (
+              &call.stx.callee,
+              Some(call.stx.arguments.as_slice()),
+              call.loc,
+            ),
             _ => (&un.stx.argument, None, expr.loc),
           };
           let callee_ty = self.check_expr(callee_expr);
@@ -1733,10 +1745,7 @@ impl<'a> Checker<'a> {
       return best.map(|(_, elems)| ArrayLiteralContext::Tuple(elems));
     }
 
-    arrays
-      .into_iter()
-      .next()
-      .map(ArrayLiteralContext::Array)
+    arrays.into_iter().next().map(ArrayLiteralContext::Array)
   }
 
   fn expected_contains_primitive(&self, expected: TypeId, primitive: TypeId) -> bool {
@@ -1869,7 +1878,10 @@ impl<'a> Checker<'a> {
       ArrayLiteralContext::Tuple(expected_elems) => {
         let mut out = Vec::new();
         for (idx, expr) in elems.into_iter().enumerate() {
-          let expected_elem = expected_elems.get(idx).map(|e| e.ty).unwrap_or(prim.unknown);
+          let expected_elem = expected_elems
+            .get(idx)
+            .map(|e| e.ty)
+            .unwrap_or(prim.unknown);
           let expr_ty = if expected_elem != prim.unknown {
             self.check_expr_with_expected(expr, expected_elem)
           } else {
@@ -2267,12 +2279,18 @@ impl<'a> Checker<'a> {
       TypeKind::Ref { def, args } => self
         .ref_expander
         .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .is_some_and(|expanded| matches!(self.store.type_kind(expanded), TypeKind::Callable { .. })),
+        .is_some_and(|expanded| {
+          matches!(self.store.type_kind(expanded), TypeKind::Callable { .. })
+        }),
       _ => false,
     }
   }
 
-  fn refine_function_expr_with_expected(&mut self, func: &Node<Func>, expected: TypeId) -> Option<TypeId> {
+  fn refine_function_expr_with_expected(
+    &mut self,
+    func: &Node<Func>,
+    expected: TypeId,
+  ) -> Option<TypeId> {
     let expected_sig = self.first_callable_signature(expected)?;
 
     let saved_expected = self.expected_return;
@@ -2297,7 +2315,9 @@ impl<'a> Checker<'a> {
     let mut instantiated = expected_sig;
     instantiated.ret = inferred_ret;
     let sig_id = self.store.intern_signature(instantiated);
-    Some(self.store.intern_type(TypeKind::Callable { overloads: vec![sig_id] }))
+    Some(self.store.intern_type(TypeKind::Callable {
+      overloads: vec![sig_id],
+    }))
   }
 
   fn first_callable_signature(&self, ty: TypeId) -> Option<Signature> {
@@ -4595,59 +4615,60 @@ impl<'a> FlowBodyChecker<'a> {
     let mut ret_ty = resolution.return_type;
     if !call.is_new {
       if let Some(sig_id) = resolution.signature {
-      let sig = self.store.signature(sig_id);
-      if let TypeKind::Predicate {
-        asserted,
-        asserts,
-        parameter,
-      } = self.store.type_kind(sig.ret)
-      {
-        if let Some(asserted) = asserted {
-          let target_idx = parameter
-            .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
-            .unwrap_or(0);
-          if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
-            if let Some(binding) = self.ident_binding(arg_expr) {
-              let arg_ty = arg_bases.get(target_idx).copied().unwrap_or(prim.unknown);
-              let (yes, no) = narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
-              if asserts {
-                if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
-                  eprintln!(
-                    "DEBUG asserts narrowing arg {} to {} (no {}) in file {:?}",
-                    TypeDisplay::new(&self.store, arg_ty),
-                    TypeDisplay::new(&self.store, yes),
-                    TypeDisplay::new(&self.store, no),
-                    self.file
-                  );
-                }
-                env.set(binding, yes);
-                out.assertions.insert(FlowKey::root(binding), yes);
-              } else {
-                let key = FlowKey::root(binding);
-                out.truthy.insert(key.clone(), yes);
-                out.falsy.insert(key, no);
-                if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
-                  eprintln!(
-                    "DEBUG predicate narrowing arg {} to {} (no {}) in file {:?}",
-                    TypeDisplay::new(&self.store, arg_ty),
-                    TypeDisplay::new(&self.store, yes),
-                    TypeDisplay::new(&self.store, no),
-                    self.file
-                  );
+        let sig = self.store.signature(sig_id);
+        if let TypeKind::Predicate {
+          asserted,
+          asserts,
+          parameter,
+        } = self.store.type_kind(sig.ret)
+        {
+          if let Some(asserted) = asserted {
+            let target_idx = parameter
+              .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
+              .unwrap_or(0);
+            if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
+              if let Some(binding) = self.ident_binding(arg_expr) {
+                let arg_ty = arg_bases.get(target_idx).copied().unwrap_or(prim.unknown);
+                let (yes, no) =
+                  narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
+                if asserts {
+                  if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
+                    eprintln!(
+                      "DEBUG asserts narrowing arg {} to {} (no {}) in file {:?}",
+                      TypeDisplay::new(&self.store, arg_ty),
+                      TypeDisplay::new(&self.store, yes),
+                      TypeDisplay::new(&self.store, no),
+                      self.file
+                    );
+                  }
+                  env.set(binding, yes);
+                  out.assertions.insert(FlowKey::root(binding), yes);
+                } else {
+                  let key = FlowKey::root(binding);
+                  out.truthy.insert(key.clone(), yes);
+                  out.falsy.insert(key, no);
+                  if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
+                    eprintln!(
+                      "DEBUG predicate narrowing arg {} to {} (no {}) in file {:?}",
+                      TypeDisplay::new(&self.store, arg_ty),
+                      TypeDisplay::new(&self.store, yes),
+                      TypeDisplay::new(&self.store, no),
+                      self.file
+                    );
+                  }
                 }
               }
             }
           }
-        }
-        ret_ty = if asserts {
-          prim.undefined
+          ret_ty = if asserts {
+            prim.undefined
+          } else {
+            prim.boolean
+          };
         } else {
-          prim.boolean
-        };
-      } else {
-        ret_ty = sig.ret;
+          ret_ty = sig.ret;
+        }
       }
-    }
     }
 
     ret_ty

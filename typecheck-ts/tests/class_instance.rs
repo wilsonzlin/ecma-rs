@@ -15,7 +15,9 @@ const s = g.greet();
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
   assert!(
-    diagnostics.iter().all(|d| d.severity != diagnostics::Severity::Error),
+    diagnostics
+      .iter()
+      .all(|d| d.severity != diagnostics::Severity::Error),
     "diagnostics: {:?}",
     diagnostics
   );

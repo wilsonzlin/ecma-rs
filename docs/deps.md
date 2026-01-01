@@ -23,14 +23,15 @@ graph TD
     typecheck_ts_bench["typecheck-ts-bench"]
     typecheck_ts_cli["typecheck-ts-cli"]
     typecheck_ts_harness["typecheck-ts-harness"]
-    types_ts["types-ts"]
     types_ts_interned["types-ts-interned"]
     emit_js --> diagnostics
+    emit_js --> hir_js
     emit_js --> parse_js
     hir_js --> diagnostics
     hir_js --> parse_js
     minify_js --> diagnostics
     minify_js --> emit_js
+    minify_js --> hir_js
     minify_js --> parse_js
     minify_js --> semantic_js
     minify_js_bench --> diagnostics
@@ -41,6 +42,7 @@ graph TD
     minify_js_node --> minify_js
     optimize_js --> diagnostics
     optimize_js --> emit_js
+    optimize_js --> hir_js
     optimize_js --> parse_js
     optimize_js --> semantic_js
     optimize_js_debugger --> diagnostics
@@ -57,7 +59,6 @@ graph TD
     typecheck_ts --> hir_js
     typecheck_ts --> parse_js
     typecheck_ts --> semantic_js
-    typecheck_ts --> types_ts
     typecheck_ts --> types_ts_interned
     typecheck_ts_bench --> diagnostics
     typecheck_ts_bench --> hir_js
@@ -67,7 +68,9 @@ graph TD
     typecheck_ts_bench --> types_ts_interned
     typecheck_ts_cli --> diagnostics
     typecheck_ts_cli --> typecheck_ts
+    typecheck_ts_harness --> diagnostics
     typecheck_ts_harness --> typecheck_ts
+    typecheck_ts_harness --> types_ts_interned
     types_ts_interned --> hir_js
 ```
 

@@ -49,8 +49,8 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
 use parse_js::loc::Loc;
-use std::panic::panic_any;
 use std::collections::{btree_map::Entry, BTreeMap, HashMap};
+use std::panic::panic_any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -451,10 +451,7 @@ impl<'a> DefSource<'a> {
         .as_ref()
         .map(|_| BodyKind::Function),
       DefSource::Enum(_) => None,
-      DefSource::Var(decl, _) => decl
-        .initializer
-        .as_ref()
-        .map(|_| BodyKind::Initializer),
+      DefSource::Var(decl, _) => decl.initializer.as_ref().map(|_| BodyKind::Initializer),
       DefSource::ClassDecl(_) | DefSource::ClassExpr(_) => Some(BodyKind::Class),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
       DefSource::None => None,
@@ -873,8 +870,15 @@ fn lower_body_from_source(
     ),
     DefSource::ClassStaticBlock(block) => {
       let span = ctx.to_range(block.loc);
-      let mut builder =
-        BodyBuilder::new(owner, span, body_id, BodyKind::Class, def_lookup, names, span_map);
+      let mut builder = BodyBuilder::new(
+        owner,
+        span,
+        body_id,
+        BodyKind::Class,
+        def_lookup,
+        names,
+        span_map,
+      );
       for stmt in block.stx.body.iter() {
         let id = lower_stmt(stmt, &mut builder, ctx);
         builder.root_stmt(id);
@@ -1084,8 +1088,15 @@ fn lower_class_body(
     }
     TextRange::new(start, end)
   };
-  let mut builder =
-    BodyBuilder::new(owner, span, body_id, BodyKind::Class, def_lookup, names, span_map);
+  let mut builder = BodyBuilder::new(
+    owner,
+    span,
+    body_id,
+    BodyKind::Class,
+    def_lookup,
+    names,
+    span_map,
+  );
   for member in members {
     if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
       let mut block_stmts = Vec::new();

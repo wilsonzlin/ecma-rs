@@ -451,7 +451,8 @@ fn lower_runtime_members(
           static_shape.construct_signatures.push(sig);
           for param in method.stx.func.stx.parameters.iter() {
             if param.stx.accessibility.is_some() {
-              if let parse_js::ast::expr::pat::Pat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref() {
+              if let parse_js::ast::expr::pat::Pat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref()
+              {
                 let key = PropKey::String(store.intern_name(id.stx.name.clone()));
                 let ty = param
                   .stx

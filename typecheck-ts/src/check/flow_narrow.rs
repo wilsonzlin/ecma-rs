@@ -346,7 +346,9 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
         (ty, primitives.never)
       }
     }
-    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => (ty, ty),
+    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
+      (ty, ty)
+    }
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
       store.intern_type(TypeKind::BooleanLiteral(false)),

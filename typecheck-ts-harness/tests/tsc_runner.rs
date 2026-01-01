@@ -3,9 +3,9 @@
 use serde_json::Map;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use typecheck_ts_harness::tsc::{node_available, typescript_available};
 use typecheck_ts_harness::tsc::TscRequest;
 use typecheck_ts_harness::tsc::TscRunner;
+use typecheck_ts_harness::tsc::{node_available, typescript_available};
 
 fn runner_or_skip() -> Option<TscRunner> {
   let node_path = PathBuf::from("node");

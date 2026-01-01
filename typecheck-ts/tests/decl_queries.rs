@@ -36,10 +36,7 @@ fn interned_types_cross_file_imports() {
     "makeBox store type {}",
     program.display_type(program.type_of_def(make_box_def))
   );
-  eprintln!(
-    "makeBox kind {:?}",
-    program.interned_type_kind(make_box_ty)
-  );
+  eprintln!("makeBox kind {:?}", program.interned_type_kind(make_box_ty));
   let sigs = program.call_signatures(make_box_ty);
   for sig in sigs {
     eprintln!(

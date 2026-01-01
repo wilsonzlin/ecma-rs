@@ -151,7 +151,8 @@ fn map_export(
   let preferred_local = pick_best(&local_defs, ns);
   let preferred = preferred_local.or_else(|| pick_best(&all_defs, ns));
   let preferred_value_local = pick_best(&local_defs, sem_ts::Namespace::VALUE);
-  let preferred_value = preferred_value_local.or_else(|| pick_best(&all_defs, sem_ts::Namespace::VALUE));
+  let preferred_value =
+    preferred_value_local.or_else(|| pick_best(&all_defs, sem_ts::Namespace::VALUE));
   let preferred_def = preferred_value_local.or(preferred_local);
   let preferred_any = preferred_value.or(preferred);
   let mut type_id: Option<TypeId> = None;
@@ -172,7 +173,8 @@ fn map_export(
       })
       .collect();
     if callable_defs.len() > 1 {
-      if let Some(merged) = state.merged_overload_callable_type(&callable_defs, &store, &mut cache) {
+      if let Some(merged) = state.merged_overload_callable_type(&callable_defs, &store, &mut cache)
+      {
         for def in callable_defs.iter().copied() {
           state.interned_def_types.insert(def, merged);
         }

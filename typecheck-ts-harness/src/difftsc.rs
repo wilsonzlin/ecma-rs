@@ -8,12 +8,12 @@ use crate::directives::HarnessOptions;
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet};
+#[cfg(feature = "with-node")]
+use crate::tsc::typescript_available;
 use crate::tsc::{
   apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TscRunner,
   TypeAtFact, TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
 };
-#[cfg(feature = "with-node")]
-use crate::tsc::typescript_available;
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;

@@ -545,10 +545,9 @@ impl Program {
 
   /// All [`FileId`]s associated with a [`FileKey`], preferring source-origin IDs first.
   pub fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.file_ids_for_key(key))) {
-      Ok(ids) => ids,
-      Err(_) => Vec::new(),
-    }
+    self
+      .with_analyzed_state(|state| Ok(state.file_ids_for_key(key)))
+      .unwrap_or_default()
   }
 
   /// Resolve a loaded [`FileId`] back to its [`FileKey`], if available.
@@ -570,28 +569,26 @@ impl Program {
 
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
-      Ok(files) => files,
-      Err(_) => Vec::new(),
-    }
+    self
+      .with_analyzed_state(|state| Ok(state.files.keys().copied().collect()))
+      .unwrap_or_default()
   }
 
   /// All files reachable from the configured roots.
   pub fn reachable_files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| {
-      let mut files: Vec<FileId> = state
-        .typecheck_db
-        .reachable_files()
-        .iter()
-        .copied()
-        .filter(|file| !state.lib_file_ids.contains(file))
-        .collect();
-      files.sort_by_key(|id| id.0);
-      Ok(files)
-    }) {
-      Ok(files) => files,
-      Err(_) => Vec::new(),
-    }
+    self
+      .with_analyzed_state(|state| {
+        let mut files: Vec<FileId> = state
+          .typecheck_db
+          .reachable_files()
+          .iter()
+          .copied()
+          .filter(|file| !state.lib_file_ids.contains(file))
+          .collect();
+        files.sort_by_key(|id| id.0);
+        Ok(files)
+      })
+      .unwrap_or_default()
   }
 
   /// Parse, bind, and type-check all known files, returning accumulated diagnostics.
@@ -1267,10 +1264,7 @@ impl Program {
     }
   }
 
-  pub fn declared_type_of_def_interned_fallible(
-    &self,
-    def: DefId,
-  ) -> Result<TypeId, FatalError> {
+  pub fn declared_type_of_def_interned_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
     self.with_interned_state(|state| {
       let store = state
         .interned_store
@@ -1637,7 +1631,11 @@ impl Program {
               if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
                 state.cache_stats.merge(&caches.stats());
               }
-              if ok { evaluated } else { ty }
+              if ok {
+                evaluated
+              } else {
+                ty
+              }
             }
           }
         }
@@ -2115,12 +2113,12 @@ impl Program {
         HashMap::new()
       }
     };
-	    let mut canonical_defs: Vec<_> = canonical_defs_map
-	      .into_iter()
-	      .filter(|((_, parent, _, _), _)| parent.is_none())
-	      .map(|((file, _parent, name, _ns), def)| ((file, name), def))
-	      .collect();
-	    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1, a.1 .0).cmp(&(b.0 .0, &b.0 .1, b.1 .0)));
+    let mut canonical_defs: Vec<_> = canonical_defs_map
+      .into_iter()
+      .filter(|((_, parent, _, _), _)| parent.is_none())
+      .map(|((file, _parent, name, _ns), def)| ((file, name), def))
+      .collect();
+    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1, a.1 .0).cmp(&(b.0 .0, &b.0 .1, b.1 .0)));
 
     let mut namespace_types: Vec<_> = state
       .namespace_object_types
@@ -4410,20 +4408,19 @@ impl ProgramState {
           let parent = def.parent;
           let namespaces = hir_namespaces(def.path.kind);
           let preferred = match def.path.kind {
-            HirDefKind::Class | HirDefKind::Enum | HirDefKind::Interface | HirDefKind::TypeAlias => {
-              [
-                sem_ts::Namespace::TYPE,
-                sem_ts::Namespace::VALUE,
-                sem_ts::Namespace::NAMESPACE,
-              ]
-            }
-            HirDefKind::Namespace | HirDefKind::Module => {
-              [
-                sem_ts::Namespace::NAMESPACE,
-                sem_ts::Namespace::VALUE,
-                sem_ts::Namespace::TYPE,
-              ]
-            }
+            HirDefKind::Class
+            | HirDefKind::Enum
+            | HirDefKind::Interface
+            | HirDefKind::TypeAlias => [
+              sem_ts::Namespace::TYPE,
+              sem_ts::Namespace::VALUE,
+              sem_ts::Namespace::NAMESPACE,
+            ],
+            HirDefKind::Namespace | HirDefKind::Module => [
+              sem_ts::Namespace::NAMESPACE,
+              sem_ts::Namespace::VALUE,
+              sem_ts::Namespace::TYPE,
+            ],
             _ => [
               sem_ts::Namespace::VALUE,
               sem_ts::Namespace::TYPE,
@@ -4613,13 +4610,20 @@ impl ProgramState {
     ordered_value_defs.sort_by(|a, b| {
       let ((file_a, parent_a, name_a, ns_a), _) = a;
       let ((file_b, parent_b, name_b, ns_b), _) = b;
-      (file_a.0, *parent_a, name_a, value_ns_priority(ns_a), ns_a.bits()).cmp(&(
-        file_b.0,
-        *parent_b,
-        name_b,
-        value_ns_priority(ns_b),
-        ns_b.bits(),
-      ))
+      (
+        file_a.0,
+        *parent_a,
+        name_a,
+        value_ns_priority(ns_a),
+        ns_a.bits(),
+      )
+        .cmp(&(
+          file_b.0,
+          *parent_b,
+          name_b,
+          value_ns_priority(ns_b),
+          ns_b.bits(),
+        ))
     });
     for ((file, parent, name, ns), def_id) in ordered_value_defs.into_iter() {
       if parent.is_some() {
@@ -4746,12 +4750,21 @@ impl ProgramState {
           ))
           .copied()
           .or_else(|| def_map.and_then(|map| map.get(&member_hir).copied()))
-          .or_else(|| self.def_data.contains_key(&member_hir).then_some(member_hir))
+          .or_else(|| {
+            self
+              .def_data
+              .contains_key(&member_hir)
+              .then_some(member_hir)
+          })
           .or_else(|| {
             target_ns
               .contains(sem_ts::Namespace::VALUE)
               .then_some(())
-              .and_then(|_| value_defs_by_name.get(&(info.file, member_name.to_string())).copied())
+              .and_then(|_| {
+                value_defs_by_name
+                  .get(&(info.file, member_name.to_string()))
+                  .copied()
+              })
           });
         let Some(member_def) = member_def else {
           continue;
@@ -4857,7 +4870,7 @@ impl ProgramState {
               {
                 (store.primitive_ids().any, self.builtin.any)
               } else {
-                if self.def_types.get(member_def).is_none() && store.contains_type_id(interned) {
+                if !self.def_types.contains_key(member_def) && store.contains_type_id(interned) {
                   store_ty = self.import_interned_type(interned);
                 }
                 (interned, store_ty)
@@ -4918,7 +4931,7 @@ impl ProgramState {
       let mut ns_entries: Vec<_> = namespace_types.into_iter().collect();
       ns_entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
       self.namespace_object_types = ns_entries.iter().cloned().collect();
-    for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
+      for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
         let mapped = [sem_ts::Namespace::NAMESPACE, sem_ts::Namespace::VALUE]
           .into_iter()
           .find_map(|ns| def_by_name.get(&(file, None, name.clone(), ns)).copied());
@@ -5032,7 +5045,8 @@ impl ProgramState {
     let Some(store) = self.interned_store.as_ref() else {
       return;
     };
-    let def_sort_key = |def: DefId, data: &DefData| (data.file.0, data.span.start, data.span.end, def.0);
+    let def_sort_key =
+      |def: DefId, data: &DefData| (data.file.0, data.span.start, data.span.end, def.0);
     let mut entries: Vec<(tti::TypeId, (u32, u32, u32, u32), DefId)> = Vec::new();
     for (def, ty) in self.interned_def_types.iter() {
       let Some(data) = self.def_data.get(def) else {
@@ -5630,30 +5644,30 @@ impl ProgramState {
       &sem_roots,
       &resolver,
       |file| {
-      let id = FileId(file.0);
-      self
-        .sem_hir
-        .get(&id)
-        .cloned()
-        .map(Arc::new)
-        .unwrap_or_else(|| {
-          let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
-            sem_ts::FileKind::Dts
-          } else {
-            sem_ts::FileKind::Ts
-          };
-          Arc::new(sem_ts::HirFile {
-            file_id: file,
-            module_kind: sem_ts::ModuleKind::Module,
-            file_kind,
-            decls: Vec::new(),
-            imports: Vec::new(),
-            import_equals: Vec::new(),
-            exports: Vec::new(),
-            export_as_namespace: Vec::new(),
-            ambient_modules: Vec::new(),
+        let id = FileId(file.0);
+        self
+          .sem_hir
+          .get(&id)
+          .cloned()
+          .map(Arc::new)
+          .unwrap_or_else(|| {
+            let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
+              sem_ts::FileKind::Dts
+            } else {
+              sem_ts::FileKind::Ts
+            };
+            Arc::new(sem_ts::HirFile {
+              file_id: file,
+              module_kind: sem_ts::ModuleKind::Module,
+              file_kind,
+              decls: Vec::new(),
+              imports: Vec::new(),
+              import_equals: Vec::new(),
+              exports: Vec::new(),
+              export_as_namespace: Vec::new(),
+              ambient_modules: Vec::new(),
+            })
           })
-        })
       },
       Some(self.cancelled.as_ref()),
     );
@@ -5942,7 +5956,8 @@ impl ProgramState {
         DefKind::Enum(_) => 2u32,
         _ => continue,
       };
-      let value_def = alloc_synthetic_def_id(&mut taken_ids, &("ts_value_def", file.0, type_def.0, tag));
+      let value_def =
+        alloc_synthetic_def_id(&mut taken_ids, &("ts_value_def", file.0, type_def.0, tag));
       self.value_defs.insert(type_def, value_def);
       new_def_data.entry(value_def).or_insert_with(|| DefData {
         name: type_data.name.clone(),
@@ -8741,106 +8756,183 @@ impl ProgramState {
     needed_globals.sort();
     let global_binding_entries: Vec<_> = needed_globals
       .into_iter()
-      .filter_map(|name| self.global_bindings.get(&name).cloned().map(|binding| (name, binding)))
+      .filter_map(|name| {
+        self
+          .global_bindings
+          .get(&name)
+          .cloned()
+          .map(|binding| (name, binding))
+      })
       .collect();
 
     let mut bind =
       |name: &str, binding: &SymbolBinding, include_type: bool| -> Result<(), FatalError> {
-      self.check_cancelled()?;
-      let prim = store.primitive_ids();
-      let mut def_for_resolver = binding.def;
-      let overload_defs = binding.def.and_then(|def| self.callable_overload_defs(def));
-      if let Some(defs) = overload_defs.as_ref() {
-        if let Some(first) = defs.first().copied() {
-          def_for_resolver = Some(first);
-        }
-      }
-      if let Some(def) = def_for_resolver {
-        binding_defs.insert(name.to_string(), def);
-      }
-      if !include_type {
-        return Ok(());
-      }
-      let mut ty = if binding.def.is_some() {
-        None
-      } else {
-        binding.type_id.and_then(|ty| {
-          if store.contains_type_id(ty) {
-            Some(store.canon(ty))
-          } else {
-            Some(store.canon(convert_type_for_display(
-              ty,
-              self,
-              &store,
-              &mut convert_cache,
-            )))
+        self.check_cancelled()?;
+        let prim = store.primitive_ids();
+        let mut def_for_resolver = binding.def;
+        let overload_defs = binding.def.and_then(|def| self.callable_overload_defs(def));
+        if let Some(defs) = overload_defs.as_ref() {
+          if let Some(first) = defs.first().copied() {
+            def_for_resolver = Some(first);
           }
-        })
-      };
-      if name == "takes" {
-        eprintln!(
-          "DEBUG takes binding initial ty {:?} def {:?}",
-          ty.map(|t| tti::TypeDisplay::new(&store, t).to_string()),
-          binding.def
-        );
-      }
-      if let Some(converted) = ty {
-        if matches!(store.type_kind(converted), tti::TypeKind::Unknown) {
-          ty = None;
         }
-      }
-      let is_owner = owner == binding.def;
-      let debug_overload = std::env::var("DEBUG_OVERLOAD").is_ok() && name == "overload";
-      if let Some(def) = binding.def {
-        if let Some(def_data) = self.def_data.get(&def) {
-          if let DefKind::Import(import) = &def_data.kind {
-            let import = import.clone();
-            if let Ok(exports) = self.exports_for_import(&import) {
-              if let Some(entry) = exports.get(&import.original) {
-                if debug_overload {
-                  if let Some(ty) = entry.type_id {
-                    let disp = if store.contains_type_id(ty) {
-                      tti::TypeDisplay::new(&store, ty)
-                    } else {
-                      let mut cache = HashMap::new();
-                      let mapped =
-                        store.canon(convert_type_for_display(ty, self, &store, &mut cache));
-                      tti::TypeDisplay::new(&store, mapped)
-                    };
-                    eprintln!("DEBUG import export type {disp}");
+        if let Some(def) = def_for_resolver {
+          binding_defs.insert(name.to_string(), def);
+        }
+        if !include_type {
+          return Ok(());
+        }
+        let mut ty = if binding.def.is_some() {
+          None
+        } else {
+          binding.type_id.and_then(|ty| {
+            if store.contains_type_id(ty) {
+              Some(store.canon(ty))
+            } else {
+              Some(store.canon(convert_type_for_display(
+                ty,
+                self,
+                &store,
+                &mut convert_cache,
+              )))
+            }
+          })
+        };
+        if name == "takes" {
+          eprintln!(
+            "DEBUG takes binding initial ty {:?} def {:?}",
+            ty.map(|t| tti::TypeDisplay::new(&store, t).to_string()),
+            binding.def
+          );
+        }
+        if let Some(converted) = ty {
+          if matches!(store.type_kind(converted), tti::TypeKind::Unknown) {
+            ty = None;
+          }
+        }
+        let is_owner = owner == binding.def;
+        let debug_overload = std::env::var("DEBUG_OVERLOAD").is_ok() && name == "overload";
+        if let Some(def) = binding.def {
+          if let Some(def_data) = self.def_data.get(&def) {
+            if let DefKind::Import(import) = &def_data.kind {
+              let import = import.clone();
+              if let Ok(exports) = self.exports_for_import(&import) {
+                if let Some(entry) = exports.get(&import.original) {
+                  if debug_overload {
+                    if let Some(ty) = entry.type_id {
+                      let disp = if store.contains_type_id(ty) {
+                        tti::TypeDisplay::new(&store, ty)
+                      } else {
+                        let mut cache = HashMap::new();
+                        let mapped =
+                          store.canon(convert_type_for_display(ty, self, &store, &mut cache));
+                        tti::TypeDisplay::new(&store, mapped)
+                      };
+                      eprintln!("DEBUG import export type {disp}");
+                    }
                   }
-                }
-                if let Some(target) = entry.def {
-                  if let Some(defs) = self.callable_overload_defs(target) {
-                    if defs.len() > 1 {
-                      if let Some(merged) =
-                        self.callable_overload_type_for_def(target, &store, &mut convert_cache)
-                      {
-                        ty = Some(merged);
-                        self.interned_def_types.insert(def, merged);
+                  if let Some(target) = entry.def {
+                    if let Some(defs) = self.callable_overload_defs(target) {
+                      if defs.len() > 1 {
+                        if let Some(merged) =
+                          self.callable_overload_type_for_def(target, &store, &mut convert_cache)
+                        {
+                          ty = Some(merged);
+                          self.interned_def_types.insert(def, merged);
+                        }
                       }
                     }
                   }
+                  if ty.is_none() {
+                    let mapped = entry
+                      .type_id
+                      .or_else(|| {
+                        entry
+                          .def
+                          .and_then(|target| self.export_type_for_def(target).ok().flatten())
+                      })
+                      .or_else(|| {
+                        entry
+                          .def
+                          .and_then(|target| self.def_types.get(&target).copied())
+                      });
+                    if let Some(exported) = mapped {
+                      let mapped = if store.contains_type_id(exported) {
+                        store.canon(exported)
+                      } else {
+                        store.canon(convert_type_for_display(
+                          exported,
+                          self,
+                          &store,
+                          &mut convert_cache,
+                        ))
+                      };
+                      ty = Some(mapped);
+                      self.interned_def_types.insert(def, mapped);
+                    }
+                  }
                 }
-                if ty.is_none() {
-                  let mapped = entry
-                    .type_id
-                    .or_else(|| {
-                      entry
-                        .def
-                        .and_then(|target| self.export_type_for_def(target).ok().flatten())
-                    })
-                    .or_else(|| {
-                      entry
-                        .def
-                        .and_then(|target| self.def_types.get(&target).copied())
-                    });
-                  if let Some(exported) = mapped {
-                    let mapped = if store.contains_type_id(exported) {
-                      store.canon(exported)
+              }
+            }
+          }
+          if let Some(defs) = overload_defs {
+            if debug_overload {
+              eprintln!("DEBUG overload defs for {name}: {:?}", defs);
+              for d in defs.iter() {
+                let maybe_ty = self
+                  .interned_def_types
+                  .get(d)
+                  .copied()
+                  .or_else(|| self.def_types.get(d).copied());
+                if let Some(maybe_ty) = maybe_ty {
+                  let disp = if store.contains_type_id(maybe_ty) {
+                    tti::TypeDisplay::new(&store, store.canon(maybe_ty))
+                  } else {
+                    let mut cache = HashMap::new();
+                    let mapped =
+                      store.canon(convert_type_for_display(maybe_ty, self, &store, &mut cache));
+                    tti::TypeDisplay::new(&store, mapped)
+                  };
+                  eprintln!("DEBUG overload def {d:?} type {disp}");
+                } else {
+                  eprintln!("DEBUG overload def {d:?} type <none>");
+                }
+              }
+            }
+            if let Some(first) = defs.first().copied() {
+              def_for_resolver = Some(first);
+            }
+            if defs.len() > 1 {
+              if let Some(merged) =
+                self.callable_overload_type_for_def(def, &store, &mut convert_cache)
+              {
+                ty = Some(merged);
+              }
+            }
+          }
+          if ty.is_none() {
+            ty = map_def_ty(self, &store, &mut convert_cache, def);
+          }
+          if !is_owner {
+            if let Some(def_data) = self.def_data.get(&def) {
+              let def_body = self.body_of_def(def);
+              let def_has_body = def_body.is_some();
+              let same_body = def_body == Some(body_id);
+              let needs_type = ty.is_none()
+                || ty == Some(store.primitive_ids().unknown)
+                || matches!(def_data.kind, DefKind::Import(_));
+              let allow_body = matches!(
+                def_data.kind,
+                DefKind::Namespace(_) | DefKind::Module(_) | DefKind::Import(_)
+              ) || (!same_body && def_has_body);
+              if !nested_check && needs_type && (!def_has_body || allow_body) {
+                match self.type_of_def(def) {
+                  Ok(fresh) => {
+                    let mapped = if store.contains_type_id(fresh) {
+                      store.canon(fresh)
                     } else {
                       store.canon(convert_type_for_display(
-                        exported,
+                        fresh,
                         self,
                         &store,
                         &mut convert_cache,
@@ -8849,164 +8941,93 @@ impl ProgramState {
                     ty = Some(mapped);
                     self.interned_def_types.insert(def, mapped);
                   }
+                  Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
+                  Err(_) => {}
                 }
               }
             }
           }
-        }
-        if let Some(defs) = overload_defs {
           if debug_overload {
-            eprintln!("DEBUG overload defs for {name}: {:?}", defs);
-            for d in defs.iter() {
-              let maybe_ty = self
-                .interned_def_types
-                .get(d)
-                .copied()
-                .or_else(|| self.def_types.get(d).copied());
-              if let Some(maybe_ty) = maybe_ty {
-                let disp = if store.contains_type_id(maybe_ty) {
-                  tti::TypeDisplay::new(&store, store.canon(maybe_ty))
-                } else {
-                  let mut cache = HashMap::new();
-                  let mapped =
-                    store.canon(convert_type_for_display(maybe_ty, self, &store, &mut cache));
-                  tti::TypeDisplay::new(&store, mapped)
-                };
-                eprintln!("DEBUG overload def {d:?} type {disp}");
-              } else {
-                eprintln!("DEBUG overload def {d:?} type <none>");
-              }
-            }
-          }
-          if let Some(first) = defs.first().copied() {
-            def_for_resolver = Some(first);
-          }
-          if defs.len() > 1 {
-            if let Some(merged) =
-              self.callable_overload_type_for_def(def, &store, &mut convert_cache)
-            {
-              ty = Some(merged);
+            if let Some(current) = ty {
+              eprintln!(
+                "DEBUG overload binding computed ty {} for file {:?}",
+                tti::TypeDisplay::new(&store, current),
+                file
+              );
+            } else {
+              eprintln!("DEBUG overload binding computed ty <none>");
             }
           }
         }
         if ty.is_none() {
-          ty = map_def_ty(self, &store, &mut convert_cache, def);
+          if binding.def.is_some() || binding.type_id.is_some() {
+            ty = Some(prim.unknown);
+          } else {
+            if let Some(def) = def_for_resolver {
+              binding_defs.insert(name.to_string(), def);
+            }
+            return Ok(());
+          }
         }
-        if !is_owner {
-          if let Some(def_data) = self.def_data.get(&def) {
-            let def_body = self.body_of_def(def);
-            let def_has_body = def_body.is_some();
-            let same_body = def_body == Some(body_id);
-            let needs_type = ty.is_none()
-              || ty == Some(store.primitive_ids().unknown)
-              || matches!(def_data.kind, DefKind::Import(_));
-            let allow_body = matches!(
-              def_data.kind,
-              DefKind::Namespace(_) | DefKind::Module(_) | DefKind::Import(_)
-            ) || (!same_body && def_has_body);
-            if !nested_check && needs_type && (!def_has_body || allow_body) {
-              match self.type_of_def(def) {
-                Ok(fresh) => {
-                  let mapped = if store.contains_type_id(fresh) {
-                    store.canon(fresh)
-                  } else {
-                    store.canon(convert_type_for_display(
-                      fresh,
-                      self,
-                      &store,
-                      &mut convert_cache,
-                    ))
-                  };
-                  ty = Some(mapped);
-                  self.interned_def_types.insert(def, mapped);
-                }
-                Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
-                Err(_) => {}
-              }
+        let ty = ty.unwrap_or_else(|| prim.unknown);
+        let ty = match store.type_kind(ty) {
+          tti::TypeKind::Callable { overloads } => {
+            let filtered: Vec<_> = overloads
+              .iter()
+              .copied()
+              .filter(|sig_id| store.signature(*sig_id).ret != prim.unknown)
+              .collect();
+            if !filtered.is_empty() && filtered.len() < overloads.len() {
+              let mut merged = filtered;
+              merged.sort();
+              merged.dedup();
+              store.canon(store.intern_type(tti::TypeKind::Callable { overloads: merged }))
+            } else {
+              ty
             }
           }
-        }
+          _ => ty,
+        };
         if debug_overload {
-          if let Some(current) = ty {
-            eprintln!(
-              "DEBUG overload binding computed ty {} for file {:?}",
-              tti::TypeDisplay::new(&store, current),
-              file
-            );
-          } else {
-            eprintln!("DEBUG overload binding computed ty <none>");
-          }
+          eprintln!(
+            "DEBUG overload binding final ty {} for file {:?}",
+            tti::TypeDisplay::new(&store, ty),
+            file
+          );
         }
-      }
-      if ty.is_none() {
-        if binding.def.is_some() || binding.type_id.is_some() {
-          ty = Some(prim.unknown);
-        } else {
-          if let Some(def) = def_for_resolver {
-            binding_defs.insert(name.to_string(), def);
-          }
-          return Ok(());
-        }
-      }
-      let ty = ty.unwrap_or_else(|| prim.unknown);
-      let ty = match store.type_kind(ty) {
-        tti::TypeKind::Callable { overloads } => {
-          let filtered: Vec<_> = overloads
-            .iter()
-            .copied()
-            .filter(|sig_id| store.signature(*sig_id).ret != prim.unknown)
-            .collect();
-          if !filtered.is_empty() && filtered.len() < overloads.len() {
-            let mut merged = filtered;
+        let ty = if binding.def.is_some() {
+          ty
+        } else if let Some(existing) = bindings.get(name) {
+          let existing_sigs = callable_signatures(store.as_ref(), *existing);
+          let new_sigs = callable_signatures(store.as_ref(), ty);
+          if !existing_sigs.is_empty() && !new_sigs.is_empty() {
+            let mut merged = existing_sigs;
+            merged.extend(new_sigs);
             merged.sort();
             merged.dedup();
             store.canon(store.intern_type(tti::TypeKind::Callable { overloads: merged }))
           } else {
-            ty
+            store.intersection(vec![*existing, ty])
           }
-        }
-        _ => ty,
-      };
-      if debug_overload {
-        eprintln!(
-          "DEBUG overload binding final ty {} for file {:?}",
-          tti::TypeDisplay::new(&store, ty),
-          file
-        );
-      }
-      let ty = if binding.def.is_some() {
-        ty
-      } else if let Some(existing) = bindings.get(name) {
-        let existing_sigs = callable_signatures(store.as_ref(), *existing);
-        let new_sigs = callable_signatures(store.as_ref(), ty);
-        if !existing_sigs.is_empty() && !new_sigs.is_empty() {
-          let mut merged = existing_sigs;
-          merged.extend(new_sigs);
-          merged.sort();
-          merged.dedup();
-          store.canon(store.intern_type(tti::TypeKind::Callable { overloads: merged }))
         } else {
-          store.intersection(vec![*existing, ty])
+          ty
+        };
+        if name == "takes" {
+          eprintln!(
+            "DEBUG takes binding final ty {} (existing {})",
+            tti::TypeDisplay::new(&store, ty),
+            bindings
+              .get(name)
+              .map(|t| tti::TypeDisplay::new(&store, *t).to_string())
+              .unwrap_or_else(|| "<none>".to_string())
+          );
         }
-      } else {
-        ty
+        bindings.insert(name.to_string(), ty);
+        if let Some(def) = def_for_resolver {
+          binding_defs.insert(name.to_string(), def);
+        }
+        Ok(())
       };
-      if name == "takes" {
-        eprintln!(
-          "DEBUG takes binding final ty {} (existing {})",
-          tti::TypeDisplay::new(&store, ty),
-          bindings
-            .get(name)
-            .map(|t| tti::TypeDisplay::new(&store, *t).to_string())
-            .unwrap_or_else(|| "<none>".to_string())
-        );
-      }
-      bindings.insert(name.to_string(), ty);
-      if let Some(def) = def_for_resolver {
-        binding_defs.insert(name.to_string(), def);
-      }
-      Ok(())
-    };
     for (name, binding) in file_binding_entries.into_iter() {
       let include_type = needed_root_names.contains(&name);
       bind(&name, &binding, include_type)?;
@@ -9081,19 +9102,15 @@ impl ProgramState {
         &self.interned_class_instances,
         caches.eval.clone(),
       );
-      let ast_index = self
-        .ast_indexes
-        .get(&file)
-        .cloned()
-        .unwrap_or_else(|| {
-          let index = Arc::new(check::hir_body::AstIndex::new(
-            Arc::clone(&ast),
-            file,
-            Some(&self.cancelled),
-          ));
-          self.ast_indexes.insert(file, Arc::clone(&index));
-          index
-        });
+      let ast_index = self.ast_indexes.get(&file).cloned().unwrap_or_else(|| {
+        let index = Arc::new(check::hir_body::AstIndex::new(
+          Arc::clone(&ast),
+          file,
+          Some(&self.cancelled),
+        ));
+        self.ast_indexes.insert(file, Arc::clone(&index));
+        index
+      });
       let semantic_resolver = self.build_type_resolver(&binding_defs);
       let resolver = semantic_resolver.or_else(|| {
         if !binding_defs.is_empty() {
@@ -9440,9 +9457,13 @@ impl ProgramState {
               .unwrap_or(TextRange::new(0, 0)),
           );
           let resolution = if call.is_new {
-            resolve_construct(&store, &relate, *callee_ty, &arg_tys, None, None, span, None)
+            resolve_construct(
+              &store, &relate, *callee_ty, &arg_tys, None, None, span, None,
+            )
           } else {
-            resolve_call(&store, &relate, *callee_ty, &arg_tys, this_arg, None, span, None)
+            resolve_call(
+              &store, &relate, *callee_ty, &arg_tys, this_arg, None, span, None,
+            )
           };
           let mut ret_ty = resolution.return_type;
           if call.optional {
@@ -10878,10 +10899,14 @@ impl ProgramState {
 
   fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
     if self.snapshot_loaded && !self.body_results.is_empty() {
-      let mut best_containing: Option<((u32, u32, u32, u32, u32, u32, BodyId, ExprId), (BodyId, ExprId, TextRange))> =
-        None;
-      let mut best_empty: Option<((u32, u32, u32, u32, u32, u32, BodyId, ExprId), (BodyId, ExprId, TextRange))> =
-        None;
+      let mut best_containing: Option<(
+        (u32, u32, u32, u32, u32, u32, BodyId, ExprId),
+        (BodyId, ExprId, TextRange),
+      )> = None;
+      let mut best_empty: Option<(
+        (u32, u32, u32, u32, u32, u32, BodyId, ExprId),
+        (BodyId, ExprId, TextRange),
+      )> = None;
 
       for (body_id, result) in self.body_results.iter() {
         let Some(meta) = self.body_map.get(body_id) else {
@@ -10932,7 +10957,10 @@ impl ProgramState {
       }
 
       match (best_containing, best_empty) {
-        (Some((_, (cont_body, cont_expr, cont_span))), Some((_, (empty_body, empty_expr, empty_span)))) => {
+        (
+          Some((_, (cont_body, cont_expr, cont_span))),
+          Some((_, (empty_body, empty_expr, empty_span))),
+        ) => {
           if empty_span.start > cont_span.start && empty_span.end < cont_span.end {
             return Some((empty_body, empty_expr));
           }

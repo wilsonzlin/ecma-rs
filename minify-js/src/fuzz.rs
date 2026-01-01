@@ -21,7 +21,7 @@ pub fn fuzz_minify_pipeline(data: &[u8]) {
     };
     match parse_with_options(&source, parse_opts) {
       Ok(mut ast) => {
-        let _ = erase_types(file, &mut ast);
+        let _ = erase_types(file, TopLevelMode::Module, &source, &mut ast);
         break;
       }
       Err(err) => last_error = Some(err),

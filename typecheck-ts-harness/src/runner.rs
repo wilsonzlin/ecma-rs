@@ -977,7 +977,8 @@ impl TscRunner {
   fn available(&self) -> bool {
     #[cfg(feature = "with-node")]
     {
-      crate::tsc::node_available(&self.node_path) && crate::tsc::typescript_available(&self.node_path)
+      crate::tsc::node_available(&self.node_path)
+        && crate::tsc::typescript_available(&self.node_path)
     }
 
     #[cfg(not(feature = "with-node"))]

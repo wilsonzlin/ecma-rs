@@ -295,7 +295,7 @@ fn export_star_skips_default() {
   let file_b = program.file_id(&key_b).expect("file id");
   let exports = program.exports_of(file_b);
   assert!(
-    exports.get("default").is_none(),
+    !exports.contains_key("default"),
     "default should not be re-exported"
   );
   let named = exports.get("named").expect("named export propagated");

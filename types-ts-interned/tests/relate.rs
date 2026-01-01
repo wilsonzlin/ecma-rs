@@ -9,11 +9,11 @@ use types_ts_interned::Property;
 use types_ts_interned::RelateCtx;
 use types_ts_interned::RelateHooks;
 use types_ts_interned::RelateTypeExpander;
+use types_ts_interned::TupleElem;
 use types_ts_interned::TypeKind;
 use types_ts_interned::TypeOptions;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
-use types_ts_interned::TupleElem;
 use types_ts_interned::{MappedModifier, MappedType, Shape, Signature};
 
 fn default_options() -> TypeOptions {
