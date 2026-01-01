@@ -583,6 +583,49 @@ pub fn apply_renames(
 
 #[cfg_attr(feature = "emit-minify", allow(dead_code))]
 pub fn rewrite_source(source: &str, replacements: &mut Vec<Replacement>) -> String {
+  // `Node::loc.end` can include lookahead tokens because the parser buffers
+  // lexed tokens; `apply_renames` therefore computes identifier replacement
+  // ranges as `loc.start + name.len()`.
+  //
+  // For module namespace identifier features we also allow string literals in
+  // binding positions (e.g. `import { "a-b" as "c-d" } from "x";`). Those are
+  // represented as `IdPat { name: "c-d" }`, where `name.len()` does *not*
+  // include the surrounding quotes or any escape sequences in the source.
+  //
+  // When we rewrite the original source (the non-emit backend), ensure
+  // replacements that begin at a quote cover the entire string literal token.
+  // Only extend ranges that are too short; never shrink, as some replacements
+  // (e.g. export specifier rewrites) intentionally span more than the first
+  // string token.
+  for rep in replacements.iter_mut() {
+    let Some(quote) = source.as_bytes().get(rep.start).copied() else {
+      continue;
+    };
+    let quote_char = match quote {
+      b'"' => '"',
+      b'\'' => '\'',
+      _ => continue,
+    };
+    let mut escaped = false;
+    for (offset, ch) in source[rep.start + 1..].char_indices() {
+      if escaped {
+        escaped = false;
+        continue;
+      }
+      if ch == '\\' {
+        escaped = true;
+        continue;
+      }
+      if ch == quote_char {
+        let literal_end = rep.start + 1 + offset + ch.len_utf8();
+        if rep.end < literal_end {
+          rep.end = literal_end;
+        }
+        break;
+      }
+    }
+  }
+
   replacements.sort_by_key(|r| r.start);
   let mut out = String::with_capacity(source.len());
   let mut cur = 0;
@@ -670,5 +713,25 @@ mod tests {
     let mut replacements = apply_renames(&mut ast, &renames);
     let rewritten = rewrite_source(source, &mut replacements);
     assert_eq!(rewritten, "const a=1;");
+  }
+
+  #[test]
+  fn rewrite_source_expands_string_literal_import_alias_ranges() {
+    let source = r#"import { "a-b" as "c-d" } from "x";"#;
+    let mut ast = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Ts,
+        source_type: SourceType::Module,
+      },
+    )
+    .expect("parse");
+    let (sem, _) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+    let usage = collect_usages(&mut ast, &sem, TopLevelMode::Module);
+    let renames = assign_names(&sem, &usage);
+
+    let mut replacements = apply_renames(&mut ast, &renames);
+    let rewritten = rewrite_source(source, &mut replacements);
+    assert_eq!(rewritten, r#"import { "a-b" as a } from "x";"#);
   }
 }
