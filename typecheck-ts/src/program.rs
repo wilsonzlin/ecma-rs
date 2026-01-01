@@ -2074,6 +2074,17 @@ impl Program {
     let mut file_state_ids: Vec<_> = state.files.keys().copied().collect();
     file_state_ids.sort_by_key(|id| id.0);
     for file in file_state_ids {
+      let exports = match state.exports_of_file(file) {
+        Ok(exports) => exports,
+        Err(fatal) => {
+          state.diagnostics.push(fatal_to_diagnostic(fatal));
+          state
+            .files
+            .get(&file)
+            .map(|state| state.exports.clone())
+            .unwrap_or_default()
+        }
+      };
       let fs = state.files.get(&file).expect("file state present");
       let mut bindings: Vec<_> = fs
         .bindings
@@ -2086,7 +2097,7 @@ impl Program {
       file_states.push(FileStateSnapshot {
         file,
         defs,
-        exports: fs.exports.clone(),
+        exports,
         bindings,
         top_body: fs.top_body,
         ambient_modules: Vec::new(),
@@ -3761,6 +3772,8 @@ struct ProgramState {
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   module_namespace_defs: HashMap<FileId, DefId>,
+  module_namespace_types: HashMap<FileId, TypeId>,
+  module_namespace_in_progress: HashSet<FileId>,
   namespace_member_index: Option<Arc<NamespaceMemberIndex>>,
   callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
   diagnostics: Vec<Diagnostic>,
@@ -3872,6 +3885,8 @@ impl ProgramState {
       global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
       module_namespace_defs: HashMap::new(),
+      module_namespace_types: HashMap::new(),
+      module_namespace_in_progress: HashSet::new(),
       namespace_member_index: None,
       callable_overloads: HashMap::new(),
       diagnostics: Vec::new(),
@@ -4604,6 +4619,8 @@ impl ProgramState {
       return Ok(());
     }
     self.check_cancelled()?;
+    self.module_namespace_types.clear();
+    self.module_namespace_in_progress.clear();
     let mut sorted_roots = roots.to_vec();
     sorted_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     self
@@ -4771,6 +4788,8 @@ impl ProgramState {
     if self.interned_revision == Some(revision) {
       return Ok(());
     }
+    self.module_namespace_types.clear();
+    self.module_namespace_in_progress.clear();
     // The interned type tables are rebuilt as a batch; clear any shared caches
     // that may have memoized partial ref expansions against the old tables.
     self.checker_caches.clear_shared();
@@ -12214,78 +12233,97 @@ impl ProgramState {
       }
     };
 
-    let exports = self.exports_of_file(file)?;
-    let mut names: Vec<String> = if let Some(semantics) = self.semantics.as_ref() {
-      semantics
-        .exports_of_opt(sem_ts::FileId(file.0))
-        .map(|exports| {
-          exports
-            .iter()
-            .filter_map(|(name, group)| {
-              group
-                .symbol_for(sem_ts::Namespace::VALUE, semantics.symbols())
-                .is_some()
-                .then_some(name.clone())
-            })
-            .collect()
-        })
-        .unwrap_or_default()
-    } else {
-      exports
-        .iter()
-        .filter_map(|(name, entry)| {
-          let is_value = entry
-            .def
-            .and_then(|def| self.def_data.get(&def))
-            .map(|data| !matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)))
-            .unwrap_or(true);
-          is_value.then_some(name.clone())
-        })
-        .collect()
-    };
-    names.sort();
-    names.dedup();
+    if let Some(cached) = self.module_namespace_types.get(&file).copied() {
+      return Ok(cached);
+    }
 
     let prim = store.primitive_ids();
-    let mut shape = tti::Shape::new();
-    let mut cache = HashMap::new();
-    for name in names.into_iter() {
-      let entry = exports.get(&name);
-      let ty = entry
-        .and_then(|entry| entry.type_id)
-        .or_else(|| {
-          entry
-            .and_then(|entry| entry.def)
-            .and_then(|def| self.export_type_for_def(def).ok().flatten())
-        })
-        .or_else(|| {
-          entry
-            .and_then(|entry| entry.def)
-            .and_then(|def| self.def_types.get(&def).copied())
-        })
-        .unwrap_or(prim.unknown);
-      let ty = if store.contains_type_id(ty) {
-        store.canon(ty)
-      } else {
-        store.canon(convert_type_for_display(ty, self, &store, &mut cache))
-      };
-      let key = PropKey::String(store.intern_name(name.clone()));
-      shape.properties.push(Property {
-        key,
-        data: PropData {
-          ty,
-          optional: false,
-          readonly: true,
-          accessibility: None,
-          is_method: false,
-          origin: None,
-          declared_on: None,
-        },
-      });
+    if self.module_namespace_in_progress.contains(&file) {
+      return Ok(prim.unknown);
     }
-    let shape_id = store.intern_shape(shape);
-    let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
-    Ok(store.canon(store.intern_type(tti::TypeKind::Object(obj_id))))
+
+    self.module_namespace_in_progress.insert(file);
+    let computed = panic::catch_unwind(AssertUnwindSafe(|| {
+      let exports = self.exports_of_file(file)?;
+      let mut names: Vec<String> = if let Some(semantics) = self.semantics.as_ref() {
+        semantics
+          .exports_of_opt(sem_ts::FileId(file.0))
+          .map(|exports| {
+            exports
+              .iter()
+              .filter_map(|(name, group)| {
+                group
+                  .symbol_for(sem_ts::Namespace::VALUE, semantics.symbols())
+                  .is_some()
+                  .then_some(name.clone())
+              })
+              .collect()
+          })
+          .unwrap_or_default()
+      } else {
+        exports
+          .iter()
+          .filter_map(|(name, entry)| {
+            let is_value = entry
+              .def
+              .and_then(|def| self.def_data.get(&def))
+              .map(|data| !matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)))
+              .unwrap_or(true);
+            is_value.then_some(name.clone())
+          })
+          .collect()
+      };
+      names.sort();
+      names.dedup();
+
+      let mut shape = tti::Shape::new();
+      let mut cache = HashMap::new();
+      for name in names.into_iter() {
+        let entry = exports.get(&name);
+        let ty = entry
+          .and_then(|entry| entry.type_id)
+          .or_else(|| {
+            entry
+              .and_then(|entry| entry.def)
+              .and_then(|def| self.export_type_for_def(def).ok().flatten())
+          })
+          .or_else(|| {
+            entry
+              .and_then(|entry| entry.def)
+              .and_then(|def| self.def_types.get(&def).copied())
+          })
+          .unwrap_or(prim.unknown);
+        let ty = if store.contains_type_id(ty) {
+          store.canon(ty)
+        } else {
+          store.canon(convert_type_for_display(ty, self, &store, &mut cache))
+        };
+        let key = PropKey::String(store.intern_name(name.clone()));
+        shape.properties.push(Property {
+          key,
+          data: PropData {
+            ty,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        });
+      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      Ok(store.canon(store.intern_type(tti::TypeKind::Object(obj_id))))
+    }));
+    self.module_namespace_in_progress.remove(&file);
+    let ty = match computed {
+      Ok(Ok(ty)) => ty,
+      Ok(Err(err)) => return Err(err),
+      Err(payload) => panic::resume_unwind(payload),
+    };
+    self.module_namespace_types.insert(file, ty);
+    Ok(ty)
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
