@@ -390,6 +390,32 @@ pub const IMPLICIT_ANY: Code = Code::new(
   &[],
 );
 
+/// TC3001: JSX syntax is present but the compiler is not configured to allow it.
+///
+/// - Primary span: the JSX element expression.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const JSX_DISABLED: Code = Code::new(
+  "TC3001",
+  "jsx is disabled",
+  "JSX element expression",
+  &["primary: JSX element expression"],
+  &[],
+);
+
+/// TC3002: JSX intrinsic element name is not present in `JSX.IntrinsicElements`.
+///
+/// - Primary span: the intrinsic JSX tag name in the opening element.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const JSX_UNKNOWN_INTRINSIC_ELEMENT: Code = Code::new(
+  "TC3002",
+  "unknown intrinsic JSX element",
+  "JSX opening tag name",
+  &["primary: JSX element tag name"],
+  &[],
+);
+
 /// HOST0001: Host environment failed to provide required input.
 ///
 /// - Primary span: zero-length placeholder when no source span is available.

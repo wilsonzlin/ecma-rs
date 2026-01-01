@@ -16,6 +16,7 @@ use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
+use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxText};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -46,6 +47,7 @@ use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
+use crate::lib_support::JsxMode;
 
 #[derive(Default, Clone)]
 struct Scope {
@@ -551,6 +553,7 @@ pub fn check_body(
   check_body_with_expander(
     body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, false,
     None,
+    None,
   )
 }
 
@@ -570,6 +573,7 @@ pub fn check_body_with_expander(
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
   no_implicit_any: bool,
+  jsx_mode: Option<JsxMode>,
   cancelled: Option<&Arc<AtomicBool>>,
 ) -> BodyCheckResult {
   if let Some(flag) = cancelled {
@@ -608,6 +612,7 @@ pub fn check_body_with_expander(
     relate_hooks,
     caches.relation.clone(),
   );
+  let type_resolver = resolver.clone();
   let mut lowerer = match resolver {
     Some(resolver) => TypeLowerer::with_resolver(Arc::clone(&store), resolver),
     None => TypeLowerer::new(Arc::clone(&store)),
@@ -621,6 +626,10 @@ pub fn check_body_with_expander(
     store,
     relate,
     lowerer,
+    type_resolver,
+    jsx_mode,
+    jsx_element_ty: None,
+    jsx_intrinsic_elements_ty: None,
     expr_types,
     pat_types,
     expr_spans,
@@ -713,6 +722,10 @@ struct Checker<'a> {
   store: Arc<TypeStore>,
   relate: RelateCtx<'a>,
   lowerer: TypeLowerer,
+  type_resolver: Option<Arc<dyn TypeResolver>>,
+  jsx_mode: Option<JsxMode>,
+  jsx_element_ty: Option<TypeId>,
+  jsx_intrinsic_elements_ty: Option<TypeId>,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -1544,6 +1557,7 @@ impl<'a> Checker<'a> {
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
       AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
+      AstExpr::JsxElem(elem) => self.check_jsx_elem(elem),
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
@@ -1578,6 +1592,222 @@ impl<'a> Checker<'a> {
     };
     self.record_expr_type(expr.loc, ty);
     ty
+  }
+
+  fn check_jsx_elem(&mut self, elem: &Node<JsxElem>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    if self.jsx_mode.is_none() {
+      self.diagnostics.push(codes::JSX_DISABLED.error(
+        "jsx is disabled",
+        Span::new(self.file, loc_to_range(self.file, elem.loc)),
+      ));
+      return prim.unknown;
+    }
+
+    let element_ty = self.jsx_element_type();
+    let mut props_ty = prim.unknown;
+
+    match &elem.stx.name {
+      None => {
+        // Fragment; no attributes, but still typecheck children.
+      }
+      Some(JsxElemName::Name(name)) => {
+        let tag = name.stx.name.as_str();
+        let intrinsic_elements = self.jsx_intrinsic_elements_type();
+        if intrinsic_elements != prim.unknown {
+          let found = self.member_type(intrinsic_elements, tag);
+          if found == prim.unknown {
+            self.diagnostics.push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
+              format!("unknown JSX intrinsic element `{tag}`"),
+              Span::new(self.file, loc_to_range(self.file, name.loc)),
+            ));
+          } else {
+            props_ty = found;
+          }
+        }
+      }
+      Some(JsxElemName::Id(id)) => {
+        let name = id.stx.name.as_str();
+        let component_ty = self.lookup(name).map(|binding| binding.ty).unwrap_or_else(|| {
+          self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+            format!("unknown identifier `{name}`"),
+            Span::new(self.file, loc_to_range(self.file, id.loc)),
+          ));
+          prim.unknown
+        });
+        props_ty = self.jsx_component_props_type(component_ty).unwrap_or(prim.unknown);
+      }
+      Some(JsxElemName::Member(member)) => {
+        // Member expressions like `<Foo.Bar />` are treated like looking up
+        // `Foo` and then checking `.Bar` as a value.
+        let base_name = member.stx.base.stx.name.as_str();
+        let mut current = self
+          .lookup(base_name)
+          .map(|binding| binding.ty)
+          .unwrap_or_else(|| {
+            self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+              format!("unknown identifier `{base_name}`"),
+              Span::new(self.file, loc_to_range(self.file, member.stx.base.loc)),
+            ));
+            prim.unknown
+          });
+        for segment in member.stx.path.iter() {
+          current = self.member_type(current, segment);
+        }
+        props_ty = self.jsx_component_props_type(current).unwrap_or(prim.unknown);
+      }
+    }
+
+    self.check_jsx_attrs(&elem.stx.attributes, props_ty);
+    self.check_jsx_children(&elem.stx.children, props_ty);
+
+    element_ty
+  }
+
+  fn check_jsx_attrs(&mut self, attrs: &[JsxAttr], props_ty: TypeId) {
+    let prim = self.store.primitive_ids();
+    for attr in attrs {
+      match attr {
+        JsxAttr::Named { name, value } => {
+          let key = &name.stx.name;
+          let expected = if props_ty == prim.unknown {
+            prim.unknown
+          } else {
+            self.member_type(props_ty, key)
+          };
+
+          match value {
+            None => {
+              // Boolean attributes (e.g. `<div hidden />`). Approximate as `true`.
+              if expected != prim.unknown && !self.relate.is_assignable(prim.boolean, expected) {
+                self.diagnostics.push(codes::TYPE_MISMATCH.error(
+                  "type mismatch",
+                  Span::new(self.file, loc_to_range(self.file, name.loc)),
+                ));
+              }
+            }
+            Some(JsxAttrVal::Text(text)) => {
+              if let Some(actual) = self.jsx_text_type(text) {
+                if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
+                  self.diagnostics.push(codes::TYPE_MISMATCH.error(
+                    "type mismatch",
+                    Span::new(self.file, loc_to_range(self.file, text.loc)),
+                  ));
+                }
+              }
+            }
+            Some(JsxAttrVal::Expression(expr)) => {
+              let actual = self.check_expr(&expr.stx.value);
+              if expected != prim.unknown {
+                self.check_assignable(&expr.stx.value, actual, expected);
+              }
+            }
+            Some(JsxAttrVal::Element(elem)) => {
+              let actual = self.check_jsx_elem(elem);
+              if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
+                self.diagnostics.push(codes::TYPE_MISMATCH.error(
+                  "type mismatch",
+                  Span::new(self.file, loc_to_range(self.file, elem.loc)),
+                ));
+              }
+            }
+          }
+        }
+        JsxAttr::Spread { value } => {
+          let actual = self.check_expr(&value.stx.value);
+          if props_ty != prim.unknown {
+            self.check_assignable(&value.stx.value, actual, props_ty);
+          }
+        }
+      }
+    }
+  }
+
+  fn check_jsx_children(&mut self, children: &[JsxElemChild], props_ty: TypeId) {
+    let prim = self.store.primitive_ids();
+    let expected = if props_ty == prim.unknown {
+      prim.unknown
+    } else {
+      self.member_type(props_ty, "children")
+    };
+    for child in children {
+      match child {
+        JsxElemChild::Text(text) => {
+          let Some(actual) = self.jsx_text_type(text) else {
+            continue;
+          };
+          if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "type mismatch",
+              Span::new(self.file, loc_to_range(self.file, text.loc)),
+            ));
+          }
+        }
+        JsxElemChild::Expr(expr) => {
+          let actual = self.check_expr(&expr.stx.value);
+          if expected != prim.unknown {
+            self.check_assignable(&expr.stx.value, actual, expected);
+          }
+        }
+        JsxElemChild::Element(elem) => {
+          let actual = self.check_jsx_elem(elem);
+          if expected != prim.unknown && !self.relate.is_assignable(actual, expected) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "type mismatch",
+              Span::new(self.file, loc_to_range(self.file, elem.loc)),
+            ));
+          }
+        }
+      }
+    }
+  }
+
+  fn jsx_text_type(&mut self, text: &Node<JsxText>) -> Option<TypeId> {
+    let trimmed = text.stx.value.trim();
+    if trimmed.is_empty() {
+      return None;
+    }
+    let name = self.store.intern_name(trimmed.to_string());
+    Some(self.store.intern_type(TypeKind::StringLiteral(name)))
+  }
+
+  fn resolve_type_ref(&mut self, path: &[&str]) -> Option<TypeId> {
+    let resolver = self.type_resolver.as_ref()?;
+    let segments: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+    let def = resolver.resolve_type_name(&segments)?;
+    Some(self.store.canon(self.store.intern_type(TypeKind::Ref {
+      def,
+      args: Vec::new(),
+    })))
+  }
+
+  fn jsx_element_type(&mut self) -> TypeId {
+    if let Some(ty) = self.jsx_element_ty {
+      return ty;
+    }
+    let prim = self.store.primitive_ids();
+    let ty = self
+      .resolve_type_ref(&["JSX", "Element"])
+      .unwrap_or(prim.unknown);
+    self.jsx_element_ty = Some(ty);
+    ty
+  }
+
+  fn jsx_intrinsic_elements_type(&mut self) -> TypeId {
+    if let Some(ty) = self.jsx_intrinsic_elements_ty {
+      return ty;
+    }
+    let prim = self.store.primitive_ids();
+    let ty = self
+      .resolve_type_ref(&["JSX", "IntrinsicElements"])
+      .unwrap_or(prim.unknown);
+    self.jsx_intrinsic_elements_ty = Some(ty);
+    ty
+  }
+
+  fn jsx_component_props_type(&mut self, component_ty: TypeId) -> Option<TypeId> {
+    let sig = self.first_callable_signature(component_ty)?;
+    sig.params.first().map(|param| param.ty)
   }
 
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
@@ -2393,6 +2623,17 @@ impl<'a> Checker<'a> {
   fn first_callable_signature(&self, ty: TypeId) -> Option<Signature> {
     match self.store.type_kind(ty) {
       TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        shape
+          .call_signatures
+          .first()
+          .map(|sig_id| self.store.signature(*sig_id))
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .copied()
+        .find_map(|member| self.first_callable_signature(member)),
       TypeKind::Ref { def, args } => self
         .ref_expander
         .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))

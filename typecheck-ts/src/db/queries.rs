@@ -391,7 +391,7 @@ pub mod body_check {
   };
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
-  use crate::lib_support::{CacheMode, CacheOptions};
+  use crate::lib_support::{CacheMode, CacheOptions, JsxMode};
   use crate::profile::{QueryKind, QueryStatsCollector};
   use crate::program::check::relate_hooks;
   use crate::{BodyCheckResult, BodyId, DefId, PatId, SymbolBinding, TypeId};
@@ -462,6 +462,7 @@ pub mod body_check {
     pub checker_caches: CheckerCaches,
     pub cache_mode: CacheMode,
     pub cache_options: CacheOptions,
+    pub jsx_mode: Option<JsxMode>,
     pub query_stats: QueryStatsCollector,
     pub cancelled: Arc<AtomicBool>,
   }
@@ -773,6 +774,7 @@ pub mod body_check {
         Some(&expander),
         contextual_fn_ty,
         ctx.no_implicit_any,
+        ctx.jsx_mode,
         Some(&ctx.cancelled),
       );
 

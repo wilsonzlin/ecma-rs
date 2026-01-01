@@ -2556,6 +2556,7 @@ struct ProgramTypeResolver {
   exports: HashMap<FileId, ExportMap>,
   module_namespace_defs: HashMap<FileId, DefId>,
   namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+  qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
 }
 
 impl ProgramTypeResolver {
@@ -2569,6 +2570,7 @@ impl ProgramTypeResolver {
     exports: HashMap<FileId, ExportMap>,
     module_namespace_defs: HashMap<FileId, DefId>,
     namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+    qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
   ) -> Self {
     ProgramTypeResolver {
       semantics,
@@ -2580,6 +2582,7 @@ impl ProgramTypeResolver {
       exports,
       module_namespace_defs,
       namespace_members,
+      qualified_def_members,
     }
   }
 
@@ -2637,9 +2640,17 @@ impl ProgramTypeResolver {
           };
           match self.def_kinds.get(&current) {
             Some(DefKind::Namespace(_) | DefKind::Module(_)) => {
-              let members = self.namespace_members.get(&current)?;
-              let candidates = members.get(segment)?;
-              current = self.pick_best_def(candidates, ns)?;
+              if let Some(members) = self.namespace_members.get(&current) {
+                if let Some(candidates) = members.get(segment) {
+                  if let Some(next) = self.pick_best_def(candidates, ns) {
+                    current = next;
+                    continue;
+                  }
+                }
+              }
+              current = *self
+                .qualified_def_members
+                .get(&(current, segment.clone(), ns))?;
             }
             _ => {
               return self.resolve_namespace_import_path(path, final_ns);
@@ -2727,7 +2738,29 @@ impl ProgramTypeResolver {
       .import_origin_file(symbol)
       .or_else(|| self.symbol_owner_file(symbol))
     else {
-      return None;
+      // `TsProgramSemantics` tracks exports across files/modules but does not
+      // provide a direct way to traverse members of global `namespace`
+      // declarations (e.g. `declare namespace JSX { interface Element {} }`).
+      // These are still represented in the lowered definition tree with parent
+      // links, so fall back to the canonical parent->member map derived from HIR.
+      let mut current = self
+        .pick_decl(symbol, sem_ts::Namespace::NAMESPACE)
+        .or_else(|| self.pick_decl(symbol, final_ns))
+        .or_else(|| self.pick_decl(symbol, sem_ts::Namespace::VALUE))?;
+
+      for (idx, segment) in path.iter().enumerate().skip(1) {
+        let is_last = idx + 1 == path.len();
+        let ns = if is_last {
+          final_ns
+        } else {
+          sem_ts::Namespace::NAMESPACE
+        };
+        current = *self
+          .qualified_def_members
+          .get(&(current, segment.clone(), ns))?;
+      }
+
+      return Some(current);
     };
     let origin = module;
     if let Some(def) = self.resolve_export_path(&path[1..], &mut module, final_ns) {
@@ -3575,6 +3608,7 @@ struct ProgramState {
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   local_semantics: HashMap<FileId, sem_ts::locals::TsLocalSemantics>,
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
+  qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   checking_bodies: HashSet<BodyId>,
@@ -3685,6 +3719,7 @@ impl ProgramState {
       sem_hir: HashMap::new(),
       local_semantics: HashMap::new(),
       semantics: None,
+      qualified_def_members: Arc::new(HashMap::new()),
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       checking_bodies: HashSet::new(),
@@ -3864,6 +3899,7 @@ impl ProgramState {
       checker_caches: self.checker_caches.clone(),
       cache_mode: self.compiler_options.cache.mode,
       cache_options: self.compiler_options.cache.clone(),
+      jsx_mode: self.compiler_options.jsx,
       query_stats: self.query_stats.clone(),
       cancelled: Arc::clone(&self.cancelled),
     }
@@ -4630,6 +4666,13 @@ impl ProgramState {
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let mut declared_type_cache: HashMap<(FileId, TextRange), Option<TypeId>> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
+    let mut qualified_def_members: HashMap<(DefId, String, sem_ts::Namespace), DefId> = HashMap::new();
+    for ((_, parent, name, ns), def_id) in def_by_name.iter() {
+      if let Some(parent) = *parent {
+        qualified_def_members.insert((parent, name.clone(), *ns), *def_id);
+      }
+    }
+    self.qualified_def_members = Arc::new(qualified_def_members);
     let mut hir_def_maps: HashMap<FileId, HashMap<HirDefId, DefId>> = HashMap::new();
     let hir_namespaces = |kind: HirDefKind| -> sem_ts::Namespace {
       match kind {
@@ -8880,6 +8923,7 @@ impl ProgramState {
         exports,
         self.module_namespace_defs.clone(),
         namespace_members,
+        Arc::clone(&self.qualified_def_members),
       )) as Arc<_>);
     }
     Some(Arc::new(check::hir_body::BindingTypeResolver::new(
@@ -9747,6 +9791,7 @@ impl ProgramState {
         Some(&expander),
         contextual_fn_ty,
         self.compiler_options.no_implicit_any,
+        self.compiler_options.jsx,
         Some(&self.cancelled),
       );
       let mut base_relate_hooks = relate_hooks();
