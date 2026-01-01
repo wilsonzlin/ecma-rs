@@ -533,6 +533,23 @@ fn union_canonicalization_is_span_stable_for_function_types() {
 }
 
 #[test]
+fn union_canonicalization_is_span_stable_for_constructor_types() {
+  let base =
+    lower_from_source("type A = (new (x: string) => Foo) | (new (y: number) => Foo);")
+      .expect("lower");
+  let with_padding = lower_from_source(
+    "type Z = string;\ntype A = (new (x: string) => Foo) | (new (y: number) => Foo);",
+  )
+  .expect("lower with padding");
+
+  let base_members = union_member_first_ctor_param_type_names(&base, "A");
+  let with_padding_members = union_member_first_ctor_param_type_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["number", "string"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
 fn union_dedups_simple_duplicates() {
   let result = lower_from_source("type A = string | string | Foo | Foo;").expect("lower");
   let members = union_member_names(&result, "A");
@@ -1027,6 +1044,45 @@ fn union_member_first_param_type_names(
       };
 
       let first = func.params.first().expect("function param");
+      let param_ty = &arenas.type_exprs[first.ty.0 as usize].kind;
+      match param_ty {
+        TypeExprKind::String => "string",
+        TypeExprKind::Number => "number",
+        other => panic!("expected primitive param type, got {other:?}"),
+      }
+    })
+    .collect()
+}
+
+fn union_member_first_ctor_param_type_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<&'static str> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let func = match member_kind {
+        TypeExprKind::Constructor(func) => func,
+        other => panic!("expected constructor member, got {other:?}"),
+      };
+
+      let first = func.params.first().expect("constructor param");
       let param_ty = &arenas.type_exprs[first.ty.0 as usize].kind;
       match param_ty {
         TypeExprKind::String => "string",
