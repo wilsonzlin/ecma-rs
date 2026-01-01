@@ -315,6 +315,56 @@ fn ambient_module_types_are_bound() {
 }
 
 #[test]
+fn module_resolution_can_target_lib_file_keys() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+
+  let lib_key = FileKey::new("custom_mod.d.ts");
+  let entry = FileKey::new("entry.ts");
+  let source = r#"import type { Foo } from "custom_mod"; type Uses = Foo;"#;
+
+  let host = TestHost::new(options)
+    .with_lib(LibFile {
+      key: lib_key.clone(),
+      name: Arc::from("custom_mod.d.ts"),
+      kind: FileKind::Dts,
+      text: Arc::from("export interface Foo { a: string }"),
+    })
+    .with_file(entry.clone(), source)
+    .link(entry.clone(), "custom_mod", lib_key.clone());
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics when resolving to a lib file: {diagnostics:?}"
+  );
+
+  assert_eq!(
+    program.file_ids_for_key(&lib_key).len(),
+    1,
+    "module resolution should reuse the lib FileId instead of creating a source copy"
+  );
+
+  let entry_id = program.file_id(&entry).expect("entry id");
+  let uses_def = program
+    .definitions_in_file(entry_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Uses"))
+    .expect("definition for Uses");
+  let uses_ty = program.type_of_def(uses_def);
+  let has_prop_a = program
+    .properties_of(uses_ty)
+    .iter()
+    .any(|p| p.key == PropertyKey::String("a".to_string()));
+  assert!(
+    has_prop_a,
+    "expected Uses to expose Foo shape from lib module; got {}",
+    program.display_type(uses_ty)
+  );
+}
+
+#[test]
 fn host_file_named_like_lib_does_not_collide() {
   let mut options = CompilerOptions::default();
   options.libs = vec![LibName::Es2020];

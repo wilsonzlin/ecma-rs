@@ -6159,7 +6159,16 @@ impl ProgramState {
     let resolved = self
       .file_key_for_id(from)
       .and_then(|from_key| host.resolve(&from_key, specifier))
-      .map(|target_key| self.intern_file_key(target_key, FileOrigin::Source));
+      .map(|target_key| {
+        // Prefer an already-known file ID when the host resolution points at a
+        // library file key. Many hosts provide `.d.ts` libraries via
+        // `Host::lib_files()` only (without implementing `file_text` for them),
+        // so interning them as `Source` would create a second `FileId` that
+        // cannot be loaded.
+        self
+          .file_id_for_key(&target_key)
+          .unwrap_or_else(|| self.intern_file_key(target_key, FileOrigin::Source))
+      });
     self
       .typecheck_db
       .set_module_resolution(from, spec, resolved);
