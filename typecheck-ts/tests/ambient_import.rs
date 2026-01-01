@@ -90,7 +90,8 @@ fn imports_from_ambient_modules_without_host_resolution() {
   let y_def = program
     .definitions_in_file(file_id)
     .into_iter()
-    .find(|def| program.def_name(*def).as_deref() == Some("y"))
+    .filter(|def| program.def_name(*def).as_deref() == Some("y"))
+    .max_by_key(|def| program.var_initializer(*def).is_some())
     .expect("definition for y");
 
   let ty = program.type_of_def(y_def);
