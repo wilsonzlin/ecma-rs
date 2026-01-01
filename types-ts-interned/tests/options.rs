@@ -199,3 +199,15 @@ fn no_unchecked_indexed_access_adds_undefined() {
     other => panic!("expected union including undefined, got {other:?}"),
   }
 }
+
+#[test]
+#[should_panic]
+fn relate_ctx_panics_on_mismatched_store_options() {
+  let mut store_opts = TypeOptions::default();
+  store_opts.no_unchecked_indexed_access = true;
+  let store = TypeStore::with_options(store_opts);
+
+  // RelateCtx must use the store's options; constructing it with mismatched
+  // options should fail fast.
+  let _ctx = RelateCtx::new(store.clone(), TypeOptions::default());
+}

@@ -192,10 +192,21 @@ impl<'a> fmt::Debug for RelateCtx<'a> {
 }
 
 impl<'a> RelateCtx<'a> {
+  /// Create a new [`RelateCtx`].
+  ///
+  /// `options` must be exactly equal to [`TypeStore::options`]. Mismatched
+  /// options panic at runtime to prevent subtle inconsistencies between
+  /// relation checks and type normalization.
   pub fn new(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_options(store, options)
   }
 
+  /// Create a new [`RelateCtx`] with the given [`TypeOptions`].
+  ///
+  /// `options` must be exactly equal to [`TypeStore::options`]. Mismatched
+  /// options panic at runtime; if you need different semantics, construct the
+  /// store with [`TypeStore::with_options`] and then create a [`RelateCtx`] from
+  /// that store.
   pub fn with_options(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_hooks(store, options, RelateHooks::default())
   }
@@ -227,9 +238,14 @@ impl<'a> RelateCtx<'a> {
     hooks: RelateHooks<'a>,
     cache: RelationCache,
   ) -> Self {
+    let store_options = store.options();
+    assert_eq!(
+      options, store_options,
+      "RelateCtx TypeOptions must match the TypeStore options; build the store with TypeStore::with_options(...) to use different options"
+    );
     Self {
       store,
-      options,
+      options: store_options,
       hooks,
       cache,
       normalizer_caches: EvaluatorCaches::new(CacheConfig::default()),

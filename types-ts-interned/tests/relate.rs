@@ -46,7 +46,7 @@ fn callable(
 fn primitives_and_special_types() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let ctx = RelateCtx::new(store.clone(), default_options());
+  let ctx = RelateCtx::new(store.clone(), store.options());
 
   assert!(ctx.is_assignable(primitives.string, primitives.any));
   assert!(ctx.is_assignable(primitives.any, primitives.string));
@@ -59,15 +59,20 @@ fn primitives_and_special_types() {
   assert!(!ctx.is_assignable(primitives.null, primitives.string));
   assert!(!ctx.is_assignable(primitives.undefined, primitives.number));
 
-  let opts = TypeOptions {
+  let relaxed_store = TypeStore::with_options(TypeOptions {
     strict_null_checks: false,
-    strict_function_types: true,
-    exact_optional_property_types: false,
-    no_unchecked_indexed_access: false,
-  };
-  let relaxed = RelateCtx::new(store.clone(), opts);
-  assert!(relaxed.is_assignable(primitives.null, primitives.string));
-  assert!(relaxed.is_assignable(primitives.string, primitives.null));
+    ..default_options()
+  });
+  let relaxed_primitives = relaxed_store.primitive_ids();
+  let relaxed = RelateCtx::new(relaxed_store.clone(), relaxed_store.options());
+  assert!(relaxed.is_assignable(
+    relaxed_primitives.null,
+    relaxed_primitives.string
+  ));
+  assert!(relaxed.is_assignable(
+    relaxed_primitives.string,
+    relaxed_primitives.null
+  ));
 }
 
 #[test]
@@ -92,62 +97,63 @@ fn type_params_treated_as_unknown() {
 
 #[test]
 fn strict_null_checks_propagate_through_objects() {
-  let store = TypeStore::new();
-  let primitives = store.primitive_ids();
-  let nullable_number = store.union(vec![primitives.number, primitives.null]);
-  let required_nullable = object_type(
-    &store,
-    Shape {
-      properties: vec![Property {
-        key: PropKey::String(store.intern_name("a")),
-        data: PropData {
-          ty: nullable_number,
-          optional: false,
-          readonly: false,
-          accessibility: None,
-          is_method: false,
-          origin: None,
-          declared_on: None,
-        },
-      }],
-      call_signatures: vec![],
-      construct_signatures: vec![],
-      indexers: vec![],
-    },
-  );
-  let required_number = object_type(
-    &store,
-    Shape {
-      properties: vec![Property {
-        key: PropKey::String(store.intern_name("a")),
-        data: PropData {
-          ty: primitives.number,
-          optional: false,
-          readonly: false,
-          accessibility: None,
-          is_method: false,
-          origin: None,
-          declared_on: None,
-        },
-      }],
-      call_signatures: vec![],
-      construct_signatures: vec![],
-      indexers: vec![],
-    },
-  );
+  let build_required_types = |store: &TypeStore| {
+    let primitives = store.primitive_ids();
+    let nullable_number = store.union(vec![primitives.number, primitives.null]);
+    let required_nullable = object_type(
+      store,
+      Shape {
+        properties: vec![Property {
+          key: PropKey::String(store.intern_name("a")),
+          data: PropData {
+            ty: nullable_number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: vec![],
+        construct_signatures: vec![],
+        indexers: vec![],
+      },
+    );
+    let required_number = object_type(
+      store,
+      Shape {
+        properties: vec![Property {
+          key: PropKey::String(store.intern_name("a")),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: vec![],
+        construct_signatures: vec![],
+        indexers: vec![],
+      },
+    );
+    (required_nullable, required_number)
+  };
 
-  let strict = RelateCtx::new(store.clone(), default_options());
+  let strict_store = TypeStore::new();
+  let (required_nullable, required_number) = build_required_types(&strict_store);
+  let strict = RelateCtx::new(strict_store.clone(), strict_store.options());
   assert!(!strict.is_assignable(required_nullable, required_number));
 
-  let loose = RelateCtx::new(
-    store.clone(),
-    TypeOptions {
-      strict_null_checks: false,
-      strict_function_types: true,
-      exact_optional_property_types: false,
-      no_unchecked_indexed_access: false,
-    },
-  );
+  let loose_store = TypeStore::with_options(TypeOptions {
+    strict_null_checks: false,
+    ..default_options()
+  });
+  let (required_nullable, required_number) = build_required_types(&loose_store);
+  let loose = RelateCtx::new(loose_store.clone(), loose_store.options());
   assert!(loose.is_assignable(required_nullable, required_number));
 }
 
@@ -271,11 +277,11 @@ fn arrays_are_not_assignable_to_fixed_tuples() {
 
 #[test]
 fn function_variance_and_methods() {
-  let store = TypeStore::new();
-  let primitives = store.primitive_ids();
+  let strict_store = TypeStore::new();
+  let primitives = strict_store.primitive_ids();
   let num = primitives.number;
   let str_ty = primitives.string;
-  let num_or_str = store.union(vec![num, str_ty]);
+  let num_or_str = strict_store.union(vec![num, str_ty]);
 
   let param_num = Param {
     name: None,
@@ -290,14 +296,14 @@ fn function_variance_and_methods() {
     rest: false,
   };
 
-  let f_num = callable(&store, vec![param_num.clone()], num);
-  let f_num_or_str = callable(&store, vec![param_num_or_str.clone()], num);
+  let f_num = callable(&strict_store, vec![param_num.clone()], num);
+  let f_num_or_str = callable(&strict_store, vec![param_num_or_str.clone()], num);
 
-  let method_num = callable(&store, vec![param_num], num);
-  let method_num_or_str = callable(&store, vec![param_num_or_str], num);
+  let method_num = callable(&strict_store, vec![param_num], num);
+  let method_num_or_str = callable(&strict_store, vec![param_num_or_str], num);
 
   let prop_method_n = Property {
-    key: PropKey::String(store.intern_name("m")),
+    key: PropKey::String(strict_store.intern_name("m")),
     data: PropData {
       ty: method_num,
       optional: false,
@@ -309,7 +315,7 @@ fn function_variance_and_methods() {
     },
   };
   let prop_method_ns = Property {
-    key: PropKey::String(store.intern_name("m")),
+    key: PropKey::String(strict_store.intern_name("m")),
     data: PropData {
       ty: method_num_or_str,
       optional: false,
@@ -322,7 +328,7 @@ fn function_variance_and_methods() {
   };
 
   let obj_n = object_type(
-    &store,
+    &strict_store,
     Shape {
       properties: vec![prop_method_n],
       call_signatures: vec![],
@@ -331,7 +337,7 @@ fn function_variance_and_methods() {
     },
   );
   let obj_ns = object_type(
-    &store,
+    &strict_store,
     Shape {
       properties: vec![prop_method_ns],
       call_signatures: vec![],
@@ -340,19 +346,34 @@ fn function_variance_and_methods() {
     },
   );
 
-  let ctx_strict = RelateCtx::new(store.clone(), default_options());
+  let ctx_strict = RelateCtx::new(strict_store.clone(), strict_store.options());
   assert!(!ctx_strict.is_assignable(f_num, f_num_or_str));
   assert!(ctx_strict.is_assignable(f_num_or_str, f_num));
 
-  let loose_opts = TypeOptions {
-    strict_null_checks: true,
+  let loose_store = TypeStore::with_options(TypeOptions {
     strict_function_types: false,
-    exact_optional_property_types: false,
-    no_unchecked_indexed_access: false,
+    ..default_options()
+  });
+  let loose_primitives = loose_store.primitive_ids();
+  let loose_num = loose_primitives.number;
+  let loose_num_or_str = loose_store.union(vec![loose_num, loose_primitives.string]);
+  let loose_param_num = Param {
+    name: None,
+    ty: loose_num,
+    optional: false,
+    rest: false,
   };
-  let ctx_loose = RelateCtx::new(store.clone(), loose_opts);
-  assert!(ctx_loose.is_assignable(f_num, f_num_or_str));
-  assert!(ctx_loose.is_assignable(f_num_or_str, f_num));
+  let loose_param_num_or_str = Param {
+    name: None,
+    ty: loose_num_or_str,
+    optional: false,
+    rest: false,
+  };
+  let loose_f_num = callable(&loose_store, vec![loose_param_num], loose_num);
+  let loose_f_num_or_str = callable(&loose_store, vec![loose_param_num_or_str], loose_num);
+  let ctx_loose = RelateCtx::new(loose_store.clone(), loose_store.options());
+  assert!(ctx_loose.is_assignable(loose_f_num, loose_f_num_or_str));
+  assert!(ctx_loose.is_assignable(loose_f_num_or_str, loose_f_num));
 
   assert!(ctx_strict.is_assignable(obj_n, obj_ns));
   assert!(ctx_strict.is_assignable(obj_ns, obj_n));
@@ -477,7 +498,10 @@ fn index_signatures_cover_properties() {
 
 #[test]
 fn no_unchecked_indexed_access_makes_indexers_optional() {
-  let store = TypeStore::new();
+  let store = TypeStore::with_options(TypeOptions {
+    no_unchecked_indexed_access: true,
+    ..default_options()
+  });
   let primitives = store.primitive_ids();
   let num = primitives.number;
   let target_prop = Property {
@@ -515,13 +539,7 @@ fn no_unchecked_indexed_access_makes_indexers_optional() {
     },
   );
 
-  let ctx = RelateCtx::new(
-    store.clone(),
-    TypeOptions {
-      no_unchecked_indexed_access: true,
-      ..default_options()
-    },
-  );
+  let ctx = RelateCtx::new(store.clone(), store.options());
   assert!(!ctx.is_assignable(src, dst));
 }
 
