@@ -87,3 +87,36 @@ export const f = (x: import("./dep").Thing) => x;
     .expect("dep should be discovered via import() type in arrow param");
   assert_eq!(program.reachable_files(), vec![main_id, dep_id]);
 }
+
+#[test]
+fn typeof_import_in_arrow_return_enqueues_modules() {
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    include_dom: false,
+    ..Default::default()
+  });
+
+  let main = FileKey::new("main.ts");
+  let dep = FileKey::new("dep.ts");
+
+  host.insert(
+    main.clone(),
+    r#"
+export const f = (): typeof import("./dep").value => 1;
+"#,
+  );
+  host.insert(dep.clone(), "export const value: number = 1;");
+  host.link(main.clone(), "./dep", dep.clone());
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+
+  let main_id = program.file_id(&main).expect("main file id");
+  let dep_id = program
+    .file_id(&dep)
+    .expect("dep should be discovered via typeof import() in arrow return type");
+  assert_eq!(program.reachable_files(), vec![main_id, dep_id]);
+}
