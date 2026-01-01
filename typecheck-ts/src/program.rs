@@ -9081,6 +9081,7 @@ impl ProgramState {
     binding_defs: &mut HashMap<String, DefId>,
   ) -> Result<(), FatalError> {
     self.check_cancelled()?;
+    let unknown = self.interned_unknown();
     fn record_pat(
       state: &ProgramState,
       pat_id: HirPatId,
@@ -9096,14 +9097,12 @@ impl ProgramState {
       let Some(pat) = body.pats.get(pat_id.0 as usize) else {
         return;
       };
-      // Parent bodies may still be mid-check (e.g. recursive initializer checks), in
-      // which case `BodyCheckResult` can be empty and pattern types are missing.
-      //
-      // Nested bodies still need the *binding name* to exist so we don't emit
-      // spurious "unknown identifier" diagnostics; use an interned `unknown`
-      // type as a safe fallback so downstream type operations don't panic on
-      // non-interned `TypeId`s.
-      let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
+      let mut ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
+      if let Some(store) = state.interned_store.as_ref() {
+        if !store.contains_type_id(ty) {
+          ty = store.primitive_ids().unknown;
+        }
+      }
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
@@ -9111,9 +9110,6 @@ impl ProgramState {
             if !seen.insert(name.clone()) {
               return;
             }
-            // Even if `ty` is `unknown`, record the binding so nested bodies
-            // resolve the identifier and shadow any file/global binding with the
-            // same name.
             bindings.insert(name.clone(), ty);
             if let Some(def_id) = state
               .def_data
@@ -9218,11 +9214,6 @@ impl ProgramState {
 
     let mut visited = HashSet::new();
     let mut seen_names = HashSet::new();
-    let unknown = self
-      .interned_store
-      .as_ref()
-      .map(|store| store.primitive_ids().unknown)
-      .unwrap_or(self.builtin.unknown);
     let mut current = self.body_parents.get(&body_id).copied();
     if let Some(meta) = self.body_map.get(&body_id).copied() {
       if matches!(meta.kind, HirBodyKind::Initializer) {
@@ -10389,6 +10380,10 @@ impl ProgramState {
           for (idx, ty) in flow_result.expr_types.iter().enumerate() {
             if *ty != prim.unknown {
               let existing = result.expr_types[idx];
+              if matches!(body.exprs[idx].kind, hir_js::ExprKind::Ident(_)) {
+                result.expr_types[idx] = *ty;
+                continue;
+              }
               let narrower =
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
               let flow_literal_on_primitive = matches!(

@@ -38,7 +38,7 @@ use super::flow::{BindingKey, Env, FlowKey, InitState, PathSegment};
 use super::flow_bindings::{FlowBindingId, FlowBindings};
 use super::flow_narrow::{
   and_facts, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
-  narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
+  narrow_by_instanceof_rhs, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
   narrow_non_nullish, or_facts, truthy_falsy_types, Facts, LiteralValue,
 };
 
@@ -5493,9 +5493,15 @@ impl<'a> FlowBodyChecker<'a> {
         BinaryOp::Instanceof => {
           let left_expr = *left;
           let left_ty = self.eval_expr(left_expr, env).0;
-          let _ = self.eval_expr(*right, env);
+          let right_ty = self.eval_expr(*right, env).0;
           if let Some(binding) = self.ident_binding(left_expr) {
-            let (yes, no) = narrow_by_instanceof(left_ty, &self.store);
+            let (yes, no) = narrow_by_instanceof_rhs(
+              left_ty,
+              right_ty,
+              &self.store,
+              &self.relate,
+              self.ref_expander,
+            );
             let key = FlowKey::root(binding);
             facts.truthy.insert(key.clone(), yes);
             facts.falsy.insert(key, no);
