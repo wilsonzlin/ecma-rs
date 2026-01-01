@@ -151,6 +151,36 @@ import Alias = N.x;
 }
 
 #[test]
+fn import_equals_entity_name_aliases_namespace_import_member() {
+  let mut host = MemoryHost::new();
+  let dep = FileKey::new("dep.ts");
+  host.insert(dep, "export const Baz = 1 as const;");
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"
+import * as Bar from "./dep";
+import Foo = Bar.Baz;
+export const x = Foo;
+"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  let entry = exports.get("x").expect("export x");
+  let ty = entry
+    .type_id
+    .or_else(|| entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported x");
+  assert_eq!(program.display_type(ty).to_string(), "1");
+}
+
+#[test]
 fn ambient_modules_in_dts_do_not_make_globals_module_scoped() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
