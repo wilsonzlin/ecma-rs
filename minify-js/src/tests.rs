@@ -228,12 +228,39 @@ fn optimizes_object_literal_methods_in_expression_position() {
 }
 
 #[test]
+fn optimizes_arrow_functions_in_call_arguments() {
+  let result = minified(
+    TopLevelMode::Global,
+    "call(()=>{if(false){sideEffect()}return 1;});",
+  );
+  assert_eq!(result, "call(()=>{return 1;});");
+}
+
+#[test]
+fn optimizes_function_expressions_in_call_arguments() {
+  let result = minified(
+    TopLevelMode::Global,
+    "call(function(){if(false){sideEffect()}return 1;});",
+  );
+  assert_eq!(result, "call(function(){return 1;});");
+}
+
+#[test]
 fn optimizes_class_expression_methods_in_expression_position() {
   let result = minified(
     TopLevelMode::Global,
     "const C=class{m(){if(false){sideEffect()}return 1;}};",
   );
   assert_eq!(result, "const C=class{m(){return 1;}};");
+}
+
+#[test]
+fn optimizes_static_blocks_in_class_expressions() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const C=class{static{if(false){sideEffect()}let x=1;}};",
+  );
+  assert_eq!(result, "const C=class{static{}};");
 }
 
 #[test]
