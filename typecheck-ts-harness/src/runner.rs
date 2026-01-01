@@ -1803,13 +1803,13 @@ pub(crate) fn build_tsc_request(
     files.insert(name, Arc::clone(&file.content));
   }
 
-  let mut root_names: Vec<String> = file_set
+  // `HarnessFileSet::root_keys` already returns a deterministic, de-duplicated
+  // list of roots, so avoid re-sorting on every request.
+  let root_names: Vec<String> = file_set
     .root_keys()
     .into_iter()
     .map(|key| key.as_str().to_string())
     .collect();
-  root_names.sort();
-  root_names.dedup();
 
   TscRequest {
     root_names,
