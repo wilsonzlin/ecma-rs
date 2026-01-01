@@ -688,7 +688,6 @@ fn load_case_for_run(case: &TestCasePath) -> Result<TestCase> {
     id: case.id.clone(),
     path: case.path.clone(),
     files: split.files,
-    deduped_files: split.deduped_files,
     directives: split.directives.clone(),
     options: HarnessOptions::from_directives(&split.directives),
     notes: split.notes,
@@ -979,7 +978,7 @@ fn execute_case(
     }
   }
   let notes = case.notes.clone();
-  let file_set = HarnessFileSet::new(&case.deduped_files);
+  let file_set = HarnessFileSet::new(&case.files);
   let harness_options = case.options.clone();
 
   let rust_start = Instant::now();
@@ -2773,10 +2772,6 @@ echo '{"diagnostics":[]}'
       id: "timeout.ts".to_string(),
       path: PathBuf::from("timeout.ts"),
       files: vec![VirtualFile {
-        name: "timeout.ts".to_string(),
-        content: "const x = 1;\n".into(),
-      }],
-      deduped_files: vec![VirtualFile {
         name: "timeout.ts".to_string(),
         content: "const x = 1;\n".into(),
       }],

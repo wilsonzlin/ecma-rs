@@ -2,7 +2,6 @@ use crate::directives::parse_directive;
 use crate::directives::HarnessDirective;
 use diagnostics::paths::normalize_ts_path;
 use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 pub(crate) fn normalize_name(name: &str) -> String {
@@ -18,7 +17,6 @@ pub struct VirtualFile {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitResult {
   pub files: Vec<VirtualFile>,
-  pub deduped_files: Vec<VirtualFile>,
   pub directives: Vec<HarnessDirective>,
   pub notes: Vec<String>,
 }
@@ -94,17 +92,6 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
       result.notes.push(format!(
         "duplicate @filename entry for {name}; last one wins"
       ));
-    }
-  }
-
-  let mut last_occurrence = HashMap::new();
-  for (idx, file) in result.files.iter().enumerate() {
-    last_occurrence.insert(normalize_name(&file.name), idx);
-  }
-  for (idx, file) in result.files.iter().enumerate() {
-    let normalized = normalize_name(&file.name);
-    if last_occurrence.get(&normalized).copied() == Some(idx) {
-      result.deduped_files.push(file.clone());
     }
   }
 
@@ -186,12 +173,8 @@ mod tests {
     let result = split_test_file(Path::new("dupe.ts"), source);
 
     assert_eq!(result.files.len(), 2);
-    assert_eq!(result.deduped_files.len(), 1);
-    assert_eq!(result.deduped_files[0].name, "./a.ts");
-    assert_eq!(
-      result.deduped_files[0].content.as_ref(),
-      "const second = 2;\n"
-    );
+    assert_eq!(result.files[0].name, "a.ts");
+    assert_eq!(result.files[1].name, "./a.ts");
     assert_eq!(
       result.notes,
       vec!["duplicate @filename entry for /a.ts; last one wins"]
@@ -255,9 +238,6 @@ const second = 2;
 
     let result = split_test_file(Path::new("paths.ts"), source);
     assert_eq!(result.files.len(), 2);
-    assert_eq!(result.deduped_files.len(), 1);
-    assert_eq!(result.deduped_files[0].name, "src/util.ts");
-    assert_eq!(result.deduped_files[0].content.trim(), "const second = 2;");
     assert!(result
       .notes
       .iter()
