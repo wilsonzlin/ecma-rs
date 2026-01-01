@@ -1,5 +1,7 @@
 use crate::expr_js::{emit_expr, ExprCtx};
-use crate::module_names::{emit_module_binding_identifier_or_string_literal, is_module_binding_identifier_token};
+use crate::module_names::{
+  emit_module_binding_identifier_or_string_literal, is_module_binding_identifier_token,
+};
 use crate::ts_type::{emit_ts_type, emit_type_parameters};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
 use parse_js::ast::class_or_object::{
