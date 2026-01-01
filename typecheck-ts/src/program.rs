@@ -8521,6 +8521,55 @@ impl ProgramState {
     defs: &mut Vec<DefId>,
   ) {
     match stmt.stx.as_ref() {
+      Stmt::AmbientVarDecl(var) => {
+        let span = loc_to_span(file, stmt.loc);
+        let name = var.stx.name.clone();
+        let typ = var
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|t| self.type_from_type_expr(t));
+        let symbol = self.alloc_symbol();
+        let def_id = self.alloc_def();
+        self.record_symbol(file, span.range, symbol);
+        self.def_data.insert(
+          def_id,
+          DefData {
+            name: name.clone(),
+            file,
+            span: span.range,
+            symbol,
+            export: var.stx.export,
+            kind: DefKind::Var(VarData {
+              typ,
+              init: None,
+              body: BodyId(u32::MAX),
+              mode: VarDeclMode::Var,
+            }),
+          },
+        );
+        self.record_def_symbol(def_id, symbol);
+        defs.push(def_id);
+        bindings.insert(
+          name.clone(),
+          SymbolBinding {
+            symbol,
+            def: Some(def_id),
+            type_id: typ,
+          },
+        );
+        builder.add_decl(
+          def_id,
+          name,
+          sem_ts::DeclKind::Var,
+          if var.stx.export {
+            sem_ts::Exported::Named
+          } else {
+            sem_ts::Exported::No
+          },
+          span.range,
+        );
+      }
       Stmt::VarDecl(var) => {
         let new_defs = self.handle_var_decl(file, var.stx.as_ref(), builder);
         for (def_id, binding, _export_name) in new_defs {
@@ -10929,6 +10978,14 @@ impl ProgramState {
     ) -> Option<TypeId> {
       for stmt in stmts {
         match stmt.stx.as_ref() {
+          Stmt::AmbientVarDecl(var) => {
+            let span = loc_to_span(file, stmt.loc).range;
+            if span == target {
+              if let Some(ann) = var.stx.type_annotation.as_ref() {
+                return Some(state.lower_interned_type_expr(file, ann));
+              }
+            }
+          }
           Stmt::VarDecl(var) => {
             for decl in var.stx.declarators.iter() {
               let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
@@ -10947,6 +11004,13 @@ impl ProgramState {
           Stmt::NamespaceDecl(ns) => {
             if let Some(ty) = walk_namespace(state, file, &ns.stx.body, target) {
               return Some(ty);
+            }
+          }
+          Stmt::ModuleDecl(module) => {
+            if let Some(body) = &module.stx.body {
+              if let Some(ty) = walk(state, file, body, target) {
+                return Some(ty);
+              }
             }
           }
           Stmt::GlobalDecl(global) => {

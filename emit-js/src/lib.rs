@@ -1,3 +1,21 @@
+//! JavaScript/TypeScript emitter for the ecma-rs toolchain.
+//!
+//! `emit-js` prints either a `parse-js` AST or lowered `hir-js` structures back
+//! to UTF-8 source text. The [`Emitter`] is boundary-aware: when emitting
+//! token-like fragments it inserts the minimum whitespace needed to avoid
+//! tokenization ambiguities.
+//!
+//! # Example
+//! ```no_run
+//! use diagnostics::FileId;
+//! use emit_js::{emit_top_level_diagnostic, EmitOptions};
+//! use parse_js::parse;
+//!
+//! let ast = parse("let x = 1;").unwrap();
+//! let out = emit_top_level_diagnostic(FileId(0), &ast, EmitOptions::minified()).unwrap();
+//! println!("{out}");
+//! ```
+
 pub mod asi;
 mod emitter;
 mod escape;

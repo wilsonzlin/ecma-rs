@@ -114,5 +114,5 @@ const min = minify("global", src);
   - Replace `const` with `let`.
   - Hoist `let` and `const`.
   - Unwrapping blocks.
-  - Unwrapping paretheses, altering expressions as necessary.
+  - Unwrapping parentheses, altering expressions as necessary.
   - `if (...) return a; else if (...) return b; else return c` => `return (...) ? a : (...) ? b : c`.

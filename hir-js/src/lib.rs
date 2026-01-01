@@ -1,3 +1,21 @@
+//! Deterministic lowering from `parse-js` AST into a semantic-friendly HIR.
+//!
+//! `hir-js` turns a `parse-js` [`parse_js::ast::stx::TopLevel`] AST into a
+//! [`HirFile`] plus per-definition bodies and arenas, assigning deterministic IDs
+//! (`DefId`, `BodyId`, `ExprId`, `PatId`, `TypeExprId`) and building a [`SpanMap`]
+//! for byte-offset lookups.
+//!
+//! Call [`lower_file`] if you already have a parsed AST. For tests and simple
+//! tooling, [`lower_from_source_with_kind`] parses and lowers in one step.
+//!
+//! # Example
+//! ```
+//! use hir_js::{lower_from_source_with_kind, FileKind};
+//!
+//! let lowered = lower_from_source_with_kind(FileKind::Ts, "export const x = 1;").unwrap();
+//! assert_eq!(lowered.hir.file_kind, FileKind::Ts);
+//! ```
+
 pub mod hir;
 pub mod ids;
 pub mod intern;

@@ -1,3 +1,26 @@
+//! SSA-based JavaScript optimizer and decompiler.
+//!
+//! The optimizer lowers `parse-js` source into `hir-js`, builds an SSA-based
+//! intermediate representation, runs optimization passes, and can decompile the
+//! result back to a `parse-js` AST or emitted JavaScript.
+//!
+//! The public entry point for one-shot compilation is [`compile_source`]. See
+//! [`program_to_js`] / [`program_to_ast`] for decompilation.
+//!
+//! # Example
+//! ```no_run
+//! use optimize_js::{compile_source, program_to_js, DecompileOptions, TopLevelMode};
+//!
+//! let program = compile_source("let x = 1;", TopLevelMode::Module, false).unwrap();
+//! let bytes = program_to_js(
+//!   &program,
+//!   &DecompileOptions::default(),
+//!   emit_js::EmitOptions::minified(),
+//! )
+//! .unwrap();
+//! println!("{}", String::from_utf8_lossy(&bytes));
+//! ```
+
 pub mod analysis;
 pub mod cfg;
 pub mod decompile;

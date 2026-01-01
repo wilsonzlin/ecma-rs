@@ -1,5 +1,23 @@
 #![deny(missing_debug_implementations)]
 
+//! Deterministic, interned TypeScript type representation.
+//!
+//! [`TypeStore`] interns canonicalized [`TypeKind`] values into stable IDs
+//! (`TypeId`, `ShapeId`, `ObjectId`, `SignatureId`, ...). IDs are derived from
+//! stable hashes so insertion order (and parallelism) does not affect results.
+//!
+//! # Example
+//! ```
+//! use types_ts_interned::{TypeDisplay, TypeStore};
+//!
+//! let store = TypeStore::new();
+//! let primitives = store.primitive_ids();
+//! assert_eq!(
+//!   TypeDisplay::new(store.as_ref(), primitives.number).to_string(),
+//!   "number"
+//! );
+//! ```
+
 mod cache;
 mod display;
 mod eval;
