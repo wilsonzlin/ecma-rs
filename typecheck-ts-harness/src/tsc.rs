@@ -32,8 +32,8 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TscRequest {
-  pub root_names: Vec<String>,
-  pub files: HashMap<String, Arc<str>>,
+  pub root_names: Vec<Arc<str>>,
+  pub files: HashMap<Arc<str>, Arc<str>>,
   #[serde(default)]
   pub options: Map<String, Value>,
   /// When set, the runner will skip collecting type facts (exports/markers) and

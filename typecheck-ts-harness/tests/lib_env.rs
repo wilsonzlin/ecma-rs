@@ -97,11 +97,12 @@ fn run_tsc(
   file: &VirtualFile,
   options: Map<String, Value>,
 ) -> TscDiagnostics {
+  let name: Arc<str> = file.name.clone().into();
   let mut files = HashMap::new();
-  files.insert(file.name.clone(), Arc::clone(&file.content));
+  files.insert(Arc::clone(&name), Arc::clone(&file.content));
 
   let request = TscRequest {
-    root_names: vec![file.name.clone()],
+    root_names: vec![name],
     files,
     options,
     diagnostics_only: true,

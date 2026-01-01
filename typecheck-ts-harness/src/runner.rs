@@ -1811,16 +1811,15 @@ pub(crate) fn build_tsc_request(
   let mut files = HashMap::with_capacity(file_set.inner.files.len());
 
   for file in file_set.iter() {
-    let name = file.key.as_str().to_string();
-    files.insert(name, Arc::clone(&file.content));
+    files.insert(Arc::clone(&file.key.0), Arc::clone(&file.content));
   }
 
   // `HarnessFileSet::root_keys` already returns a deterministic, de-duplicated
   // list of roots, so avoid re-sorting on every request.
-  let root_names: Vec<String> = file_set
+  let root_names: Vec<Arc<str>> = file_set
     .root_keys()
     .into_iter()
-    .map(|key| key.as_str().to_string())
+    .map(|key| key.0)
     .collect();
 
   TscRequest {

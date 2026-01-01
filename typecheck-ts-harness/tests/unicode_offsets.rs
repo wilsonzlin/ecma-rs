@@ -18,11 +18,12 @@ fn diagnostics_report_utf8_byte_offsets() {
   let expected_start = source.find("notDefined").expect("expected marker to exist") as u32;
   let expected_end = expected_start + "notDefined".len() as u32;
 
+  let name: Arc<str> = Arc::from("main.ts");
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), Arc::from(source));
+  files.insert(Arc::clone(&name), Arc::from(source));
 
   let request = TscRequest {
-    root_names: vec!["main.ts".to_string()],
+    root_names: vec![name],
     files,
     options: Map::new(),
     diagnostics_only: true,
@@ -50,11 +51,12 @@ fn auto_scanned_type_queries_use_utf8_byte_offsets() {
   let expected_offset =
     source.find("const t = ").expect("expected const usage") + "const t = ".len();
 
+  let name: Arc<str> = Arc::from("main.ts");
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), Arc::from(source));
+  files.insert(Arc::clone(&name), Arc::from(source));
 
   let request = TscRequest {
-    root_names: vec!["main.ts".to_string()],
+    root_names: vec![name],
     files,
     options: Map::new(),
     diagnostics_only: false,
@@ -81,11 +83,12 @@ fn provided_type_queries_convert_utf8_offsets_for_typescript() {
   let source = format!("let s = \"{emojis}\";\nlet a = 1;\nconst b = s;\n");
   let expected_offset = source.find("let a").expect("expected let a") + "let ".len();
 
+  let name: Arc<str> = Arc::from("main.ts");
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), Arc::from(source));
+  files.insert(Arc::clone(&name), Arc::from(source));
 
   let request = TscRequest {
-    root_names: vec!["main.ts".to_string()],
+    root_names: vec![name],
     files,
     options: Map::new(),
     diagnostics_only: false,

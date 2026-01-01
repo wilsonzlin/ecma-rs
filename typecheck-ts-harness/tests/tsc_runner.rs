@@ -14,11 +14,12 @@ fn reports_single_file_error() {
     None => return,
   };
 
+  let name: Arc<str> = Arc::from("main.ts");
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), Arc::from("const value: string = 1;"));
+  files.insert(Arc::clone(&name), Arc::from("const value: string = 1;"));
 
   let request = TscRequest {
-    root_names: vec!["main.ts".to_string()],
+    root_names: vec![name],
     files,
     options: Map::new(),
     diagnostics_only: true,
@@ -44,18 +45,20 @@ fn resolves_relative_imports_across_files() {
     None => return,
   };
 
+  let a_name: Arc<str> = Arc::from("a.ts");
+  let b_name: Arc<str> = Arc::from("b.ts");
   let mut files = HashMap::new();
   files.insert(
-    "a.ts".to_string(),
+    Arc::clone(&a_name),
     Arc::from("export const value: number = 1;"),
   );
   files.insert(
-    "b.ts".to_string(),
+    Arc::clone(&b_name),
     Arc::from("import { value } from './a';\nconst str: string = value;\n"),
   );
 
   let request = TscRequest {
-    root_names: vec!["a.ts".to_string(), "b.ts".to_string()],
+    root_names: vec![a_name, b_name],
     files,
     options: Map::new(),
     diagnostics_only: true,
