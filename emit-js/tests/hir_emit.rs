@@ -131,6 +131,14 @@ fn hir_emission_drops_type_only_named_imports() {
 }
 
 #[test]
+fn hir_emission_drops_type_only_export_all() {
+  let source = r#"export type * from "mod"; export const x = 1;"#;
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower TS source");
+  let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
+  assert_eq!(emitted, "export const x=1;");
+}
+
+#[test]
 fn do_while_emits_trailing_semicolon() {
   // The trailing semicolon is required for a `do...while` statement to be
   // parseable when immediately followed by another statement in minified output

@@ -408,6 +408,11 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
 }
 
 fn emit_export_all(em: &mut Emitter, ctx: &HirContext<'_>, all: &ExportAll) -> EmitResult {
+  // Type-only export star declarations (`export type * from "mod"`) do not
+  // produce runtime code after type erasure.
+  if all.is_type_only {
+    return Ok(());
+  }
   em.write_keyword("export");
   em.write_punct("*");
   if let Some(alias) = &all.alias {
