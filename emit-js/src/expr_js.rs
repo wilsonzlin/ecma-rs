@@ -1,6 +1,7 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{cooked_template_segment, emit_template_literal_segment};
 use crate::pat::emit_class_or_object_key;
+use crate::precedence::starts_with_optional_chaining;
 use crate::stmt::{emit_class_like, emit_decorators};
 use crate::ts_type::{emit_ts_type, emit_type_expr};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -100,8 +101,8 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
         .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
     ),
     Expr::NonNullAssertion(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    Expr::TypeAssertion(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    Expr::SatisfiesExpr(_) => Ok(CALL_MEMBER_PRECEDENCE),
+    Expr::TypeAssertion(_) => Ok(crate::precedence::TYPE_ASSERTION_PRECEDENCE.value()),
+    Expr::SatisfiesExpr(_) => Ok(crate::precedence::SATISFIES_PRECEDENCE.value()),
     Expr::ArrowFunc(_) => Ok(ARROW_PRECEDENCE),
     Expr::Func(_) | Expr::Class(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Import(_) => Ok(CALL_MEMBER_PRECEDENCE),
@@ -281,10 +282,19 @@ fn emit_computed_member(
 }
 
 fn emit_unary(em: &mut Emitter, unary: &Node<UnaryExpr>, ctx: ExprCtx) -> EmitResult {
+  if unary.stx.operator == OperatorName::New {
+    return emit_new_expr(em, &unary.stx.argument, ctx);
+  }
+
   let op = unary_operator_text(unary.stx.operator)?;
   match unary.stx.operator {
     OperatorName::Typeof | OperatorName::Void | OperatorName::Delete | OperatorName::Await => {
       em.write_keyword(op)
+    }
+    OperatorName::Yield => em.write_keyword(op),
+    OperatorName::YieldDelegated => {
+      em.write_keyword(op);
+      em.write_punct("*");
     }
     OperatorName::LogicalNot
     | OperatorName::BitwiseNot
@@ -299,6 +309,54 @@ fn emit_unary(em: &mut Emitter, unary: &Node<UnaryExpr>, ctx: ExprCtx) -> EmitRe
     .ok_or_else(|| EmitError::unsupported("unknown operator"))?
     .precedence;
   emit_expr_with_min_prec(em, &unary.stx.argument, prec, ctx)
+}
+
+fn emit_new_expr(em: &mut Emitter, argument: &Node<Expr>, ctx: ExprCtx) -> EmitResult {
+  em.write_keyword("new");
+
+  match argument.stx.as_ref() {
+    Expr::Call(call) => {
+      if call.stx.optional_chaining {
+        em.write_punct("(");
+        emit_call(em, call, ctx)?;
+        em.write_punct(")");
+        return Ok(());
+      }
+
+      let callee = &call.stx.callee;
+      if starts_with_optional_chaining(callee) {
+        em.write_punct("(");
+        emit_expr_with_min_prec(em, callee, CALL_MEMBER_PRECEDENCE, ctx)?;
+        em.write_punct(")");
+      } else {
+        emit_expr_with_min_prec(em, callee, CALL_MEMBER_PRECEDENCE, ctx)?;
+      }
+
+      em.write_punct("(");
+      for (i, arg) in call.stx.arguments.iter().enumerate() {
+        if i > 0 {
+          em.write_punct(",");
+        }
+        let CallArg { spread, value } = arg.stx.as_ref();
+        if *spread {
+          em.write_punct("...");
+        }
+        emit_expr_with_min_prec(em, value, 1, ctx)?;
+      }
+      em.write_punct(")");
+      Ok(())
+    }
+    _ => {
+      if starts_with_optional_chaining(argument) {
+        em.write_punct("(");
+        emit_expr_with_min_prec(em, argument, CALL_MEMBER_PRECEDENCE, ctx)?;
+        em.write_punct(")");
+      } else {
+        emit_expr_with_min_prec(em, argument, CALL_MEMBER_PRECEDENCE, ctx)?;
+      }
+      Ok(())
+    }
+  }
 }
 
 fn emit_postfix(em: &mut Emitter, postfix: &Node<UnaryPostfixExpr>, ctx: ExprCtx) -> EmitResult {
@@ -675,6 +733,8 @@ fn unary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     OperatorName::Void => Ok("void"),
     OperatorName::Delete => Ok("delete"),
     OperatorName::Await => Ok("await"),
+    OperatorName::Yield => Ok("yield"),
+    OperatorName::YieldDelegated => Ok("yield"),
     _ => Err(EmitError::unsupported("unsupported unary operator")),
   }
 }

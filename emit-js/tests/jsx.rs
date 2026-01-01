@@ -492,13 +492,13 @@ fn emits_real_world_tsx_patterns_using_js_emitter_for_nested_exprs() {
   // non-empty block bodies. Attribute/child expressions must use `expr_js` so common React patterns
   // like `onClick={() => { ... }}` work.
   let source = r#"
-    const a = <button onClick={() => { foo(); bar(); }}>Hi</button>;
+    const a = <button onClick={() => { foo(); new Promise((resolve) => { bar(); resolve(); }); }}>Hi</button>;
     const b = <div {...(cond ? getA() : getB())}>{x ? foo() : bar()}</div>;
   "#;
 
   assert_emits_tsx_in_both_modes(
     source,
-    "const a=<button onClick={()=>{foo();bar();}}>Hi</button>;const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
-    "const a=<button onClick={()=>{foo();bar();}}>Hi</button>;\nconst b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+    "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+    "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;\nconst b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
   );
 }
