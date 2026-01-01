@@ -1134,7 +1134,7 @@ function onlyObjects(val: object | number) {
   );
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
-  assert_eq!(then_ty, "{}");
+  assert_eq!(then_ty, "object");
   assert_eq!(else_ty, "number");
 }
 

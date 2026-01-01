@@ -929,6 +929,11 @@ impl<'a> Checker<'a> {
       self.check_cancelled();
       if let Some(init) = info.initializer {
         let init = unsafe { &*init };
+        // Initializer bodies can be nested inside functions. Bind any enclosing
+        // function parameters so references like `const x = param;` do not emit
+        // spurious `unknown identifier` diagnostics when the initializer is
+        // type-checked in isolation.
+        self.bind_enclosing_params(loc_to_range(self.file, init.loc));
         let annotation = info
           .type_annotation
           .map(|ann| unsafe { &*ann })
@@ -976,6 +981,49 @@ impl<'a> Checker<'a> {
       return true;
     }
     false
+  }
+
+  fn bind_enclosing_params(&mut self, span: TextRange) {
+    let mut best: Option<FunctionInfo> = None;
+    for func in self.index.functions.iter().copied() {
+      let contains = func.func_span.start <= span.start && func.func_span.end >= span.end;
+      if !contains {
+        continue;
+      }
+      let len = func.func_span.end.saturating_sub(func.func_span.start);
+      let replace = match best {
+        Some(existing) => {
+          let existing_len = existing
+            .func_span
+            .end
+            .saturating_sub(existing.func_span.start);
+          len < existing_len
+        }
+        None => true,
+      };
+      if replace {
+        best = Some(func);
+      }
+    }
+
+    let Some(func) = best else {
+      return;
+    };
+    let func_node = unsafe { &*func.func };
+
+    let mut type_param_decls = Vec::new();
+    let mut has_type_params = false;
+    if let Some(params) = func_node.stx.type_parameters.as_ref() {
+      self.lowerer.push_type_param_scope();
+      has_type_params = true;
+      type_param_decls = self.lower_type_params(params);
+    }
+
+    self.bind_params(func_node, &type_param_decls, None);
+
+    if has_type_params {
+      self.lowerer.pop_type_param_scope();
+    }
   }
 
   fn bind_params(
@@ -5572,9 +5620,15 @@ impl<'a> FlowBodyChecker<'a> {
   fn optional_chain_info(&mut self, expr: ExprId) -> Option<OptionalChainInfo> {
     match &self.body.exprs[expr.0 as usize].kind {
       ExprKind::Member(mem) if mem.optional => {
+        let prim = self.store.primitive_ids();
         let base = self.optional_chain_root(mem.object)?;
         let base_ty = self.expr_types[mem.object.0 as usize];
-        let result_ty = Some(self.member_type(base_ty, mem));
+        let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
+        let result_ty = Some(if non_nullish == prim.never {
+          prim.never
+        } else {
+          self.member_type(non_nullish, mem)
+        });
         Some(OptionalChainInfo {
           base,
           base_ty,

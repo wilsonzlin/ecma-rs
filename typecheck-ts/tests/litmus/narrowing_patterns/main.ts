@@ -30,7 +30,7 @@ function onlyObjects(val: object | number) {
   return val;
 }
 
-// expect-expr-type: inner; = {}
+// expect-expr-type: inner; = object
 
 function area(shape: { kind: "square", size: number } | { kind: "circle", radius: number }) {
   switch (shape.kind) {
