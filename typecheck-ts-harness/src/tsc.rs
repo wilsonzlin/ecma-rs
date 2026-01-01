@@ -253,6 +253,9 @@ impl TscRunner {
     request: TscRequest,
     cancel: &AtomicBool,
   ) -> anyhow::Result<TscDiagnostics> {
+    if cancel.load(Ordering::Relaxed) {
+      bail!("tsc request cancelled");
+    }
     self.ensure_running()?;
     self.check_inner(request, cancel)
   }
@@ -264,6 +267,9 @@ impl TscRunner {
   ) -> anyhow::Result<TscDiagnostics> {
     let mut attempts = 0;
     loop {
+      if cancel.load(Ordering::Relaxed) {
+        bail!("tsc request cancelled");
+      }
       attempts += 1;
       match self.send(&request) {
         Ok(mut diags) => {

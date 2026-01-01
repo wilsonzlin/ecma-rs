@@ -1514,7 +1514,6 @@ fn tsc_worker_loop(
   for command in rx {
     match command {
       TscWorkerCommand::Run { request, reply } => {
-        cancel.store(false, Ordering::Relaxed);
         let outcome = if let Some(runner) = runner.as_mut() {
           run_tsc_request(runner, request, &cancel)
         } else {
