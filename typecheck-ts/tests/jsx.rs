@@ -423,6 +423,43 @@ declare namespace JSX {
 }
 
 #[test]
+fn spread_attributes_are_contextually_typed() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+  options.no_implicit_any = true;
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+ function Foo(props: { onClick?: (ev: { x: number }) => void }): JSX.Element { return null as any; }
+ <Foo {...{ onClick: (ev) => { const n: number = ev.x; } }} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics (including implicit any) for contextually typed spread attrs, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn component_props_checked_for_imported_component_and_imported_value_used_only_in_jsx() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;

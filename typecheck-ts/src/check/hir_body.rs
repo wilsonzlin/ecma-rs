@@ -2215,7 +2215,10 @@ impl<'a> Checker<'a> {
         }
         JsxAttr::Spread { value } => {
           has_spread = true;
-          spreads.push(self.check_expr(&value.stx.value));
+          let expected_ty = expected
+            .filter(|ty| !matches!(self.store.type_kind(*ty), TypeKind::Any | TypeKind::Unknown))
+            .unwrap_or(prim.unknown);
+          spreads.push(self.check_expr_with_expected(&value.stx.value, expected_ty));
         }
       }
     }
