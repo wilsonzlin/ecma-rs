@@ -89,3 +89,34 @@ fn unresolved_modules_emit_diagnostics() {
     assert_eq!(diag.primary.file, file);
   }
 }
+
+#[test]
+fn unresolved_type_only_modules_emit_diagnostics() {
+  let mut db = TypecheckDb::default();
+  let file = FileId(20);
+  let key = FileKey::new("entry.ts");
+  db.set_roots(Arc::from([key.clone()]));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from(
+      r#"type T = import("./missing").Thing;
+type U = typeof import("./also").value;"#,
+    ),
+    FileOrigin::Source,
+  );
+  db.set_module_resolution(file, Arc::<str>::from("./missing"), None);
+  db.set_module_resolution(file, Arc::<str>::from("./also"), None);
+
+  let diags = db.module_dep_diagnostics(file);
+  assert_eq!(
+    diags.len(),
+    2,
+    "type-only module references should also surface unresolved diagnostics"
+  );
+  for diag in diags.iter() {
+    assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
+    assert_eq!(diag.primary.file, file);
+  }
+}

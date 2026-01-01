@@ -142,50 +142,50 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
   let mut diagnostics = Vec::new();
   let file_id = file.file_id(db);
   let source = file_text_for(db, file);
-  let refine_spec_span = |spec: &hir_js::ModuleSpecifier| -> TextRange {
-    if (spec.span.end as usize) <= source.len() {
-      if let Some(segment) = source.get(spec.span.start as usize..spec.span.end as usize) {
+  let refine_span = |span: TextRange, value: &str| -> TextRange {
+    if (span.end as usize) <= source.len() {
+      if let Some(segment) = source.get(span.start as usize..span.end as usize) {
         for quote in ['"', '\'', '`'] {
-          let needle = format!("{quote}{}{quote}", spec.value);
+          let needle = format!("{quote}{value}{quote}");
           if let Some(idx) = segment.find(&needle) {
-            let start = spec.span.start + idx as u32;
+            let start = span.start + idx as u32;
             let end = start + needle.len() as u32;
             return TextRange::new(start, end);
           }
         }
       }
     }
-    spec.span
+    span
   };
   let mut seen = BTreeSet::new();
-  let mut check_specifier =
-    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
-      db,
-      file_id,
-      Arc::<str>::from(spec.value.clone()),
-    ) {
+  let mut check_specifier_value = |specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>| {
+    match module_resolve(db, file_id, Arc::<str>::from(specifier)) {
       Some(_) => {}
       None => {
         if semantics
           .semantics
-          .exports_of_ambient_module(spec.value.as_str())
+          .exports_of_ambient_module(specifier)
           .is_some()
         {
           return;
         }
-        let range = refine_spec_span(spec);
-        let key = (range.start, range.end, spec.value.clone());
+        let range = refine_span(span, specifier);
+        let key = (range.start, range.end, specifier.to_string());
         if !seen.insert(key) {
           return;
         }
         let mut diag = codes::UNRESOLVED_MODULE.error(
-          format!("unresolved module specifier \"{}\"", spec.value),
+          format!("unresolved module specifier \"{specifier}\""),
           Span::new(file_id, range),
         );
-        diag.push_note(format!("module specifier: \"{}\"", spec.value));
+        diag.push_note(format!("module specifier: \"{specifier}\""));
         diags.push(diag);
       }
-    };
+    }
+  };
+  let mut check_specifier = |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| {
+    check_specifier_value(&spec.value, spec.span, diags);
+  };
 
   for import in lowered.hir.imports.iter() {
     match &import.kind {
@@ -211,6 +211,13 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
         check_specifier(&all.source, &mut diagnostics);
       }
       ExportKind::Default(_) | ExportKind::Assignment(_) | ExportKind::AsNamespace(_) => {}
+    }
+  }
+
+  let parsed = parse_for(db, file);
+  if let Some(ast) = parsed.ast.as_deref() {
+    for (specifier, span) in collect_type_only_module_specifiers_from_ast(ast) {
+      check_specifier_value(specifier.as_ref(), span, &mut diagnostics);
     }
   }
 
