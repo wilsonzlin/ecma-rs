@@ -711,7 +711,9 @@ fn execute_case(
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => run_live_tsc("tsc unavailable"),
-    CompareMode::Snapshot if update_snapshots => run_live_tsc("tsc unavailable for snapshot update"),
+    CompareMode::Snapshot if update_snapshots => {
+      run_live_tsc("tsc unavailable for snapshot update")
+    }
     CompareMode::Snapshot => match snapshots.load(&case.id) {
       Ok(snapshot) => {
         let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
