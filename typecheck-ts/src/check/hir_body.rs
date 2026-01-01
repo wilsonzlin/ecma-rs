@@ -2152,9 +2152,8 @@ impl<'a> Checker<'a> {
     };
 
     let element_class_ty = is_construct.then(|| self.jsx_element_class_type());
-    let enforce_element_class = element_class_ty.is_some_and(|ty| {
-      !matches!(self.store.type_kind(ty), TypeKind::Any | TypeKind::Unknown)
-    });
+    let enforce_element_class = element_class_ty
+      .is_some_and(|ty| !matches!(self.store.type_kind(ty), TypeKind::Any | TypeKind::Unknown));
 
     let args = [actual_props.ty];
     let contextual_return_ty = contextual_return.then_some(element_ty);
@@ -2172,7 +2171,10 @@ impl<'a> Checker<'a> {
         ret_ty = substituter.substitute_type(ret_ty);
       }
       if enforce_element_class
-        && !matches!(self.store.type_kind(ret_ty), TypeKind::Any | TypeKind::Unknown)
+        && !matches!(
+          self.store.type_kind(ret_ty),
+          TypeKind::Any | TypeKind::Unknown
+        )
       {
         let class_ty = element_class_ty.expect("enforced element class type");
         if !self.relate.is_assignable(ret_ty, class_ty) {
@@ -2203,7 +2205,10 @@ impl<'a> Checker<'a> {
       let class_ty = element_class_ty.expect("enforced element class type");
       self.diagnostics.push(
         codes::NO_OVERLOAD
-          .error("JSX class component does not satisfy JSX.ElementClass", span)
+          .error(
+            "JSX class component does not satisfy JSX.ElementClass",
+            span,
+          )
           .with_note(format!(
             "expected JSX.ElementClass {}, got component type {}",
             TypeDisplay::new(self.store.as_ref(), class_ty),

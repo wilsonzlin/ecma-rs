@@ -1341,7 +1341,10 @@ fn format_location(diag: &NormalizedDiagnostic, files: &HashMap<String, Arc<str>
   }
 }
 
-fn render_context(diag: &NormalizedDiagnostic, files: &HashMap<String, Arc<str>>) -> Option<String> {
+fn render_context(
+  diag: &NormalizedDiagnostic,
+  files: &HashMap<String, Arc<str>>,
+) -> Option<String> {
   let file = diag.file.as_ref()?;
   let content = files.get(file)?;
   let lines = collect_lines(content);
