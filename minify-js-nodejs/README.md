@@ -19,7 +19,13 @@ const out = minify('global', src);
 // out is a Buffer containing the minified source
 ```
 
-`minify(topLevelType, src)` accepts `'global'` or `'module'` for `topLevelType` and a `Buffer` containing UTF-8 JavaScript for `src`, returning a `Buffer` with the minified output.
+`minify(topLevelType, src)` accepts:
+
+- `'global'` or `'module'` for `topLevelType`
+- a `string` or `Buffer` of UTF-8 JavaScript/TypeScript for `src`
+
+It returns a `Buffer` containing the minified JavaScript output. Buffer inputs
+must be valid UTF-8.
 
 If the input cannot be minified (e.g. due to syntax errors), an `Error` is
 thrown containing rendered diagnostics for the input file. The error also has
