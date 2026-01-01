@@ -403,7 +403,7 @@ impl HarnessFileSet {
 
 pub(crate) fn is_source_root(name: &str) -> bool {
   [
-    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".d.mts", ".d.cts",
+    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.mts", ".d.cts",
   ]
   .into_iter()
   .any(|suffix| name.ends_with(suffix))
@@ -1595,12 +1595,23 @@ mod tests {
         name: "d.d.cts".to_string(),
         content: "export {};\n".to_string(),
       },
+      VirtualFile {
+        name: "e.mjs".to_string(),
+        content: "export const e = 3;\n".to_string(),
+      },
+      VirtualFile {
+        name: "f.cjs".to_string(),
+        content: "exports.f = 4;\n".to_string(),
+      },
     ];
 
     let file_set = HarnessFileSet::new(&files);
     let roots = file_set.root_keys();
     let root_names: Vec<&str> = roots.iter().map(|k| k.as_str()).collect();
-    assert_eq!(root_names, vec!["/a.mts", "/b.cts", "/c.d.mts", "/d.d.cts"]);
+    assert_eq!(
+      root_names,
+      vec!["/a.mts", "/b.cts", "/c.d.mts", "/d.d.cts", "/e.mjs", "/f.cjs"]
+    );
   }
 
   #[test]

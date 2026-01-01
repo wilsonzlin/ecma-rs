@@ -1,5 +1,5 @@
 use crate::multifile::normalize_name;
-use crate::runner::HarnessFileSet;
+use crate::runner::{is_source_root, HarnessFileSet};
 use serde_json::{Map, Value};
 use typecheck_ts::FileKey;
 
@@ -188,7 +188,7 @@ fn resolve_as_file_or_directory_inner(
         return Some(found);
       }
     }
-  } else if !has_known_extension(&base_candidate) {
+  } else if !is_source_root(&base_candidate) {
     for ext in EXTENSIONS {
       let candidate = normalize_name(&format!("{base_candidate}.{ext}"));
       if let Some(found) = files.resolve(&candidate) {
@@ -197,7 +197,7 @@ fn resolve_as_file_or_directory_inner(
     }
   }
 
-  if !has_known_extension(&base_candidate) {
+  if !is_source_root(&base_candidate) {
     if let Some(found) = resolve_via_package_json(files, &base_candidate, depth) {
       return Some(found);
     }
@@ -386,20 +386,6 @@ fn best_exports_subpath_pattern(
 
 fn is_relative_specifier(specifier: &str) -> bool {
   specifier.starts_with("./") || specifier.starts_with("../")
-}
-
-fn has_known_extension(name: &str) -> bool {
-  name.ends_with(".d.ts")
-    || name.ends_with(".d.mts")
-    || name.ends_with(".d.cts")
-    || name.ends_with(".ts")
-    || name.ends_with(".tsx")
-    || name.ends_with(".mts")
-    || name.ends_with(".cts")
-    || name.ends_with(".js")
-    || name.ends_with(".jsx")
-    || name.ends_with(".mjs")
-    || name.ends_with(".cjs")
 }
 
 fn is_virtual_root_dir(dir: &str) -> bool {
