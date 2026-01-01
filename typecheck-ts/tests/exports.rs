@@ -479,6 +479,54 @@ fn exports_support_string_literal_names() {
 }
 
 #[test]
+fn type_exports_support_string_literal_names() {
+  let mut host = MemoryHost::default();
+  let key_mod = fk(460);
+  let key_entry = fk(461);
+  host.insert(
+    key_mod.clone(),
+    "export type Foo = number;\nexport type { Foo as \"a-b\" };",
+  );
+  host.insert(
+    key_entry.clone(),
+    "import type { \"a-b\" as Bar } from \"./mod\";\n\
+     declare const x: Bar;\n\
+     x satisfies number;\n",
+  );
+  host.link(key_entry.clone(), "./mod", key_mod.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_mod = program.file_id(&key_mod).expect("module id");
+  let exports_mod = program.exports_of(file_mod);
+  let export = exports_mod.get("a-b").expect("export a-b present");
+  let export_ty = export.type_id.expect("type for export a-b");
+  let rendered = program.display_type(export_ty).to_string();
+  assert!(
+    rendered == "Foo" || rendered == "number",
+    "unexpected type export for a-b: {rendered}"
+  );
+
+  let file_entry = program.file_id(&key_entry).expect("entry id");
+  let bar_def = program
+    .definitions_in_file(file_entry)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Bar"))
+    .expect("imported Bar def");
+  let bar_ty = program.type_of_def_interned(bar_def);
+  let bar_rendered = program.display_type(bar_ty).to_string();
+  assert!(
+    bar_rendered == "Foo" || bar_rendered == "number",
+    "unexpected type for imported Bar: {bar_rendered}"
+  );
+}
+
+#[test]
 fn export_star_cycle_reaches_fixpoint() {
   let mut host = MemoryHost::default();
   let key_a = fk(210);
