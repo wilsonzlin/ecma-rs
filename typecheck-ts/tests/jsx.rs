@@ -796,3 +796,97 @@ const el = <Foo x={1} />;
     "expected NO_OVERLOAD, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn value_tag_string_literal_is_treated_as_intrinsic_element() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+const Tag = "div";
+const ok = <Tag id="x">hi</Tag>;
+const bad = <Tag foo="x" />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected EXCESS_PROPERTY, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn value_tag_union_of_string_literals_requires_common_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+declare const cond: boolean;
+const Tag = cond ? "div" : "span";
+const ok = <Tag children="hi" />;
+const bad = <Tag id="x" />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected EXCESS_PROPERTY, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn value_tag_union_of_components_requires_common_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+declare const cond: boolean;
+function Foo(props: { x: number }): JSX.Element { return null as any; }
+function Bar(props: { x: number; y?: number }): JSX.Element { return null as any; }
+const Comp = cond ? Foo : Bar;
+const ok = <Comp x={1} />;
+const bad = <Comp x={1} y={2} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected exactly one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected EXCESS_PROPERTY, got {diagnostics:?}"
+  );
+}

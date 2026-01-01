@@ -1877,7 +1877,7 @@ impl<'a> Checker<'a> {
               ));
               prim.unknown
             });
-          self.check_jsx_component(component_ty, &actual_props, element_ty, elem.loc);
+          self.check_jsx_value_tag(component_ty, &actual_props, element_ty, elem.loc, id.loc);
         }
       }
       Some(JsxElemName::Member(member)) => {
@@ -1919,12 +1919,98 @@ impl<'a> Checker<'a> {
           for segment in member.stx.path.iter() {
             current = self.member_type(current, segment);
           }
-          self.check_jsx_component(current, &actual_props, element_ty, elem.loc);
+          self.check_jsx_value_tag(current, &actual_props, element_ty, elem.loc, member.loc);
         }
       }
     }
     self.record_expr_type(elem.loc, element_ty);
     element_ty
+  }
+
+  fn check_jsx_value_tag(
+    &mut self,
+    tag_ty: TypeId,
+    actual_props: &JsxActualProps,
+    element_ty: TypeId,
+    elem_loc: Loc,
+    tag_loc: Loc,
+  ) {
+    let prim = self.store.primitive_ids();
+    if matches!(
+      self.store.type_kind(tag_ty),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
+      return;
+    }
+
+    let expanded = self.expand_for_props(tag_ty);
+    if expanded != tag_ty {
+      self.check_jsx_value_tag(expanded, actual_props, element_ty, elem_loc, tag_loc);
+      return;
+    }
+
+    match self.store.type_kind(tag_ty) {
+      TypeKind::Union(members) => {
+        for member in members {
+          let before = self.diagnostics.len();
+          self.check_jsx_value_tag(member, actual_props, element_ty, elem_loc, tag_loc);
+          if self.diagnostics.len() > before {
+            return;
+          }
+        }
+      }
+      TypeKind::StringLiteral(name_id) => {
+        let tag = self.store.name(name_id);
+        self.check_jsx_intrinsic_tag(tag.as_str(), actual_props, elem_loc, tag_loc);
+      }
+      TypeKind::String => {
+        // Dynamic intrinsic tag; allow it only when `JSX.IntrinsicElements` provides a string
+        // index signature.
+        let intrinsic_elements = self.jsx_intrinsic_elements_type(elem_loc);
+        if intrinsic_elements == prim.unknown {
+          return;
+        }
+        let expected_props_ty = self.member_type_for_index_key(intrinsic_elements, prim.string);
+        if expected_props_ty == prim.unknown {
+          self.diagnostics.push(codes::NO_OVERLOAD.error(
+            "JSX tag type `string` is not assignable to JSX.IntrinsicElements",
+            Span::new(self.file, loc_to_range(self.file, tag_loc)),
+          ));
+          return;
+        }
+        let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
+        self.check_jsx_props(elem_loc, actual_props, expected_props_ty);
+      }
+      _ => {
+        self.check_jsx_component(tag_ty, actual_props, element_ty, elem_loc);
+      }
+    }
+  }
+
+  fn check_jsx_intrinsic_tag(
+    &mut self,
+    tag: &str,
+    actual_props: &JsxActualProps,
+    elem_loc: Loc,
+    tag_loc: Loc,
+  ) {
+    let prim = self.store.primitive_ids();
+    let intrinsic_elements = self.jsx_intrinsic_elements_type(elem_loc);
+    if intrinsic_elements == prim.unknown {
+      return;
+    }
+    let expected_props_ty = self.member_type(intrinsic_elements, tag);
+    if expected_props_ty == prim.unknown {
+      self
+        .diagnostics
+        .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
+          format!("unknown JSX intrinsic element `{tag}`"),
+          Span::new(self.file, loc_to_range(self.file, tag_loc)),
+        ));
+      return;
+    }
+    let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
+    self.check_jsx_props(elem_loc, actual_props, expected_props_ty);
   }
 
   fn jsx_actual_props(
