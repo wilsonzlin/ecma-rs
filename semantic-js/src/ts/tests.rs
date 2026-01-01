@@ -577,6 +577,73 @@ fn import_type_expressions_are_traversed() {
 }
 
 #[test]
+fn unresolved_type_import_reports_span() {
+  let file = FileId(2006);
+  let mut hir = HirFile::script(file);
+  hir.type_imports.push(TypeImport {
+    specifier: "missing".to_string(),
+    specifier_span: span(10),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1002");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(10));
+}
+
+#[test]
+fn ambient_module_type_imports_are_traversed() {
+  let file_dep = FileId(2007);
+  let file_host = FileId(2008);
+
+  let mut dep = HirFile::module(file_dep);
+  dep
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Interface, Exported::Named));
+
+  let mut host = HirFile::script(file_host);
+  host.ambient_modules.push(AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: Vec::new(),
+    imports: Vec::new(),
+    type_imports: vec![TypeImport {
+      specifier: "dep".to_string(),
+      specifier_span: span(1),
+    }],
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_dep => Arc::new(dep),
+    file_host => Arc::new(host),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "dep".to_string() => file_dep,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_host], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_dep = semantics
+    .exports_of_opt(file_dep)
+    .expect("type import dependency should be bound");
+  let foo = exports_dep.get("Foo").expect("Foo exported");
+  assert!(foo
+    .symbol_for(Namespace::TYPE, semantics.symbols())
+    .is_some());
+}
+
+#[test]
 fn export_namespace_import_uses_local_binding() {
   let file_a = FileId(22);
   let file_b = FileId(23);
