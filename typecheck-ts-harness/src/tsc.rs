@@ -555,3 +555,35 @@ pub fn node_available(_node_path: &Path) -> bool {
 pub fn typescript_available(_node_path: &Path) -> bool {
   false
 }
+
+#[cfg(all(test, unix, feature = "with-node"))]
+mod tests {
+  use super::*;
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
+  use tempfile::tempdir;
+
+  #[test]
+  fn command_succeeds_with_timeout_returns_false_when_command_hangs() {
+    let tmp = tempdir().expect("tempdir");
+    let script_path = tmp.path().join("hang.sh");
+    fs::write(&script_path, "#!/bin/sh\nexec sleep 10\n").expect("write script");
+    let mut perms = fs::metadata(&script_path)
+      .expect("script metadata")
+      .permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).expect("chmod");
+
+    let start = Instant::now();
+    let ok = command_succeeds_with_timeout(
+      std::process::Command::new(&script_path),
+      Duration::from_millis(50),
+    );
+    let elapsed = start.elapsed();
+    assert!(!ok);
+    assert!(
+      elapsed < Duration::from_secs(1),
+      "expected quick timeout; got {elapsed:?}"
+    );
+  }
+}
