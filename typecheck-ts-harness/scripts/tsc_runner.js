@@ -268,8 +268,7 @@ function collectTypeFacts(program, checker, markers, requestFiles) {
     sourceFiles.set(normalizePath(sf.fileName), sf);
   }
   const exports = [];
-  const requestNames = Object.keys(requestFiles || {}).slice().sort();
-  for (const rawName of requestNames) {
+  for (const rawName of Object.keys(requestFiles || {})) {
     const absName = toAbsolute(rawName);
     const sf = sourceFiles.get(absName);
     if (!sf) continue;
@@ -279,21 +278,6 @@ function collectTypeFacts(program, checker, markers, requestFiles) {
   if (exports.length === 0 && markerFacts.length === 0) {
     return null;
   }
-
-  exports.sort((a, b) =>
-    [
-      (a.file ?? "").localeCompare(b.file ?? ""),
-      (a.name ?? "").localeCompare(b.name ?? ""),
-      (a.type ?? "").localeCompare(b.type ?? ""),
-    ].find((value) => value !== 0) ?? 0,
-  );
-  markerFacts.sort((a, b) =>
-    [
-      (a.file ?? "").localeCompare(b.file ?? ""),
-      (a.offset ?? 0) - (b.offset ?? 0),
-      (a.type ?? "").localeCompare(b.type ?? ""),
-    ].find((value) => value !== 0) ?? 0,
-  );
   return { exports, markers: markerFacts };
 }
 
@@ -317,16 +301,7 @@ function serializeDiagnostic(diagnostic) {
 }
 
 function serializeDiagnostics(diagnostics) {
-  return diagnostics
-    .map(serializeDiagnostic)
-    .sort((a, b) =>
-      [
-        (a.file ?? "").localeCompare(b.file ?? ""),
-        a.start - b.start,
-        a.end - b.end,
-        a.code - b.code,
-      ].find((value) => value !== 0) ?? 0,
-    );
+  return diagnostics.map(serializeDiagnostic);
 }
 
 function parseOptions(rawOptions) {
