@@ -37,13 +37,8 @@ fn conformance_options(compare: CompareMode) -> ConformanceOptions {
 }
 
 #[test]
+#[cfg(feature = "with-node")]
 fn strict_null_checks_directive_reaches_tsc() {
-  #[cfg(not(feature = "with-node"))]
-  {
-    eprintln!("skipping strict null checks test: built without node");
-    return;
-  }
-
   let options = conformance_options(CompareMode::Tsc);
   let report = run_conformance(options).expect("run conformance");
   let enabled = report
@@ -70,6 +65,12 @@ fn strict_null_checks_directive_reaches_tsc() {
     disabled.tsc.diagnostics.is_empty(),
     "expected no diagnostics when strictNullChecks is disabled"
   );
+}
+
+#[test]
+#[cfg(not(feature = "with-node"))]
+fn strict_null_checks_directive_reaches_tsc() {
+  eprintln!("skipping strict null checks test: built without node");
 }
 
 #[test]

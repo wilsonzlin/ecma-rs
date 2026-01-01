@@ -1,10 +1,12 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, Host, HostError, Program};
 use typecheck_ts_harness::VirtualFile;
 
+#[cfg(feature = "with-node")]
+use std::path::PathBuf;
 #[cfg(feature = "with-node")]
 use serde_json::Map;
 #[cfg(feature = "with-node")]
