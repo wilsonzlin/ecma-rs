@@ -865,6 +865,7 @@ fn init_tracing(enabled: bool) {
     return;
   }
   let _ = tracing_subscriber::fmt()
+    .with_writer(std::io::stderr)
     .with_span_events(FmtSpan::CLOSE)
     .with_max_level(Level::DEBUG)
     .json()

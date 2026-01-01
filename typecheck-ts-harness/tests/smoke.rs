@@ -70,12 +70,7 @@ fn run_cli_json_report(root: &Path) -> JsonReport {
     .arg("--allow-mismatches");
 
   let output = cmd.assert().success().get_output().stdout.clone();
-  let stdout = String::from_utf8_lossy(&output);
-
-  let start = stdout.find('{').expect("json output");
-  let json_blob = stdout[start..].trim();
-
-  serde_json::from_str(json_blob).expect("valid json")
+  serde_json::from_slice(&output).expect("valid json")
 }
 
 fn normalize_report(report: &mut JsonReport) {
@@ -249,17 +244,41 @@ fn cli_runs_with_filter_and_json() {
     .arg("5");
 
   let output = cmd.assert().success().get_output().stdout.clone();
-  let stdout = String::from_utf8_lossy(&output);
-
-  let start = stdout.find('{').expect("json output");
-  let json_blob = stdout[start..].trim();
-
-  let report: JsonReport = serde_json::from_str(json_blob).expect("valid json");
+  let report: JsonReport = serde_json::from_slice(&output).expect("valid json");
   assert_eq!(report.summary.total, 1);
   assert!(matches!(
     report.results.first().map(|r| r.outcome),
     Some(TestOutcome::Match)
   ));
+}
+
+#[test]
+fn cli_json_report_is_machine_readable_with_trace_enabled() {
+  let (_dir, root) = write_fixtures();
+
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd
+    .arg("conformance")
+    .arg("--root")
+    .arg(&root)
+    .arg("--compare")
+    .arg("none")
+    .arg("--json")
+    .arg("--trace")
+    .arg("--allow-mismatches")
+    .arg("--timeout-secs")
+    .arg("5");
+
+  let assert = cmd.assert().success();
+  let output = assert.get_output();
+
+  let report: JsonReport = serde_json::from_slice(&output.stdout).expect("valid json report");
+  assert_eq!(report.summary.total, 3);
+  assert!(
+    !output.stderr.is_empty(),
+    "expected trace output on stderr when --trace is enabled"
+  );
 }
 
 #[test]
@@ -324,12 +343,7 @@ fn conformance_enforces_timeouts_per_test() {
     .env("HARNESS_SLEEP_MS_PER_TEST", "slow=1500");
 
   let output = cmd.assert().success().get_output().stdout.clone();
-  let stdout = String::from_utf8_lossy(&output);
-
-  let start = stdout.find('{').expect("json output");
-  let json_blob = stdout[start..].trim();
-
-  let report: JsonReport = serde_json::from_str(json_blob).expect("valid json");
+  let report: JsonReport = serde_json::from_slice(&output).expect("valid json");
   assert_eq!(report.summary.total, 2);
   assert_eq!(report.summary.outcomes.timeout, 1);
   assert!(report

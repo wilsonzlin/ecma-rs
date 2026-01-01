@@ -107,8 +107,10 @@ cargo run -p typecheck-ts-harness --release -- conformance \
     snapshots, else none with a warning)
   - `--node /path/to/node` overrides the Node.js executable used for `tsc`
   - `--span-tolerance <bytes>` allows small span drift when diffing
-- `--json` emits machine-readable results (including both engines’ diagnostics);
-  `--trace`/`--profile` are forwarded to the checker.
+- `--json` prints the machine-readable conformance report to stdout.
+- `--trace` enables structured tracing logs on stderr (JSONL), keeping stdout
+  parseable when `--json` is enabled. Redirect with `2> trace.jsonl`.
+- `--profile` is forwarded to the checker.
 - Harness execution is currently single-threaded; for CI parallelism use shards
   across jobs (example below).
 - A tiny demo corpus lives at `typecheck-ts-harness/fixtures/conformance-mini`.
