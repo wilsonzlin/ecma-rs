@@ -23,4 +23,3 @@ fn parse_with_options_cancellable_parses_successfully_when_not_cancelled() {
   };
   assert!(parse_with_options_cancellable("let x = 1;", opts, cancel).is_ok());
 }
-

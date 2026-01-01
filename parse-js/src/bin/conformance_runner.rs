@@ -6,8 +6,8 @@ use diagnostics::{
   diagnostic_from_syntax_error, sort_diagnostics, sort_labels, Diagnostic, FileId, Span, TextRange,
 };
 use parse_js;
-use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::error::SyntaxErrorType;
+use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
 use serde::Serialize;
