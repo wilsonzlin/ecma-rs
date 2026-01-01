@@ -7,15 +7,15 @@ fn resolves_package_json_types_entrypoints() {
   let files = vec![
     VirtualFile {
       name: "/src/app.ts".to_string(),
-      content: "import \"pkg\";\n".to_string(),
+      content: "import \"pkg\";\n".into(),
     },
     VirtualFile {
       name: "/node_modules/pkg/package.json".to_string(),
-      content: r#"{ "types": "./dist/index.d.ts" }"#.to_string(),
+      content: r#"{ "types": "./dist/index.d.ts" }"#.into(),
     },
     VirtualFile {
       name: "/node_modules/pkg/dist/index.d.ts".to_string(),
-      content: "export {};\n".to_string(),
+      content: "export {};\n".into(),
     },
   ];
 
@@ -32,15 +32,15 @@ fn resolves_package_json_exports_types_entrypoints() {
   let files = vec![
     VirtualFile {
       name: "/src/app.ts".to_string(),
-      content: "import \"pkg\";\n".to_string(),
+      content: "import \"pkg\";\n".into(),
     },
     VirtualFile {
       name: "/node_modules/pkg/package.json".to_string(),
-      content: r#"{ "exports": { ".": { "types": "./dist/index.d.ts" } } }"#.to_string(),
+      content: r#"{ "exports": { ".": { "types": "./dist/index.d.ts" } } }"#.into(),
     },
     VirtualFile {
       name: "/node_modules/pkg/dist/index.d.ts".to_string(),
-      content: "export {};\n".to_string(),
+      content: "export {};\n".into(),
     },
   ];
 

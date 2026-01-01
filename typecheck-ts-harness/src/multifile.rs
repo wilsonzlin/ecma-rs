@@ -4,6 +4,7 @@ use diagnostics::paths::normalize_ts_path;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 pub(crate) fn normalize_name(name: &str) -> String {
   normalize_ts_path(name)
 }
@@ -11,7 +12,7 @@ pub(crate) fn normalize_name(name: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualFile {
   pub name: String,
-  pub content: String,
+  pub content: Arc<str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -29,10 +30,8 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|| "input.ts".to_string());
 
-  let mut current = VirtualFile {
-    name: default_name,
-    content: String::new(),
-  };
+  let mut current_name = default_name;
+  let mut current_content = String::new();
   let mut has_started = false;
 
   for (idx, raw_line) in contents.split_inclusive('\n').enumerate() {
@@ -44,14 +43,14 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
       if name == "filename" {
         if let Some(value) = directive.value.clone() {
           if has_started {
-            result.files.push(current);
-            current = VirtualFile {
-              name: value,
-              content: String::new(),
-            };
+            result.files.push(VirtualFile {
+              name: std::mem::take(&mut current_name),
+              content: std::mem::take(&mut current_content).into(),
+            });
+            current_name = value;
           } else {
-            current.name = value;
-            current.content.clear();
+            current_name = value;
+            current_content.clear();
             has_started = true;
           }
         } else {
@@ -69,13 +68,19 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
     }
 
     has_started = true;
-    current.content.push_str(raw_line);
+    current_content.push_str(raw_line);
   }
 
-  if has_started || !current.content.is_empty() {
-    result.files.push(current);
+  if has_started || !current_content.is_empty() {
+    result.files.push(VirtualFile {
+      name: current_name,
+      content: current_content.into(),
+    });
   } else if result.files.is_empty() {
-    result.files.push(current);
+    result.files.push(VirtualFile {
+      name: current_name,
+      content: current_content.into(),
+    });
   }
 
   let mut duplicates = BTreeMap::new();
@@ -118,7 +123,7 @@ mod tests {
     let result = split_test_file(Path::new("input.ts"), source);
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].name, "input.ts");
-    assert_eq!(result.files[0].content, source);
+    assert_eq!(result.files[0].content.as_ref(), source);
   }
 
   #[test]
@@ -128,9 +133,9 @@ mod tests {
 
     assert_eq!(result.files.len(), 2);
     assert_eq!(result.files[0].name, "a.ts");
-    assert_eq!(result.files[0].content, "const a = 1;\n");
+    assert_eq!(result.files[0].content.as_ref(), "const a = 1;\n");
     assert_eq!(result.files[1].name, "b.ts");
-    assert_eq!(result.files[1].content, "const b = a;\n");
+    assert_eq!(result.files[1].content.as_ref(), "const b = a;\n");
   }
 
   #[test]
@@ -149,9 +154,9 @@ mod tests {
     let result = split_test_file(Path::new("empty.ts"), source);
     assert_eq!(result.files.len(), 2);
     assert_eq!(result.files[0].name, "a.ts");
-    assert_eq!(result.files[0].content, "");
+    assert_eq!(result.files[0].content.as_ref(), "");
     assert_eq!(result.files[1].name, "b.ts");
-    assert_eq!(result.files[1].content, "const b = 2;\n");
+    assert_eq!(result.files[1].content.as_ref(), "const b = 2;\n");
   }
 
   #[test]
@@ -160,7 +165,7 @@ mod tests {
     let result = split_test_file(Path::new("single.ts"), source);
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].name, "single.ts");
-    assert_eq!(result.files[0].content, source);
+    assert_eq!(result.files[0].content.as_ref(), source);
   }
 
   #[test]
@@ -168,7 +173,7 @@ mod tests {
     let source = "// @module: amd\nconst value = 1;\n";
     let result = split_test_file(Path::new("module.ts"), source);
     assert_eq!(result.files.len(), 1);
-    assert_eq!(result.files[0].content, "const value = 1;\n");
+    assert_eq!(result.files[0].content.as_ref(), "const value = 1;\n");
     assert!(result
       .directives
       .iter()
@@ -183,7 +188,7 @@ mod tests {
     assert_eq!(result.files.len(), 2);
     assert_eq!(result.deduped_files.len(), 1);
     assert_eq!(result.deduped_files[0].name, "./a.ts");
-    assert_eq!(result.deduped_files[0].content, "const second = 2;\n");
+    assert_eq!(result.deduped_files[0].content.as_ref(), "const second = 2;\n");
     assert_eq!(
       result.notes,
       vec!["duplicate @filename entry for /a.ts; last one wins"]
@@ -197,7 +202,7 @@ mod tests {
 
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].name, "a.ts");
-    assert_eq!(result.files[0].content, "const a = 1;\r\n");
+    assert_eq!(result.files[0].content.as_ref(), "const a = 1;\r\n");
   }
 
   #[test]
@@ -205,7 +210,7 @@ mod tests {
     let source = "// @module: commonjs\r\nconst value = 1;\r\n";
     let result = split_test_file(Path::new("module.ts"), source);
     assert_eq!(result.files.len(), 1);
-    assert_eq!(result.files[0].content, "const value = 1;\r\n");
+    assert_eq!(result.files[0].content.as_ref(), "const value = 1;\r\n");
     assert!(result
       .directives
       .iter()

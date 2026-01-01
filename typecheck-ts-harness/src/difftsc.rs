@@ -1267,7 +1267,7 @@ fn build_file_map(
   let mut map = HashMap::new();
   for file in files {
     let normalized = normalize_path_for_compare(&file.name, normalization);
-    map.insert(normalized, file.content.clone());
+    map.insert(normalized, file.content.to_string());
   }
   map
 }
@@ -1701,7 +1701,7 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .context("test file missing name")?,
-          content,
+          content: content.into(),
         }],
       });
     }
@@ -1765,7 +1765,7 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
       read_utf8_file(path).with_context(|| format!("read test file {}", path.display()))?;
     files.push(VirtualFile {
       name: relative_path,
-      content,
+      content: content.into(),
     });
   }
 
@@ -1913,7 +1913,7 @@ mod tests {
       files: vec![VirtualFile {
         name: "a.ts".to_string(),
         content: "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"
-          .to_string(),
+          .into(),
       }],
     };
     let opts = NormalizationOptions::default();
@@ -2086,7 +2086,7 @@ span mismatches:
 export const v = 1;
 export interface Foo { x: number }
     "#
-      .to_string(),
+      .into(),
     }];
     let file_set = HarnessFileSet::new(&files);
     let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());

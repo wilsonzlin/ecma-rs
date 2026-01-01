@@ -29,7 +29,7 @@ impl SimpleHost {
     let mut names = Vec::new();
     for file in files {
       names.push(FileKey::new(file.name.clone()));
-      map.insert(file.name, Arc::from(file.content));
+      map.insert(file.name, file.content);
     }
     Self {
       files: map,
@@ -68,7 +68,7 @@ fn lib_env_fixture(name: &str) -> VirtualFile {
     .join(name);
   VirtualFile {
     name: name.to_string(),
-    content: fs::read_to_string(path).expect("read fixture"),
+    content: fs::read_to_string(path).expect("read fixture").into(),
   }
 }
 
@@ -98,7 +98,7 @@ fn run_tsc(
   options: Map<String, Value>,
 ) -> TscDiagnostics {
   let mut files = HashMap::new();
-  files.insert(file.name.clone(), file.content.clone());
+  files.insert(file.name.clone(), file.content.to_string());
 
   let request = TscRequest {
     root_names: vec![file.name.clone()],

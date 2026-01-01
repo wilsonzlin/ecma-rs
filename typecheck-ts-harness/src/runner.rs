@@ -430,7 +430,7 @@ impl HarnessFileSet {
       key_to_name.insert(key.clone(), normalized.clone());
       stored.push(HarnessFile {
         key,
-        content: Arc::from(files[idx].content.clone()),
+        content: Arc::clone(&files[idx].content),
       });
     }
 
@@ -2005,15 +2005,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "a.ts".to_string(),
-        content: "first version".to_string(),
+        content: "first version".into(),
       },
       VirtualFile {
         name: "./a.ts".to_string(),
-        content: "second version".to_string(),
+        content: "second version".into(),
       },
       VirtualFile {
         name: "b.ts".to_string(),
-        content: "unrelated".to_string(),
+        content: "unrelated".into(),
       },
     ];
 
@@ -2033,7 +2033,7 @@ mod tests {
   fn harness_host_carries_compiler_options() {
     let files = vec![VirtualFile {
       name: "a.ts".to_string(),
-      content: "const value: string = null;".to_string(),
+      content: "const value: string = null;".into(),
     }];
 
     let mut harness_options = HarnessOptions::default();
@@ -2051,11 +2051,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "a.ts".to_string(),
-        content: "const a = 1;\n".to_string(),
+        content: "const a = 1;\n".into(),
       },
       VirtualFile {
         name: "package.json".to_string(),
-        content: "{\n  \"name\": \"pkg\"\n}\n".to_string(),
+        content: "{\n  \"name\": \"pkg\"\n}\n".into(),
       },
     ];
 
@@ -2077,11 +2077,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "b.ts".to_string(),
-        content: "const b = 1;\n".to_string(),
+        content: "const b = 1;\n".into(),
       },
       VirtualFile {
         name: "a.ts".to_string(),
-        content: "const a = 1;\n".to_string(),
+        content: "const a = 1;\n".into(),
       },
     ];
 
@@ -2096,27 +2096,27 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "a.mts".to_string(),
-        content: "export const a = 1;\n".to_string(),
+        content: "export const a = 1;\n".into(),
       },
       VirtualFile {
         name: "b.cts".to_string(),
-        content: "export const b = 2;\n".to_string(),
+        content: "export const b = 2;\n".into(),
       },
       VirtualFile {
         name: "c.d.mts".to_string(),
-        content: "export {};\n".to_string(),
+        content: "export {};\n".into(),
       },
       VirtualFile {
         name: "d.d.cts".to_string(),
-        content: "export {};\n".to_string(),
+        content: "export {};\n".into(),
       },
       VirtualFile {
         name: "e.mjs".to_string(),
-        content: "export const e = 3;\n".to_string(),
+        content: "export const e = 3;\n".into(),
       },
       VirtualFile {
         name: "f.cjs".to_string(),
-        content: "exports.f = 4;\n".to_string(),
+        content: "exports.f = 4;\n".into(),
       },
     ];
 
@@ -2133,7 +2133,7 @@ mod tests {
   fn harness_host_uses_tsx_parser_for_tsx_inputs() {
     let files = vec![VirtualFile {
       name: "case.tsx".to_string(),
-      content: "const el = <div />;\n".to_string(),
+      content: "const el = <div />;\n".into(),
     }];
 
     let file_set = HarnessFileSet::new(&files);
@@ -2167,11 +2167,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2189,15 +2189,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/src/b.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/src/node_modules/foo/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/index.d.ts".to_string(),
-        content: "export const x: string;".to_string(),
+        content: "export const x: string;".into(),
       },
     ];
 
@@ -2217,11 +2217,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/src/b.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2239,11 +2239,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/@types/foo/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2263,15 +2263,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/package.json".to_string(),
-        content: r#"{ "name": "foo", "types": "types.d.ts" }"#.to_string(),
+        content: r#"{ "name": "foo", "types": "types.d.ts" }"#.into(),
       },
       VirtualFile {
         name: "/node_modules/foo/types.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2289,15 +2289,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/src/a.ts".to_string(),
-        content: "import { x } from \"#foo\";".to_string(),
+        content: "import { x } from \"#foo\";".into(),
       },
       VirtualFile {
         name: "/src/package.json".to_string(),
-        content: r##"{ "imports": { "#foo": { "types": "./types/foo.d.ts", "default": "./types/foo.js" } } }"##.to_string(),
+        content: r##"{ "imports": { "#foo": { "types": "./types/foo.d.ts", "default": "./types/foo.js" } } }"##.into(),
       },
       VirtualFile {
         name: "/src/types/foo.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2315,15 +2315,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/src/a.ts".to_string(),
-        content: "import { x } from \"#foo/bar\";".to_string(),
+        content: "import { x } from \"#foo/bar\";".into(),
       },
       VirtualFile {
         name: "/src/package.json".to_string(),
-        content: r##"{ "imports": { "#foo/*": { "types": "./types/*.d.ts", "default": "./types/*.js" } } }"##.to_string(),
+        content: r##"{ "imports": { "#foo/*": { "types": "./types/*.d.ts", "default": "./types/*.js" } } }"##.into(),
       },
       VirtualFile {
         name: "/src/types/bar.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2343,15 +2343,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/package.json".to_string(),
-        content: r#"{ "name": "foo", "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } } }"#.to_string(),
+        content: r#"{ "name": "foo", "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } } }"#.into(),
       },
       VirtualFile {
         name: "/node_modules/foo/dist/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2371,15 +2371,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/package.json".to_string(),
-        content: r#"{ "name": "foo", "exports": { ".": { "types": "./missing.d.ts", "default": "./dist/index.d.ts" } } }"#.to_string(),
+        content: r#"{ "name": "foo", "exports": { ".": { "types": "./missing.d.ts", "default": "./dist/index.d.ts" } } }"#.into(),
       },
       VirtualFile {
         name: "/node_modules/foo/dist/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2399,15 +2399,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo/bar\";".to_string(),
+        content: "import { x } from \"foo/bar\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/package.json".to_string(),
-        content: r#"{ "name": "foo", "exports": { "./bar": { "types": "./dist/bar.d.ts", "default": "./dist/bar.js" } } }"#.to_string(),
+        content: r#"{ "name": "foo", "exports": { "./bar": { "types": "./dist/bar.d.ts", "default": "./dist/bar.js" } } }"#.into(),
       },
       VirtualFile {
         name: "/node_modules/foo/dist/bar.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2427,15 +2427,15 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo/bar\";".to_string(),
+        content: "import { x } from \"foo/bar\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/package.json".to_string(),
-        content: r#"{ "name": "foo", "exports": { "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" } } }"#.to_string(),
+        content: r#"{ "name": "foo", "exports": { "./*": { "types": "./dist/*.d.ts", "default": "./dist/*.js" } } }"#.into(),
       },
       VirtualFile {
         name: "/node_modules/foo/dist/bar.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2455,11 +2455,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import \"./foo.js\";".to_string(),
+        content: "import \"./foo.js\";".into(),
       },
       VirtualFile {
         name: "/foo.d.ts".to_string(),
-        content: "export {};".to_string(),
+        content: "export {};".into(),
       },
     ];
 
@@ -2526,11 +2526,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"@scope/pkg\";".to_string(),
+        content: "import { x } from \"@scope/pkg\";".into(),
       },
       VirtualFile {
         name: "/node_modules/@types/scope__pkg/index.d.ts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2552,11 +2552,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import { x } from \"foo\";".to_string(),
+        content: "import { x } from \"foo\";".into(),
       },
       VirtualFile {
         name: "/node_modules/foo/index.d.mts".to_string(),
-        content: "export const x: number;".to_string(),
+        content: "export const x: number;".into(),
       },
     ];
 
@@ -2574,11 +2574,11 @@ mod tests {
     let files = vec![
       VirtualFile {
         name: "/a.ts".to_string(),
-        content: "import \"./foo.mjs\";".to_string(),
+        content: "import \"./foo.mjs\";".into(),
       },
       VirtualFile {
         name: "/foo.d.mts".to_string(),
-        content: "export {};".to_string(),
+        content: "export {};".into(),
       },
     ];
 
@@ -2629,7 +2629,7 @@ echo '{"diagnostics":[]}'
     let pool = TscRunnerPool::new(script_path, 1);
     let file_set = HarnessFileSet::new(&[VirtualFile {
       name: "case.ts".to_string(),
-      content: "const value = 1;\n".to_string(),
+      content: "const value = 1;\n".into(),
     }]);
     let options = Map::new();
 
@@ -2661,7 +2661,7 @@ echo '{"diagnostics":[]}'
 
     let file_set = HarnessFileSet::new(&[VirtualFile {
       name: "case.ts".to_string(),
-      content: "const x = 1;\n".to_string(),
+      content: "const x = 1;\n".into(),
     }]);
     let mut compiler_options = CompilerOptions::default();
     compiler_options.no_default_lib = true;
@@ -2693,7 +2693,7 @@ echo '{"diagnostics":[]}'
 
     let file_set = HarnessFileSet::new(&[VirtualFile {
       name: "case.ts".to_string(),
-      content: "const x = 1;\n".to_string(),
+      content: "const x = 1;\n".into(),
     }]);
     let mut compiler_options = CompilerOptions::default();
     compiler_options.no_default_lib = true;
@@ -2731,11 +2731,11 @@ echo '{"diagnostics":[]}'
       path: PathBuf::from("timeout.ts"),
       files: vec![VirtualFile {
         name: "timeout.ts".to_string(),
-        content: "const x = 1;\n".to_string(),
+        content: "const x = 1;\n".into(),
       }],
       deduped_files: vec![VirtualFile {
         name: "timeout.ts".to_string(),
-        content: "const x = 1;\n".to_string(),
+        content: "const x = 1;\n".into(),
       }],
       directives: Vec::new(),
       options: HarnessOptions::default(),
