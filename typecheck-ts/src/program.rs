@@ -10228,22 +10228,33 @@ impl ProgramState {
     };
     let synthetic_value_def = matches!(def_data.kind, DefKind::Var(_))
       && self.value_defs.values().any(|value_def| *value_def == def);
-    if let Some(store) = self.interned_store.as_ref() {
+    if let Some(store) = self.interned_store.clone() {
       if let Some(interned) = self.interned_def_types.get(&def).copied() {
         let skip_cache = matches!(def_data.kind, DefKind::Var(_)) && !synthetic_value_def;
-        let ty = store.canon(interned);
-        let needs_recompute = match &def_data.kind {
-          DefKind::Function(func) => {
-            func.return_ann.is_none()
-              && func.body.is_some()
-              && matches!(store.type_kind(ty), tti::TypeKind::Callable { .. })
-              && callable_return_is_unknown(store, ty)
-          }
-          _ => false,
-        };
-        if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache || needs_recompute {
+        let mut ty = store.canon(interned);
+        if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache {
           self.interned_def_types.remove(&def);
         } else {
+          if let DefKind::Function(func) = &def_data.kind {
+            if func.return_ann.is_none()
+              && func.body.is_some()
+              && matches!(store.type_kind(ty), tti::TypeKind::Callable { .. })
+              && callable_return_is_unknown(&store, ty)
+            {
+              let has_overloads = self.def_data.iter().any(|(other, data)| {
+                *other != def
+                  && data.symbol == def_data.symbol
+                  && matches!(data.kind, DefKind::Function(_))
+              });
+              if !has_overloads {
+                if let Some(updated) =
+                  self.infer_cached_callable_return_type(def, func, &store, ty)?
+                {
+                  ty = updated;
+                }
+              }
+            }
+          }
           if let Some(span) = span.take() {
             span.finish(Some(ty));
           }
@@ -10705,6 +10716,62 @@ impl ProgramState {
         Err(err)
       }
     }
+  }
+
+  fn infer_cached_callable_return_type(
+    &mut self,
+    def: DefId,
+    func: &FuncData,
+    store: &Arc<tti::TypeStore>,
+    callable_ty: TypeId,
+  ) -> Result<Option<TypeId>, FatalError> {
+    let Some(body) = func.body else {
+      return Ok(None);
+    };
+    let tti::TypeKind::Callable { overloads } = store.type_kind(callable_ty) else {
+      return Ok(None);
+    };
+    if overloads.len() != 1 {
+      return Ok(None);
+    }
+    let ret = if self.checking_bodies.contains(&body) {
+      store.primitive_ids().unknown
+    } else {
+      let res = self.check_body(body)?;
+      if res.return_types.is_empty() {
+        store.primitive_ids().void
+      } else {
+        let mut members = Vec::new();
+        for ty in res.return_types.iter() {
+          let ty = store.canon(self.ensure_interned_type(*ty));
+          let widened = check::widen::widen_literal(store.as_ref(), ty);
+          members.push(widened);
+        }
+        store.union(members)
+      }
+    };
+    let sig_id = overloads[0];
+    let mut sig = store.signature(sig_id);
+    if sig.ret == ret {
+      return Ok(None);
+    }
+    sig.ret = ret;
+    let sig_id = store.intern_signature(sig);
+    let callable_ty = store.canon(store.intern_type(tti::TypeKind::Callable {
+      overloads: vec![sig_id],
+    }));
+    self.interned_def_types.insert(def, callable_ty);
+    self.def_types.insert(def, callable_ty);
+    if let Some(def_data) = self.def_data.get(&def) {
+      if let Some(file_state) = self.files.get_mut(&def_data.file) {
+        if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
+          if binding.def == Some(def) {
+            binding.type_id = Some(callable_ty);
+          }
+        }
+      }
+    }
+    Ok(Some(callable_ty))
   }
 
   fn function_type(&mut self, def: DefId, func: FuncData) -> Result<TypeId, FatalError> {
