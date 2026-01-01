@@ -638,11 +638,13 @@ fn run_single_test(
       &tsc_options,
       &baseline.metadata.options,
     ));
-    let expected = normalize_tsc_diagnostics_with_options(&baseline.diagnostics, normalization);
-    let actual = normalize_tsc_diagnostics_with_options(
+    let mut expected = normalize_tsc_diagnostics_with_options(&baseline.diagnostics, normalization);
+    let mut actual = normalize_tsc_diagnostics_with_options(
       &live_tsc.as_ref().expect("live tsc required").diagnostics,
       normalization,
     );
+    sort_diagnostics(&mut expected);
+    sort_diagnostics(&mut actual);
     let expected_types = normalize_type_facts(&baseline.type_facts, normalization);
     let actual_types = normalize_type_facts(
       &live_tsc.as_ref().expect("live tsc required").type_facts,
@@ -704,7 +706,8 @@ fn run_single_test(
   ));
 
   let rust = run_rust(&file_set, &harness_options);
-  let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
+  let mut expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
+  sort_diagnostics(&mut expected);
   let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
   let marker_queries = marker_queries_from_type_facts(&tsc_diags.type_facts);
   let actual_types = if rust.status == EngineStatus::Ok {
@@ -729,7 +732,8 @@ fn run_single_test(
     };
   }
 
-  let actual: Vec<NormalizedDiagnostic> = rust.diagnostics.clone();
+  let mut actual: Vec<NormalizedDiagnostic> = rust.diagnostics.clone();
+  sort_diagnostics(&mut actual);
 
   let diff = diff_diagnostics(&expected, &actual, normalization);
   let type_diff = diff_type_facts(&expected_types, &actual_types);
