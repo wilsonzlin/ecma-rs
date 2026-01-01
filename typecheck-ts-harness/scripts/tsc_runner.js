@@ -471,7 +471,8 @@ function collectTypeFacts(program, checker, markers, requestFiles) {
     sourceFiles.set(normalizePath(sf.fileName), sf);
   }
   const exports = [];
-  for (const rawName of Object.keys(requestFiles || {})) {
+  const requestNames = Object.keys(requestFiles || {}).slice().sort();
+  for (const rawName of requestNames) {
     const absName = toAbsolute(rawName);
     const sf = sourceFiles.get(absName);
     if (!sf) continue;
@@ -481,6 +482,21 @@ function collectTypeFacts(program, checker, markers, requestFiles) {
   if (exports.length === 0 && markerFacts.length === 0) {
     return null;
   }
+
+  exports.sort((a, b) =>
+    [
+      (a.file ?? "").localeCompare(b.file ?? ""),
+      (a.name ?? "").localeCompare(b.name ?? ""),
+      (a.type ?? "").localeCompare(b.type ?? ""),
+    ].find((value) => value !== 0) ?? 0,
+  );
+  markerFacts.sort((a, b) =>
+    [
+      (a.file ?? "").localeCompare(b.file ?? ""),
+      (a.offset ?? 0) - (b.offset ?? 0),
+      (a.type ?? "").localeCompare(b.type ?? ""),
+    ].find((value) => value !== 0) ?? 0,
+  );
   return { exports, markers: markerFacts };
 }
 
