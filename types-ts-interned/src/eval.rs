@@ -1,6 +1,7 @@
 use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::ids::{DefId, ObjectId, TypeId, TypeParamId};
 use crate::kind::{MappedModifier, MappedType, TemplateLiteralType, TypeKind};
+use crate::relate::RelateCtx;
 use crate::shape::{PropData, PropKey, Property, Shape};
 use crate::store::TypeStore;
 use ahash::{AHashMap, AHashSet};
@@ -527,7 +528,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
     }
 
-    let branch = if self.is_assignable(check_eval, extends_eval, subst, depth + 1) {
+    let relate = RelateCtx::new(self.store.clone(), self.store.options());
+    let branch = if relate.is_assignable_no_normalize(check_eval, extends_eval) {
       true_ty
     } else {
       false_ty
@@ -1187,49 +1189,6 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     }
   }
 
-  fn is_assignable(
-    &mut self,
-    src: TypeId,
-    target: TypeId,
-    subst: &Substitution,
-    depth: usize,
-  ) -> bool {
-    if src == target {
-      return true;
-    }
-    match (self.store.type_kind(src), self.store.type_kind(target)) {
-      (_, TypeKind::Any) => true,
-      (TypeKind::Any, _) => true,
-      (_, TypeKind::Unknown) => true,
-      (TypeKind::Never, _) => true,
-      (TypeKind::Union(members), target_kind) => members.into_iter().all(|m| {
-        self.is_assignable(
-          m,
-          self.store.intern_type(target_kind.clone()),
-          subst,
-          depth + 1,
-        )
-      }),
-      (src_kind, TypeKind::Union(members)) => members.into_iter().any(|member| {
-        self.is_assignable(
-          self.store.intern_type(src_kind.clone()),
-          member,
-          subst,
-          depth + 1,
-        )
-      }),
-      (TypeKind::BooleanLiteral(_), TypeKind::Boolean) => true,
-      (TypeKind::NumberLiteral(_), TypeKind::Number) => true,
-      (TypeKind::StringLiteral(_), TypeKind::String) => true,
-      (TypeKind::BigIntLiteral(_), TypeKind::BigInt) => true,
-      (TypeKind::TemplateLiteral(_), TypeKind::String) => true,
-      (TypeKind::TypeParam(param), other) => match subst.get(param) {
-        Some(mapped) => self.is_assignable(mapped, self.store.intern_type(other), subst, depth + 1),
-        None => false,
-      },
-      _ => false,
-    }
-  }
 }
 
 struct MappedKeyTypes {

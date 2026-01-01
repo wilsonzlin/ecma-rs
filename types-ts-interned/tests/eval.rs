@@ -71,6 +71,88 @@ fn conditional_distributes_over_union_with_substitution() {
 }
 
 #[test]
+fn conditional_uses_structural_assignability() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let foo = store.intern_name("foo");
+  let bar = store.intern_name("bar");
+
+  let src_shape_id = store.intern_shape(Shape {
+    properties: vec![
+      Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      },
+      Property {
+        key: PropKey::String(bar),
+        data: PropData {
+          ty: primitives.string,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      },
+    ],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let src_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType {
+      shape: src_shape_id,
+    }),
+  ));
+
+  let dst_shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(foo),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let dst_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType {
+      shape: dst_shape_id,
+    }),
+  ));
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: src_ty,
+    extends: dst_ty,
+    true_ty: primitives.boolean,
+    false_ty: primitives.never,
+    distributive: false,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(cond);
+  assert_eq!(result, primitives.boolean);
+}
+
+#[test]
 fn mapped_type_applies_modifiers_and_remaps() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
