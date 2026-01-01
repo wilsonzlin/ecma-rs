@@ -188,7 +188,10 @@ mod tests {
     assert_eq!(result.files.len(), 2);
     assert_eq!(result.deduped_files.len(), 1);
     assert_eq!(result.deduped_files[0].name, "./a.ts");
-    assert_eq!(result.deduped_files[0].content.as_ref(), "const second = 2;\n");
+    assert_eq!(
+      result.deduped_files[0].content.as_ref(),
+      "const second = 2;\n"
+    );
     assert_eq!(
       result.notes,
       vec!["duplicate @filename entry for /a.ts; last one wins"]
