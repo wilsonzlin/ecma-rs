@@ -20,6 +20,7 @@ pub use hir::ClassMemberAccessibility;
 pub use hir::ClassMemberSig;
 pub use hir::ClassMemberSigKind;
 pub use hir::ConditionalType;
+pub use hir::Decorator;
 pub use hir::DefData;
 pub use hir::DefTypeInfo;
 pub use hir::EnumMemberInfo;

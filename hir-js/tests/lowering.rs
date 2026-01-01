@@ -726,6 +726,101 @@ fn export_default_class_has_ids() {
 }
 
 #[test]
+fn lowers_class_and_member_decorators() {
+  let source = r#"
+    const dec = () => (t:any) => {};
+    @dec() class C { @dec() method(@dec() x: number) {} }
+  "#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let names = &result.names;
+
+  let class_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Class && names.resolve(def.name) == Some("C"))
+    .expect("class C definition");
+  let class_body_id = class_def.body.expect("class body id");
+  let class_body = result.body(class_body_id).expect("class body");
+  assert_eq!(class_body.kind, BodyKind::Class);
+
+  let decorator_stmt_exprs: Vec<_> = class_body
+    .root_stmts
+    .iter()
+    .filter_map(|stmt_id| match class_body.stmts[stmt_id.0 as usize].kind {
+      StmtKind::Expr(expr) => Some(expr),
+      _ => None,
+    })
+    .collect();
+  assert_eq!(
+    decorator_stmt_exprs.len(),
+    3,
+    "expected class, member, and parameter decorators to be lowered as class-body expr statements",
+  );
+
+  let decorator_starts: Vec<_> = source
+    .match_indices("@dec()")
+    .map(|(idx, _)| idx as u32)
+    .collect();
+  assert_eq!(
+    decorator_starts.len(),
+    3,
+    "expected three decorators in source"
+  );
+
+  let stmt_starts: Vec<_> = class_body
+    .root_stmts
+    .iter()
+    .map(|stmt_id| class_body.stmts[stmt_id.0 as usize].span.start)
+    .collect();
+  assert_eq!(
+    stmt_starts, decorator_starts,
+    "decorator statements should preserve source order",
+  );
+
+  for (idx, decorator_start) in decorator_starts.iter().enumerate() {
+    let offset = decorator_start + 4; // `@dec()` -> point at `(`
+    let (body, expr) = result
+      .hir
+      .span_map
+      .expr_at_offset(offset)
+      .expect("decorator expression should be present in span map");
+    assert_eq!(body, class_body_id);
+    assert_eq!(expr, decorator_stmt_exprs[idx]);
+  }
+
+  assert_eq!(class_def.decorators.len(), 1);
+  assert_eq!(class_def.decorators[0].span.start, decorator_starts[0]);
+  assert_eq!(class_def.decorators[0].body, class_body_id);
+  assert_eq!(class_def.decorators[0].expr, decorator_stmt_exprs[0]);
+
+  let method_def = result
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Method
+        && names.resolve(def.name) == Some("method")
+        && def.parent == Some(class_def.id)
+    })
+    .expect("decorated method definition");
+  assert_eq!(method_def.decorators.len(), 1);
+  assert_eq!(method_def.decorators[0].span.start, decorator_starts[1]);
+  assert_eq!(method_def.decorators[0].body, class_body_id);
+  assert_eq!(method_def.decorators[0].expr, decorator_stmt_exprs[1]);
+
+  let method_body_id = method_def.body.expect("method body id");
+  let method_body = result.body(method_body_id).expect("method body");
+  let func = method_body
+    .function
+    .as_ref()
+    .expect("method function metadata");
+  assert_eq!(func.params.len(), 1);
+  assert_eq!(func.params[0].decorators.len(), 1);
+  assert_eq!(func.params[0].decorators[0].span.start, decorator_starts[2]);
+  assert_eq!(func.params[0].decorators[0].body, class_body_id);
+  assert_eq!(func.params[0].decorators[0].expr, decorator_stmt_exprs[2]);
+}
+
+#[test]
 fn class_member_defs_have_stable_ids() {
   let source = "class C { x = 1; static y = 2; method(a){ const inner = () => 1; } get z(){ return 1 } set z(v){} static { const s = 1 } constructor(){} }";
   let result = lower_from_source(source).expect("lower");

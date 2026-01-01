@@ -190,6 +190,7 @@ pub struct DefData {
   pub path: DefPath,
   pub parent: Option<DefId>,
   pub span: TextRange,
+  pub decorators: Vec<Decorator>,
   pub is_static: bool,
   pub is_ambient: bool,
   pub in_global: bool,
@@ -604,8 +605,16 @@ pub enum BodyKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Decorator {
+  pub span: TextRange,
+  pub expr: ExprId,
+  pub body: BodyId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Param {
   pub pat: PatId,
+  pub decorators: Vec<Decorator>,
   pub default: Option<ExprId>,
 }
 

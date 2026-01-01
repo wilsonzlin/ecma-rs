@@ -1,6 +1,6 @@
 use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
-  CallArg, CallExpr, CatchClause, DefData, DefTypeInfo, Export, ExportAlias, ExportAll,
+  CallArg, CallExpr, CatchClause, Decorator, DefData, DefTypeInfo, Export, ExportAlias, ExportAll,
   ExportAsNamespace, ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed,
   ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile,
   Import, ImportBinding, ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed,
@@ -33,6 +33,7 @@ use parse_js::ast::expr::pat::ObjPat;
 use parse_js::ast::expr::pat::Pat as AstPat;
 use parse_js::ast::expr::ArrowFuncExpr;
 use parse_js::ast::expr::ClassExpr;
+use parse_js::ast::expr::Decorator as AstDecorator;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::func::Func;
@@ -290,6 +291,12 @@ impl<'a> DefDescriptor<'a> {
 struct DefLookup {
   node_to_def: HashMap<RawNode, DefId>,
   def_bodies: HashMap<DefId, BodyId>,
+}
+
+#[derive(Default)]
+struct DecoratorStore {
+  by_def: HashMap<DefId, Vec<Decorator>>,
+  params_by_def: HashMap<DefId, Vec<Vec<Decorator>>>,
 }
 
 fn compute_descriptor_depths(descriptors: &mut [DefDescriptor<'_>]) {
@@ -576,6 +583,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
   let mut bodies: Vec<Arc<Body>> = Vec::new();
   let mut body_index: BTreeMap<BodyId, usize> = BTreeMap::new();
   let mut items = Vec::new();
+  let mut decorator_store = DecoratorStore::default();
 
   for PlannedDef {
     desc,
@@ -599,6 +607,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
       path: def_path,
       span: desc.span,
       parent,
+      decorators: Vec::new(),
       is_static: desc.is_static,
       is_ambient: desc.is_ambient,
       in_global: desc.in_global,
@@ -641,6 +650,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
         body.id,
         &desc.source,
         &def_lookup,
+        &mut decorator_store,
         &mut names,
         &mut types,
         &mut span_map,
@@ -654,6 +664,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
       bodies.push(body_arc);
     }
 
+    def_data.decorators = decorator_store.by_def.remove(&def_id).unwrap_or_default();
     defs.push(def_data);
   }
 
@@ -793,6 +804,7 @@ fn lower_body_from_source(
   body_id: BodyId,
   source: &DefSource,
   def_lookup: &DefLookup,
+  decorator_store: &mut DecoratorStore,
   names: &mut NameInterner,
   types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
@@ -805,6 +817,7 @@ fn lower_body_from_source(
       &decl.stx.function,
       false,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -816,6 +829,7 @@ fn lower_body_from_source(
       &func.stx.func,
       true,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -827,6 +841,7 @@ fn lower_body_from_source(
       &func.stx.func,
       false,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -835,8 +850,11 @@ fn lower_body_from_source(
     DefSource::ClassDecl(class) => Some(lower_class_body(
       owner,
       body_id,
+      ctx.to_range(class.loc),
+      &class.stx.decorators,
       &class.stx.members,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -845,8 +863,11 @@ fn lower_body_from_source(
     DefSource::ClassExpr(class) => Some(lower_class_body(
       owner,
       body_id,
+      ctx.to_range(class.loc),
+      &class.stx.decorators,
       &class.stx.members,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -864,6 +885,7 @@ fn lower_body_from_source(
       &method.stx.func,
       false,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -893,6 +915,7 @@ fn lower_body_from_source(
       &getter.stx.func,
       false,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -904,6 +927,7 @@ fn lower_body_from_source(
       &setter.stx.func,
       false,
       def_lookup,
+      decorator_store,
       names,
       types,
       span_map,
@@ -1022,6 +1046,7 @@ fn lower_function_body(
   func: &Node<Func>,
   is_arrow: bool,
   def_lookup: &DefLookup,
+  decorator_store: &mut DecoratorStore,
   names: &mut NameInterner,
   types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
@@ -1038,15 +1063,27 @@ fn lower_function_body(
     types,
     span_map,
   );
+  let mut param_decorators = decorator_store
+    .params_by_def
+    .remove(&owner)
+    .unwrap_or_default();
   let mut params = Vec::new();
-  for param in func.stx.parameters.iter() {
+  for (idx, param) in func.stx.parameters.iter().enumerate() {
     let pat = lower_pat(&param.stx.pattern.stx.pat, &mut builder, ctx);
     let default = param
       .stx
       .default_value
       .as_ref()
       .map(|default| lower_expr(default, &mut builder, ctx));
-    params.push(Param { pat, default });
+    let decorators = param_decorators
+      .get_mut(idx)
+      .map(std::mem::take)
+      .unwrap_or_default();
+    params.push(Param {
+      pat,
+      decorators,
+      default,
+    });
   }
 
   let body = match &func.stx.body {
@@ -1079,28 +1116,49 @@ fn lower_function_body(
   Some(builder.finish_with_id(body_id))
 }
 
-fn lower_class_body(
+fn lower_class_body<'a>(
   owner: DefId,
   body_id: BodyId,
-  members: &[Node<parse_js::ast::class_or_object::ClassMember>],
+  class_span: TextRange,
+  decorators: &'a [Node<AstDecorator>],
+  members: &'a [Node<ClassMember>],
   def_lookup: &DefLookup,
+  decorator_store: &mut DecoratorStore,
   names: &mut NameInterner,
   types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Body {
-  let span = if members.is_empty() {
-    TextRange::new(0, 0)
-  } else {
-    let mut start = u32::MAX;
-    let mut end = 0u32;
-    for member in members {
-      let range = ctx.to_range(member.loc);
-      start = start.min(range.start);
-      end = end.max(range.end);
-    }
-    TextRange::new(start, end)
-  };
+  #[derive(Clone, Copy)]
+  enum DecoratorTarget {
+    Def(DefId),
+    Param { def: DefId, index: usize },
+  }
+
+  enum ClassEvalKind<'a> {
+    Decorator {
+      node: &'a Node<AstDecorator>,
+      target: DecoratorTarget,
+    },
+    StaticBlock {
+      node: &'a Node<ClassStaticBlock>,
+    },
+  }
+
+  struct ClassEvalItem<'a> {
+    range: TextRange,
+    order: usize,
+    kind: ClassEvalKind<'a>,
+  }
+
+  let mut start = class_span.start;
+  let mut end = class_span.end;
+  for decorator in decorators {
+    let range = ctx.to_range(decorator.loc);
+    start = start.min(range.start);
+    end = end.max(range.end);
+  }
+  let span = TextRange::new(start, end);
   let mut builder = BodyBuilder::new(
     owner,
     span,
@@ -1111,15 +1169,134 @@ fn lower_class_body(
     types,
     span_map,
   );
-  for member in members {
-    if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
-      let mut block_stmts = Vec::new();
-      for stmt in block.stx.body.iter() {
-        let stmt_id = lower_stmt(stmt, &mut builder, ctx);
-        block_stmts.push(stmt_id);
+
+  let mut items: Vec<ClassEvalItem<'a>> = Vec::new();
+
+  fn collect_param_decorators<'b>(
+    items: &mut Vec<ClassEvalItem<'b>>,
+    func: &'b Node<Func>,
+    owner_def: DefId,
+    ctx: &mut LoweringContext,
+  ) {
+    for (param_idx, param) in func.stx.parameters.iter().enumerate() {
+      for decorator in param.stx.decorators.iter() {
+        let range = ctx.to_range(decorator.loc);
+        let order = items.len();
+        items.push(ClassEvalItem {
+          range,
+          order,
+          kind: ClassEvalKind::Decorator {
+            node: decorator,
+            target: DecoratorTarget::Param {
+              def: owner_def,
+              index: param_idx,
+            },
+          },
+        });
       }
-      let stmt_id = builder.alloc_stmt(ctx.to_range(block.loc), StmtKind::Block(block_stmts));
-      builder.root_stmt(stmt_id);
+    }
+  }
+
+  for decorator in decorators {
+    let range = ctx.to_range(decorator.loc);
+    items.push(ClassEvalItem {
+      range,
+      order: items.len(),
+      kind: ClassEvalKind::Decorator {
+        node: decorator,
+        target: DecoratorTarget::Def(owner),
+      },
+    });
+  }
+
+  for member in members {
+    let member_def = match &member.stx.val {
+      ClassOrObjVal::Method(method) => def_lookup.def_for_node(method),
+      ClassOrObjVal::Getter(getter) => def_lookup.def_for_node(getter),
+      ClassOrObjVal::Setter(setter) => def_lookup.def_for_node(setter),
+      ClassOrObjVal::Prop(_) => def_lookup.def_for_node(member),
+      ClassOrObjVal::StaticBlock(block) => def_lookup.def_for_node(block),
+      ClassOrObjVal::IndexSignature(_) => None,
+    };
+
+    if let Some(member_def) = member_def {
+      for decorator in member.stx.decorators.iter() {
+        let range = ctx.to_range(decorator.loc);
+        items.push(ClassEvalItem {
+          range,
+          order: items.len(),
+          kind: ClassEvalKind::Decorator {
+            node: decorator,
+            target: DecoratorTarget::Def(member_def),
+          },
+        });
+      }
+
+      match &member.stx.val {
+        ClassOrObjVal::Method(method) => {
+          collect_param_decorators(&mut items, &method.stx.func, member_def, ctx)
+        }
+        ClassOrObjVal::Setter(setter) => {
+          collect_param_decorators(&mut items, &setter.stx.func, member_def, ctx)
+        }
+        ClassOrObjVal::Getter(getter) => {
+          collect_param_decorators(&mut items, &getter.stx.func, member_def, ctx)
+        }
+        _ => {}
+      }
+    }
+
+    if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
+      let range = ctx.to_range(block.loc);
+      items.push(ClassEvalItem {
+        range,
+        order: items.len(),
+        kind: ClassEvalKind::StaticBlock { node: block },
+      });
+    }
+  }
+
+  items.sort_by(|a, b| {
+    (a.range.start, a.range.end, a.order).cmp(&(b.range.start, b.range.end, b.order))
+  });
+
+  for item in items {
+    match item.kind {
+      ClassEvalKind::Decorator { node, target } => {
+        let expr = lower_expr(&node.stx.expression, &mut builder, ctx);
+        let stmt_id = builder.alloc_stmt(item.range, StmtKind::Expr(expr));
+        builder.root_stmt(stmt_id);
+        let decorator = Decorator {
+          span: item.range,
+          expr,
+          body: body_id,
+        };
+        match target {
+          DecoratorTarget::Def(def_id) => {
+            decorator_store
+              .by_def
+              .entry(def_id)
+              .or_default()
+              .push(decorator);
+          }
+          DecoratorTarget::Param { def, index } => {
+            let params = decorator_store.params_by_def.entry(def).or_default();
+            if params.len() <= index {
+              params.resize_with(index + 1, Vec::new);
+            }
+            params[index].push(decorator);
+          }
+        }
+      }
+      ClassEvalKind::StaticBlock { node } => {
+        let mut block_stmts = Vec::new();
+        for stmt in node.stx.body.iter() {
+          let stmt_id = lower_stmt(stmt, &mut builder, ctx);
+          block_stmts.push(stmt_id);
+        }
+        let stmt_id = builder.alloc_stmt(item.range, StmtKind::Block(block_stmts));
+        builder.root_stmt(stmt_id);
+      }
     }
   }
 
@@ -2276,6 +2453,17 @@ fn collect_stmt<'a>(
       }
       descriptors.push(desc);
       ctx.with_parent(Some(class_raw), |ctx| {
+        for decorator in class_decl.stx.decorators.iter() {
+          collect_expr(
+            &decorator.stx.expression,
+            descriptors,
+            module_items,
+            names,
+            decl_ambient,
+            in_global,
+            ctx,
+          );
+        }
         collect_class_members(
           &class_decl.stx.members,
           class_raw,
@@ -2896,6 +3084,17 @@ fn collect_class_members<'a>(
   ctx: &mut LoweringContext,
 ) {
   for member in members.iter() {
+    for decorator in member.stx.decorators.iter() {
+      collect_expr(
+        &decorator.stx.expression,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+    }
     let span = ctx.to_range(member.loc);
     let member_raw = RawNode::from(member);
     let is_static = member.stx.static_;
@@ -3729,6 +3928,17 @@ fn collect_expr<'a>(
       desc.parent = ctx.current_parent();
       descriptors.push(desc);
       ctx.with_parent(Some(class_raw), |ctx| {
+        for decorator in class_expr.stx.decorators.iter() {
+          collect_expr(
+            &decorator.stx.expression,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
         collect_class_members(
           &class_expr.stx.members,
           class_raw,
@@ -4291,6 +4501,17 @@ fn collect_func_params<'a>(
   ctx: &mut LoweringContext,
 ) {
   for param in func.stx.parameters.iter() {
+    for decorator in param.stx.decorators.iter() {
+      collect_expr(
+        &decorator.stx.expression,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+    }
     collect_pat_defs(
       &param.stx.pattern,
       DefKind::Param,
