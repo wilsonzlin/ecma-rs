@@ -510,7 +510,11 @@ pub fn normalize_type_string(raw: &str) -> String {
     normalized.join(", ")
   }
 
-  fn strip_trailing_object_semicolons(raw: &str) -> String {
+  fn strip_trailing_object_semicolons(raw: String) -> String {
+    if !raw.contains(';') {
+      return raw;
+    }
+
     let mut out = String::with_capacity(raw.len());
     let mut iter = raw.chars().peekable();
     while let Some(ch) = iter.next() {
@@ -560,7 +564,7 @@ pub fn normalize_type_string(raw: &str) -> String {
   }
 
   let collapsed = collapse_whitespace(raw);
-  let normalized = strip_trailing_object_semicolons(&collapsed);
+  let normalized = strip_trailing_object_semicolons(collapsed);
 
   if let Some(parts) = split_top_level(&normalized, '|') {
     let mut normalized_parts: Vec<_> = parts
