@@ -280,6 +280,151 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   const DEFAULT_DEPTH_LIMIT: usize = 64;
   const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
 
+  fn has_free_type_param(
+    &self,
+    ty: TypeId,
+    bound: &mut Vec<TypeParamId>,
+    visited: &mut AHashSet<TypeId>,
+    depth: usize,
+  ) -> bool {
+    if depth >= self.depth_limit {
+      // Depth-limit hits are treated conservatively so we don't incorrectly
+      // collapse conditional types when a free type parameter exists behind a
+      // recursive type graph.
+      return true;
+    }
+
+    let kind = self.store.type_kind(ty);
+    if let TypeKind::TypeParam(param) = kind {
+      return !bound.contains(&param);
+    }
+
+    if !visited.insert(ty) {
+      return false;
+    }
+
+    let result = match kind {
+      TypeKind::Infer { constraint, .. } => constraint
+        .map(|c| self.has_free_type_param(c, bound, visited, depth + 1))
+        .unwrap_or(false),
+      TypeKind::Tuple(elems) => elems
+        .into_iter()
+        .any(|elem| self.has_free_type_param(elem.ty, bound, visited, depth + 1)),
+      TypeKind::Array { ty, .. } => self.has_free_type_param(ty, bound, visited, depth + 1),
+      TypeKind::Union(members) => members
+        .into_iter()
+        .any(|member| self.has_free_type_param(member, bound, visited, depth + 1)),
+      TypeKind::Intersection(members) => members
+        .into_iter()
+        .any(|member| self.has_free_type_param(member, bound, visited, depth + 1)),
+      TypeKind::Object(obj) => {
+        let object = self.store.object(obj);
+        let shape = self.store.shape(object.shape);
+
+        shape.properties.into_iter().any(|prop| {
+          self.has_free_type_param(prop.data.ty, bound, visited, depth + 1)
+        }) || shape
+          .indexers
+          .into_iter()
+          .any(|idxer| {
+            self.has_free_type_param(idxer.key_type, bound, visited, depth + 1)
+              || self.has_free_type_param(idxer.value_type, bound, visited, depth + 1)
+          })
+          || shape.call_signatures.into_iter().any(|sig| {
+            self.signature_has_free_type_param(sig, bound, visited, depth + 1)
+          })
+          || shape.construct_signatures.into_iter().any(|sig| {
+            self.signature_has_free_type_param(sig, bound, visited, depth + 1)
+          })
+      }
+      TypeKind::Callable { overloads } => overloads.into_iter().any(|sig| {
+        self.signature_has_free_type_param(sig, bound, visited, depth + 1)
+      }),
+      TypeKind::Ref { args, .. } => args
+        .into_iter()
+        .any(|arg| self.has_free_type_param(arg, bound, visited, depth + 1)),
+      TypeKind::Predicate { asserted, .. } => asserted
+        .map(|ty| self.has_free_type_param(ty, bound, visited, depth + 1))
+        .unwrap_or(false),
+      TypeKind::Conditional {
+        check,
+        extends,
+        true_ty,
+        false_ty,
+        ..
+      } => {
+        self.has_free_type_param(check, bound, visited, depth + 1)
+          || self.has_free_type_param(extends, bound, visited, depth + 1)
+          || self.has_free_type_param(true_ty, bound, visited, depth + 1)
+          || self.has_free_type_param(false_ty, bound, visited, depth + 1)
+      }
+      TypeKind::Mapped(mapped) => {
+        let free_in_source = self.has_free_type_param(mapped.source, bound, visited, depth + 1);
+
+        let bound_len = bound.len();
+        bound.push(mapped.param);
+        let free_in_value = self.has_free_type_param(mapped.value, bound, visited, depth + 1)
+          || mapped
+            .name_type
+            .map(|ty| self.has_free_type_param(ty, bound, visited, depth + 1))
+            .unwrap_or(false)
+          || mapped
+            .as_type
+            .map(|ty| self.has_free_type_param(ty, bound, visited, depth + 1))
+            .unwrap_or(false);
+        bound.truncate(bound_len);
+
+        free_in_source || free_in_value
+      }
+      TypeKind::TemplateLiteral(tpl) => tpl
+        .spans
+        .into_iter()
+        .any(|chunk| self.has_free_type_param(chunk.ty, bound, visited, depth + 1)),
+      TypeKind::IndexedAccess { obj, index } => {
+        self.has_free_type_param(obj, bound, visited, depth + 1)
+          || self.has_free_type_param(index, bound, visited, depth + 1)
+      }
+      TypeKind::KeyOf(inner) => self.has_free_type_param(inner, bound, visited, depth + 1),
+      _ => false,
+    };
+
+    visited.remove(&ty);
+    result
+  }
+
+  fn signature_has_free_type_param(
+    &self,
+    sig: crate::SignatureId,
+    bound: &mut Vec<TypeParamId>,
+    visited: &mut AHashSet<TypeId>,
+    depth: usize,
+  ) -> bool {
+    let sig = self.store.signature(sig);
+    let bound_len = bound.len();
+    bound.extend(sig.type_params.iter().map(|tp| tp.id));
+
+    let result = sig.type_params.into_iter().any(|tp| {
+      tp.constraint
+        .map(|c| self.has_free_type_param(c, bound, visited, depth + 1))
+        .unwrap_or(false)
+        || tp
+          .default
+          .map(|d| self.has_free_type_param(d, bound, visited, depth + 1))
+          .unwrap_or(false)
+    }) || sig
+      .params
+      .into_iter()
+      .any(|param| self.has_free_type_param(param.ty, bound, visited, depth + 1))
+      || self.has_free_type_param(sig.ret, bound, visited, depth + 1)
+      || sig
+        .this_param
+        .map(|this| self.has_free_type_param(this, bound, visited, depth + 1))
+        .unwrap_or(false);
+
+    bound.truncate(bound_len);
+    result
+  }
+
   pub fn new(store: Arc<TypeStore>, expander: &'a E) -> Self {
     Self::with_caches(
       store,
@@ -606,13 +751,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
     // Conditional types are only reducible once their operands are known.
     //
-    // When we cannot prove assignability (most notably due to unsubstituted type
-    // parameters, unresolved refs, or `infer` placeholders) we must defer
-    // evaluation instead of incorrectly collapsing to the false branch.
-    //
-    // Note: This logic is intentionally conservative to match TypeScript's
-    // behavior for generic conditional types.
-    if raw_check_param.is_some_and(|param| subst.get(param).is_none())
+    // When the assignability check depends on free (unsubstituted) type
+    // parameters we must defer evaluation instead of incorrectly picking a
+    // branch.
+    let mut bound = Vec::new();
+    let mut visited = AHashSet::new();
+    if self.has_free_type_param(check_eval, &mut bound, &mut visited, 0)
+      || self.has_free_type_param(extends_eval, &mut bound, &mut visited, 0)
       || self.conditional_is_indeterminate_operand(check_eval, subst, depth + 1)
       || self.conditional_is_indeterminate_operand(extends_eval, subst, depth + 1)
     {
@@ -626,6 +771,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         distributive,
       });
     }
+
     let assignable = match self.conditional_assignability {
       Some(provider) => provider.is_assignable_for_conditional(check_eval, extends_eval),
       None => {
@@ -673,7 +819,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
     match self.store.type_kind(ty) {
       TypeKind::Infer { .. } => true,
-      TypeKind::TypeParam(param) => subst.get(param).is_none(),
+      // `TypeParam` occurrences are handled separately via `has_free_type_param`
+      // so that we can respect binding scopes (signatures/mapped types) and
+      // avoid false positives from locally-bound parameters.
+      TypeKind::TypeParam(_) => false,
       TypeKind::Union(members) | TypeKind::Intersection(members) => members
         .into_iter()
         .any(|m| self.conditional_is_indeterminate_operand_inner(m, subst, depth + 1, visited)),

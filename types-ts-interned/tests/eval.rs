@@ -86,11 +86,51 @@ fn conditional_with_unsubstituted_type_param_is_deferred() {
   let default_expander = MockExpander::default();
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
 
-  assert!(matches!(
-    store.type_kind(result),
-    TypeKind::Conditional { .. }
-  ));
+#[test]
+fn conditional_with_unresolved_extends_type_param_is_deferred() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: primitives.string,
+    extends: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+}
+
+#[test]
+fn conditional_with_wrapped_unresolved_type_param_is_deferred() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::Array {
+      ty: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+      readonly: false,
+    }),
+    extends: store.intern_type(TypeKind::Array {
+      ty: primitives.string,
+      readonly: false,
+    }),
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(cond);
+  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
 }
 
 #[test]
