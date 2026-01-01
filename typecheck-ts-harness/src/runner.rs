@@ -258,6 +258,7 @@ pub enum EngineStatus {
   Ice,
   Crashed,
   Skipped,
+  Timeout,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -297,6 +298,14 @@ impl EngineDiagnostics {
   fn skipped(message: Option<String>) -> Self {
     Self {
       status: EngineStatus::Skipped,
+      diagnostics: Vec::new(),
+      error: message,
+    }
+  }
+
+  fn timeout(message: Option<String>) -> Self {
+    Self {
+      status: EngineStatus::Timeout,
       diagnostics: Vec::new(),
       error: message,
     }
@@ -675,8 +684,14 @@ fn build_timeout_result(case: &TestCase, timeout: Duration) -> TestResult {
     rust_ms: None,
     tsc_ms: None,
     diff_ms: None,
-    rust: EngineDiagnostics::skipped(None),
-    tsc: EngineDiagnostics::skipped(None),
+    rust: EngineDiagnostics::timeout(Some(format!(
+      "timed out after {}ms",
+      timeout.as_millis()
+    ))),
+    tsc: EngineDiagnostics::timeout(Some(format!(
+      "timed out after {}ms",
+      timeout.as_millis()
+    ))),
     options: build_test_options(&case.options, &tsc_options),
     query_stats: None,
     notes: case.notes.clone(),
@@ -2709,6 +2724,42 @@ echo '{"diagnostics":[]}'
         Err(other) => panic!("unexpected fatal error: {other}"),
       }
     }
+  }
+
+  #[test]
+  fn timeout_results_mark_engines_as_timed_out() {
+    use std::time::Duration;
+    let case = TestCase {
+      id: "timeout.ts".to_string(),
+      path: PathBuf::from("timeout.ts"),
+      files: vec![VirtualFile {
+        name: "timeout.ts".to_string(),
+        content: "const x = 1;\n".to_string(),
+      }],
+      deduped_files: vec![VirtualFile {
+        name: "timeout.ts".to_string(),
+        content: "const x = 1;\n".to_string(),
+      }],
+      directives: Vec::new(),
+      options: HarnessOptions::default(),
+      notes: Vec::new(),
+    };
+
+    let result = build_timeout_result(&case, Duration::from_millis(123));
+    assert_eq!(result.outcome, TestOutcome::Timeout);
+    assert_eq!(result.rust.status, EngineStatus::Timeout);
+    assert_eq!(result.tsc.status, EngineStatus::Timeout);
+    assert_eq!(result.duration_ms, 123);
+    assert!(
+      result
+        .rust
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("123"),
+      "expected rust timeout error to mention duration; got {:?}",
+      result.rust.error
+    );
   }
 
   #[test]
