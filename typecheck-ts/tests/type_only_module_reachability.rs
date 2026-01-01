@@ -40,7 +40,9 @@ export const x: T = 1;
     .and_then(|entry| entry.def)
     .expect("export x should have a definition");
   assert_eq!(
-    program.display_type(program.type_of_def_interned(x_def)).to_string(),
+    program
+      .display_type(program.type_of_def_interned(x_def))
+      .to_string(),
     "T"
   );
 

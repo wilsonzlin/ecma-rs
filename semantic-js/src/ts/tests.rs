@@ -694,8 +694,7 @@ fn class_namespace_merge_in_both_orders() {
     .push(mk_decl(1, "C", DeclKind::Namespace, Exported::Named));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(class_first) };
-  let (semantics, diags) =
-    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
   let class_first_sym = assert_merged_value_type_namespace(&semantics, file, "C");
 
@@ -707,10 +706,8 @@ fn class_namespace_merge_in_both_orders() {
     .decls
     .push(mk_decl(1, "C", DeclKind::Class, Exported::Named));
 
-  let files: HashMap<FileId, Arc<HirFile>> =
-    maplit::hashmap! { file => Arc::new(namespace_first) };
-  let (semantics, diags) =
-    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(namespace_first) };
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
   let namespace_first_sym = assert_merged_value_type_namespace(&semantics, file, "C");
 
@@ -734,8 +731,7 @@ fn enum_namespace_merge_in_both_orders() {
     .push(mk_decl(1, "E", DeclKind::Namespace, Exported::Named));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(enum_first) };
-  let (semantics, diags) =
-    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
   let enum_first_sym = assert_merged_value_type_namespace(&semantics, file, "E");
 
@@ -747,10 +743,8 @@ fn enum_namespace_merge_in_both_orders() {
     .decls
     .push(mk_decl(1, "E", DeclKind::Enum, Exported::Named));
 
-  let files: HashMap<FileId, Arc<HirFile>> =
-    maplit::hashmap! { file => Arc::new(namespace_first) };
-  let (semantics, diags) =
-    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(namespace_first) };
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
   let namespace_first_sym = assert_merged_value_type_namespace(&semantics, file, "E");
 
@@ -787,7 +781,10 @@ fn symbol_for_def_prefers_merged_symbol_for_function_namespace_merge() {
   assert!(diags.is_empty());
 
   let symbols = semantics.symbols();
-  let group = semantics.exports_of(file).get(name).expect("exported symbol");
+  let group = semantics
+    .exports_of(file)
+    .get(name)
+    .expect("exported symbol");
   let merged_sym = match &group.kind {
     SymbolGroupKind::Merged(sym) => *sym,
     other => panic!("expected merged symbol group, got {:?}", other),

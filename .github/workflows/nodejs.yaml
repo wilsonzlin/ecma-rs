@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: minify-js-nodejs/package-lock.json
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.92.0
 
       - name: Build native module
         working-directory: ./minify-js-nodejs

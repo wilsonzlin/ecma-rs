@@ -2032,8 +2032,12 @@ pub(crate) fn var_initializer_in_file(
           collect_named_ident_pats(lowered, body, rest, name, traversal_idx, out);
         }
       }
-      PatKind::Rest(inner) => collect_named_ident_pats(lowered, body, **inner, name, traversal_idx, out),
-      PatKind::Assign { target, .. } => collect_named_ident_pats(lowered, body, *target, name, traversal_idx, out),
+      PatKind::Rest(inner) => {
+        collect_named_ident_pats(lowered, body, **inner, name, traversal_idx, out)
+      }
+      PatKind::Assign { target, .. } => {
+        collect_named_ident_pats(lowered, body, *target, name, traversal_idx, out)
+      }
     }
   }
 
@@ -2076,7 +2080,16 @@ pub(crate) fn var_initializer_in_file(
         );
         for (candidate_pat, span, traversal_idx) in candidates {
           let dist = span_distance(span, def_span);
-          let key = (dist, (body_order, stmt_idx, decl_idx, traversal_idx, candidate_pat.0));
+          let key = (
+            dist,
+            (
+              body_order,
+              stmt_idx,
+              decl_idx,
+              traversal_idx,
+              candidate_pat.0,
+            ),
+          );
           let candidate = VarInit {
             body: *body_id,
             expr,
@@ -2089,7 +2102,17 @@ pub(crate) fn var_initializer_in_file(
             .map(|current| key < (current.0, current.1))
             .unwrap_or(true);
           if replace {
-            best = Some((dist, (body_order, stmt_idx, decl_idx, traversal_idx, candidate_pat.0), candidate));
+            best = Some((
+              dist,
+              (
+                body_order,
+                stmt_idx,
+                decl_idx,
+                traversal_idx,
+                candidate_pat.0,
+              ),
+              candidate,
+            ));
           }
         }
       }

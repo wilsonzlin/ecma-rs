@@ -676,8 +676,8 @@ fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Vec<SerializableDiagnost
 
 fn main() {
   let options = parse_args();
-  let test_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-    .join("tests/TypeScript/tests/cases/conformance");
+  let test_dir =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/TypeScript/tests/cases/conformance");
 
   if !test_dir.is_dir() {
     eprintln!(

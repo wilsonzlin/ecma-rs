@@ -66,14 +66,8 @@ fn primitives_and_special_types() {
   });
   let relaxed_primitives = relaxed_store.primitive_ids();
   let relaxed = RelateCtx::new(relaxed_store.clone(), relaxed_store.options());
-  assert!(relaxed.is_assignable(
-    relaxed_primitives.null,
-    relaxed_primitives.string
-  ));
-  assert!(relaxed.is_assignable(
-    relaxed_primitives.string,
-    relaxed_primitives.null
-  ));
+  assert!(relaxed.is_assignable(relaxed_primitives.null, relaxed_primitives.string));
+  assert!(relaxed.is_assignable(relaxed_primitives.string, relaxed_primitives.null));
 }
 
 #[test]

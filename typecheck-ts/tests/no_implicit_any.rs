@@ -27,10 +27,7 @@ fn reports_implicit_any_for_params_and_destructuring() {
     "expected exactly two implicit-any diagnostics, got {implicit:?} (all={diagnostics:?})",
   );
 
-  let x_start = source
-    .find("f(x)")
-    .expect("expected f(x) in source") as u32
-    + 2;
+  let x_start = source.find("f(x)").expect("expected f(x) in source") as u32 + 2;
   let x_span = TextRange::new(x_start, x_start + 1);
   assert!(
     implicit
@@ -39,10 +36,7 @@ fn reports_implicit_any_for_params_and_destructuring() {
     "missing implicit-any diagnostic on parameter `x` at {x_span:?}: {implicit:?}",
   );
 
-  let a_start = source
-    .find("{a}")
-    .expect("expected {a} in source") as u32
-    + 1;
+  let a_start = source.find("{a}").expect("expected {a} in source") as u32 + 1;
   let a_span = TextRange::new(a_start, a_start + 1);
   assert!(
     implicit
@@ -51,4 +45,3 @@ fn reports_implicit_any_for_params_and_destructuring() {
     "missing implicit-any diagnostic on binding `a` at {a_span:?}: {implicit:?}",
   );
 }
-

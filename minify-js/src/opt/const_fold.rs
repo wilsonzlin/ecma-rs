@@ -3,17 +3,17 @@ use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild};
-use parse_js::ast::expr::lit::{LitArrElem, LitBoolExpr, LitNullExpr, LitNumExpr, LitStrExpr};
 use parse_js::ast::expr::lit::LitTemplatePart;
+use parse_js::ast::expr::lit::{LitArrElem, LitBoolExpr, LitNullExpr, LitNumExpr, LitStrExpr};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat};
 use parse_js::ast::expr::{BinaryExpr, Expr};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::decl::{ParamDecl, VarDecl, VarDeclarator};
+use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::{
   CatchBlock, ForBody, ForInOfLhs, ForTripleStmtInit, SwitchBranch, TryStmt,
 };
-use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
@@ -395,7 +395,9 @@ fn fold_expr(expr: Node<Expr>, ctx: ExprCtx, changed: &mut bool) -> Node<Expr> {
   match *stx {
     Expr::Binary(mut bin) => {
       let op = bin.stx.operator;
-      let child_ctx = if ctx == ExprCtx::Condition && matches!(op, OperatorName::LogicalAnd | OperatorName::LogicalOr) {
+      let child_ctx = if ctx == ExprCtx::Condition
+        && matches!(op, OperatorName::LogicalAnd | OperatorName::LogicalOr)
+      {
         ExprCtx::Condition
       } else {
         ExprCtx::Value
@@ -593,7 +595,12 @@ fn fold_binary_expr(
         *changed = true;
         return Some(Node::new(
           loc,
-          Expr::LitNum(Node::new(loc, LitNumExpr { value: JsNumber(l + r) })),
+          Expr::LitNum(Node::new(
+            loc,
+            LitNumExpr {
+              value: JsNumber(l + r),
+            },
+          )),
         ));
       }
       if let (Some(l), Some(r)) = (as_str(&bin.left), as_str(&bin.right)) {
@@ -622,7 +629,12 @@ fn fold_binary_expr(
         *changed = true;
         return Some(Node::new(
           loc,
-          Expr::LitNum(Node::new(loc, LitNumExpr { value: JsNumber(result) })),
+          Expr::LitNum(Node::new(
+            loc,
+            LitNumExpr {
+              value: JsNumber(result),
+            },
+          )),
         ));
       }
     }

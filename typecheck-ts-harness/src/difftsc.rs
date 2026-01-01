@@ -632,7 +632,10 @@ fn run_single_test(
         };
       }
     };
-    notes.extend(baseline_option_mismatch_notes(&tsc_options, &baseline.metadata.options));
+    notes.extend(baseline_option_mismatch_notes(
+      &tsc_options,
+      &baseline.metadata.options,
+    ));
     let expected = normalize_tsc_diagnostics_with_options(&baseline.diagnostics, normalization);
     let actual = normalize_tsc_diagnostics_with_options(
       &live_tsc.as_ref().expect("live tsc required").diagnostics,
@@ -693,7 +696,10 @@ fn run_single_test(
       }
     }
   };
-  notes.extend(baseline_option_mismatch_notes(&tsc_options, &tsc_diags.metadata.options));
+  notes.extend(baseline_option_mismatch_notes(
+    &tsc_options,
+    &tsc_diags.metadata.options,
+  ));
 
   let file_set = HarnessFileSet::new(&test.files);
   let rust = run_rust(&file_set, &harness_options);
@@ -1507,7 +1513,9 @@ fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
     .map(|file| (normalize_name(&file.name), file))
     .collect();
   ordered.sort_by(|(a_norm, a_file), (b_norm, b_file)| {
-    a_norm.cmp(b_norm).then_with(|| a_file.name.cmp(&b_file.name))
+    a_norm
+      .cmp(b_norm)
+      .then_with(|| a_file.name.cmp(&b_file.name))
   });
 
   let mut directives = Vec::new();
@@ -1809,26 +1817,20 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
   let mut diagnostics = diagnostics.clone();
   diagnostics.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
   diagnostics.diagnostics.sort_by(|a, b| {
-    (
-      a.file.as_deref().unwrap_or(""),
-      a.start,
-      a.end,
-      a.code,
-    )
-      .cmp(&(
-        b.file.as_deref().unwrap_or(""),
-        b.start,
-        b.end,
-        b.code,
-      ))
+    (a.file.as_deref().unwrap_or(""), a.start, a.end, a.code).cmp(&(
+      b.file.as_deref().unwrap_or(""),
+      b.start,
+      b.end,
+      b.code,
+    ))
   });
   if let Some(type_facts) = diagnostics.type_facts.as_mut() {
     type_facts
       .exports
       .sort_by(|a, b| (&a.file, &a.name, &a.type_str).cmp(&(&b.file, &b.name, &b.type_str)));
-    type_facts.markers.sort_by(|a, b| {
-      (&a.file, a.offset, &a.type_str).cmp(&(&b.file, b.offset, &b.type_str))
-    });
+    type_facts
+      .markers
+      .sort_by(|a, b| (&a.file, a.offset, &a.type_str).cmp(&(&b.file, b.offset, &b.type_str)));
   }
   let json = serde_json::to_string_pretty(&diagnostics)?;
   fs::write(path, format!("{json}\n"))

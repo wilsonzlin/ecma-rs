@@ -3,7 +3,9 @@
 use serde_json::Map;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use typecheck_ts_harness::tsc::{node_available, typescript_available, TscRequest, TscRunner, TypeQuery};
+use typecheck_ts_harness::tsc::{
+  node_available, typescript_available, TscRequest, TscRunner, TypeQuery,
+};
 
 fn runner_or_skip() -> Option<TscRunner> {
   let node_path = PathBuf::from("node");
@@ -35,9 +37,7 @@ fn diagnostics_report_utf8_byte_offsets() {
   };
 
   let source = "const s = \"💩\";\nnotDefined;\n".to_string();
-  let expected_start = source
-    .find("notDefined")
-    .expect("expected marker to exist") as u32;
+  let expected_start = source.find("notDefined").expect("expected marker to exist") as u32;
   let expected_end = expected_start + "notDefined".len() as u32;
 
   let mut files = HashMap::new();

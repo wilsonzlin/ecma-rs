@@ -183,7 +183,10 @@ fn rewrites_return_undefined() {
 
 #[test]
 fn does_not_rewrite_shadowed_undefined() {
-  let result = minified(TopLevelMode::Global, "function f(undefined){return undefined;}");
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(undefined){return undefined;}",
+  );
   assert_eq!(result, "function f(a){return a;}");
 }
 
@@ -519,11 +522,12 @@ fn rewrites_enum_member_references_in_initializers() {
     other => panic!("expected enum IIFE expr stmt, got {other:?}"),
   };
   let call = match iife.stx.expr.stx.as_ref() {
-    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
-    {
-      Expr::Call(call) => call,
-      other => panic!("expected comma call rhs, got {other:?}"),
-    },
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+      match bin.stx.right.stx.as_ref() {
+        Expr::Call(call) => call,
+        other => panic!("expected comma call rhs, got {other:?}"),
+      }
+    }
     other => panic!("expected comma expression, got {other:?}"),
   };
   let func = match call.stx.callee.stx.as_ref() {
@@ -577,11 +581,12 @@ fn string_enum_aliases_do_not_emit_reverse_mappings() {
     other => panic!("expected enum IIFE expr stmt, got {other:?}"),
   };
   let call = match iife.stx.expr.stx.as_ref() {
-    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
-    {
-      Expr::Call(call) => call,
-      other => panic!("expected comma call rhs, got {other:?}"),
-    },
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+      match bin.stx.right.stx.as_ref() {
+        Expr::Call(call) => call,
+        other => panic!("expected comma call rhs, got {other:?}"),
+      }
+    }
     other => panic!("expected comma expression, got {other:?}"),
   };
   let func = match call.stx.callee.stx.as_ref() {

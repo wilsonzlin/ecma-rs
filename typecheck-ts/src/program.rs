@@ -11,8 +11,8 @@ use hir_js::{
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
-use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::func::Func;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
@@ -5458,10 +5458,8 @@ impl ProgramState {
         // the missing annotation as `any` while emitting `--noImplicitAny`.
         ty = prim.any;
         let span = loc_to_span(file, param.stx.pattern.stx.pat.loc);
-        diagnostics.push(codes::IMPLICIT_ANY.error(
-          codes::implicit_any_message(name.as_deref()),
-          span,
-        ));
+        diagnostics
+          .push(codes::IMPLICIT_ANY.error(codes::implicit_any_message(name.as_deref()), span));
       }
       if idx == 0 && matches!(name.as_deref(), Some("this")) {
         this_param = Some(ty);
@@ -7741,12 +7739,9 @@ impl ProgramState {
                     });
                   }
                 }
-                let alias = alias.as_ref().map(|alias| {
-                  (
-                    alias.stx.name.clone(),
-                    loc_to_span(file, alias.loc).range,
-                  )
-                });
+                let alias = alias
+                  .as_ref()
+                  .map(|alias| (alias.stx.name.clone(), loc_to_span(file, alias.loc).range));
                 sem_builder.add_export_all(
                   spec,
                   loc_to_span(file, stmt.loc).range,
@@ -9084,7 +9079,9 @@ impl ProgramState {
         .exprs
         .iter()
         .filter_map(|expr| match &expr.kind {
-          hir_js::ExprKind::Ident(name_id) => lowered.names.resolve(*name_id).map(|n| n.to_string()),
+          hir_js::ExprKind::Ident(name_id) => {
+            lowered.names.resolve(*name_id).map(|n| n.to_string())
+          }
           hir_js::ExprKind::Jsx(jsxe) => match &jsxe.kind {
             hir_js::JsxElementKind::Member(parts) => parts
               .first()
@@ -10667,11 +10664,11 @@ impl ProgramState {
                 VarDeclMode::Using => HirVarDeclKind::Using,
                 VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
               });
-           let mut init_span_for_const = None;
-           let mut init_pat_is_root = true;
-           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
-           let annotated_raw = declared_ann.or(var.typ);
-           let annotated = annotated_raw;
+          let mut init_span_for_const = None;
+          let mut init_pat_is_root = true;
+          let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
+          let annotated_raw = declared_ann.or(var.typ);
+          let annotated = annotated_raw;
           if std::env::var("DEBUG_VAR_DECL").is_ok() {
             let describe = |ty: Option<TypeId>, state: &ProgramState| -> String {
               let Some(ty) = ty else {
@@ -10708,81 +10705,81 @@ impl ProgramState {
             }
             self.def_types.entry(def).or_insert(annotated);
           }
-           let mut inferred = if let Some(t) = annotated {
-             t
-           } else if let Some(init) = init {
-             if self.checking_bodies.contains(&init.body) {
-               self.builtin.unknown
-             } else {
-               self.body_results.remove(&init.body);
-               let res = self.check_body(init.body)?;
-               init_span_for_const = res.expr_span(init.expr);
-               init_pat_is_root = init
-                 .pat
-                 .map(|pat| {
-                   let meta = match self.body_map.get(&init.body) {
-                     Some(meta) => meta,
-                     None => return false,
-                   };
-                   let hir_id = match meta.hir {
-                     Some(id) => id,
-                     None => return false,
-                   };
-                   let lowered = match self.hir_lowered.get(&meta.file) {
-                     Some(lowered) => lowered,
-                     None => return false,
-                   };
-                   let hir_body = match lowered.body(hir_id) {
-                     Some(body) => body,
-                     None => return false,
-                   };
-                   for stmt in hir_body.stmts.iter() {
-                     if let hir_js::StmtKind::Var(decl) = &stmt.kind {
-                       for declarator in decl.declarators.iter() {
-                         if declarator.init == Some(init.expr) {
-                           return declarator.pat == pat;
-                         }
-                       }
-                     }
-                   }
-                   false
-                 })
-                 .unwrap_or(true);
-               let init_ty_from_pat = init
-                 .pat
-                 .and_then(|pat| res.pat_type(pat))
-                 .filter(|ty| !self.is_unknown_type_id(*ty));
-               let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
-               if let Some(init_ty) = init_ty {
-                 if let Some(store) = self.interned_store.as_ref() {
-                   let init_ty = store.canon(init_ty);
-                   self
-                     .interned_def_types
-                     .entry(def)
+          let mut inferred = if let Some(t) = annotated {
+            t
+          } else if let Some(init) = init {
+            if self.checking_bodies.contains(&init.body) {
+              self.builtin.unknown
+            } else {
+              self.body_results.remove(&init.body);
+              let res = self.check_body(init.body)?;
+              init_span_for_const = res.expr_span(init.expr);
+              init_pat_is_root = init
+                .pat
+                .map(|pat| {
+                  let meta = match self.body_map.get(&init.body) {
+                    Some(meta) => meta,
+                    None => return false,
+                  };
+                  let hir_id = match meta.hir {
+                    Some(id) => id,
+                    None => return false,
+                  };
+                  let lowered = match self.hir_lowered.get(&meta.file) {
+                    Some(lowered) => lowered,
+                    None => return false,
+                  };
+                  let hir_body = match lowered.body(hir_id) {
+                    Some(body) => body,
+                    None => return false,
+                  };
+                  for stmt in hir_body.stmts.iter() {
+                    if let hir_js::StmtKind::Var(decl) = &stmt.kind {
+                      for declarator in decl.declarators.iter() {
+                        if declarator.init == Some(init.expr) {
+                          return declarator.pat == pat;
+                        }
+                      }
+                    }
+                  }
+                  false
+                })
+                .unwrap_or(true);
+              let init_ty_from_pat = init
+                .pat
+                .and_then(|pat| res.pat_type(pat))
+                .filter(|ty| !self.is_unknown_type_id(*ty));
+              let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
+              if let Some(init_ty) = init_ty {
+                if let Some(store) = self.interned_store.as_ref() {
+                  let init_ty = store.canon(init_ty);
+                  self
+                    .interned_def_types
+                    .entry(def)
                     .and_modify(|existing| {
                       *existing =
                         ProgramState::merge_interned_decl_types(store, *existing, init_ty);
                     })
-                   .or_insert(init_ty);
-                 }
-                 self.import_interned_type(init_ty)
-               } else {
-                 self.builtin.unknown
-               }
-             }
-           } else if let Some((_, store_ty)) = ns_entry {
+                    .or_insert(init_ty);
+                }
+                self.import_interned_type(init_ty)
+              } else {
+                self.builtin.unknown
+              }
+            }
+          } else if let Some((_, store_ty)) = ns_entry {
             store_ty
           } else if let Some(raw) = annotated_raw {
             raw
           } else {
             self.builtin.unknown
           };
-           if matches!(decl_kind, HirVarDeclKind::Const) && init_pat_is_root {
-             if let Some(init_span) = init_span_for_const {
-               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
-                 let res = self.check_body(file_body)?;
-                 let top_ty = res
-                   .expr_spans()
+          if matches!(decl_kind, HirVarDeclKind::Const) && init_pat_is_root {
+            if let Some(init_span) = init_span_for_const {
+              if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
+                let res = self.check_body(file_body)?;
+                let top_ty = res
+                  .expr_spans()
                   .iter()
                   .enumerate()
                   .find(|(_, span)| **span == init_span)
@@ -10806,7 +10803,10 @@ impl ProgramState {
               }
             }
           }
-          if self.compiler_options.no_implicit_any && annotated.is_none() && inferred == self.builtin.unknown {
+          if self.compiler_options.no_implicit_any
+            && annotated.is_none()
+            && inferred == self.builtin.unknown
+          {
             // Like TypeScript with `--noImplicitAny`, flag unannotated bindings
             // that could not be inferred. Use `any` for recovery so later checks
             // don't cascade.
@@ -11348,7 +11348,11 @@ impl ProgramState {
             .and_then(|entry| entry.def)
             .and_then(|def| self.export_type_for_def(def).ok().flatten())
         })
-        .or_else(|| entry.and_then(|entry| entry.def).and_then(|def| self.def_types.get(&def).copied()))
+        .or_else(|| {
+          entry
+            .and_then(|entry| entry.def)
+            .and_then(|def| self.def_types.get(&def).copied())
+        })
         .unwrap_or(prim.unknown);
       let ty = if store.contains_type_id(ty) {
         store.canon(ty)

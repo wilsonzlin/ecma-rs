@@ -519,12 +519,11 @@ fn union_canonicalization_is_span_stable() {
 
 #[test]
 fn union_canonicalization_is_span_stable_for_function_types() {
-  let base = lower_from_source("type A = ((x: string) => void) | ((y: number) => void);")
-    .expect("lower");
-  let with_padding = lower_from_source(
-    "type Z = string;\ntype A = ((x: string) => void) | ((y: number) => void);",
-  )
-  .expect("lower with padding");
+  let base =
+    lower_from_source("type A = ((x: string) => void) | ((y: number) => void);").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = ((x: string) => void) | ((y: number) => void);")
+      .expect("lower with padding");
 
   let base_members = union_member_first_param_type_names(&base, "A");
   let with_padding_members = union_member_first_param_type_names(&with_padding, "A");
@@ -556,8 +555,8 @@ fn union_flattens_parenthesized_nested_unions() {
 
 #[test]
 fn union_dedups_duplicate_function_types() {
-  let result = lower_from_source("type A = ((x: string) => void) | ((x: string) => void);")
-    .expect("lower");
+  let result =
+    lower_from_source("type A = ((x: string) => void) | ((x: string) => void);").expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -574,8 +573,8 @@ fn union_dedups_duplicate_function_types() {
 
 #[test]
 fn union_dedups_duplicate_function_types_ignoring_param_names() {
-  let result = lower_from_source("type A = ((x: string) => void) | ((y: string) => void);")
-    .expect("lower");
+  let result =
+    lower_from_source("type A = ((x: string) => void) | ((y: string) => void);").expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -592,10 +591,9 @@ fn union_dedups_duplicate_function_types_ignoring_param_names() {
 
 #[test]
 fn union_dedups_type_predicate_function_types_ignoring_param_names() {
-  let result = lower_from_source(
-    "type A = ((x: unknown) => x is string) | ((y: unknown) => y is string);",
-  )
-  .expect("lower");
+  let result =
+    lower_from_source("type A = ((x: unknown) => x is string) | ((y: unknown) => y is string);")
+      .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -639,16 +637,16 @@ fn union_dedups_tuple_types_ignoring_labels() {
 
 #[test]
 fn union_does_not_dedup_distinct_computed_string_property_names() {
-  let result = lower_from_source(r#"type A = { ["foo"]: string } | { ["bar"]: string };"#)
-    .expect("lower");
+  let result =
+    lower_from_source(r#"type A = { ["foo"]: string } | { ["bar"]: string };"#).expect("lower");
   let members = union_member_first_property_names(&result, "A");
   assert_eq!(members, vec!["bar", "foo"]);
 }
 
 #[test]
 fn union_does_not_dedup_distinct_computed_template_property_names() {
-  let result = lower_from_source(r#"type A = { [`foo`]: string } | { [`bar`]: string };"#)
-    .expect("lower");
+  let result =
+    lower_from_source(r#"type A = { [`foo`]: string } | { [`bar`]: string };"#).expect("lower");
   let members = union_member_first_property_names(&result, "A");
   assert_eq!(members, vec!["bar", "foo"]);
 }
@@ -676,12 +674,11 @@ fn union_dedups_duplicate_type_literals() {
 
 #[test]
 fn intersection_canonicalization_is_span_stable_for_function_types() {
-  let base = lower_from_source("type A = ((x: string) => void) & ((y: number) => void);")
-    .expect("lower");
-  let with_padding = lower_from_source(
-    "type Z = string;\ntype A = ((x: string) => void) & ((y: number) => void);",
-  )
-  .expect("lower with padding");
+  let base =
+    lower_from_source("type A = ((x: string) => void) & ((y: number) => void);").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = ((x: string) => void) & ((y: number) => void);")
+      .expect("lower with padding");
 
   let base_members = intersection_member_first_param_type_names(&base, "A");
   let with_padding_members = intersection_member_first_param_type_names(&with_padding, "A");
@@ -692,8 +689,8 @@ fn intersection_canonicalization_is_span_stable_for_function_types() {
 
 #[test]
 fn intersection_dedups_duplicate_function_types() {
-  let result = lower_from_source("type A = ((x: string) => void) & ((y: string) => void);")
-    .expect("lower");
+  let result =
+    lower_from_source("type A = ((x: string) => void) & ((y: string) => void);").expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -779,7 +776,10 @@ fn intersection_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<S
     .collect()
 }
 
-fn intersection_member_first_property_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+fn intersection_member_first_property_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -896,7 +896,10 @@ fn intersection_member_first_param_type_names(
     .collect()
 }
 
-fn union_member_first_param_type_names(result: &hir_js::LowerResult, alias: &str) -> Vec<&'static str> {
+fn union_member_first_param_type_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<&'static str> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {

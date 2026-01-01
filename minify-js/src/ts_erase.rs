@@ -17,7 +17,9 @@ use parse_js::ast::stmt::decl::{
 };
 use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl};
+use parse_js::ast::ts_stmt::{
+  EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl,
+};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use std::collections::{HashMap, HashSet};
@@ -270,10 +272,18 @@ fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) 
       strip_var_decl(ctx, &mut decl.stx);
       vec![new_node(loc, assoc, Stmt::VarDecl(decl))]
     }
-    Stmt::FunctionDecl(func_decl) => strip_func_decl(ctx, func_decl, loc, assoc).into_iter().collect(),
-    Stmt::ClassDecl(class_decl) => strip_class_decl(ctx, class_decl, loc, assoc).into_iter().collect(),
-    Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc).into_iter().collect(),
-    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc).into_iter().collect(),
+    Stmt::FunctionDecl(func_decl) => strip_func_decl(ctx, func_decl, loc, assoc)
+      .into_iter()
+      .collect(),
+    Stmt::ClassDecl(class_decl) => strip_class_decl(ctx, class_decl, loc, assoc)
+      .into_iter()
+      .collect(),
+    Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc)
+      .into_iter()
+      .collect(),
+    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc)
+      .into_iter()
+      .collect(),
     Stmt::ExportDefaultExpr(mut expr) => {
       expr.stx.expression = strip_expr(ctx, expr.stx.expression);
       vec![new_node(loc, assoc, Stmt::ExportDefaultExpr(expr))]
@@ -290,10 +300,14 @@ fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) 
     Stmt::EnumDecl(decl) => strip_enum_decl(ctx, decl, loc, assoc, is_top_level, None),
     Stmt::NamespaceDecl(decl) => strip_namespace_decl(ctx, decl, loc, assoc, is_top_level, None),
     Stmt::ModuleDecl(decl) => strip_module_decl(ctx, decl, loc, assoc, is_top_level, None),
-    Stmt::ImportEqualsDecl(decl) => lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level).into_iter().collect(),
+    Stmt::ImportEqualsDecl(decl) => lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level)
+      .into_iter()
+      .collect(),
     Stmt::ExportAssignmentDecl(decl) => {
       let expr = strip_expr(ctx, decl.stx.expression);
-      lower_export_assignment(ctx, loc, assoc, expr, is_top_level).into_iter().collect()
+      lower_export_assignment(ctx, loc, assoc, expr, is_top_level)
+        .into_iter()
+        .collect()
     }
   }
 }
@@ -900,9 +914,7 @@ fn rewrite_enum_member_refs(
       | Expr::LitBigInt(_)
       | Expr::LitRegex(_)
       | Expr::LitStr(_) => {}
-      Expr::TypeAssertion(_)
-      | Expr::NonNullAssertion(_)
-      | Expr::SatisfiesExpr(_) => {
+      Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {
         // These should have been erased already.
       }
     }
@@ -936,8 +948,7 @@ fn enum_reverse_mapping_stmt(
     ),
     value,
   );
-  let reverse_left =
-    ts_lower::member_expr(loc, enum_obj, ts_lower::MemberKey::Expr(name_assign));
+  let reverse_left = ts_lower::member_expr(loc, enum_obj, ts_lower::MemberKey::Expr(name_assign));
   ts_lower::expr_stmt(
     loc,
     ts_lower::assign_expr(loc, reverse_left, ts_lower::string(loc, member.to_string())),
@@ -950,7 +961,11 @@ fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> N
       loc,
       OperatorName::LogicalOr,
       ts_lower::id(loc, enum_name),
-      ts_lower::assign_expr(loc, ts_lower::id(loc, enum_name), ts_lower::empty_object(loc)),
+      ts_lower::assign_expr(
+        loc,
+        ts_lower::id(loc, enum_name),
+        ts_lower::empty_object(loc),
+      ),
     ),
     Some(namespace_param) => {
       let prop_read = ts_lower::member_expr(
@@ -1112,7 +1127,11 @@ fn namespace_iife_arg(loc: Loc, name: &str, parent_namespace: Option<&str>) -> N
   }
 }
 
-fn namespace_export_assignments(loc: Loc, namespace_param: &str, names: &[String]) -> Vec<Node<Stmt>> {
+fn namespace_export_assignments(
+  loc: Loc,
+  namespace_param: &str,
+  names: &[String],
+) -> Vec<Node<Stmt>> {
   names
     .iter()
     .map(|name| {
@@ -1211,19 +1230,41 @@ fn strip_namespace_body_stmt(
       }
       out
     }
-    Stmt::EnumDecl(decl) if decl.stx.export => strip_enum_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
-    Stmt::NamespaceDecl(decl) if decl.stx.export => strip_namespace_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
-    Stmt::ModuleDecl(decl) if decl.stx.export => strip_module_decl(ctx, decl, loc, assoc, false, Some(namespace_param)),
+    Stmt::EnumDecl(decl) if decl.stx.export => {
+      strip_enum_decl(ctx, decl, loc, assoc, false, Some(namespace_param))
+    }
+    Stmt::NamespaceDecl(decl) if decl.stx.export => {
+      strip_namespace_decl(ctx, decl, loc, assoc, false, Some(namespace_param))
+    }
+    Stmt::ModuleDecl(decl) if decl.stx.export => {
+      strip_module_decl(ctx, decl, loc, assoc, false, Some(namespace_param))
+    }
     // ES module exports do not make sense inside runtime namespaces.
     Stmt::ExportList(_) | Stmt::ExportDefaultExpr(_) => {
-      unsupported_ts(ctx, loc, "export statements are not supported inside runtime namespaces");
+      unsupported_ts(
+        ctx,
+        loc,
+        "export statements are not supported inside runtime namespaces",
+      );
       vec![]
     }
-    other => strip_stmt(ctx, Node { loc, assoc, stx: Box::new(other) }, false),
+    other => strip_stmt(
+      ctx,
+      Node {
+        loc,
+        assoc,
+        stx: Box::new(other),
+      },
+      false,
+    ),
   }
 }
 
-fn strip_namespace_body(ctx: &mut StripContext<'_>, body: NamespaceBody, namespace_param: &str) -> Vec<Node<Stmt>> {
+fn strip_namespace_body(
+  ctx: &mut StripContext<'_>,
+  body: NamespaceBody,
+  namespace_param: &str,
+) -> Vec<Node<Stmt>> {
   match body {
     NamespaceBody::Block(stmts) => stmts
       .into_iter()
@@ -1269,8 +1310,10 @@ fn strip_namespace_decl(
   let has_top_level_value_binding = parent_namespace.is_none()
     && is_top_level
     && ctx.top_level_value_bindings.contains(&namespace_name);
-  let needs_var_decl =
-    parent_namespace.is_some() || !is_top_level || should_export_var || !has_top_level_value_binding;
+  let needs_var_decl = parent_namespace.is_some()
+    || !is_top_level
+    || should_export_var
+    || !has_top_level_value_binding;
   if needs_var_decl {
     out.push(ts_lower::var_decl_stmt(
       loc,

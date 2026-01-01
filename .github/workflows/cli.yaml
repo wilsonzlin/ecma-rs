@@ -38,7 +38,7 @@ jobs:
         run: echo "VERSION=$([[ \"$GITHUB_REF\" == refs/tags/v* ]] && echo ${GITHUB_REF#refs/tags/v} || echo '0.0.0')" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.92.0
 
       - name: Build CLI
         working-directory: ./minify-js-cli

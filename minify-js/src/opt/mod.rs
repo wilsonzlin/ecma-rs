@@ -126,4 +126,3 @@ impl fmt::Debug for PassPipeline {
       .finish()
   }
 }
-

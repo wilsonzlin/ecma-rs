@@ -124,7 +124,9 @@ fn match_id_and_nullish(
   let sym = resolved_symbol(&id.assoc)?;
   let kind = match other.stx.as_ref() {
     Expr::LitNull(_) => NullishKind::Null,
-    Expr::Id(other_id) if other_id.stx.name == "undefined" && resolved_symbol(&other_id.assoc).is_none() => {
+    Expr::Id(other_id)
+      if other_id.stx.name == "undefined" && resolved_symbol(&other_id.assoc).is_none() =>
+    {
       NullishKind::Undefined
     }
     _ => return None,
@@ -142,4 +144,3 @@ fn build_loose_null_check(loc: Loc, name: String) -> Expr {
     },
   ))
 }
-

@@ -294,15 +294,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let mut def_to_symbol = BTreeMap::new();
     let add_group_to_def_to_symbol =
       |group: &SymbolGroup, def_to_symbol: &mut BTreeMap<(DefId, Namespace), SymbolId>| {
-      for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
-        if let Some(symbol) = group.symbol_for(ns, &self.symbols) {
-          for decl_id in self.symbols.symbol(symbol).decls_for(ns) {
-            let decl = self.symbols.decl(*decl_id);
-            def_to_symbol.entry((decl.def_id, ns)).or_insert(symbol);
+        for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
+          if let Some(symbol) = group.symbol_for(ns, &self.symbols) {
+            for decl_id in self.symbols.symbol(symbol).decls_for(ns) {
+              let decl = self.symbols.decl(*decl_id);
+              def_to_symbol.entry((decl.def_id, ns)).or_insert(symbol);
+            }
           }
         }
-      }
-    };
+      };
     // Ensure stable precedence when a declaration is reachable via multiple
     // owners (e.g. script/global declarations that appear in both module and
     // global maps). Prefer global symbols, then ambient modules, then per-module
@@ -560,9 +560,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         );
       }
       match decl.exported {
-         Exported::No => {
-           if implicit_export {
-             has_exports = true;
+        Exported::No => {
+          if implicit_export {
+            has_exports = true;
             has_other_exports = true;
             let span = Span::new(file_id, decl.span);
             first_export_span.get_or_insert(span);

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property,
-  Param, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
+  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey,
+  Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
   TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
@@ -87,7 +87,10 @@ fn conditional_with_unsubstituted_type_param_is_deferred() {
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
 
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -110,7 +113,10 @@ fn conditional_with_infer_in_extends_is_deferred() {
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
 
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -146,7 +152,10 @@ fn conditional_checked_type_any_yields_union_of_branches() {
   });
 
   let result = store.evaluate(cond);
-  assert_eq!(result, store.union(vec![primitives.number, primitives.boolean]));
+  assert_eq!(
+    result,
+    store.union(vec![primitives.number, primitives.boolean])
+  );
 }
 
 #[test]
@@ -178,7 +187,10 @@ fn distributive_conditional_any_is_union_of_branches() {
 
   let mut eval = evaluator(store.clone(), &expander);
   let result = eval.evaluate(ref_ty);
-  assert_eq!(result, store.union(vec![primitives.number, primitives.boolean]));
+  assert_eq!(
+    result,
+    store.union(vec![primitives.number, primitives.boolean])
+  );
 }
 
 #[test]
@@ -196,7 +208,10 @@ fn conditional_with_unresolved_type_param_is_preserved() {
   });
 
   let result = store.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -223,9 +238,7 @@ fn conditional_with_unresolved_nested_type_param_is_preserved() {
     construct_signatures: Vec::new(),
     indexers: Vec::new(),
   });
-  let check_obj = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType { shape }),
-  ));
+  let check_obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
 
   let shape = store.intern_shape(Shape {
     properties: vec![Property {
@@ -244,9 +257,7 @@ fn conditional_with_unresolved_nested_type_param_is_preserved() {
     construct_signatures: Vec::new(),
     indexers: Vec::new(),
   });
-  let extends_obj = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType { shape }),
-  ));
+  let extends_obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
 
   let cond = store.intern_type(TypeKind::Conditional {
     check: check_obj,
@@ -257,7 +268,10 @@ fn conditional_with_unresolved_nested_type_param_is_preserved() {
   });
 
   let result = store.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -278,7 +292,10 @@ fn conditional_with_unresolved_ref_is_preserved() {
   });
 
   let result = store.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -378,11 +395,9 @@ fn conditional_uses_structural_object_assignability() {
     construct_signatures: Vec::new(),
     indexers: Vec::new(),
   });
-  let src_ty = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType {
-      shape: src_shape_id,
-    }),
-  ));
+  let src_ty = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: src_shape_id,
+  })));
 
   let dst_shape_id = store.intern_shape(Shape {
     properties: vec![Property {
@@ -401,11 +416,9 @@ fn conditional_uses_structural_object_assignability() {
     construct_signatures: Vec::new(),
     indexers: Vec::new(),
   });
-  let dst_ty = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType {
-      shape: dst_shape_id,
-    }),
-  ));
+  let dst_ty = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: dst_shape_id,
+  })));
   assert_ne!(src_ty, dst_ty);
 
   let default_expander = MockExpander::default();
@@ -421,27 +434,25 @@ fn conditional_uses_structural_object_assignability() {
   assert_eq!(result, true_ty);
 
   // Negative: property types differ (`foo: number` is not assignable to `foo: string`).
-  let dst_mismatch = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType {
-      shape: store.intern_shape(Shape {
-        properties: vec![Property {
-          key: PropKey::String(foo),
-          data: PropData {
-            ty: primitives.string,
-            optional: false,
-            readonly: false,
-            accessibility: None,
-            is_method: false,
-            origin: None,
-            declared_on: None,
-          },
-        }],
-        call_signatures: Vec::new(),
-        construct_signatures: Vec::new(),
-        indexers: Vec::new(),
-      }),
+  let dst_mismatch = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: primitives.string,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
     }),
-  ));
+  })));
   let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
     check: src_ty,
     extends: dst_mismatch,
@@ -452,27 +463,25 @@ fn conditional_uses_structural_object_assignability() {
   assert_eq!(result, false_ty);
 
   // Negative: optional vs required (`foo?: number` is not assignable to `foo: number`).
-  let src_optional = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType {
-      shape: store.intern_shape(Shape {
-        properties: vec![Property {
-          key: PropKey::String(foo),
-          data: PropData {
-            ty: primitives.number,
-            optional: true,
-            readonly: false,
-            accessibility: None,
-            is_method: false,
-            origin: None,
-            declared_on: None,
-          },
-        }],
-        call_signatures: Vec::new(),
-        construct_signatures: Vec::new(),
-        indexers: Vec::new(),
-      }),
+  let src_optional = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: primitives.number,
+          optional: true,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
     }),
-  ));
+  })));
   let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
     check: src_optional,
     extends: dst_ty,
@@ -558,16 +567,12 @@ fn conditional_uses_callable_assignability() {
   };
 
   let f_num = store.intern_type(TypeKind::Callable {
-    overloads: vec![store.intern_signature(Signature::new(
-      vec![param_num],
-      primitives.number,
-    ))],
+    overloads: vec![store.intern_signature(Signature::new(vec![param_num], primitives.number))],
   });
   let f_num_or_str = store.intern_type(TypeKind::Callable {
-    overloads: vec![store.intern_signature(Signature::new(
-      vec![param_num_or_str],
-      primitives.number,
-    ))],
+    overloads: vec![
+      store.intern_signature(Signature::new(vec![param_num_or_str], primitives.number))
+    ],
   });
 
   let true_ty = primitives.number;
@@ -1216,9 +1221,7 @@ fn keyof_string_indexer_includes_number() {
       readonly: false,
     }],
   });
-  let obj = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType { shape }),
-  ));
+  let obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
   let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(obj)));
   let TypeKind::Union(members) = store.type_kind(evaluated) else {
     panic!("expected union, got {:?}", store.type_kind(evaluated));

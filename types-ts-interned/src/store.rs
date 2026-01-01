@@ -555,14 +555,12 @@ impl TypeStore {
       .construct_signatures
       .sort_by(|a, b| self.signature_cmp(*a, *b));
     shape.construct_signatures.dedup();
-    shape
-      .indexers
-      .sort_by(|a, b| {
-        self
-          .type_cmp(a.key_type, b.key_type)
-          .then_with(|| self.type_cmp(a.value_type, b.value_type))
-          .then_with(|| a.readonly.cmp(&b.readonly))
-      });
+    shape.indexers.sort_by(|a, b| {
+      self
+        .type_cmp(a.key_type, b.key_type)
+        .then_with(|| self.type_cmp(a.value_type, b.value_type))
+        .then_with(|| a.readonly.cmp(&b.readonly))
+    });
 
     self.insert_shape_direct(shape)
   }

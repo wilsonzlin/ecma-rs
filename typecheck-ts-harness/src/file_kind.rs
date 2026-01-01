@@ -53,4 +53,3 @@ mod tests {
     assert_eq!(infer_file_kind("/a.cjs"), FileKind::Js);
   }
 }
-

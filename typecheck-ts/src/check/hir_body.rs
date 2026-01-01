@@ -549,18 +549,7 @@ pub fn check_body(
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id,
-    body,
-    names,
-    file,
-    ast_index,
-    store,
-    caches,
-    bindings,
-    resolver,
-    None,
-    None,
-    false,
+    body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, false,
     None,
   )
 }

@@ -412,7 +412,10 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 
   let job_count = opts.jobs.max(1);
   let tsc_limiter = Arc::new(ConcurrencyLimiter::new(job_count));
-  let tsc_pool = Arc::new(TscRunnerPool::new(opts.node_path.clone(), tsc_limiter.clone()));
+  let tsc_pool = Arc::new(TscRunnerPool::new(
+    opts.node_path.clone(),
+    tsc_limiter.clone(),
+  ));
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -899,7 +902,11 @@ fn diff_diagnostics(
     return (
       TestOutcome::SpanMismatch,
       Some(MismatchDetail {
-        message: format!("span mismatch between {} and {}", describe(rust), describe(tsc)),
+        message: format!(
+          "span mismatch between {} and {}",
+          describe(rust),
+          describe(tsc)
+        ),
         rust: Some(rust.clone()),
         tsc: Some(tsc.clone()),
       }),
@@ -910,7 +917,11 @@ fn diff_diagnostics(
     return (
       TestOutcome::CodeMismatch,
       Some(MismatchDetail {
-        message: format!("code mismatch between {} and {}", describe(rust), describe(tsc)),
+        message: format!(
+          "code mismatch between {} and {}",
+          describe(rust),
+          describe(tsc)
+        ),
         rust: Some(rust.clone()),
         tsc: Some(tsc.clone()),
       }),
@@ -1055,7 +1066,9 @@ impl TscRunnerPool {
       let mut runners = self.runners.lock().unwrap();
       runners.pop()
     };
-    runner.map(Ok).unwrap_or_else(|| TscRunner::new(self.node_path.clone()))
+    runner
+      .map(Ok)
+      .unwrap_or_else(|| TscRunner::new(self.node_path.clone()))
   }
 
   fn release(&self, runner: TscRunner) {
@@ -1260,7 +1273,9 @@ mod tests {
   fn diff_matches_rust_ts_prefixed_code_with_tsc_numeric_code() {
     let rust = vec![NormalizedDiagnostic {
       engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
-      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS2345".into())),
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+        "TS2345".into(),
+      )),
       file: Some("a.ts".into()),
       start: 0,
       end: 1,
@@ -1311,7 +1326,9 @@ mod tests {
   fn diff_reports_code_mismatch_for_different_codes() {
     let rust = vec![NormalizedDiagnostic {
       engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
-      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS9999".into())),
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+        "TS9999".into(),
+      )),
       file: Some("a.ts".into()),
       start: 0,
       end: 1,
@@ -1338,7 +1355,9 @@ mod tests {
     let rust = vec![
       NormalizedDiagnostic {
         engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
-        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS9999".into())),
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+          "TS9999".into(),
+        )),
         file: Some("a.ts".into()),
         start: 0,
         end: 1,
@@ -1347,7 +1366,9 @@ mod tests {
       },
       NormalizedDiagnostic {
         engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
-        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TS2345".into())),
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+          "TS2345".into(),
+        )),
         file: Some("a.ts".into()),
         start: 10,
         end: 11,
@@ -1424,7 +1445,12 @@ mod tests {
 
     let file_set = HarnessFileSet::new(&files);
     let diagnostics = run_rust(&file_set, &HarnessOptions::default());
-    assert_eq!(diagnostics.status, EngineStatus::Ok, "{:?}", diagnostics.error);
+    assert_eq!(
+      diagnostics.status,
+      EngineStatus::Ok,
+      "{:?}",
+      diagnostics.error
+    );
 
     let parse_diags: Vec<_> = diagnostics
       .diagnostics
@@ -1487,7 +1513,9 @@ mod tests {
 
     let from = file_set.resolve("/src/b.ts").unwrap();
     let resolved = host.resolve(&from, "foo").expect("foo should resolve");
-    let expected = file_set.resolve("/src/node_modules/foo/index.d.ts").unwrap();
+    let expected = file_set
+      .resolve("/src/node_modules/foo/index.d.ts")
+      .unwrap();
     assert_eq!(resolved, expected);
   }
 
@@ -1531,7 +1559,9 @@ mod tests {
 
     let from = file_set.resolve("/a.ts").unwrap();
     let resolved = host.resolve(&from, "foo").expect("foo should resolve");
-    let expected = file_set.resolve("/node_modules/@types/foo/index.d.ts").unwrap();
+    let expected = file_set
+      .resolve("/node_modules/@types/foo/index.d.ts")
+      .unwrap();
     assert_eq!(resolved, expected);
   }
 }

@@ -943,8 +943,7 @@ fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatI
           if matches!(
             def.path.kind,
             hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
-          )
-            && def.name == *name
+          ) && def.name == *name
             && def.span == pat.span
             && def_is_root_export(ctx, def_id)
           {
@@ -952,19 +951,14 @@ fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatI
           }
         }
       }
-      ctx
-        .lowered
-        .defs
-        .iter()
-        .any(|def| {
-          matches!(
-            def.path.kind,
-            hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
-          )
-            && def.name == *name
-            && def.span == pat.span
-            && def_is_root_export(ctx, def.id)
-        })
+      ctx.lowered.defs.iter().any(|def| {
+        matches!(
+          def.path.kind,
+          hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
+        ) && def.name == *name
+          && def.span == pat.span
+          && def_is_root_export(ctx, def.id)
+      })
     }
     PatKind::Array(array) => {
       array

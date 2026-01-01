@@ -2,8 +2,8 @@ use super::{OptCtx, Pass};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData};
+use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
-use parse_js::ast::stmt::{Stmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 
@@ -201,4 +201,3 @@ fn empty_stmt() -> Node<Stmt> {
     Stmt::Empty(Node::new(Loc(0, 0), parse_js::ast::stmt::EmptyStmt {})),
   )
 }
-

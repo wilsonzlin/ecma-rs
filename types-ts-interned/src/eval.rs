@@ -599,11 +599,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
     };
 
-    let branch = if assignable {
-      true_ty
-    } else {
-      false_ty
-    };
+    let branch = if assignable { true_ty } else { false_ty };
     self.evaluate_with_subst(branch, subst, depth + 1)
   }
 
@@ -1403,7 +1399,6 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       _ => None,
     }
   }
-
 }
 
 struct MappedKeyTypes {

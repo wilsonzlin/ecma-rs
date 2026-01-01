@@ -97,4 +97,3 @@ fn export_list_after_array_destructuring_exports_bound_names() {
   let y_type = y.type_id.expect("y type");
   assert_eq!(program.display_type(y_type).to_string(), "string");
 }
-

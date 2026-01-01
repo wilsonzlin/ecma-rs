@@ -121,7 +121,9 @@ fn emit_jsx_attr_value(em: &mut Emitter, value: &JsxAttrVal) -> EmitResult {
 }
 
 fn emit_jsx_child_text(em: &mut Emitter, text: &Node<JsxText>) -> EmitResult {
-  with_node_context(text.loc, || crate::jsx::escape_jsx_child_text(em, &text.stx.value))
+  with_node_context(text.loc, || {
+    crate::jsx::escape_jsx_child_text(em, &text.stx.value)
+  })
 }
 
 fn emit_jsx_child(em: &mut Emitter, child: &JsxElemChild) -> EmitResult {
@@ -147,7 +149,9 @@ fn emit_jsx_children(em: &mut Emitter, children: &[JsxElemChild]) -> EmitResult 
             break;
           }
         }
-        with_node_context(text.loc, || crate::jsx::escape_jsx_child_text(em, &combined))?;
+        with_node_context(text.loc, || {
+          crate::jsx::escape_jsx_child_text(em, &combined)
+        })?;
       }
       child => {
         emit_jsx_child(em, child)?;
@@ -161,4 +165,3 @@ fn emit_jsx_children(em: &mut Emitter, children: &[JsxElemChild]) -> EmitResult 
 fn is_empty_jsx_expr_placeholder(expr: &Node<Expr>) -> bool {
   expr.loc.is_empty() && matches!(expr.stx.as_ref(), Expr::Id(id) if id.stx.name.is_empty())
 }
-

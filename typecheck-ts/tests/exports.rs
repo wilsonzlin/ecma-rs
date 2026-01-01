@@ -509,7 +509,10 @@ fn export_namespace_all_is_supported() {
   let file_b = program.file_id(&key_b).expect("file b");
   let exports = program.exports_of(file_b);
   let ns_entry = exports.get("ns").expect("ns export");
-  assert!(ns_entry.def.is_none(), "namespace re-export should not bind a local def");
+  assert!(
+    ns_entry.def.is_none(),
+    "namespace re-export should not bind a local def"
+  );
   let ns_ty = ns_entry.type_id.expect("type for ns");
   assert_eq!(
     program.display_type(ns_ty).to_string(),

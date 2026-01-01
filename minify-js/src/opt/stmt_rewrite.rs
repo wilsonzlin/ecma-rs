@@ -76,7 +76,11 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
           collect_var_names(dead_stmt, &mut hoisted);
         }
 
-        let live_exists = if cond { true } else { if_stmt.stx.alternate.is_some() };
+        let live_exists = if cond {
+          true
+        } else {
+          if_stmt.stx.alternate.is_some()
+        };
         if !hoisted.is_empty() && live_exists && !in_list {
           // We need to emit `var ...;` alongside the chosen branch, but we
           // cannot do that in a single-statement position without introducing a
@@ -117,7 +121,10 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
             return vec![new_node(
               loc,
               assoc,
-              Stmt::Expr(Node::new(loc, parse_js::ast::stmt::ExprStmt { expr: ternary })),
+              Stmt::Expr(Node::new(
+                loc,
+                parse_js::ast::stmt::ExprStmt { expr: ternary },
+              )),
             )];
           }
           (Err(cons_stmt), Err(alt_stmt)) => {
@@ -157,7 +164,10 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
           vec![new_node(
             loc,
             assoc,
-            Stmt::Expr(Node::new(loc, parse_js::ast::stmt::ExprStmt { expr: and_expr })),
+            Stmt::Expr(Node::new(
+              loc,
+              parse_js::ast::stmt::ExprStmt { expr: and_expr },
+            )),
           )]
         }
         Err(cons_stmt) => {
@@ -237,7 +247,10 @@ fn rewrite_single_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
       let body = rewritten;
       Node::new(
         Loc(0, 0),
-        Stmt::Block(Node::new(Loc(0, 0), parse_js::ast::stmt::BlockStmt { body })),
+        Stmt::Block(Node::new(
+          Loc(0, 0),
+          parse_js::ast::stmt::BlockStmt { body },
+        )),
       )
     }
   }
@@ -271,9 +284,9 @@ fn rewrite_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool) {
 fn rewrite_func_body(func: &mut Node<parse_js::ast::func::Func>, changed: &mut bool) {
   if let Some(body) = func.stx.body.take() {
     func.stx.body = Some(match body {
-      parse_js::ast::func::FuncBody::Block(stmts) => parse_js::ast::func::FuncBody::Block(
-        rewrite_stmts(stmts, changed),
-      ),
+      parse_js::ast::func::FuncBody::Block(stmts) => {
+        parse_js::ast::func::FuncBody::Block(rewrite_stmts(stmts, changed))
+      }
       other => other,
     });
   }
@@ -303,7 +316,14 @@ fn stmt_to_expr(stmt: Node<Stmt>) -> Result<Node<Expr>, Node<Stmt>> {
       let only = block.stx.body.pop().unwrap();
       match stmt_to_expr(only) {
         Ok(expr) => Ok(expr),
-        Err(stmt) => Err(new_node(loc, assoc, Stmt::Block(Node::new(loc, parse_js::ast::stmt::BlockStmt { body: vec![stmt] })))),
+        Err(stmt) => Err(new_node(
+          loc,
+          assoc,
+          Stmt::Block(Node::new(
+            loc,
+            parse_js::ast::stmt::BlockStmt { body: vec![stmt] },
+          )),
+        )),
       }
     }
     other => Err(new_node(loc, assoc, other)),
@@ -348,9 +368,27 @@ fn contains_function_decl(stmt: &Node<Stmt>) -> bool {
           .as_ref()
           .map_or(false, contains_function_decl)
     }
-    Stmt::ForTriple(for_stmt) => for_stmt.stx.body.stx.body.iter().any(contains_function_decl),
-    Stmt::ForIn(for_stmt) => for_stmt.stx.body.stx.body.iter().any(contains_function_decl),
-    Stmt::ForOf(for_stmt) => for_stmt.stx.body.stx.body.iter().any(contains_function_decl),
+    Stmt::ForTriple(for_stmt) => for_stmt
+      .stx
+      .body
+      .stx
+      .body
+      .iter()
+      .any(contains_function_decl),
+    Stmt::ForIn(for_stmt) => for_stmt
+      .stx
+      .body
+      .stx
+      .body
+      .iter()
+      .any(contains_function_decl),
+    Stmt::ForOf(for_stmt) => for_stmt
+      .stx
+      .body
+      .stx
+      .body
+      .iter()
+      .any(contains_function_decl),
     Stmt::While(while_stmt) => contains_function_decl(&while_stmt.stx.body),
     Stmt::DoWhile(do_stmt) => contains_function_decl(&do_stmt.stx.body),
     Stmt::Switch(switch_stmt) => switch_stmt
@@ -359,7 +397,13 @@ fn contains_function_decl(stmt: &Node<Stmt>) -> bool {
       .iter()
       .any(|b| b.stx.body.iter().any(contains_function_decl)),
     Stmt::Try(try_stmt) => {
-      try_stmt.stx.wrapped.stx.body.iter().any(contains_function_decl)
+      try_stmt
+        .stx
+        .wrapped
+        .stx
+        .body
+        .iter()
+        .any(contains_function_decl)
         || try_stmt
           .stx
           .catch
@@ -496,10 +540,7 @@ fn build_hoisted_var_decl(loc: Loc, names: Vec<String>) -> Node<Stmt> {
         PatDecl {
           pat: Node::new(
             loc,
-            Pat::Id(Node::new(
-              loc,
-              parse_js::ast::expr::pat::IdPat { name },
-            )),
+            Pat::Id(Node::new(loc, parse_js::ast::expr::pat::IdPat { name })),
           ),
         },
       ),

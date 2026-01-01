@@ -1,8 +1,8 @@
 use crate::cache::{CacheConfig, CacheStats, ShardedCache};
+use crate::eval::ConditionalAssignability;
 use crate::eval::EvaluatorCacheStats;
 use crate::eval::EvaluatorCaches;
 use crate::eval::ExpandedType;
-use crate::eval::ConditionalAssignability;
 use crate::eval::TypeEvaluator;
 use crate::eval::TypeExpander as EvalTypeExpander;
 use crate::shape::Indexer;
@@ -20,12 +20,12 @@ use crate::TypeKind;
 use crate::TypeOptions;
 use crate::TypeStore;
 use bitflags::bitflags;
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
-#[cfg(test)]
-use std::cell::Cell;
 
 #[cfg(test)]
 thread_local! {
@@ -247,8 +247,7 @@ impl<'a> RelateCtx<'a> {
   ) -> Self {
     let store_options = store.options();
     debug_assert_eq!(
-      options.exact_optional_property_types,
-      store_options.exact_optional_property_types,
+      options.exact_optional_property_types, store_options.exact_optional_property_types,
       concat!(
         "RelateCtx.options.exact_optional_property_types must match ",
         "TypeStore.options().exact_optional_property_types because type normalization uses ",
@@ -256,8 +255,7 @@ impl<'a> RelateCtx<'a> {
       )
     );
     debug_assert_eq!(
-      options.no_unchecked_indexed_access,
-      store_options.no_unchecked_indexed_access,
+      options.no_unchecked_indexed_access, store_options.no_unchecked_indexed_access,
       concat!(
         "RelateCtx.options.no_unchecked_indexed_access must match ",
         "TypeStore.options().no_unchecked_indexed_access because type normalization uses ",
@@ -1687,12 +1685,12 @@ impl<'a> RelateCtx<'a> {
   ) -> RelationResult {
     let (src_reason_ty, dst_reason_ty) = if record {
       (
-        self
-          .store
-          .intern_type(TypeKind::Callable { overloads: vec![src_id] }),
-        self
-          .store
-          .intern_type(TypeKind::Callable { overloads: vec![dst_id] }),
+        self.store.intern_type(TypeKind::Callable {
+          overloads: vec![src_id],
+        }),
+        self.store.intern_type(TypeKind::Callable {
+          overloads: vec![dst_id],
+        }),
       )
     } else {
       (TypeId(src_id.0), TypeId(dst_id.0))
@@ -1791,8 +1789,8 @@ impl<'a> RelateCtx<'a> {
     let src_rest_index = src.params.iter().position(|p| p.rest);
     let dst_rest_index = dst.params.iter().position(|p| p.rest);
 
-    let effective_param_type = |sig: &Signature, rest_index: Option<usize>, index: usize| {
-      match sig.params.get(index) {
+    let effective_param_type =
+      |sig: &Signature, rest_index: Option<usize>, index: usize| match sig.params.get(index) {
         Some(param) => {
           let ty = if param.rest {
             self.spread_element_type(param.ty)
@@ -1812,8 +1810,7 @@ impl<'a> RelateCtx<'a> {
             .unwrap_or(prim.any),
           _ => prim.any,
         },
-      }
-    };
+      };
 
     for index in 0..src.params.len().max(dst.params.len()) {
       // If the destination signature has no parameter here and no rest parameter
@@ -1826,15 +1823,35 @@ impl<'a> RelateCtx<'a> {
       let d_ty = effective_param_type(dst, dst_rest_index, index);
 
       let related = if allow_bivariance {
-        let forward =
-          self.relate_internal(s_ty, d_ty, RelationKind::Assignable, mode, record, depth + 1);
+        let forward = self.relate_internal(
+          s_ty,
+          d_ty,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if forward.result {
           forward
         } else {
-          self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record, depth + 1)
+          self.relate_internal(
+            d_ty,
+            s_ty,
+            RelationKind::Assignable,
+            mode,
+            record,
+            depth + 1,
+          )
         }
       } else {
-        self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record, depth + 1)
+        self.relate_internal(
+          d_ty,
+          s_ty,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        )
       };
 
       if record {
@@ -1934,12 +1951,9 @@ impl<'a> RelateCtx<'a> {
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
-    let mut evaluator = TypeEvaluator::with_caches(
-      self.store.clone(),
-      &adapter,
-      self.normalizer_caches.clone(),
-    )
-    .with_conditional_assignability(self);
+    let mut evaluator =
+      TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone())
+        .with_conditional_assignability(self);
     evaluator.evaluate(ty)
   }
 
@@ -2307,21 +2321,18 @@ impl<'a> RelateCtx<'a> {
     depth: usize,
   ) -> Option<&'b Indexer> {
     let key_ty = self.prop_key_type(name);
-    shape
-      .indexers
-      .iter()
-      .find(|idx| {
-        self
-          .relate_internal(
-            key_ty,
-            idx.key_type,
-            RelationKind::Assignable,
-            mode,
-            false,
-            depth,
-          )
-          .result
-      })
+    shape.indexers.iter().find(|idx| {
+      self
+        .relate_internal(
+          key_ty,
+          idx.key_type,
+          RelationKind::Assignable,
+          mode,
+          false,
+          depth,
+        )
+        .result
+    })
   }
 
   fn indexer_accepts_prop(
@@ -2418,7 +2429,9 @@ mod tests {
       readonly: false,
     });
     let src_shape_id = store.intern_shape(src_shape);
-    let src_obj = store.intern_object(ObjectType { shape: src_shape_id });
+    let src_obj = store.intern_object(ObjectType {
+      shape: src_shape_id,
+    });
     let src_ty = store.intern_type(TypeKind::Object(src_obj));
 
     // dst: { foo: number }
@@ -2437,7 +2450,9 @@ mod tests {
       },
     });
     let dst_shape_id = store.intern_shape(dst_shape);
-    let dst_obj = store.intern_object(ObjectType { shape: dst_shape_id });
+    let dst_obj = store.intern_object(ObjectType {
+      shape: dst_shape_id,
+    });
     let dst_ty = store.intern_type(TypeKind::Object(dst_obj));
 
     assert!(ctx.is_assignable_no_normalize(src_ty, dst_ty));
@@ -2481,16 +2496,18 @@ mod tests {
 
     // Skip-normalize mode cannot evaluate `keyof` and will treat the target as
     // an unsupported structural kind.
-    assert!(!ctx
-      .relate_internal(
-        key_a,
-        keyof_obj,
-        RelationKind::Assignable,
-        RelationMode::SKIP_NORMALIZE,
-        false,
-        1,
-      )
-      .result);
+    assert!(
+      !ctx
+        .relate_internal(
+          key_a,
+          keyof_obj,
+          RelationKind::Assignable,
+          RelationMode::SKIP_NORMALIZE,
+          false,
+          1,
+        )
+        .result
+    );
 
     // Normal mode normalizes `keyof` before the structural check and should not
     // be affected by the cached SKIP_NORMALIZE result.

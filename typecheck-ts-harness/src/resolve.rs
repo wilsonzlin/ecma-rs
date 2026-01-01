@@ -3,7 +3,13 @@ use crate::runner::HarnessFileSet;
 use typecheck_ts::FileKey;
 
 const EXTENSIONS: [&str; 5] = ["ts", "tsx", "d.ts", "js", "jsx"];
-const INDEX_FILES: [&str; 5] = ["index.ts", "index.tsx", "index.d.ts", "index.js", "index.jsx"];
+const INDEX_FILES: [&str; 5] = [
+  "index.ts",
+  "index.tsx",
+  "index.d.ts",
+  "index.js",
+  "index.jsx",
+];
 
 pub(crate) fn resolve_module_specifier(
   files: &HarnessFileSet,

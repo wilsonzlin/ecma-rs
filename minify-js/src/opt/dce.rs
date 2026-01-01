@@ -8,8 +8,8 @@ use parse_js::ast::expr::IdExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::decl::VarDeclMode;
-use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
 use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol};
@@ -89,7 +89,12 @@ fn dce_stmts(
     .collect()
 }
 
-fn dce_stmt(stmt: Node<Stmt>, cx: &OptCtx, used: &HashSet<SymbolId>, changed: &mut bool) -> Node<Stmt> {
+fn dce_stmt(
+  stmt: Node<Stmt>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+  changed: &mut bool,
+) -> Node<Stmt> {
   let Node { loc, assoc, stx } = stmt;
   match *stx {
     Stmt::Block(mut block) => {
@@ -155,13 +160,17 @@ fn dce_stmt(stmt: Node<Stmt>, cx: &OptCtx, used: &HashSet<SymbolId>, changed: &m
       new_node(loc, assoc, Stmt::ClassDecl(decl))
     }
     Stmt::VarDecl(mut decl) => {
-      if decl.stx.export || matches!(decl.stx.mode, VarDeclMode::Using | VarDeclMode::AwaitUsing)
-      {
+      if decl.stx.export || matches!(decl.stx.mode, VarDeclMode::Using | VarDeclMode::AwaitUsing) {
         return new_node(loc, assoc, Stmt::VarDecl(decl));
       }
       let mut kept = Vec::with_capacity(decl.stx.declarators.len());
       for declarator in decl.stx.declarators.into_iter() {
-        if should_keep_declarator(&declarator.pattern.stx.pat, declarator.initializer.as_ref(), cx, used) {
+        if should_keep_declarator(
+          &declarator.pattern.stx.pat,
+          declarator.initializer.as_ref(),
+          cx,
+          used,
+        ) {
           kept.push(declarator);
         } else {
           *changed = true;
@@ -189,7 +198,10 @@ fn should_keep_declarator(
   if used.contains(&sym) {
     return true;
   }
-  if cx.disabled_scopes.contains(&cx.sem().symbol(sym).decl_scope) {
+  if cx
+    .disabled_scopes
+    .contains(&cx.sem().symbol(sym).decl_scope)
+  {
     return true;
   }
   match initializer {
@@ -220,7 +232,12 @@ fn dce_switch_branch(
   branch
 }
 
-fn dce_try_stmt(try_stmt: &mut Node<TryStmt>, cx: &OptCtx, used: &HashSet<SymbolId>, changed: &mut bool) {
+fn dce_try_stmt(
+  try_stmt: &mut Node<TryStmt>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+  changed: &mut bool,
+) {
   let wrapped = std::mem::take(&mut try_stmt.stx.wrapped.stx.body);
   try_stmt.stx.wrapped.stx.body = dce_stmts(wrapped, cx, used, changed);
 
@@ -244,7 +261,12 @@ fn dce_func(func: &mut Node<Func>, cx: &OptCtx, used: &HashSet<SymbolId>, change
   }
 }
 
-fn dce_class_member(member: &mut Node<ClassMember>, cx: &OptCtx, used: &HashSet<SymbolId>, changed: &mut bool) {
+fn dce_class_member(
+  member: &mut Node<ClassMember>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+  changed: &mut bool,
+) {
   match &mut member.stx.val {
     ClassOrObjVal::Getter(get) => dce_func(&mut get.stx.func, cx, used, changed),
     ClassOrObjVal::Setter(set) => dce_func(&mut set.stx.func, cx, used, changed),

@@ -54,4 +54,3 @@ fn export_star_as_namespace_is_typed_and_resolves_through_imports() {
     .expect("type for x export");
   assert_eq!(program.display_type(x_ty).to_string(), "number");
 }
-

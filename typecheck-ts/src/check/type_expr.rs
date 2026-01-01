@@ -3,8 +3,8 @@ use ahash::AHashMap;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use parse_js::ast::node::Node;
 use parse_js::ast::expr::Expr;
+use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::{
   MappedTypeModifier, TypeArray, TypeConditional, TypeConstructor, TypeEntityName, TypeExpr,
   TypeFunction, TypeFunctionParameter, TypeIndexedAccess, TypeInfer, TypeIntersection, TypeKeyOf,
@@ -674,10 +674,11 @@ impl TypeLowerer {
     if let Some((module, qualifier)) = import_typeof_target(&query.stx.expr_name) {
       let qualifier_opt = (!qualifier.is_empty()).then_some(qualifier);
       if let Some(resolver) = &self.resolver {
-        if let Some(def) =
-          resolver.resolve_import_typeof(&module, qualifier_opt.as_deref())
-        {
-          return self.store.intern_type(TypeKind::Ref { def, args: Vec::new() });
+        if let Some(def) = resolver.resolve_import_typeof(&module, qualifier_opt.as_deref()) {
+          return self.store.intern_type(TypeKind::Ref {
+            def,
+            args: Vec::new(),
+          });
         }
       }
       let mut message = format!("cannot resolve typeof import(\"{}\")", module);

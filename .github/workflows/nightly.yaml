@@ -22,7 +22,7 @@ jobs:
           submodules: recursive
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.92.0
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y ripgrep
@@ -80,7 +80,7 @@ jobs:
           submodules: recursive
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.92.0
 
       - name: Generate lockfile
         run: cargo generate-lockfile

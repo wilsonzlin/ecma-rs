@@ -85,4 +85,3 @@ pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
     _ => false,
   }
 }
-
