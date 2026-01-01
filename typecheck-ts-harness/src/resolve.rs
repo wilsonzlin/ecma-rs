@@ -67,7 +67,7 @@ fn resolve_non_relative(
 
   // a) Exact match of the normalized specifier (for explicit-path tests). Avoid normalizing bare
   // package names (e.g. `react`) since they will almost always resolve through `node_modules`.
-  if specifier.contains('.')
+  if is_source_root(specifier)
     || specifier.starts_with('/')
     || specifier.starts_with('\\')
     || starts_with_drive_letter(specifier)
