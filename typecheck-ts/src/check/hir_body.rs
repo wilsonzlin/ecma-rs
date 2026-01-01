@@ -2745,6 +2745,12 @@ impl<'a> Checker<'a> {
   }
 
   fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
+    if obj.stx.members.is_empty() {
+      // TypeScript infers `{}` for empty object literals, which is semantically
+      // the top type for non-nullish values (and is distinct from the `object`
+      // keyword).
+      return self.store.intern_type(TypeKind::EmptyObject);
+    }
     let mut shape = Shape::new();
     for member in obj.stx.members.iter() {
       match &member.stx.typ {
@@ -3056,7 +3062,31 @@ impl<'a> Checker<'a> {
               "assignment type mismatch",
               Span {
                 file: self.file,
-                range: loc_to_range(self.file, left.loc),
+                range: loc_to_range(self.file, right.loc),
+              },
+            ));
+          }
+          self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
+          return value_ty;
+        } else {
+          let value_ty = self.check_expr(right);
+          self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
+          return value_ty;
+        }
+      }
+      AstExpr::IdPat(id) => {
+        if let Some(binding) = self.lookup(&id.stx.name) {
+          let value_ty = if matches!(op, OperatorName::Assignment) {
+            self.check_expr_with_expected(right, binding.ty)
+          } else {
+            self.check_expr(right)
+          };
+          if !self.relate.is_assignable(value_ty, binding.ty) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "assignment type mismatch",
+              Span {
+                file: self.file,
+                range: loc_to_range(self.file, right.loc),
               },
             ));
           }
@@ -6355,6 +6385,11 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn object_type(&mut self, obj: &ObjectLiteral, env: &mut Env) -> TypeId {
+    if obj.properties.is_empty() {
+      // Keep the flow checker consistent with the AST checker: `{}` expression
+      // literals infer the `{}` (empty object) type, not the `object` keyword.
+      return self.store.intern_type(TypeKind::EmptyObject);
+    }
     let mut shape = Shape::new();
     for prop in obj.properties.iter() {
       match prop {

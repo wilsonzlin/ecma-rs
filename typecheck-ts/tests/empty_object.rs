@@ -49,3 +49,37 @@ let bad_null: {} = null;
     "expected mismatch span to cover `null`; got {mismatches:?}",
   );
 }
+
+#[test]
+fn empty_object_literal_infers_empty_object_type() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file0.ts");
+  let source = r#"
+let x = {};
+x = 1;
+x = null;
+"#;
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let diagnostics = program.check();
+
+  let mismatches: Vec<_> = diagnostics
+    .iter()
+    .filter(|diag| diag.code.as_str() == codes::TYPE_MISMATCH.as_str())
+    .collect();
+  assert_eq!(mismatches.len(), 1, "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&file).expect("file id for file0.ts");
+  let null_offset = u32::try_from(source.find("= null").expect("bad null assignment"))
+    .expect("offset fits in u32")
+    + "= ".len() as u32;
+  assert!(
+    mismatches.iter().any(|diag| {
+      diag.primary.file == file_id
+        && diag.primary.range.start <= null_offset
+        && diag.primary.range.end >= null_offset + 1
+    }),
+    "expected mismatch span to cover `null`; got {mismatches:?}",
+  );
+}
