@@ -97,8 +97,9 @@ fn resolve_non_relative(
   let mut types_specifier: Option<String> = None;
   let mut types_specifier_checked = false;
   let mut dir = virtual_parent_dir(from_name);
-  let mut package_dir =
-    String::with_capacity(dir.len() + 2 + "node_modules".len() + package_name.len() + subpath.len());
+  let mut package_dir = String::with_capacity(
+    dir.len() + 2 + "node_modules".len() + package_name.len() + subpath.len(),
+  );
   let mut types_base = String::with_capacity(
     dir.len() + 2 + "node_modules/@types".len() + specifier.len() + subpath.len(),
   );
@@ -129,7 +130,12 @@ fn resolve_non_relative(
       types_specifier_checked = true;
     }
     if let Some(types_specifier) = types_specifier.as_deref() {
-      virtual_join3_into(&mut types_base, &dir, "node_modules/@types", types_specifier);
+      virtual_join3_into(
+        &mut types_base,
+        &dir,
+        "node_modules/@types",
+        types_specifier,
+      );
       if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
         return Some(found);
       }
