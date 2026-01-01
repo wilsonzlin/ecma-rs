@@ -144,24 +144,22 @@ fn shadowed_bindings_map_to_distinct_initializers() {
   );
 
   let file_id = program.file_id(&key).expect("file id");
-  let mut values: Vec<_> = program
+  let mut inits: Vec<_> = program
     .definitions_in_file(file_id)
     .into_iter()
-    .filter(|def| program.def_name(*def) == Some("value".to_string()))
-    .filter(|def| program.var_initializer(*def).is_some())
-    .filter_map(|def| program.def_span(def).map(|span| (def, span.range.start)))
+    .filter(|def| program.def_name(*def).as_deref() == Some("value"))
+    .filter_map(|def| program.var_initializer(def))
     .collect();
-  assert_eq!(values.len(), 2, "expected two value definitions");
-  values.sort_by_key(|(_, start)| *start);
+  // `definitions_in_file` includes both the binding (`Var`) and its enclosing
+  // `VarDeclarator` definition. Both map to the same initializer body/expression,
+  // so normalize to distinct initializers before asserting.
+  inits.sort_by_key(|init| (init.body.0, init.expr.0));
+  inits.dedup_by_key(|init| (init.body, init.expr));
+  assert_eq!(inits.len(), 2, "expected two distinct value initializers");
+  inits.sort_by_key(|init| init.span.map(|span| span.start).unwrap_or(u32::MAX));
 
-  let inner_def = values[0].0;
-  let outer_def = values[1].0;
-  let inner_init = program
-    .var_initializer(inner_def)
-    .expect("initializer for inner value");
-  let outer_init = program
-    .var_initializer(outer_def)
-    .expect("initializer for outer value");
+  let inner_init = inits[0];
+  let outer_init = inits[1];
   assert_ne!(inner_init.body, outer_init.body);
   let inner_span = program
     .expr_span(inner_init.body, inner_init.expr)

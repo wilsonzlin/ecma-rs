@@ -392,18 +392,21 @@ pub mod body_check {
   use hir_js::{PatId as HirPatId, PatKind as HirPatKind};
   use parse_js::ast::node::Node;
   use parse_js::ast::stx::TopLevel;
+  use semantic_js::ts as sem_ts;
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
-  use crate::check::caches::CheckerCaches;
+  use crate::check::caches::{CheckerCacheStats, CheckerCaches};
   use crate::check::hir_body::{
     check_body_with_env, check_body_with_expander, BindingTypeResolver,
   };
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
+  use crate::files::FileRegistry;
   use crate::lib_support::{CacheMode, CacheOptions, JsxMode};
   use crate::profile::{QueryKind, QueryStatsCollector};
   use crate::program::check::relate_hooks;
-  use crate::{BodyCheckResult, BodyId, DefId, PatId, SymbolBinding, TypeId};
+  use crate::program::{NamespaceMemberIndex, ProgramTypeResolver};
+  use crate::{BodyCheckResult, BodyId, DefId, ExportMap, Host, PatId, SymbolBinding, TypeId};
 
   #[derive(Clone)]
   pub struct ArcAst(Arc<Node<TopLevel>>);
@@ -468,6 +471,16 @@ pub mod body_check {
     pub global_bindings: HashMap<String, SymbolBinding>,
     pub file_bindings: HashMap<FileId, HashMap<String, SymbolBinding>>,
     pub def_spans: HashMap<(FileId, TextRange), DefId>,
+    pub semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
+    pub def_kinds: Arc<HashMap<DefId, crate::DefKind>>,
+    pub def_files: Arc<HashMap<DefId, FileId>>,
+    pub def_id_spans: Arc<HashMap<DefId, TextRange>>,
+    pub exports: Arc<HashMap<FileId, ExportMap>>,
+    pub module_namespace_defs: Arc<HashMap<FileId, DefId>>,
+    pub(crate) namespace_members: Arc<NamespaceMemberIndex>,
+    pub qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
+    pub(crate) file_registry: Arc<FileRegistry>,
+    pub host: Arc<dyn Host>,
     pub checker_caches: CheckerCaches,
     pub cache_mode: CacheMode,
     pub cache_options: CacheOptions,
@@ -488,6 +501,7 @@ pub mod body_check {
     context: Arc<BodyCheckContext>,
     memo: RefCell<HashMap<BodyId, Arc<BodyCheckResult>>>,
     ast_indexes: RefCell<HashMap<FileId, Arc<crate::check::hir_body::AstIndex>>>,
+    cache_stats: RefCell<CheckerCacheStats>,
   }
 
   #[derive(Debug, Default)]
@@ -504,41 +518,61 @@ pub mod body_check {
     pub fn max_active(&self) -> usize {
       self.max_active.load(Ordering::SeqCst)
     }
-
-    fn guard(self: Arc<Self>) -> ParallelGuard {
-      let current = self.active.fetch_add(1, Ordering::SeqCst) + 1;
-      self.max_active.fetch_max(current, Ordering::SeqCst);
-      ParallelGuard { tracker: self }
-    }
   }
 
   pub struct ParallelGuard {
-    tracker: Arc<ParallelTracker>,
+    trackers: Vec<Arc<ParallelTracker>>,
   }
 
   impl Drop for ParallelGuard {
     fn drop(&mut self) {
-      self.tracker.active.fetch_sub(1, Ordering::SeqCst);
+      for tracker in &self.trackers {
+        tracker.active.fetch_sub(1, Ordering::SeqCst);
+      }
     }
   }
 
-  static PARALLEL_TRACKER: OnceLock<RwLock<Option<Arc<ParallelTracker>>>> = OnceLock::new();
+  impl ParallelGuard {
+    fn new(trackers: Vec<Arc<ParallelTracker>>) -> Self {
+      for tracker in trackers.iter() {
+        let current = tracker.active.fetch_add(1, Ordering::SeqCst) + 1;
+        tracker.max_active.fetch_max(current, Ordering::SeqCst);
+      }
+      ParallelGuard { trackers }
+    }
+  }
 
-  fn tracker_slot() -> &'static RwLock<Option<Arc<ParallelTracker>>> {
-    PARALLEL_TRACKER.get_or_init(|| RwLock::new(None))
+  static PARALLEL_TRACKER: OnceLock<RwLock<Vec<Arc<ParallelTracker>>>> = OnceLock::new();
+
+  thread_local! {
+    static LOCAL_TRACKER: RefCell<Option<Arc<ParallelTracker>>> = RefCell::new(None);
+  }
+
+  fn tracker_slot() -> &'static RwLock<Vec<Arc<ParallelTracker>>> {
+    PARALLEL_TRACKER.get_or_init(|| RwLock::new(Vec::new()))
   }
 
   pub fn set_parallel_tracker(tracker: Option<Arc<ParallelTracker>>) {
-    *tracker_slot().write().unwrap() = tracker;
+    LOCAL_TRACKER.with(|local| {
+      let mut local = local.borrow_mut();
+      let mut global = tracker_slot().write().unwrap();
+
+      if let Some(existing) = local.take() {
+        global.retain(|registered| !Arc::ptr_eq(registered, &existing));
+      }
+
+      if let Some(tracker) = tracker {
+        if !global.iter().any(|registered| Arc::ptr_eq(registered, &tracker)) {
+          global.push(Arc::clone(&tracker));
+        }
+        *local = Some(tracker);
+      }
+    });
   }
 
   pub fn parallel_guard() -> Option<ParallelGuard> {
-    tracker_slot()
-      .read()
-      .unwrap()
-      .as_ref()
-      .cloned()
-      .map(|tracker| tracker.guard())
+    let trackers: Vec<_> = tracker_slot().read().unwrap().iter().cloned().collect();
+    (!trackers.is_empty()).then(|| ParallelGuard::new(trackers))
   }
 
   impl BodyCheckDb {
@@ -551,7 +585,28 @@ pub mod body_check {
         context,
         memo: RefCell::new(HashMap::new()),
         ast_indexes: RefCell::new(HashMap::new()),
+        cache_stats: RefCell::new(CheckerCacheStats::default()),
       }
+    }
+
+    pub fn from_shared_context_with_seed_results(
+      context: Arc<BodyCheckContext>,
+      seed_results: &[(BodyId, Arc<BodyCheckResult>)],
+    ) -> Self {
+      let memo = seed_results
+        .iter()
+        .map(|(body, res)| (*body, Arc::clone(res)))
+        .collect();
+      Self {
+        context,
+        memo: RefCell::new(memo),
+        ast_indexes: RefCell::new(HashMap::new()),
+        cache_stats: RefCell::new(CheckerCacheStats::default()),
+      }
+    }
+
+    pub(crate) fn into_cache_stats(self) -> CheckerCacheStats {
+      self.cache_stats.into_inner()
     }
   }
 
@@ -745,20 +800,6 @@ pub mod body_check {
         &mut binding_defs,
         prim.unknown,
       );
-      if std::env::var("DEBUG_BINDINGS").is_ok() {
-        let has_greeter = bindings.contains_key("Greeter");
-        if !has_greeter {
-          let mut names: Vec<_> = bindings.keys().cloned().collect();
-          names.sort();
-          eprintln!(
-            "DEBUG_BINDINGS: body {:?} file {:?} missing Greeter ({} bindings): {:?}",
-            body_id,
-            meta.file,
-            bindings.len(),
-            names
-          );
-        }
-      }
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
@@ -767,6 +808,26 @@ pub mod body_check {
           .and_then(|span| contextual_callable_for_body(self, body_id, span))
       } else {
         None
+      };
+      let resolver = if let Some(semantics) = ctx.semantics.as_ref() {
+        Some(Arc::new(ProgramTypeResolver::new(
+          Arc::clone(&ctx.host),
+          Arc::clone(semantics),
+          Arc::clone(&ctx.def_kinds),
+          Arc::clone(&ctx.def_files),
+          Arc::clone(&ctx.def_id_spans),
+          Arc::clone(&ctx.file_registry),
+          meta.file,
+          binding_defs,
+          Arc::clone(&ctx.exports),
+          Arc::clone(&ctx.module_namespace_defs),
+          Arc::clone(&ctx.namespace_members),
+          Arc::clone(&ctx.qualified_def_members),
+        )) as Arc<_>)
+      } else if binding_defs.is_empty() {
+        None
+      } else {
+        Some(Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>)
       };
       let ast_index = self.ast_index(meta.file, &ast);
       let mut result = check_body_with_expander(
@@ -778,8 +839,7 @@ pub mod body_check {
         Arc::clone(&ctx.store),
         &caches,
         &bindings,
-        (!binding_defs.is_empty())
-          .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
+        resolver,
         Some(&expander),
         contextual_fn_ty,
         ctx.no_implicit_any,
@@ -919,9 +979,31 @@ pub mod body_check {
             }
           }
         }
-        let flow_return_types = flow_result.return_types;
-        if !flow_return_types.is_empty() {
+        let flow_return_types: Vec<_> = flow_result
+          .return_types
+          .into_iter()
+          .map(|ty| crate::check::widen::widen_literal(ctx.store.as_ref(), ty))
+          .collect();
+        if result.return_types.is_empty() && !flow_return_types.is_empty() {
           result.return_types = flow_return_types;
+        } else if flow_return_types.len() == result.return_types.len() {
+          for (idx, ty) in flow_return_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.return_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.return_types[idx] = *ty;
+              }
+            }
+          }
+        }
+        if !result.return_types.is_empty() {
+          result.return_types = result
+            .return_types
+            .iter()
+            .map(|ty| crate::check::widen::widen_literal(ctx.store.as_ref(), *ty))
+            .collect();
         }
         let mut flow_diagnostics = flow_result.diagnostics;
         if !flow_diagnostics.is_empty() {
@@ -966,6 +1048,7 @@ pub mod body_check {
             stats.relation.evictions = 1;
           }
         }
+        self.cache_stats.borrow_mut().merge(&stats);
         ctx
           .query_stats
           .record_cache(crate::profile::CacheKind::Relation, &stats.relation);
@@ -2066,7 +2149,7 @@ pub(crate) fn var_initializer_in_file(
 ) -> Option<VarInit> {
   let hir_def = lowered.def(def)?;
   match hir_def.path.kind {
-    DefKind::Var => {}
+    DefKind::Var | DefKind::VarDeclarator => {}
     DefKind::Field | DefKind::Param => return None,
     _ if def_name != Some("default") => return None,
     _ => {}

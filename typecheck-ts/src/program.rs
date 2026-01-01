@@ -2541,7 +2541,7 @@ pub struct ModuleData {
 }
 
 #[derive(Clone, Debug, Default)]
-struct NamespaceMemberIndex {
+pub(crate) struct NamespaceMemberIndex {
   // (parent def, namespace bit) -> (member name -> candidate defs)
   by_parent: HashMap<(DefId, sem_ts::Namespace), HashMap<String, Vec<DefId>>>,
 }
@@ -2576,33 +2576,33 @@ impl NamespaceMemberIndex {
 }
 
 #[derive(Clone)]
-struct ProgramTypeResolver {
+pub(crate) struct ProgramTypeResolver {
   semantics: Arc<sem_ts::TsProgramSemantics>,
-  def_kinds: HashMap<DefId, DefKind>,
-  def_files: HashMap<DefId, FileId>,
-  def_spans: HashMap<DefId, TextRange>,
-  registry: FileRegistry,
+  def_kinds: Arc<HashMap<DefId, DefKind>>,
+  def_files: Arc<HashMap<DefId, FileId>>,
+  def_spans: Arc<HashMap<DefId, TextRange>>,
+  registry: Arc<FileRegistry>,
   host: Arc<dyn Host>,
   current_file: FileId,
   local_defs: HashMap<String, DefId>,
-  exports: HashMap<FileId, ExportMap>,
-  module_namespace_defs: HashMap<FileId, DefId>,
+  exports: Arc<HashMap<FileId, ExportMap>>,
+  module_namespace_defs: Arc<HashMap<FileId, DefId>>,
   namespace_members: Arc<NamespaceMemberIndex>,
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
 }
 
 impl ProgramTypeResolver {
-  fn new(
+  pub(crate) fn new(
     host: Arc<dyn Host>,
     semantics: Arc<sem_ts::TsProgramSemantics>,
-    def_kinds: HashMap<DefId, DefKind>,
-    def_files: HashMap<DefId, FileId>,
-    def_spans: HashMap<DefId, TextRange>,
-    registry: FileRegistry,
+    def_kinds: Arc<HashMap<DefId, DefKind>>,
+    def_files: Arc<HashMap<DefId, FileId>>,
+    def_spans: Arc<HashMap<DefId, TextRange>>,
+    registry: Arc<FileRegistry>,
     current_file: FileId,
     local_defs: HashMap<String, DefId>,
-    exports: HashMap<FileId, ExportMap>,
-    module_namespace_defs: HashMap<FileId, DefId>,
+    exports: Arc<HashMap<FileId, ExportMap>>,
+    module_namespace_defs: Arc<HashMap<FileId, DefId>>,
     namespace_members: Arc<NamespaceMemberIndex>,
     qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
   ) -> Self {
@@ -4048,6 +4048,26 @@ impl ProgramState {
     for (def, data) in self.def_data.iter() {
       def_spans.insert((data.file, data.span), *def);
     }
+    let def_kinds = Arc::new(
+      self
+        .def_data
+        .iter()
+        .map(|(id, data)| (*id, data.kind.clone()))
+        .collect(),
+    );
+    let def_files = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.file)).collect());
+    let def_id_spans = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.span)).collect());
+    let exports = Arc::new(
+      self
+        .files
+        .iter()
+        .map(|(file, state)| (*file, state.exports.clone()))
+        .collect(),
+    );
+    let namespace_members = self
+      .namespace_member_index
+      .clone()
+      .unwrap_or_else(|| Arc::new(NamespaceMemberIndex::default()));
     BodyCheckContext {
       store: Arc::clone(&store),
       no_implicit_any: self.compiler_options.no_implicit_any,
@@ -4068,6 +4088,16 @@ impl ProgramState {
         .collect(),
       file_bindings,
       def_spans,
+      semantics: self.semantics.clone(),
+      def_kinds,
+      def_files,
+      def_id_spans,
+      exports,
+      module_namespace_defs: Arc::new(self.module_namespace_defs.clone()),
+      namespace_members,
+      qualified_def_members: Arc::clone(&self.qualified_def_members),
+      file_registry: Arc::new(self.file_registry.clone()),
+      host: Arc::clone(&self.host),
       checker_caches: self.checker_caches.clone(),
       cache_mode: self.compiler_options.cache.mode,
       cache_options: self.compiler_options.cache.clone(),
@@ -6147,9 +6177,68 @@ impl ProgramState {
       body_ids
     };
 
-    for body in body_ids {
-      self.check_cancelled()?;
-      let _ = self.check_body(body)?;
+    let shared_context = self.body_check_context();
+    // Parent body results (especially top-level bodies) are needed to seed bindings for many
+    // child bodies. Compute these sequentially once and seed each parallel worker with the
+    // results to avoid redundant work (and pathological contention) during parallel checking.
+    let mut seed_results: Vec<(BodyId, Arc<BodyCheckResult>)> = Vec::new();
+    let mut remaining: Vec<BodyId> = Vec::with_capacity(body_ids.len());
+    let seed_db = BodyCheckDb::from_shared_context(Arc::clone(&shared_context));
+    for body in body_ids.iter().copied() {
+      let is_top_level = shared_context
+        .body_info
+        .get(&body)
+        .map(|info| matches!(info.kind, HirBodyKind::TopLevel))
+        .unwrap_or(false);
+      if is_top_level {
+        seed_results.push((body, db::queries::body_check::check_body(&seed_db, body)));
+      } else {
+        remaining.push(body);
+      }
+    }
+    let seed_cache_stats = seed_db.into_cache_stats();
+    let seed_results = Arc::new(seed_results);
+    use rayon::prelude::*;
+    let (cache_stats, mut results): (CheckerCacheStats, Vec<(BodyId, Arc<BodyCheckResult>)>) =
+      remaining
+        .par_iter()
+        .fold(
+          || {
+            (
+              BodyCheckDb::from_shared_context_with_seed_results(
+                Arc::clone(&shared_context),
+                seed_results.as_slice(),
+              ),
+              Vec::new(),
+            )
+          },
+          |(db, mut results), body| {
+            results.push((*body, db::queries::body_check::check_body(&db, *body)));
+            (db, results)
+          },
+        )
+        .map(|(db, results)| (db.into_cache_stats(), results))
+        .reduce(
+          || (CheckerCacheStats::default(), Vec::new()),
+          |(mut stats, mut merged), (thread_stats, results)| {
+            stats.merge(&thread_stats);
+            merged.extend(results);
+            (stats, merged)
+          },
+        );
+    results.extend(seed_results.iter().map(|(id, res)| (*id, Arc::clone(res))));
+    let mut cache_stats = cache_stats;
+    cache_stats.merge(&seed_cache_stats);
+
+    // Preserve determinism regardless of parallel scheduling.
+    results.sort_by_key(|(id, _)| id.0);
+    for (body, res) in results {
+      self.body_results.insert(body, Arc::clone(&res));
+      self.typecheck_db.set_body_result(body, res);
+    }
+
+    if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
+      self.cache_stats.merge(&cache_stats);
     }
 
     let db = self.typecheck_db.clone();
@@ -9111,19 +9200,22 @@ impl ProgramState {
     binding_defs: &HashMap<String, DefId>,
   ) -> Option<Arc<dyn TypeResolver>> {
     if let Some(semantics) = self.semantics.as_ref() {
-      let mut def_kinds = HashMap::with_capacity(self.def_data.len());
-      let mut def_files = HashMap::with_capacity(self.def_data.len());
-      let mut def_spans = HashMap::with_capacity(self.def_data.len());
-      for (id, data) in self.def_data.iter() {
-        def_kinds.insert(*id, data.kind.clone());
-        def_files.insert(*id, data.file);
-        def_spans.insert(*id, data.span);
-      }
-      let exports = self
-        .files
-        .iter()
-        .map(|(file, state)| (*file, state.exports.clone()))
-        .collect();
+      let def_kinds = Arc::new(
+        self
+          .def_data
+          .iter()
+          .map(|(id, data)| (*id, data.kind.clone()))
+          .collect(),
+      );
+      let def_files = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.file)).collect());
+      let def_spans = Arc::new(self.def_data.iter().map(|(id, data)| (*id, data.span)).collect());
+      let exports = Arc::new(
+        self
+          .files
+          .iter()
+          .map(|(file, state)| (*file, state.exports.clone()))
+          .collect(),
+      );
       let current_file = self.current_file.unwrap_or(FileId(u32::MAX));
       let namespace_members = self
         .namespace_member_index
@@ -9135,11 +9227,11 @@ impl ProgramState {
         def_kinds,
         def_files,
         def_spans,
-        self.file_registry.clone(),
+        Arc::new(self.file_registry.clone()),
         current_file,
         binding_defs.clone(),
         exports,
-        self.module_namespace_defs.clone(),
+        Arc::new(self.module_namespace_defs.clone()),
         namespace_members,
         Arc::clone(&self.qualified_def_members),
       )) as Arc<_>);
@@ -10933,7 +11025,9 @@ impl ProgramState {
     let lowered = self.hir_lowered.get(&def_data.file)?;
     let hir_def = lowered.def(def)?;
     let def_name = lowered.names.resolve(hir_def.path.name);
-    if !matches!(hir_def.path.kind, HirDefKind::Var) && def_name != Some("default") {
+    if !matches!(hir_def.path.kind, HirDefKind::Var | HirDefKind::VarDeclarator)
+      && def_name != Some("default")
+    {
       return None;
     }
     let def_name = def_name.or_else(|| Some(def_data.name.as_str()));
