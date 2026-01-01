@@ -894,6 +894,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         vec![Key::Literal(PropKey::Number(num.0 as i64))],
         &self.store,
       ),
+      TypeKind::Symbol | TypeKind::UniqueSymbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::TemplateLiteral(tpl) => {
         match self.compute_template_strings(&tpl, &Substitution::empty(), 0) {
           Some(strings) => KeySet::known(
@@ -940,6 +941,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           let key = match self.store.type_kind(idxer.key_type) {
             TypeKind::String => Key::String,
             TypeKind::Number => Key::Number,
+            TypeKind::Symbol | TypeKind::UniqueSymbol => Key::Symbol,
             _ => continue,
           };
           merged
@@ -997,6 +999,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           match self.store.type_kind(idx.key_type) {
             TypeKind::String => keys.push(Key::String),
             TypeKind::Number => keys.push(Key::Number),
+            TypeKind::Symbol | TypeKind::UniqueSymbol => keys.push(Key::Symbol),
             _ => {}
           }
         }
@@ -1092,6 +1095,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         matches!(key, PropKey::String(_) | PropKey::Number(_))
       }
       TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(key, PropKey::Number(_)),
+      TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(key, PropKey::Symbol(_)),
       TypeKind::Union(members) => members
         .iter()
         .any(|member| self.indexer_accepts_key(key, *member)),

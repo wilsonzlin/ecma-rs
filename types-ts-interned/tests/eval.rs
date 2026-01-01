@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  DefId, ExpandedType, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property, Shape,
-  TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property,
+  Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind,
+  TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -486,4 +486,102 @@ fn recursive_conditional_terminates() {
     store.type_kind(result),
     TypeKind::Ref { .. } | TypeKind::Boolean | TypeKind::Union(_)
   ));
+}
+
+#[test]
+fn keyof_includes_symbol_index_signature() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.symbol,
+      value_type: primitives.string,
+      readonly: false,
+    }],
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(store.intern_type(TypeKind::KeyOf(obj_ty)));
+  assert_eq!(result, primitives.symbol);
+}
+
+#[test]
+fn indexed_access_uses_symbol_indexer_value_type() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.symbol,
+      value_type: primitives.string,
+      readonly: false,
+    }],
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: obj_ty,
+    index: primitives.symbol,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(indexed);
+  assert_eq!(result, primitives.string);
+}
+
+#[test]
+fn mapped_type_preserves_symbol_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.symbol,
+      value_type: primitives.string,
+      readonly: true,
+    }],
+  });
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: store.intern_type(TypeKind::KeyOf(obj_ty)),
+    value: primitives.boolean,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: None,
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 1);
+  assert_eq!(shape.indexers[0].key_type, primitives.symbol);
+  assert_eq!(shape.indexers[0].value_type, primitives.boolean);
+  assert!(shape.indexers[0].readonly);
 }
