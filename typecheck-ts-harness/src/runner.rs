@@ -14,12 +14,12 @@ use crate::tsc::{
   node_available, typescript_available, TscDiagnostics, TscKillSwitch, TscRequest, TscRunner,
   TSC_BASELINE_SCHEMA_VERSION,
 };
-use crate::{read_utf8_file, FailOn, Result, VirtualFile};
+use crate::{FailOn, Result, VirtualFile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
-use std::io::Write;
+use std::io::{BufReader, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 #[cfg(test)]
@@ -1875,12 +1875,12 @@ impl SnapshotStore {
 
   fn load(&self, id: &str) -> std::io::Result<TscDiagnostics> {
     let path = self.path_for(id);
-    let data = match read_utf8_file(&path) {
-      Ok(data) => data,
+    let file = match std::fs::File::open(&path) {
+      Ok(file) => file,
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
         let legacy = self.legacy_path_for(id);
-        match read_utf8_file(&legacy) {
-          Ok(data) => data,
+        match std::fs::File::open(&legacy) {
+          Ok(file) => file,
           Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             return Err(std::io::Error::new(
               std::io::ErrorKind::NotFound,
@@ -1896,7 +1896,8 @@ impl SnapshotStore {
       }
       Err(err) => return Err(err),
     };
-    let parsed: TscDiagnostics = serde_json::from_str(&data)?;
+    let reader = BufReader::new(file);
+    let parsed: TscDiagnostics = serde_json::from_reader(reader)?;
     let version = parsed.schema_version.unwrap_or(0);
     if version != TSC_BASELINE_SCHEMA_VERSION {
       return Err(std::io::Error::new(
