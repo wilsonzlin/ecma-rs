@@ -11,7 +11,8 @@ use hir_js::{
   lower_file_with_diagnostics_with_cancellation, DefKind, ExportDefaultValue, ExportKind, ExprKind,
   FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
-use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use parse_js::error::SyntaxErrorType;
+use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{CacheStats, PrimitiveIds, TypeStore};
 
@@ -1364,7 +1365,31 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
   parse_metrics::record_parse_call();
   let kind = file.kind(db);
   let source = file.text(db);
-  parser::parse(file.file_id(db), kind, &source)
+  let file_id = file.file_id(db);
+  let dialect = match kind {
+    FileKind::Js => Dialect::Js,
+    FileKind::Ts => Dialect::Ts,
+    FileKind::Tsx => Dialect::Tsx,
+    FileKind::Jsx => Dialect::Jsx,
+    FileKind::Dts => Dialect::Dts,
+  };
+  let cancel = cancelled(db);
+  match parse_with_options_cancellable(
+    &source,
+    ParseOptions {
+      dialect,
+      source_type: SourceType::Module,
+    },
+    Arc::clone(&cancel),
+  ) {
+    Ok(ast) => parser::ParseResult::ok(ast),
+    Err(err) => {
+      if err.typ == SyntaxErrorType::Cancelled {
+        panic_any(crate::FatalError::Cancelled);
+      }
+      parser::ParseResult::error(err.to_diagnostic(file_id))
+    }
+  }
 }
 
 #[salsa::tracked]
@@ -1410,6 +1435,7 @@ fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
 
 #[salsa::tracked]
 fn symbol_index_for(db: &dyn Db, file: FileInput) -> SymbolIndex {
+  panic_if_cancelled(db);
   let file_id = file.file_id(db);
   let kind = file.kind(db);
   let parsed = parse_for(db, file);
@@ -1424,15 +1450,22 @@ fn symbol_index_for(db: &dyn Db, file: FileInput) -> SymbolIndex {
     FileKind::Jsx => Dialect::Jsx,
     FileKind::Dts => Dialect::Dts,
   };
-  let ast = match parse_with_options(
+  let cancel = cancelled(db);
+  let ast = match parse_with_options_cancellable(
     &source,
     ParseOptions {
       dialect,
       source_type: SourceType::Module,
     },
+    Arc::clone(&cancel),
   ) {
     Ok(ast) => ast,
-    Err(_) => return SymbolIndex::empty(),
+    Err(err) => {
+      if err.typ == SyntaxErrorType::Cancelled {
+        panic_any(crate::FatalError::Cancelled);
+      }
+      return SymbolIndex::empty();
+    }
   };
   let semantics = ts_semantics_for(db);
   symbols::symbol_index_for_file(file_id, kind, ast, Some(semantics.semantics.as_ref()))
