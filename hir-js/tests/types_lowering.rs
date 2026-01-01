@@ -609,8 +609,11 @@ fn union_dedups_type_predicate_function_types_ignoring_param_names() {
 }
 
 #[test]
-fn union_dedups_generic_function_types_ignoring_unused_type_param_names() {
-  let result = lower_from_source("type A = (<T>() => void) | (<U>() => void);").expect("lower");
+fn union_does_not_dedup_generic_function_types_with_different_bindings() {
+  let result = lower_from_source(
+    "type T = string;\ntype A = (<T>(x: T) => void) | (<U>(x: T) => void);",
+  )
+  .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -622,13 +625,7 @@ fn union_dedups_generic_function_types_ignoring_unused_type_param_names() {
     other => panic!("expected union, got {other:?}"),
   };
 
-  assert_eq!(members.len(), 1);
-
-  let func = match &arenas.type_exprs[members[0].0 as usize].kind {
-    TypeExprKind::Function(func) => func,
-    other => panic!("expected function type, got {other:?}"),
-  };
-  assert_eq!(func.type_params.len(), 1);
+  assert_eq!(members.len(), 2);
 }
 
 #[test]
