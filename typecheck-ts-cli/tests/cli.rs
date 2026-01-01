@@ -182,6 +182,39 @@ fn rejects_invalid_utf8_sources() {
 }
 
 #[test]
+fn timeout_secs_cancels_typecheck() {
+  let path = fixture("basic.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--timeout-secs")
+    .arg("0")
+    .arg("--json")
+    .arg(path.as_os_str())
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.iter().any(|d| {
+      d.get("code")
+        .and_then(|c| c.as_str())
+        .is_some_and(|code| code == "CANCEL0001")
+    }),
+    "expected cancellation diagnostic in output, got {json:?}"
+  );
+}
+
+#[test]
 fn project_mode_discovers_files_and_resolves_paths() {
   let tsconfig = fixture("project_mode/tsconfig.json");
   let index = fixture("project_mode/src/index.ts");

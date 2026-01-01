@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
@@ -95,6 +96,10 @@ struct TypecheckArgs {
   /// Emit tracing spans (JSON) suitable for profiling.
   #[arg(long)]
   profile: bool,
+
+  /// Cancel type checking if it takes longer than this many seconds.
+  #[arg(long, value_name = "SECS")]
+  timeout_secs: Option<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -297,7 +302,8 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     }
   };
 
-  let program = Program::new(host.clone(), roots);
+  let program = Arc::new(Program::new(host.clone(), roots));
+  let _timeout_guard = ProgramTimeoutGuard::new(&program, args.timeout_secs);
   let mut diagnostics = program.check();
   sort_diagnostics(&mut diagnostics);
 
@@ -496,6 +502,58 @@ fn init_tracing(enabled: bool) {
     .json()
     .with_ansi(false)
     .try_init();
+}
+
+struct ProgramTimeoutGuard {
+  done: Option<mpsc::Sender<()>>,
+  handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ProgramTimeoutGuard {
+  fn new(program: &Arc<Program>, timeout_secs: Option<u64>) -> Self {
+    let Some(secs) = timeout_secs else {
+      return Self {
+        done: None,
+        handle: None,
+      };
+    };
+
+    let timeout = Duration::from_secs(secs);
+    if timeout.is_zero() {
+      program.cancel();
+      return Self {
+        done: None,
+        handle: None,
+      };
+    }
+
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    let program = Arc::clone(program);
+    let handle = std::thread::Builder::new()
+      .name("typecheck-ts-cli-timeout".into())
+      .spawn(move || {
+        if matches!(done_rx.recv_timeout(timeout), Err(mpsc::RecvTimeoutError::Timeout)) {
+          program.cancel();
+        }
+      })
+      .expect("spawn typecheck-ts-cli timeout thread");
+
+    Self {
+      done: Some(done_tx),
+      handle: Some(handle),
+    }
+  }
+}
+
+impl Drop for ProgramTimeoutGuard {
+  fn drop(&mut self) {
+    if let Some(done) = self.done.take() {
+      let _ = done.send(());
+    }
+    if let Some(handle) = self.handle.take() {
+      let _ = handle.join();
+    }
+  }
 }
 
 impl DiskHost {
