@@ -11464,7 +11464,10 @@ impl ProgramState {
               span: Some(def_data.span),
             })
           });
-          let decl_kind = init.as_ref().map(|init| init.decl_kind).unwrap_or(mode_decl_kind);
+          let decl_kind = init
+            .as_ref()
+            .map(|init| init.decl_kind)
+            .unwrap_or(mode_decl_kind);
           let mut init_span_for_const = None;
           let mut init_pat_is_root = true;
           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
