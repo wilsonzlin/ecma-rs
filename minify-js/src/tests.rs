@@ -147,12 +147,30 @@ fn export_star_alias_is_not_renamed() {
 }
 
 #[test]
+fn export_star_string_alias_is_preserved() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const ns=1;export * as \"ns-name\" from \"mod\";",
+  );
+  assert_eq!(result, "export*as\"ns-name\"from\"mod\";");
+}
+
+#[test]
 fn reexport_does_not_keep_or_rename_same_named_locals() {
   let result = minified(
     TopLevelMode::Module,
     "const foo=1;export { foo } from \"mod\";",
   );
   assert_eq!(result, "export{foo}from\"mod\";");
+}
+
+#[test]
+fn preserves_string_export_names_in_reexports() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { \"a-b\" as \"c-d\" } from \"mod\";",
+  );
+  assert_eq!(result, "export{\"a-b\"as\"c-d\"}from\"mod\";");
 }
 
 #[test]
