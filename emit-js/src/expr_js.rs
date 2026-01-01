@@ -1,18 +1,20 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{cooked_template_segment, emit_template_literal_segment};
-use crate::pat::emit_class_or_object_key;
 use crate::precedence::starts_with_optional_chaining;
 use crate::stmt::{emit_class_like, emit_decorators};
-use crate::ts_type::{emit_ts_type, emit_type_expr};
+use crate::ts_type::{emit_ts_type, emit_type_expr, emit_type_parameters};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitObjExpr, LitTemplateExpr, LitTemplatePart,
 };
+use parse_js::ast::expr::pat::{ArrPat, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::*;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
-use parse_js::ast::type_expr::TypeExpr;
+use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
+use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
 use parse_js::operator::{Associativity, OperatorName, OPERATORS};
+use parse_js::token::TT;
 
 const PRIMARY_PRECEDENCE: u8 = 19;
 const CALL_MEMBER_PRECEDENCE: u8 = 18;
@@ -75,6 +77,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     | Expr::LitObj(_)
     | Expr::LitTemplate(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::ArrPat(_) | Expr::IdPat(_) | Expr::ObjPat(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) => Ok(CALL_MEMBER_PRECEDENCE),
     Expr::Binary(binary) => Ok(
       OPERATORS
@@ -132,6 +135,9 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::LitObj(obj) => emit_object_literal(em, obj)?,
     Expr::LitTemplate(template) => emit_template_literal(em, template)?,
     Expr::JsxElem(elem) => crate::jsx_emit::emit_jsx_elem(em, elem)?,
+    Expr::ArrPat(arr) => emit_array_pattern(em, arr)?,
+    Expr::IdPat(id) => emit_id_pat(em, id)?,
+    Expr::ObjPat(obj) => emit_object_pattern(em, obj)?,
     Expr::Binary(binary) => emit_binary(em, binary, ctx)?,
     Expr::Cond(cond) => emit_conditional(em, cond, ctx)?,
     Expr::Call(call) => emit_call(em, call, ctx)?,
@@ -432,18 +438,26 @@ fn emit_obj_valued_member(
     ClassOrObjVal::Getter(get) => {
       em.write_keyword("get");
       emit_class_or_object_key(em, key)?;
+      emit_type_params(em, get.stx.func.stx.type_parameters.as_deref());
       em.write_punct("(");
       em.write_punct(")");
+      if let Some(ret) = &get.stx.func.stx.return_type {
+        emit_type_annotation(em, ret)?;
+      }
       emit_func_body(em, &get.stx.func.stx.body, ExprCtx::Default)
     }
     ClassOrObjVal::Setter(set) => {
       em.write_keyword("set");
       emit_class_or_object_key(em, key)?;
+      emit_type_params(em, set.stx.func.stx.type_parameters.as_deref());
       em.write_punct("(");
       if let Some(param) = set.stx.func.stx.parameters.first() {
-        emit_param_pattern(em, param)?;
+        emit_param_decl(em, param)?;
       }
       em.write_punct(")");
+      if let Some(ret) = &set.stx.func.stx.return_type {
+        emit_type_annotation(em, ret)?;
+      }
       emit_func_body(em, &set.stx.func.stx.body, ExprCtx::Default)
     }
     ClassOrObjVal::Method(method) => {
@@ -460,6 +474,157 @@ fn emit_obj_valued_member(
       Err(EmitError::unsupported("object member kind not supported"))
     }
   }
+}
+
+fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult {
+  match key {
+    ClassOrObjKey::Direct(name) => {
+      match name.stx.tt {
+        TT::LiteralString => emit_string_literal(em, &name.stx.key),
+        TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
+          em.write_number(&name.stx.key)
+        }
+        tt if tt == TT::Identifier || tt.is_keyword() => em.write_identifier(&name.stx.key),
+        _ => em.write_str(&name.stx.key),
+      }
+      Ok(())
+    }
+    ClassOrObjKey::Computed(expr) => {
+      em.write_punct("[");
+      emit_expr(em, expr, ExprCtx::Default)?;
+      em.write_punct("]");
+      Ok(())
+    }
+  }
+}
+
+fn emit_type_annotation(em: &mut Emitter, ty: &Node<TypeExpr>) -> EmitResult {
+  em.write_punct(":");
+  if !em.minify() {
+    em.write_space();
+  }
+  emit_ts_type(em, ty)
+}
+
+fn emit_type_params(em: &mut Emitter, params: Option<&[Node<TypeParameter>]>) {
+  let Some(params) = params else {
+    return;
+  };
+  if params.is_empty() {
+    return;
+  }
+  let mut buf = String::new();
+  emit_type_parameters(&mut buf, Some(params));
+  em.write_str(&buf);
+}
+
+fn emit_param_decl(em: &mut Emitter, param: &Node<ParamDecl>) -> EmitResult {
+  let param = param.stx.as_ref();
+  emit_decorators(em, &param.decorators)?;
+  if param.rest {
+    em.write_punct("...");
+  }
+  if let Some(accessibility) = &param.accessibility {
+    emit_accessibility(em, *accessibility);
+  }
+  if param.readonly {
+    em.write_keyword("readonly");
+  }
+  emit_pat_decl(em, &param.pattern)?;
+  if param.optional {
+    em.write_punct("?");
+  }
+  if let Some(ty) = &param.type_annotation {
+    emit_type_annotation(em, ty)?;
+  }
+  if let Some(default) = &param.default_value {
+    em.write_punct("=");
+    emit_expr(em, default, ExprCtx::Default)?;
+  }
+  Ok(())
+}
+
+fn emit_accessibility(em: &mut Emitter, accessibility: Accessibility) {
+  match accessibility {
+    Accessibility::Public => em.write_keyword("public"),
+    Accessibility::Private => em.write_keyword("private"),
+    Accessibility::Protected => em.write_keyword("protected"),
+  }
+}
+
+fn emit_pat_decl(em: &mut Emitter, decl: &Node<PatDecl>) -> EmitResult {
+  emit_pat(em, &decl.stx.pat)
+}
+
+fn emit_pat(em: &mut Emitter, pat: &Node<Pat>) -> EmitResult {
+  match pat.stx.as_ref() {
+    Pat::Arr(arr) => emit_array_pattern(em, arr),
+    Pat::Id(id) => emit_id_pat(em, id),
+    Pat::Obj(obj) => emit_object_pattern(em, obj),
+    Pat::AssignTarget(expr) => emit_expr(em, expr, ExprCtx::Default),
+  }
+}
+
+fn emit_id_pat(em: &mut Emitter, id: &Node<IdPat>) -> EmitResult {
+  em.write_identifier(&id.stx.name);
+  Ok(())
+}
+
+fn emit_array_pattern(em: &mut Emitter, arr: &Node<ArrPat>) -> EmitResult {
+  em.write_punct("[");
+  for (idx, elem) in arr.stx.elements.iter().enumerate() {
+    if idx > 0 {
+      em.write_punct(",");
+    }
+    if let Some(elem) = elem {
+      emit_pat(em, &elem.target)?;
+      if let Some(default) = &elem.default_value {
+        em.write_punct("=");
+        emit_expr(em, default, ExprCtx::Default)?;
+      }
+    }
+  }
+  if let Some(rest) = &arr.stx.rest {
+    if !arr.stx.elements.is_empty() {
+      em.write_punct(",");
+    }
+    em.write_punct("...");
+    emit_pat(em, rest)?;
+  }
+  em.write_punct("]");
+  Ok(())
+}
+
+fn emit_object_pattern(em: &mut Emitter, obj: &Node<ObjPat>) -> EmitResult {
+  em.write_punct("{");
+  for (idx, prop) in obj.stx.properties.iter().enumerate() {
+    if idx > 0 {
+      em.write_punct(",");
+    }
+    emit_obj_pat_prop(em, prop)?;
+  }
+  if let Some(rest) = &obj.stx.rest {
+    if !obj.stx.properties.is_empty() {
+      em.write_punct(",");
+    }
+    em.write_punct("...");
+    emit_pat(em, rest)?;
+  }
+  em.write_punct("}");
+  Ok(())
+}
+
+fn emit_obj_pat_prop(em: &mut Emitter, prop: &Node<ObjPatProp>) -> EmitResult {
+  emit_class_or_object_key(em, &prop.stx.key)?;
+  if !prop.stx.shorthand {
+    em.write_punct(":");
+    emit_pat(em, &prop.stx.target)?;
+  }
+  if let Some(default) = &prop.stx.default_value {
+    em.write_punct("=");
+    emit_expr(em, default, ExprCtx::Default)?;
+  }
+  Ok(())
 }
 
 fn emit_type_assertion(
@@ -509,10 +674,34 @@ fn emit_satisfies_expr(
 
 fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCtx) -> EmitResult {
   let func = func.stx.as_ref();
-  emit_function_params(em, &func.func.stx.parameters)?;
+  let func = func.func.stx.as_ref();
+
+  if func.generator {
+    return Err(EmitError::unsupported("generator arrow function not supported"));
+  }
+  if func.async_ {
+    em.write_keyword("async");
+  }
+
+  emit_type_params(em, func.type_parameters.as_deref());
+  emit_function_params(em, &func.parameters)?;
+  if let Some(ret) = &func.return_type {
+    emit_type_annotation(em, ret)?;
+  }
+
   em.write_punct("=>");
-  match &func.func.stx.body {
-    Some(FuncBody::Expression(expr)) => emit_expr(em, expr, ctx),
+  match &func.body {
+    Some(FuncBody::Expression(expr)) => {
+      let needs_parens = is_comma_expression(expr.stx.as_ref()) || expr_starts_with_brace(expr);
+      if needs_parens {
+        em.write_punct("(");
+      }
+      emit_expr_with_min_prec(em, expr, 1, ctx)?;
+      if needs_parens {
+        em.write_punct(")");
+      }
+      Ok(())
+    }
     Some(FuncBody::Block(stmts)) => {
       em.write_punct("{");
       for stmt in stmts {
@@ -527,43 +716,26 @@ fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCt
 
 fn emit_function_params(
   em: &mut Emitter,
-  params: &[Node<parse_js::ast::stmt::decl::ParamDecl>],
+  params: &[Node<ParamDecl>],
 ) -> EmitResult {
   em.write_punct("(");
   for (idx, param) in params.iter().enumerate() {
     if idx > 0 {
       em.write_punct(",");
     }
-    emit_param_pattern(em, param)?;
+    emit_param_decl(em, param)?;
   }
   em.write_punct(")");
   Ok(())
 }
 
 fn emit_function_params_and_body(em: &mut Emitter, func: &Node<Func>, ctx: ExprCtx) -> EmitResult {
+  emit_type_params(em, func.stx.type_parameters.as_deref());
   emit_function_params(em, &func.stx.parameters)?;
+  if let Some(ret) = &func.stx.return_type {
+    emit_type_annotation(em, ret)?;
+  }
   emit_func_body(em, &func.stx.body, ctx)
-}
-
-fn emit_param_pattern(
-  em: &mut Emitter,
-  param: &Node<parse_js::ast::stmt::decl::ParamDecl>,
-) -> EmitResult {
-  let pat = &param.stx.pattern;
-  if param.stx.rest {
-    em.write_punct("...");
-  }
-  match pat.stx.pat.stx.as_ref() {
-    parse_js::ast::expr::pat::Pat::Id(id) => em.write_identifier(&id.stx.name),
-    _ => {
-      crate::pat::emit_pat_decl(em, pat)?;
-    }
-  }
-  if let Some(default) = &param.stx.default_value {
-    em.write_punct("=");
-    emit_expr(em, default, ExprCtx::Default)?;
-  }
-  Ok(())
 }
 
 fn emit_func_body(em: &mut Emitter, body: &Option<FuncBody>, ctx: ExprCtx) -> EmitResult {
@@ -745,4 +917,25 @@ fn requires_trailing_dot(rendered: &str) -> bool {
     bytes = &bytes[1..];
   }
   bytes.iter().all(|b| b.is_ascii_digit())
+}
+
+fn is_comma_expression(expr: &Expr) -> bool {
+  matches!(expr, Expr::Binary(binary) if binary.stx.operator == OperatorName::Comma)
+}
+
+fn expr_starts_with_brace(expr: &Node<Expr>) -> bool {
+  match expr.stx.as_ref() {
+    Expr::LitObj(_) | Expr::ObjPat(_) => true,
+    Expr::Binary(binary) => expr_starts_with_brace(&binary.stx.left),
+    Expr::Call(call) => expr_starts_with_brace(&call.stx.callee),
+    Expr::Member(member) => expr_starts_with_brace(&member.stx.left),
+    Expr::ComputedMember(member) => expr_starts_with_brace(&member.stx.object),
+    Expr::TaggedTemplate(tagged) => expr_starts_with_brace(&tagged.stx.function),
+    Expr::NonNullAssertion(expr) => expr_starts_with_brace(&expr.stx.expression),
+    Expr::TypeAssertion(assertion) => expr_starts_with_brace(&assertion.stx.expression),
+    Expr::SatisfiesExpr(satisfies) => expr_starts_with_brace(&satisfies.stx.expression),
+    Expr::UnaryPostfix(unary) => expr_starts_with_brace(&unary.stx.argument),
+    Expr::Cond(cond) => expr_starts_with_brace(&cond.stx.test),
+    _ => false,
+  }
 }

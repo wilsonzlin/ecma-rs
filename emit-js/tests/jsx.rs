@@ -494,11 +494,26 @@ fn emits_real_world_tsx_patterns_using_js_emitter_for_nested_exprs() {
   let source = r#"
     const a = <button onClick={() => { foo(); new Promise((resolve) => { bar(); resolve(); }); }}>Hi</button>;
     const b = <div {...(cond ? getA() : getB())}>{x ? foo() : bar()}</div>;
+    const c = <button onClick={async (e: Event) => { await foo(e); }}>Hi</button>;
+    const d = <Comp onClick={({ cb = () => { foo(); } }) => { cb(); }} />;
+    const e = <Comp factory={() => ({ a: 1 })} />;
   "#;
 
   assert_emits_tsx_in_both_modes(
     source,
-    "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
-    "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;\nconst b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+    concat!(
+      "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;",
+      "const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;",
+      "const c=<button onClick={async(e:Event)=>{await foo(e);}}>Hi</button>;",
+      "const d=<Comp onClick={({cb=()=>{foo();}})=>{cb();}}/>;",
+      "const e=<Comp factory={()=>({a:1})}/>;"
+    ),
+    concat!(
+      "const a=<button onClick={()=>{foo();new Promise((resolve)=>{bar();resolve();});}}>Hi</button>;\n",
+      "const b=<div {...cond?getA():getB()}>{x?foo():bar()}</div>;\n",
+      "const c=<button onClick={async(e: Event)=>{await foo(e);}}>Hi</button>;\n",
+      "const d=<Comp onClick={({cb=()=>{foo();}})=>{cb();}}/>;\n",
+      "const e=<Comp factory={()=>({a:1})}/>;"
+    ),
   );
 }
