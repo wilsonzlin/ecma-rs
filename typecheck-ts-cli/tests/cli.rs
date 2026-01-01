@@ -4,7 +4,10 @@ use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::NamedTempFile;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn fixture(name: &str) -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -26,6 +29,7 @@ fn typecheck_succeeds_on_basic_fixture() {
   let path = fixture("basic.ts");
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .assert()
@@ -46,6 +50,7 @@ fn type_at_reports_number() {
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .args(["--type-at", &query])
@@ -71,6 +76,7 @@ fn resolves_relative_modules_and_index_files() {
   let path = fixture("resolution/entry.ts");
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .assert()
@@ -84,6 +90,7 @@ fn node_modules_resolution_is_opt_in() {
 
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .assert()
@@ -92,6 +99,7 @@ fn node_modules_resolution_is_opt_in() {
 
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .arg("--node-resolve")
@@ -106,6 +114,7 @@ fn json_output_is_stable_and_parseable() {
   let run = || {
     Command::cargo_bin("typecheck-ts-cli")
       .unwrap()
+      .timeout(CLI_TIMEOUT)
       .args(["typecheck"])
       .arg(path.as_os_str())
       .arg("--json")
@@ -156,6 +165,7 @@ fn rejects_invalid_utf8_sources() {
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
     .assert()
@@ -181,6 +191,7 @@ fn project_mode_discovers_files_and_resolves_paths() {
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
     .arg(tsconfig.as_os_str())
@@ -250,6 +261,7 @@ fn project_mode_exports_and_type_at_queries_work() {
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
+    .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
     .arg(tsconfig.as_os_str())

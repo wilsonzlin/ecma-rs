@@ -1,6 +1,9 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use std::path::Path;
+use std::time::Duration;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[test]
 fn this_param_dts_matches_baseline_type_facts() {
@@ -12,6 +15,7 @@ fn this_param_dts_matches_baseline_type_facts() {
   #[allow(deprecated)]
   let output = Command::cargo_bin("typecheck-ts-harness")
     .expect("binary")
+    .timeout(CLI_TIMEOUT)
     .arg("difftsc")
     .arg("--suite")
     .arg(&suite)

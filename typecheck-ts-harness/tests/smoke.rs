@@ -11,6 +11,7 @@ use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestOutcome;
 
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
+const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn conformance_options(root: PathBuf) -> ConformanceOptions {
   let mut options = ConformanceOptions::new(root);
@@ -63,6 +64,7 @@ impl Drop for EnvGuard {
 fn run_cli_json_report(root: &Path) -> JsonReport {
   #[allow(deprecated)]
   let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
     .arg("--root")
@@ -152,6 +154,7 @@ fn cli_requires_suite_unless_allowed_to_be_empty() {
 
   #[allow(deprecated)]
   let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
     .arg("--root")
@@ -174,6 +177,7 @@ fn cli_requires_suite_unless_allowed_to_be_empty() {
 
   #[allow(deprecated)]
   let mut allow_cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  allow_cmd.timeout(CLI_TIMEOUT);
   allow_cmd
     .arg("conformance")
     .arg("--root")
@@ -193,6 +197,7 @@ fn cli_runs_with_filter_and_json() {
 
   #[allow(deprecated)]
   let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
     .arg("--root")
@@ -220,6 +225,7 @@ fn cli_json_report_is_machine_readable_with_trace_enabled() {
 
   #[allow(deprecated)]
   let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
     .arg("--root")
@@ -273,6 +279,7 @@ fn conformance_enforces_timeouts_per_test() {
 
   #[allow(deprecated)]
   let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
     .arg("--root")
@@ -350,6 +357,7 @@ fn difftsc_results_are_sorted_with_parallel_execution() {
   let run = || -> Value {
     #[allow(deprecated)]
     let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+    cmd.timeout(CLI_TIMEOUT);
     cmd
       .arg("difftsc")
       .arg("--suite")
