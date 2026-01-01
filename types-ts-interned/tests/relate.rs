@@ -577,6 +577,124 @@ fn index_signatures_cover_properties() {
 }
 
 #[test]
+fn string_indexer_covers_numeric_property() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![Property {
+        key: PropKey::Number(0),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx.is_assignable(src, dst));
+}
+
+#[test]
+fn string_indexer_satisfies_number_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.number,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(ctx.is_assignable(src, dst));
+}
+
+#[test]
+fn number_indexer_does_not_satisfy_string_indexer() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.number,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: primitives.number,
+        readonly: false,
+      }],
+    },
+  );
+
+  let ctx = RelateCtx::new(store.clone(), default_options());
+  assert!(!ctx.is_assignable(src, dst));
+}
+
+#[test]
 fn no_unchecked_indexed_access_makes_indexers_optional() {
   let store = TypeStore::with_options(TypeOptions {
     no_unchecked_indexed_access: true,

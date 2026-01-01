@@ -85,6 +85,13 @@ enum OptionalFlavor {
   IndexerValue,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PropKeyKind {
+  String,
+  Number,
+  Symbol,
+}
+
 pub struct RelateHooks<'a> {
   pub expander: Option<&'a dyn RelateTypeExpander>,
   pub is_same_origin_private_member: Option<&'a dyn Fn(&Property, &Property) -> bool>,
@@ -2164,7 +2171,7 @@ impl<'a> RelateCtx<'a> {
             reason: self.join_reasons(record, key, children, false, Some("indexer".into()), depth),
           };
         }
-      } else {
+      } else if src_shape.indexers.is_empty() {
         for prop in &src_shape.properties {
           if !self.indexer_accepts_prop(dst_index, &prop.key, mode, depth + 1) {
             continue;
@@ -2194,6 +2201,11 @@ impl<'a> RelateCtx<'a> {
             };
           }
         }
+      } else {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(record, key, children, false, Some("missing indexer".into()), depth),
+        };
       }
     }
 
@@ -2320,19 +2332,12 @@ impl<'a> RelateCtx<'a> {
     mode: RelationMode,
     depth: usize,
   ) -> Option<&'b Indexer> {
-    let key_ty = self.prop_key_type(name);
-    shape.indexers.iter().find(|idx| {
-      self
-        .relate_internal(
-          key_ty,
-          idx.key_type,
-          RelationKind::Assignable,
-          mode,
-          false,
-          depth,
-        )
-        .result
-    })
+    let key_kind = self.prop_key_kind(name);
+    shape
+      .indexers
+      .iter()
+      .filter(|idx| self.indexer_key_accepts_prop_kind(idx.key_type, key_kind, mode, depth))
+      .min_by_key(|idx| self.indexer_key_specificity(idx.key_type, mode, depth))
   }
 
   fn indexer_accepts_prop(
@@ -2342,17 +2347,7 @@ impl<'a> RelateCtx<'a> {
     mode: RelationMode,
     depth: usize,
   ) -> bool {
-    let key_ty = self.prop_key_type(key);
-    self
-      .relate_internal(
-        key_ty,
-        idx.key_type,
-        RelationKind::Assignable,
-        mode,
-        false,
-        depth,
-      )
-      .result
+    self.indexer_key_accepts_prop_kind(idx.key_type, self.prop_key_kind(key), mode, depth)
   }
 
   fn find_matching_indexer<'b>(
@@ -2360,28 +2355,75 @@ impl<'a> RelateCtx<'a> {
     shape: &'b Shape,
     dst: &Indexer,
     mode: RelationMode,
-    record: bool,
+    _record: bool,
     depth: usize,
   ) -> Option<&'b Indexer> {
-    shape.indexers.iter().find(|src_idx| {
-      let key_related = self.relate_internal(
-        dst.key_type,
-        src_idx.key_type,
-        RelationKind::Assignable,
-        mode,
-        record,
-        depth + 1,
-      );
-      key_related.result
+    shape
+      .indexers
+      .iter()
+      .filter(|src_idx| self.indexer_key_covers(src_idx.key_type, dst.key_type, mode, depth))
+      .min_by_key(|src_idx| self.indexer_key_specificity(src_idx.key_type, mode, depth))
+  }
+
+  fn indexer_key_covers(
+    &self,
+    src_key: TypeId,
+    dst_key: TypeId,
+    mode: RelationMode,
+    depth: usize,
+  ) -> bool {
+    use PropKeyKind::*;
+    [String, Number, Symbol].into_iter().all(|kind| {
+      !self.indexer_key_accepts_prop_kind(dst_key, kind, mode, depth)
+        || self.indexer_key_accepts_prop_kind(src_key, kind, mode, depth)
     })
   }
 
-  fn prop_key_type(&self, key: &PropKey) -> TypeId {
-    let prim = self.store.primitive_ids();
+  fn indexer_key_specificity(&self, idx_key: TypeId, mode: RelationMode, depth: usize) -> u8 {
+    use PropKeyKind::*;
+    [String, Number, Symbol]
+      .into_iter()
+      .filter(|kind| self.indexer_key_accepts_prop_kind(idx_key, *kind, mode, depth))
+      .count() as u8
+  }
+
+  fn indexer_key_accepts_prop_kind(
+    &self,
+    idx_key: TypeId,
+    kind: PropKeyKind,
+    mode: RelationMode,
+    depth: usize,
+  ) -> bool {
+    match self.store.type_kind(idx_key) {
+      TypeKind::String | TypeKind::StringLiteral(_) => {
+        matches!(kind, PropKeyKind::String | PropKeyKind::Number)
+      }
+      TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(kind, PropKeyKind::Number),
+      TypeKind::Symbol | TypeKind::UniqueSymbol => matches!(kind, PropKeyKind::Symbol),
+      TypeKind::Union(members) => members
+        .iter()
+        .any(|member| self.indexer_key_accepts_prop_kind(*member, kind, mode, depth + 1)),
+      TypeKind::Intersection(members) => members
+        .iter()
+        .any(|member| self.indexer_key_accepts_prop_kind(*member, kind, mode, depth + 1)),
+      _ => {
+        let key_ty = match kind {
+          PropKeyKind::String => self.store.primitive_ids().string,
+          PropKeyKind::Number => self.store.primitive_ids().number,
+          PropKeyKind::Symbol => self.store.primitive_ids().symbol,
+        };
+        self
+          .relate_internal(key_ty, idx_key, RelationKind::Assignable, mode, false, depth)
+          .result
+      }
+    }
+  }
+
+  fn prop_key_kind(&self, key: &PropKey) -> PropKeyKind {
     match key {
-      PropKey::String(_) => prim.string,
-      PropKey::Number(_) => prim.number,
-      PropKey::Symbol(_) => prim.symbol,
+      PropKey::String(_) => PropKeyKind::String,
+      PropKey::Number(_) => PropKeyKind::Number,
+      PropKey::Symbol(_) => PropKeyKind::Symbol,
     }
   }
 
