@@ -83,7 +83,7 @@ fn resolve_non_relative(
     }
 
     if let Some(types_specifier) = types_specifier.as_deref() {
-      let types_base = virtual_join(&virtual_join(&node_modules_dir, "@types"), types_specifier);
+      let types_base = virtual_join3(&node_modules_dir, "@types", types_specifier);
       if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
         return Some(found);
       }
@@ -487,6 +487,20 @@ fn virtual_join(base: &str, segment: &str) -> String {
     joined.push_str(segment);
     joined
   }
+}
+
+fn virtual_join3(base: &str, segment: &str, tail: &str) -> String {
+  let mut joined = String::with_capacity(base.len() + segment.len() + tail.len() + 2);
+  joined.push_str(base);
+  if base != "/" && !base.ends_with('/') {
+    joined.push('/');
+  }
+  joined.push_str(segment);
+  if !joined.ends_with('/') {
+    joined.push('/');
+  }
+  joined.push_str(tail);
+  joined
 }
 
 fn types_fallback_specifier(specifier: &str) -> Option<String> {
