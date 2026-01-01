@@ -1110,6 +1110,77 @@ fn mapped_type_remap_as_never_filters_keys() {
 }
 
 #[test]
+fn mapped_over_keyof_any_produces_broad_indexers() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: store.intern_type(TypeKind::KeyOf(primitives.any)),
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: None,
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 3);
+  assert_eq!(
+    shape.indexers.iter().map(|idx| idx.key_type).collect::<Vec<_>>(),
+    vec![primitives.number, primitives.string, primitives.symbol]
+  );
+  assert!(shape
+    .indexers
+    .iter()
+    .all(|idx| idx.value_type == primitives.number));
+}
+
+#[test]
+fn mapped_remap_as_any_widens_to_broad_indexers() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let key_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: key_a,
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(primitives.any),
+  }));
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(mapped);
+  let TypeKind::Object(obj) = store.type_kind(result) else {
+    panic!("expected object, got {:?}", store.type_kind(result));
+  };
+  let shape = store.shape(store.object(obj).shape);
+
+  assert!(shape.properties.is_empty());
+  assert_eq!(shape.indexers.len(), 3);
+  assert_eq!(
+    shape.indexers.iter().map(|idx| idx.key_type).collect::<Vec<_>>(),
+    vec![primitives.number, primitives.string, primitives.symbol]
+  );
+  assert!(shape
+    .indexers
+    .iter()
+    .all(|idx| idx.value_type == primitives.number));
+}
+
+#[test]
 fn mapped_as_string_produces_string_indexer() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

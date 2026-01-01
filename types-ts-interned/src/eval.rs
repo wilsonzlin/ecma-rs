@@ -953,11 +953,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       };
 
       let remap_keys = self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1);
-      // If we cannot determine the remapped keys precisely (e.g. template
-      // literal explosion), fall back to the pre-existing behavior and keep the
-      // original mapped key. This is intentionally conservative.
       let remap_keys = match remap_keys {
-        KeySet::Unknown => KeySet::known(vec![entry.key.clone()], &self.store),
+        KeySet::Unknown => KeySet::known(vec![Key::String, Key::Number, Key::Symbol], &self.store),
         other => other,
       };
 
@@ -1377,7 +1374,27 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             readonly: false,
           })
           .collect(),
-        KeySet::Unknown => Vec::new(),
+        KeySet::Unknown => {
+          let mut entries = vec![
+            KeyInfo {
+              key: Key::String,
+              optional: false,
+              readonly: false,
+            },
+            KeyInfo {
+              key: Key::Number,
+              optional: false,
+              readonly: false,
+            },
+            KeyInfo {
+              key: Key::Symbol,
+              optional: false,
+              readonly: false,
+            },
+          ];
+          entries.sort_by(|a, b| a.key.cmp(&b.key, &self.store));
+          entries
+        }
       },
     }
   }
