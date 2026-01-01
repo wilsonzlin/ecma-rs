@@ -143,7 +143,6 @@ mod lower_metrics;
 mod parse_metrics;
 mod profile;
 mod program;
-mod sem_hir;
 #[cfg(feature = "serde")]
 mod snapshot;
 mod symbols;

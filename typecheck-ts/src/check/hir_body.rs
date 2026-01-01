@@ -5069,20 +5069,30 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
+        let base_obj_ty = if mem.optional {
+          let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
+          non_nullish
+        } else {
+          obj_ty
+        };
         if let ObjectKey::Computed(expr) = &mem.property {
           let _ = self.eval_expr(*expr, env);
         }
-        let prop_ty = match (
-          self.ident_binding(mem.object),
-          self.member_property_name(&mem.property),
-        ) {
-          (Some(binding), Some(prop)) => {
-            let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
-            env
-              .get_path(&key)
-              .unwrap_or_else(|| self.member_type(obj_ty, mem))
+        let prop_ty = if mem.optional && base_obj_ty == prim.never {
+          prim.undefined
+        } else {
+          match (
+            self.ident_binding(mem.object),
+            self.member_property_name(&mem.property),
+          ) {
+            (Some(binding), Some(prop)) => {
+              let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
+              env
+                .get_path(&key)
+                .unwrap_or_else(|| self.member_type(base_obj_ty, mem))
+            }
+            _ => self.member_type(base_obj_ty, mem),
           }
-          _ => self.member_type(obj_ty, mem),
         };
         if mem.optional {
           if let Some(name) = self.optional_chain_root(mem.object) {

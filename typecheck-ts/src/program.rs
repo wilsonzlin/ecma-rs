@@ -4056,102 +4056,6 @@ impl ProgramState {
     id
   }
 
-  fn merge_sem_hir(mut base: sem_ts::HirFile, extras: sem_ts::HirFile) -> sem_ts::HirFile {
-    debug_assert_eq!(base.file_id, extras.file_id);
-    debug_assert_eq!(base.file_kind, extras.file_kind);
-
-    let mut existing_defs: HashSet<sem_ts::DefId> =
-      base.decls.iter().map(|decl| decl.def_id).collect();
-    let mut existing_decl_keys: HashSet<(String, sem_ts::DeclKind)> = base
-      .decls
-      .iter()
-      .map(|decl| (decl.name.clone(), decl.kind.clone()))
-      .collect();
-
-    for decl in extras.decls {
-      if existing_defs.contains(&decl.def_id)
-        || existing_decl_keys.contains(&(decl.name.clone(), decl.kind.clone()))
-      {
-        continue;
-      }
-      existing_defs.insert(decl.def_id);
-      existing_decl_keys.insert((decl.name.clone(), decl.kind.clone()));
-      base.decls.push(decl);
-    }
-
-    for import in extras.imports {
-      if !base.imports.contains(&import) {
-        base.imports.push(import);
-      }
-    }
-    for import in extras.type_imports {
-      if !base.type_imports.contains(&import) {
-        base.type_imports.push(import);
-      }
-    }
-    for import_equals in extras.import_equals {
-      if !base.import_equals.contains(&import_equals) {
-        base.import_equals.push(import_equals);
-      }
-    }
-    for export in extras.exports {
-      if !base.exports.contains(&export) {
-        base.exports.push(export);
-      }
-    }
-    for export in extras.export_as_namespace {
-      if !base.export_as_namespace.contains(&export) {
-        base.export_as_namespace.push(export);
-      }
-    }
-    base.ambient_modules.extend(extras.ambient_modules);
-
-    base.module_kind = ProgramState::module_kind_from_sem_hir(&base);
-    base
-  }
-
-  fn remap_sem_hir_ids(hir: &mut sem_ts::HirFile, mapping: &HashMap<DefId, DefId>) {
-    for decl in hir.decls.iter_mut() {
-      if let Some(mapped) = mapping.get(&DefId(decl.def_id.0)) {
-        decl.def_id = sem_ts::DefId(mapped.0);
-      }
-    }
-    for module in hir.ambient_modules.iter_mut() {
-      Self::remap_ambient_module_ids(module, mapping);
-    }
-  }
-
-  fn remap_ambient_module_ids(module: &mut sem_ts::AmbientModule, mapping: &HashMap<DefId, DefId>) {
-    for decl in module.decls.iter_mut() {
-      if let Some(mapped) = mapping.get(&DefId(decl.def_id.0)) {
-        decl.def_id = sem_ts::DefId(mapped.0);
-      }
-    }
-    for nested in module.ambient_modules.iter_mut() {
-      Self::remap_ambient_module_ids(nested, mapping);
-    }
-  }
-
-  fn module_kind_from_sem_hir(file: &sem_ts::HirFile) -> sem_ts::ModuleKind {
-    let has_import_equals_require = file
-      .import_equals
-      .iter()
-      .any(|ie| matches!(ie.target, sem_ts::ImportEqualsTarget::Require { .. }));
-    let has_module_syntax = !file.imports.is_empty()
-      || !file.exports.is_empty()
-      || !file.export_as_namespace.is_empty()
-      || has_import_equals_require
-      || file
-        .decls
-        .iter()
-        .any(|decl| !matches!(decl.exported, sem_ts::Exported::No));
-    if has_module_syntax {
-      sem_ts::ModuleKind::Module
-    } else {
-      sem_ts::ModuleKind::Script
-    }
-  }
-
   fn def_namespaces(kind: &DefKind) -> sem_ts::Namespace {
     match kind {
       DefKind::Function(_) | DefKind::Var(_) => sem_ts::Namespace::VALUE,
@@ -4786,43 +4690,43 @@ impl ProgramState {
             )
             .expect("reparse locals");
             sem_ts::locals::bind_ts_locals(&mut owned, file, is_module)
-          };
-          self.local_semantics.insert(file, locals);
-          self.asts.insert(file, Arc::clone(&ast));
-          self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
-          let lower_span = QuerySpan::enter(
-            QueryKind::LowerHir,
-            query_span!(
-              "typecheck_ts.lower_hir",
-              Some(file.0),
+           };
+           self.local_semantics.insert(file, locals);
+           self.asts.insert(file, Arc::clone(&ast));
+           self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
+           let lower_span = QuerySpan::enter(
+             QueryKind::LowerHir,
+             query_span!(
+               "typecheck_ts.lower_hir",
+               Some(file.0),
               Option::<u32>::None,
               Option::<u32>::None,
               false
             ),
             None,
             false,
-            Some(self.query_stats.clone()),
-          );
-          let lowered = db::lower_hir(&self.typecheck_db, file);
-          let Some(lowered) = lowered.lowered else {
-            if let Some(span) = lower_span {
-              span.finish(None);
-            }
-            continue;
-          };
-          self.hir_lowered.insert(file, Arc::clone(&lowered));
-          let _bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
-          let _ = self.align_definitions_with_hir(file, lowered.as_ref());
-          self.map_hir_bodies(file, lowered.as_ref());
-          self.check_cancelled()?;
-          if let Some(span) = lower_span {
-            span.finish(None);
-          }
-        }
-        Err(err) => {
-          let _ = err;
-        }
-      }
+             Some(self.query_stats.clone()),
+           );
+           let lowered = db::lower_hir(&self.typecheck_db, file);
+           let Some(lowered) = lowered.lowered else {
+             if let Some(span) = lower_span {
+               span.finish(None);
+             }
+             continue;
+           };
+           self.hir_lowered.insert(file, Arc::clone(&lowered));
+           let _bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
+           let _ = self.align_definitions_with_hir(file, lowered.as_ref());
+           self.map_hir_bodies(file, lowered.as_ref());
+           self.check_cancelled()?;
+           if let Some(span) = lower_span {
+             span.finish(None);
+           }
+         }
+         Err(err) => {
+           let _ = err;
+         }
+       }
       self.current_file = prev_file;
     }
     if !self.hir_lowered.is_empty() {
@@ -6065,23 +5969,23 @@ impl ProgramState {
             )
             .expect("reparse lib locals");
             sem_ts::locals::bind_ts_locals(&mut owned, file_id, true)
-          };
-          self.local_semantics.insert(file_id, locals);
-          self.asts.insert(file_id, Arc::clone(&ast));
-          self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);
-          let lowered = db::lower_hir(&self.typecheck_db, file_id);
-          let Some(lowered) = lowered.lowered else {
-            continue;
-          };
-          self.hir_lowered.insert(file_id, Arc::clone(&lowered));
-          let _bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, queue);
-          let _ = self.align_definitions_with_hir(file_id, lowered.as_ref());
-          self.map_hir_bodies(file_id, lowered.as_ref());
-        }
-        Err(err) => {
-          let _ = err;
-        }
-      }
+           };
+           self.local_semantics.insert(file_id, locals);
+           self.asts.insert(file_id, Arc::clone(&ast));
+           self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);
+           let lowered = db::lower_hir(&self.typecheck_db, file_id);
+           let Some(lowered) = lowered.lowered else {
+             continue;
+           };
+           self.hir_lowered.insert(file_id, Arc::clone(&lowered));
+           let _bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, queue);
+           let _ = self.align_definitions_with_hir(file_id, lowered.as_ref());
+           self.map_hir_bodies(file_id, lowered.as_ref());
+         }
+         Err(err) => {
+           let _ = err;
+         }
+       }
     }
     Ok(())
   }
@@ -6308,11 +6212,20 @@ impl ProgramState {
     let mut lowered_defs: Vec<_> = lowered.defs.iter().collect();
     lowered_defs.sort_by_key(|def| (def.span.start, def.span.end, def.id.0));
     for def in lowered_defs {
-      let name = lowered
+      let mut name = lowered
         .names
         .resolve(def.name)
         .unwrap_or_default()
         .to_string();
+      // `hir-js` emits `VarDeclarator` defs to hang initializer bodies off of a
+      // single declarator (e.g. `const x = 1`). They are not user-visible
+      // bindings, but we still keep them in the program's def set so HIR IDs
+      // remain round-trippable. Use a synthetic name so callers looking up
+      // bindings by name don't accidentally select a declarator def.
+      let is_var_declarator = matches!(def.path.kind, HirDefKind::VarDeclarator);
+      if is_var_declarator {
+        name = format!("<var_decl:{name}>");
+      }
       let match_kind = match_kind_from_hir(def.path.kind);
       // `hir-js` models variable declarations as a `VarDeclarator` node that owns the initializer
       // body plus one or more child `Var` defs for the bindings (to support destructuring).
@@ -6441,7 +6354,9 @@ impl ProgramState {
           kind,
         };
         self.record_def_symbol(def.id, symbol);
-        self.record_symbol(file, def.span, symbol);
+        if !is_var_declarator {
+          self.record_symbol(file, def.span, symbol);
+        }
         (def.id, data)
       };
 
@@ -6623,6 +6538,16 @@ impl ProgramState {
         _ => None,
       };
       if let Some(kind) = kind {
+        if kind == "var" {
+          if let Some(hir_def) = lowered.def(*def_id) {
+            if matches!(hir_def.path.kind, HirDefKind::VarDeclarator) {
+              // `VarDeclarator` defs exist to own initializer bodies; they are not
+              // bindings and shouldn't be used for mapping patterns to program
+              // definitions.
+              continue;
+            }
+          }
+        }
         defs_by_span.entry((data.span, kind)).or_insert(*def_id);
         defs_by_name
           .entry((data.name.clone(), kind))
@@ -8912,7 +8837,7 @@ impl ProgramState {
       };
       let ty = result
         .pat_type(PatId(pat_id.0))
-        .unwrap_or(state.builtin.unknown);
+        .unwrap_or(state.interned_unknown());
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
