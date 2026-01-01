@@ -1560,6 +1560,125 @@ fn indexed_access_over_union_collects_member_properties() {
 }
 
 #[test]
+fn array_length_indexed_access_is_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let array = store.intern_type(TypeKind::Array {
+    ty: primitives.boolean,
+    readonly: false,
+  });
+  let length = store.intern_type(TypeKind::StringLiteral(store.intern_name("length")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: array,
+    index: length,
+  });
+
+  let result = store.evaluate(indexed);
+  assert_eq!(result, primitives.number);
+}
+
+#[test]
+fn tuple_length_indexed_access_fixed_is_number_literal() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  let length = store.intern_type(TypeKind::StringLiteral(store.intern_name("length")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: tuple,
+    index: length,
+  });
+
+  let result = store.evaluate(indexed);
+  assert_eq!(
+    result,
+    store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(2.0)))
+  );
+}
+
+#[test]
+fn tuple_length_indexed_access_optional_is_union() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: true,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  let length = store.intern_type(TypeKind::StringLiteral(store.intern_name("length")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: tuple,
+    index: length,
+  });
+
+  let result = store.evaluate(indexed);
+  assert_eq!(
+    result,
+    store.union(vec![
+      store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.0))),
+      store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(2.0))),
+    ])
+  );
+}
+
+#[test]
+fn tuple_length_indexed_access_variadic_is_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let number_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: number_array,
+      optional: false,
+      rest: true,
+      readonly: false,
+    },
+  ]));
+  let length = store.intern_type(TypeKind::StringLiteral(store.intern_name("length")));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: tuple,
+    index: length,
+  });
+
+  let result = store.evaluate(indexed);
+  assert_eq!(result, primitives.number);
+}
+
+#[test]
 fn keyof_respects_union_and_intersection_semantics() {
   let store = TypeStore::new();
 

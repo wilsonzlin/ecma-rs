@@ -1190,12 +1190,42 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
       }
       TypeKind::Array { ty, .. } => match self.store.type_kind(index_eval) {
+        TypeKind::StringLiteral(id) if self.store.name(id) == "length" => {
+          self.store.primitive_ids().number
+        }
         TypeKind::NumberLiteral(_) | TypeKind::Number => {
           self.evaluate_with_subst(ty, subst, depth + 1)
         }
         _ => self.store.primitive_ids().unknown,
       },
       TypeKind::Tuple(elems) => match self.store.type_kind(index_eval) {
+        TypeKind::StringLiteral(id) if self.store.name(id) == "length" => {
+          if elems.iter().any(|elem| elem.rest) {
+            self.store.primitive_ids().number
+          } else {
+            let len = elems.len();
+            let mut required_len = len;
+            while required_len > 0 && elems[required_len - 1].optional {
+              required_len -= 1;
+            }
+
+            if required_len == len {
+              self
+                .store
+                .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(len as f64)))
+            } else {
+              let mut members = Vec::new();
+              for l in required_len..=len {
+                members.push(
+                  self
+                    .store
+                    .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(l as f64))),
+                );
+              }
+              self.store.union(members)
+            }
+          }
+        }
         TypeKind::NumberLiteral(num) => {
           let idx = num.0 as usize;
           if let Some(elem) = elems.get(idx) {
