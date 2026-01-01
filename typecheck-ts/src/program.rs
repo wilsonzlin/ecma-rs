@@ -931,9 +931,8 @@ impl Program {
       const TYPE_AT_TRIVIA_LOOKAROUND: usize = 32;
 
       let mut offset = offset;
-      let index = db::file_span_index(&state.typecheck_db, file);
       let mut expr_at = state.expr_at(file, offset);
-      let mut pat_at = index.pat_at(offset);
+      let mut pat_at = state.pat_at(file, offset);
 
       if expr_at.is_none() && pat_at.is_none() {
         if let Ok(text) = state.load_text(file, &self.host) {
@@ -949,7 +948,7 @@ impl Program {
             let Ok(cand_u32) = cand.try_into() else {
               break;
             };
-            if state.expr_at(file, cand_u32).is_some() || index.pat_at(cand_u32).is_some() {
+            if state.expr_at(file, cand_u32).is_some() || state.pat_at(file, cand_u32).is_some() {
               found = Some(cand_u32);
               break;
             }
@@ -964,7 +963,9 @@ impl Program {
               let Ok(cand_u32) = cand.try_into() else {
                 break;
               };
-              if state.expr_at(file, cand_u32).is_some() || index.pat_at(cand_u32).is_some() {
+              if state.expr_at(file, cand_u32).is_some()
+                || state.pat_at(file, cand_u32).is_some()
+              {
                 found = Some(cand_u32);
                 break;
               }
@@ -974,7 +975,7 @@ impl Program {
           if let Some(adj) = found {
             offset = adj;
             expr_at = state.expr_at(file, offset);
-            pat_at = index.pat_at(offset);
+            pat_at = state.pat_at(file, offset);
           }
         }
       }
@@ -982,10 +983,9 @@ impl Program {
       let (body, expr) = match expr_at {
         Some(res) => res,
         None => {
-          let Some(result) = pat_at else {
+          let Some((body, pat)) = pat_at else {
             return Ok(None);
           };
-          let (body, pat) = result.id;
           let result = state.check_body(body)?;
           let unknown = state.interned_unknown();
           return Ok(Some(result.pat_type(pat).unwrap_or(unknown)));
@@ -1899,7 +1899,14 @@ impl Program {
   }
 
   pub fn def_name_fallible(&self, def: DefId) -> Result<Option<String>, FatalError> {
-    self.with_analyzed_state(|state| Ok(state.def_data.get(&def).map(|d| d.name.clone())))
+    self.with_analyzed_state(|state| {
+      Ok(state.def_data.get(&def).and_then(|d| {
+        // `hir-js` `VarDeclarator` nodes are internal containers for variable declarations and do
+        // not correspond to user-visible bindings; hide them from the name lookup helper so
+        // callers searching by name (tests included) find the actual `Var` binding.
+        (!matches!(d.kind, DefKind::VarDeclarator(_))).then(|| d.name.clone())
+      }))
+    })
   }
 
   /// Body attached to a definition, if any.
@@ -1924,11 +1931,12 @@ impl Program {
             state.var_initializer(def).map(|init| init.body)
           }
         }
+        DefKind::VarDeclarator(var) => var.body,
         DefKind::Class(class) => class.body,
         DefKind::Enum(en) => en.body,
         DefKind::Namespace(ns) => ns.body,
         DefKind::Module(module) => module.body,
-        DefKind::Import(_) => None,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => None,
         DefKind::Interface(_) => None,
         DefKind::TypeAlias(_) => None,
       }))
@@ -2418,11 +2426,13 @@ pub struct DefData {
 pub enum DefKind {
   Function(FuncData),
   Var(VarData),
+  VarDeclarator(VarDeclaratorData),
   Class(ClassData),
   Enum(EnumData),
   Namespace(NamespaceData),
   Module(ModuleData),
   Import(ImportData),
+  ImportAlias(ImportAliasData),
   Interface(InterfaceData),
   TypeAlias(TypeAliasData),
 }
@@ -2457,6 +2467,12 @@ pub struct VarData {
   pub mode: VarDeclMode,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct VarDeclaratorData {
+  pub body: Option<BodyId>,
+}
+
 #[cfg(feature = "serde")]
 fn default_var_mode() -> VarDeclMode {
   VarDeclMode::Var
@@ -2467,6 +2483,12 @@ fn default_var_mode() -> VarDeclMode {
 pub struct ImportData {
   pub target: ImportTarget,
   pub original: String,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct ImportAliasData {
+  pub path: Vec<String>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -2535,6 +2557,7 @@ struct ProgramTypeResolver {
   local_defs: HashMap<String, DefId>,
   exports: HashMap<FileId, ExportMap>,
   module_namespace_defs: HashMap<FileId, DefId>,
+  namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
 }
 
 impl ProgramTypeResolver {
@@ -2547,6 +2570,7 @@ impl ProgramTypeResolver {
     local_defs: HashMap<String, DefId>,
     exports: HashMap<FileId, ExportMap>,
     module_namespace_defs: HashMap<FileId, DefId>,
+    namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
   ) -> Self {
     ProgramTypeResolver {
       semantics,
@@ -2557,6 +2581,7 @@ impl ProgramTypeResolver {
       local_defs,
       exports,
       module_namespace_defs,
+      namespace_members,
     }
   }
 
@@ -2567,7 +2592,65 @@ impl ProgramTypeResolver {
   fn resolve_local(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
     let def = self.local_defs.get(name).copied()?;
     let kind = self.def_kinds.get(&def)?;
-    Self::matches_namespace(kind, ns).then_some(def)
+    match kind {
+      DefKind::ImportAlias(alias) => self
+        .resolve_entity_name_path(&alias.path, ns)
+        .or_else(|| Self::matches_namespace(kind, ns).then_some(def)),
+      _ => Self::matches_namespace(kind, ns).then_some(def),
+    }
+  }
+
+  fn pick_best_def(&self, defs: &[DefId], ns: sem_ts::Namespace) -> Option<DefId> {
+    let mut best: Option<(u8, DefId)> = None;
+    for def in defs.iter().copied() {
+      let pri = self.def_priority(def, ns);
+      if pri == u8::MAX {
+        continue;
+      }
+      best = match best {
+        Some((best_pri, best_def)) if best_pri < pri || (best_pri == pri && best_def <= def) => {
+          Some((best_pri, best_def))
+        }
+        _ => Some((pri, def)),
+      };
+    }
+    best.map(|(_, def)| def)
+  }
+
+  fn resolve_entity_name_path(
+    &self,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    match path {
+      [] => None,
+      [name] => self.resolve_symbol_in_module(name, final_ns),
+      _ => {
+        let mut current = self
+          .resolve_symbol_in_module(&path[0], sem_ts::Namespace::NAMESPACE)
+          .or_else(|| self.resolve_symbol_in_module(&path[0], final_ns))
+          .or_else(|| self.resolve_symbol_in_module(&path[0], sem_ts::Namespace::VALUE))?;
+        for (idx, segment) in path.iter().enumerate().skip(1) {
+          let is_last = idx + 1 == path.len();
+          let ns = if is_last {
+            final_ns
+          } else {
+            sem_ts::Namespace::NAMESPACE
+          };
+          match self.def_kinds.get(&current) {
+            Some(DefKind::Namespace(_) | DefKind::Module(_)) => {
+              let members = self.namespace_members.get(&current)?;
+              let candidates = members.get(segment)?;
+              current = self.pick_best_def(candidates, ns)?;
+            }
+            _ => {
+              return self.resolve_namespace_import_path(path, final_ns);
+            }
+          }
+        }
+        Some(current)
+      }
+    }
   }
 
   fn global_symbol(&self, name: &str, ns: sem_ts::Namespace) -> Option<sem_ts::SymbolId> {
@@ -2736,8 +2819,9 @@ impl ProgramTypeResolver {
         DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
         DefKind::Var(var) if var.body.0 != u32::MAX => 1,
         DefKind::Namespace(_) | DefKind::Module(_) => 2,
-        DefKind::Import(_) => 3,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
         DefKind::Var(_) => 4,
+        DefKind::VarDeclarator(_) => 5,
         DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }
@@ -2747,14 +2831,16 @@ impl ProgramTypeResolver {
         DefKind::TypeAlias(_) => 1,
         DefKind::Class(_) => 2,
         DefKind::Enum(_) => 3,
-        DefKind::Import(_) => 4,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 4,
+        DefKind::VarDeclarator(_) => 5,
         _ => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::NAMESPACE) {
       return match kind {
         DefKind::Namespace(_) | DefKind::Module(_) => 0,
-        DefKind::Import(_) => 1,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 1,
+        DefKind::VarDeclarator(_) => 2,
         _ => 2,
       };
     }
@@ -2829,6 +2915,7 @@ struct SemHirBuilder {
   is_ambient: bool,
   decls: Vec<sem_ts::Decl>,
   imports: Vec<sem_ts::Import>,
+  import_equals: Vec<sem_ts::ImportEquals>,
   exports: Vec<sem_ts::Export>,
   ambient_modules: Vec<sem_ts::AmbientModule>,
 }
@@ -2841,6 +2928,7 @@ impl SemHirBuilder {
       is_ambient: false,
       decls: Vec::new(),
       imports: Vec::new(),
+      import_equals: Vec::new(),
       exports: Vec::new(),
       ambient_modules: Vec::new(),
     }
@@ -2874,6 +2962,10 @@ impl SemHirBuilder {
 
   fn add_import(&mut self, import: sem_ts::Import) {
     self.imports.push(import);
+  }
+
+  fn add_import_equals(&mut self, import_equals: sem_ts::ImportEquals) {
+    self.import_equals.push(import_equals);
   }
 
   fn add_ambient_module(&mut self, module: sem_ts::AmbientModule) {
@@ -2924,7 +3016,7 @@ impl SemHirBuilder {
       decls: self.decls,
       imports: self.imports,
       type_imports: Vec::new(),
-      import_equals: Vec::new(),
+      import_equals: self.import_equals,
       exports: self.exports,
       export_as_namespace: Vec::new(),
       ambient_modules: self.ambient_modules,
@@ -2938,7 +3030,7 @@ impl SemHirBuilder {
       decls: self.decls,
       imports: self.imports,
       type_imports: Vec::new(),
-      import_equals: Vec::new(),
+      import_equals: self.import_equals,
       exports: self.exports,
       export_as_namespace: Vec::new(),
       ambient_modules: self.ambient_modules,
@@ -2957,6 +3049,7 @@ struct BodyMeta {
 enum DefMatchKind {
   Function,
   Var,
+  VarDeclarator,
   Class,
   Enum,
   Namespace,
@@ -2971,11 +3064,13 @@ fn match_kind_from_def(kind: &DefKind) -> DefMatchKind {
   match kind {
     DefKind::Function(_) => DefMatchKind::Function,
     DefKind::Var(_) => DefMatchKind::Var,
+    DefKind::VarDeclarator(_) => DefMatchKind::VarDeclarator,
     DefKind::Class(_) => DefMatchKind::Class,
     DefKind::Enum(_) => DefMatchKind::Enum,
     DefKind::Namespace(_) => DefMatchKind::Namespace,
     DefKind::Module(_) => DefMatchKind::Module,
     DefKind::Import(_) => DefMatchKind::Import,
+    DefKind::ImportAlias(_) => DefMatchKind::Import,
     DefKind::Interface(_) => DefMatchKind::Interface,
     DefKind::TypeAlias(_) => DefMatchKind::TypeAlias,
   }
@@ -2989,6 +3084,7 @@ fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
     HirDefKind::Enum => DefMatchKind::Enum,
     HirDefKind::Namespace => DefMatchKind::Namespace,
     HirDefKind::Module => DefMatchKind::Module,
+    HirDefKind::VarDeclarator => DefMatchKind::VarDeclarator,
     HirDefKind::Var | HirDefKind::Field | HirDefKind::Param | HirDefKind::ExportAlias => {
       DefMatchKind::Var
     }
@@ -3883,13 +3979,14 @@ impl ProgramState {
   fn def_namespaces(kind: &DefKind) -> sem_ts::Namespace {
     match kind {
       DefKind::Function(_) | DefKind::Var(_) => sem_ts::Namespace::VALUE,
+      DefKind::VarDeclarator(_) => sem_ts::Namespace::empty(),
       DefKind::Class(_) | DefKind::Enum(_) => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
       DefKind::Interface(_) => sem_ts::Namespace::TYPE,
       DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
       DefKind::Namespace(_) | DefKind::Module(_) => {
         sem_ts::Namespace::VALUE | sem_ts::Namespace::NAMESPACE
       }
-      DefKind::Import(_) => {
+      DefKind::Import(_) | DefKind::ImportAlias(_) => {
         sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE | sem_ts::Namespace::NAMESPACE
       }
     }
@@ -3907,8 +4004,9 @@ impl ProgramState {
         DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
         DefKind::Var(var) if var.body.0 != u32::MAX => 1,
         DefKind::Namespace(_) | DefKind::Module(_) => 2,
-        DefKind::Import(_) => 3,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
         DefKind::Var(_) => 4,
+        DefKind::VarDeclarator(_) => 5,
         DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }
@@ -3918,14 +4016,16 @@ impl ProgramState {
         DefKind::TypeAlias(_) => 1,
         DefKind::Class(_) => 2,
         DefKind::Enum(_) => 3,
-        DefKind::Import(_) => 4,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 4,
+        DefKind::VarDeclarator(_) => 5,
         _ => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::NAMESPACE) {
       return match &data.kind {
         DefKind::Namespace(_) | DefKind::Module(_) => 0,
-        DefKind::Import(_) => 1,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 1,
+        DefKind::VarDeclarator(_) => 2,
         _ => 2,
       };
     }
@@ -6030,6 +6130,12 @@ impl ProgramState {
         .unwrap_or_default()
         .to_string();
       let match_kind = match_kind_from_hir(def.path.kind);
+      // `hir-js` models variable declarations as a `VarDeclarator` node that owns the initializer
+      // body plus one or more child `Var` defs for the bindings (to support destructuring).
+      //
+      // Track `VarDeclarator` as a definition for stable IDs, but do not treat it as a symbol in
+      // any namespace or allow it to clobber the real `Var` binding in `bindings`/`exports`.
+      let is_var_declarator = matches!(match_kind, DefMatchKind::VarDeclarator);
       let matched = by_name_kind
         .get_mut(&(name.clone(), match_kind))
         .and_then(|list| {
@@ -6043,12 +6149,18 @@ impl ProgramState {
         id_mapping.insert(old_id, def.id);
         data.span = def.span;
         data.export = data.export || def.is_exported || def.is_default_export;
+        if is_var_declarator {
+          data.export = false;
+        }
         match &mut data.kind {
           DefKind::Function(func) => func.body = def.body,
           DefKind::Var(var) => {
             if let Some(body) = def.body {
               var.body = body;
             }
+          }
+          DefKind::VarDeclarator(var) => {
+            var.body = def.body;
           }
           DefKind::Class(class) => {
             class.body = def.body;
@@ -6090,6 +6202,7 @@ impl ProgramState {
             return_ann: None,
             body: def.body,
           }),
+          DefMatchKind::VarDeclarator => DefKind::VarDeclarator(VarDeclaratorData { body: def.body }),
           DefMatchKind::Class => DefKind::Class(ClassData {
             body: def.body,
             instance_type: None,
@@ -6128,12 +6241,17 @@ impl ProgramState {
             mode: VarDeclMode::Var,
           }),
         };
+        let export = if is_var_declarator {
+          false
+        } else {
+          def.is_exported || def.is_default_export
+        };
         let data = DefData {
           name: name.clone(),
           file,
           span: def.span,
           symbol,
-          export: def.is_exported || def.is_default_export,
+          export,
           kind,
         };
         self.record_def_symbol(def.id, symbol);
@@ -6141,17 +6259,19 @@ impl ProgramState {
         (def.id, data)
       };
 
-      bindings
-        .entry(name.clone())
-        .and_modify(|binding| {
-          binding.symbol = data.symbol;
-          binding.def = Some(def_id);
-        })
-        .or_insert(SymbolBinding {
-          symbol: data.symbol,
-          def: Some(def_id),
-          type_id: None,
-        });
+      if !is_var_declarator {
+        bindings
+          .entry(name.clone())
+          .and_modify(|binding| {
+            binding.symbol = data.symbol;
+            binding.def = Some(def_id);
+          })
+          .or_insert(SymbolBinding {
+            symbol: data.symbol,
+            def: Some(def_id),
+            type_id: None,
+          });
+      }
 
       if data.export {
         let export_name = if def.is_default_export {
@@ -6546,6 +6666,11 @@ impl ProgramState {
             self.body_owners.insert(var.body, *def_id);
           }
         }
+        DefKind::VarDeclarator(var) => {
+          if let Some(body) = var.body {
+            self.body_owners.entry(body).or_insert(*def_id);
+          }
+        }
         DefKind::Class(class) => {
           if let Some(body) = class.body {
             self.body_owners.insert(body, *def_id);
@@ -6566,7 +6691,10 @@ impl ProgramState {
             self.body_owners.insert(body, *def_id);
           }
         }
-        DefKind::Import(_) | DefKind::Interface(_) | DefKind::TypeAlias(_) => {}
+        DefKind::Import(_)
+        | DefKind::ImportAlias(_)
+        | DefKind::Interface(_)
+        | DefKind::TypeAlias(_) => {}
       }
     }
   }
@@ -6585,6 +6713,7 @@ impl ProgramState {
       let body = match &data.kind {
         DefKind::Function(func) => func.body,
         DefKind::Var(var) if var.body.0 != u32::MAX => Some(var.body),
+        DefKind::VarDeclarator(var) => var.body,
         DefKind::Class(class) => class.body,
         DefKind::Enum(en) => en.body,
         DefKind::Namespace(ns) => ns.body,
@@ -7981,10 +8110,7 @@ impl ProgramState {
         }
         Stmt::ImportEqualsDecl(import_equals) => match &import_equals.stx.rhs {
           ImportEqualsRhs::Require { module } => {
-            let resolved = self
-              .file_key_for_id(file)
-              .and_then(|file_key| host.resolve(&file_key, module))
-              .map(|target| self.intern_file_key(target, FileOrigin::Source));
+            let resolved = self.record_module_resolution(file, module, host);
             if let Some(target) = resolved {
               queue.push_back(target);
             }
@@ -8033,26 +8159,62 @@ impl ProgramState {
                 },
               );
             }
-            sem_builder.add_import(sem_ts::Import {
-              specifier: module.clone(),
-              specifier_span: span,
-              default: None,
-              namespace: Some(sem_ts::ImportNamespace {
-                local: name,
-                local_span: span,
-                is_type_only: false,
-              }),
-              named: Vec::new(),
-              is_type_only: false,
+            sem_builder.add_import_equals(sem_ts::ImportEquals {
+              local: name,
+              local_span: span,
+              target: sem_ts::ImportEqualsTarget::Require {
+                specifier: module.clone(),
+                specifier_span: span,
+              },
+              is_exported: import_equals.stx.export,
             });
           }
-          ImportEqualsRhs::EntityName { .. } => {
-            self
-              .diagnostics
-              .push(codes::UNSUPPORTED_IMPORT_PATTERN.error(
-                "import = aliasing non-module targets is not supported yet",
-                loc_to_span(file, stmt.loc),
-              ));
+          ImportEqualsRhs::EntityName { path } => {
+            let span = loc_to_span(file, stmt.loc).range;
+            let name = import_equals.stx.name.clone();
+            let symbol = self.alloc_symbol();
+            let def_id = self.alloc_def();
+            self.def_data.insert(
+              def_id,
+              DefData {
+                name: name.clone(),
+                file,
+                span,
+                symbol,
+                export: import_equals.stx.export,
+                kind: DefKind::ImportAlias(ImportAliasData { path: path.clone() }),
+              },
+            );
+            self.record_def_symbol(def_id, symbol);
+            defs.push(def_id);
+            bindings.insert(
+              name.clone(),
+              SymbolBinding {
+                symbol,
+                def: Some(def_id),
+                type_id: None,
+              },
+            );
+            self.record_symbol(file, span, symbol);
+            if import_equals.stx.export {
+              exports.insert(
+                name.clone(),
+                ExportEntry {
+                  symbol,
+                  def: Some(def_id),
+                  type_id: None,
+                },
+              );
+            }
+            sem_builder.add_import_equals(sem_ts::ImportEquals {
+              local: name,
+              local_span: span,
+              target: sem_ts::ImportEqualsTarget::EntityName {
+                path: path.clone(),
+                span,
+              },
+              is_exported: import_equals.stx.export,
+            });
           }
         },
         Stmt::Expr(_) | Stmt::If(_) | Stmt::Block(_) | Stmt::While(_) => {}
@@ -8688,15 +8850,45 @@ impl ProgramState {
         .iter()
         .map(|(file, state)| (*file, state.exports.clone()))
         .collect();
+      let current_file = self.current_file.unwrap_or(FileId(u32::MAX));
+      let mut namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>> = HashMap::new();
+      if let Some(lowered) = self.hir_lowered.get(&current_file) {
+        for def in lowered.defs.iter() {
+          let Some(hir_js::DefTypeInfo::Namespace { members }) = def.type_info.as_ref() else {
+            continue;
+          };
+          for member_def in members.iter().copied() {
+            let Some(member) = lowered.def(member_def) else {
+              continue;
+            };
+            let Some(name) = lowered.names.resolve(member.name) else {
+              continue;
+            };
+            namespace_members
+              .entry(def.id)
+              .or_default()
+              .entry(name.to_string())
+              .or_default()
+              .push(member_def);
+          }
+        }
+      }
+      for members in namespace_members.values_mut() {
+        for defs in members.values_mut() {
+          defs.sort_by_key(|def| def.0);
+          defs.dedup();
+        }
+      }
       return Some(Arc::new(ProgramTypeResolver::new(
         Arc::clone(&self.host),
         Arc::clone(semantics),
         def_kinds,
         self.file_registry.clone(),
-        self.current_file.unwrap_or(FileId(u32::MAX)),
+        current_file,
         binding_defs.clone(),
         exports,
         self.module_namespace_defs.clone(),
+        namespace_members,
       )) as Arc<_>);
     }
     Some(Arc::new(check::hir_body::BindingTypeResolver::new(
@@ -9476,8 +9668,11 @@ impl ProgramState {
     }
 
     for (name, def) in binding_defs.iter() {
+      if self.type_stack.contains(def) {
+        continue;
+      }
       if let Some(def_data) = self.def_data.get(def) {
-        if matches!(def_data.kind, DefKind::Import(_)) {
+        if matches!(def_data.kind, DefKind::Import(_) | DefKind::ImportAlias(_)) {
           match self.type_of_def(*def) {
             Ok(def_ty) => {
               let ty = if store.contains_type_id(def_ty) {
@@ -9514,6 +9709,9 @@ impl ProgramState {
     let prim = store.primitive_ids();
     let caches = self.checker_caches.for_body();
     for def in binding_defs.values() {
+      if self.type_stack.contains(def) {
+        continue;
+      }
       if self.body_of_def(*def).is_none() && !self.interned_def_types.contains_key(def) {
         self.type_of_def(*def)?;
       }
@@ -10592,6 +10790,193 @@ impl ProgramState {
     walk(self, file, &ast.stx.body, target, name)
   }
 
+  fn resolve_import_alias_target_in_namespace(
+    &self,
+    file: FileId,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    if path.is_empty() {
+      return None;
+    }
+    let lowered = self.hir_lowered.get(&file)?;
+    let start_ns = if path.len() == 1 {
+      final_ns
+    } else {
+      sem_ts::Namespace::NAMESPACE
+    };
+    let mut current: Option<DefId> = None;
+    let mut best_pri = u8::MAX;
+    for def in lowered.defs.iter() {
+      if def.parent.is_some() {
+        continue;
+      }
+      let Some(name) = lowered.names.resolve(def.name) else {
+        continue;
+      };
+      if name != path[0].as_str() {
+        continue;
+      }
+      let pri = self.def_priority(def.id, start_ns);
+      if pri == u8::MAX {
+        continue;
+      }
+      let replace = current
+        .map(|best| pri < best_pri || (pri == best_pri && def.id < best))
+        .unwrap_or(true);
+      if replace {
+        current = Some(def.id);
+        best_pri = pri;
+      }
+    }
+    let mut current = current.or_else(|| {
+      let def = self
+        .files
+        .get(&file)?
+        .bindings
+        .get(&path[0])
+        .and_then(|binding| binding.def)?;
+      (self.def_priority(def, start_ns) != u8::MAX).then_some(def)
+    })?;
+    if path.len() == 1 {
+      return Some(current);
+    }
+    for (idx, segment) in path.iter().enumerate().skip(1) {
+      let is_last = idx + 1 == path.len();
+      let ns = if is_last {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      };
+      let current_def = lowered.def(current)?;
+      let hir_js::DefTypeInfo::Namespace { members } = current_def.type_info.as_ref()? else {
+        return None;
+      };
+      let mut candidates: Vec<DefId> = Vec::new();
+      for member_def in members.iter().copied() {
+        let Some(member) = lowered.def(member_def) else {
+          continue;
+        };
+        let Some(name) = lowered.names.resolve(member.name) else {
+          continue;
+        };
+        if name == segment.as_str() {
+          candidates.push(member_def);
+        }
+      }
+      let mut best: Option<(u8, DefId)> = None;
+      for def in candidates {
+        let pri = self.def_priority(def, ns);
+        if pri == u8::MAX {
+          continue;
+        }
+        best = match best {
+          Some((best_pri, best_def))
+            if best_pri < pri || (best_pri == pri && best_def <= def) =>
+          {
+            Some((best_pri, best_def))
+          }
+          _ => Some((pri, def)),
+        };
+      }
+      current = best.map(|(_, def)| def)?;
+    }
+    Some(current)
+  }
+
+  fn resolve_import_alias_target(&self, file: FileId, path: &[String]) -> Option<DefId> {
+    self
+      .resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::VALUE)
+      .or_else(|| self.resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::TYPE))
+      .or_else(|| {
+        self.resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::NAMESPACE)
+      })
+  }
+
+  fn module_namespace_object_type(&mut self, exports: &ExportMap) -> Result<TypeId, FatalError> {
+    if let Some(store) = self.interned_store.as_ref().cloned() {
+      let mut shape = tti::Shape::new();
+      for (name, entry) in exports.iter() {
+        if name == "*" {
+          continue;
+        }
+        let resolved_def = entry
+          .def
+          .or_else(|| self.symbol_to_def.get(&entry.symbol).copied());
+        if let Some(def) = resolved_def {
+          if let Some(data) = self.def_data.get(&def) {
+            if matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)) {
+              continue;
+            }
+          }
+        }
+        let mut ty = entry.type_id;
+        if ty.is_none() {
+          if let Some(def) = resolved_def {
+            ty = self.export_type_for_def(def)?;
+            if ty.is_none() {
+              ty = Some(self.type_of_def(def)?);
+            }
+          }
+        }
+        let ty = ty.unwrap_or(self.builtin.unknown);
+        let ty = self.ensure_interned_type(ty);
+        let key = PropKey::String(store.intern_name(name.clone()));
+        shape.properties.push(Property {
+          key,
+          data: PropData {
+            ty,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        });
+      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      Ok(store.intern_type(tti::TypeKind::Object(obj_id)))
+    } else {
+      let mut obj = ObjectType::empty();
+      for (name, entry) in exports.iter() {
+        if name == "*" {
+          continue;
+        }
+        let resolved_def = entry
+          .def
+          .or_else(|| self.symbol_to_def.get(&entry.symbol).copied());
+        if let Some(def) = resolved_def {
+          if let Some(data) = self.def_data.get(&def) {
+            if matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)) {
+              continue;
+            }
+          }
+        }
+        let mut ty = entry.type_id;
+        if ty.is_none() {
+          if let Some(def) = resolved_def {
+            ty = self.export_type_for_def(def)?;
+            if ty.is_none() {
+              ty = Some(self.type_of_def(def)?);
+            }
+          }
+        }
+        let ty = ty.unwrap_or(self.builtin.unknown);
+        obj.props.insert(
+          name.clone(),
+          ObjectProperty {
+            typ: ty,
+            optional: false,
+            readonly: true,
+          },
+        );
+      }
+      Ok(self.type_store.object(obj))
+    }
+  }
+
   fn type_of_def(&mut self, def: DefId) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let cache_hit = self.def_types.contains_key(&def);
@@ -10927,6 +11312,7 @@ impl ProgramState {
           }
           ty
         }
+        DefKind::VarDeclarator(_) => self.builtin.unknown,
         DefKind::Class(class) => {
           if let Some(store) = self.interned_store.as_ref() {
             if let Some(instance_type) = class.instance_type {
@@ -11020,6 +11406,12 @@ impl ProgramState {
             }
           }
         }
+        DefKind::ImportAlias(alias) => {
+          match self.resolve_import_alias_target(def_data.file, &alias.path) {
+            Some(target) if target != def => self.type_of_def(target)?,
+            _ => self.builtin.unknown,
+          }
+        }
         DefKind::Interface(interface) => {
           if let Some(store) = self.interned_store.as_ref() {
             if !self.interned_def_types.contains_key(&def) {
@@ -11070,7 +11462,21 @@ impl ProgramState {
         if let Some(store) = self.interned_store.as_ref() {
           if store.contains_type_id(ty) {
             let interned = store.canon(ty);
-            self.interned_def_types.entry(def).or_insert(interned);
+            let replace = self
+              .interned_def_types
+              .get(&def)
+              .copied()
+              .map(|existing| match store.type_kind(existing) {
+                tti::TypeKind::Unknown => true,
+                tti::TypeKind::Ref { def: ref_def, args } => {
+                  ref_def == tti::DefId(def.0) && args.is_empty()
+                }
+                _ => false,
+              })
+              .unwrap_or(true);
+            if replace {
+              self.interned_def_types.insert(def, interned);
+            }
             let imported = self.import_interned_type(interned);
             ty = if imported == self.builtin.unknown {
               interned
@@ -11610,6 +12016,83 @@ impl ProgramState {
     db::expr_at(&self.typecheck_db, file, offset)
   }
 
+  fn pat_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, PatId)> {
+    if self.snapshot_loaded {
+      let mut best_containing: Option<(
+        (u32, u32, u32, u32, u32, u32, BodyId, PatId),
+        (BodyId, PatId, TextRange),
+      )> = None;
+      let mut best_empty: Option<(
+        (u32, u32, u32, u32, u32, u32, BodyId, PatId),
+        (BodyId, PatId, TextRange),
+      )> = None;
+
+      for (body_id, result) in self.body_results.iter() {
+        let Some(meta) = self.body_map.get(body_id) else {
+          continue;
+        };
+        if meta.file != file {
+          continue;
+        }
+        let Some((pat_id, span)) = expr_at_from_spans(result.pat_spans(), offset) else {
+          continue;
+        };
+        let pat_id = PatId(pat_id.0);
+        let Some(body_span) = body_extent_from_spans(result.expr_spans(), result.pat_spans())
+        else {
+          continue;
+        };
+        let key = (
+          span.len(),
+          span.start,
+          span.end,
+          body_span.len(),
+          body_span.start,
+          body_span.end,
+          *body_id,
+          pat_id,
+        );
+
+        if span.start <= offset && offset < span.end {
+          if best_containing
+            .as_ref()
+            .map(|(existing, _)| key < *existing)
+            .unwrap_or(true)
+          {
+            best_containing = Some((key, (*body_id, pat_id, span)));
+          }
+        } else if span.is_empty() && span.start == offset {
+          if best_empty
+            .as_ref()
+            .map(|(existing, _)| key < *existing)
+            .unwrap_or(true)
+          {
+            best_empty = Some((key, (*body_id, pat_id, span)));
+          }
+        }
+      }
+
+      match (best_containing, best_empty) {
+        (
+          Some((_, (cont_body, cont_pat, cont_span))),
+          Some((_, (empty_body, empty_pat, empty_span))),
+        ) => {
+          if empty_span.start > cont_span.start && empty_span.end < cont_span.end {
+            return Some((empty_body, empty_pat));
+          }
+          return Some((cont_body, cont_pat));
+        }
+        (Some((_, (body, pat, _))), None) => return Some((body, pat)),
+        (None, Some((_, (body, pat, _)))) => return Some((body, pat)),
+        (None, None) => return None,
+      }
+    }
+
+    db::file_span_index(&self.typecheck_db, file)
+      .pat_at(offset)
+      .map(|res| res.id)
+  }
+
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
     self.def_data.get(&def).and_then(|d| match &d.kind {
       DefKind::Function(func) => func.body,
@@ -11620,11 +12103,12 @@ impl ProgramState {
           self.var_initializer(def).map(|init| init.body)
         }
       }
+      DefKind::VarDeclarator(var) => var.body,
       DefKind::Class(class) => class.body,
       DefKind::Enum(en) => en.body,
       DefKind::Namespace(ns) => ns.body,
       DefKind::Module(ns) => ns.body,
-      DefKind::Import(_) => None,
+      DefKind::Import(_) | DefKind::ImportAlias(_) => None,
       DefKind::Interface(_) => None,
       DefKind::TypeAlias(_) => None,
     })
