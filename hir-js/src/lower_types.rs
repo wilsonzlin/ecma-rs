@@ -1280,17 +1280,252 @@ impl<'a> TypeLowerer<'a> {
           })
           .collect(),
       },
+      TypeExprKind::Union(members) => {
+        let mut member_keys: Vec<_> = members
+          .iter()
+          .map(|id| self.type_expr_sort_key(*id, cache, in_progress))
+          .collect();
+        member_keys.sort();
+        member_keys.dedup();
+        TypeSortKey::Union(member_keys)
+      }
+      TypeExprKind::Intersection(members) => {
+        let mut member_keys: Vec<_> = members
+          .iter()
+          .map(|id| self.type_expr_sort_key(*id, cache, in_progress))
+          .collect();
+        member_keys.sort();
+        member_keys.dedup();
+        TypeSortKey::Intersection(member_keys)
+      }
+      TypeExprKind::Function(func) => TypeSortKey::Function(self.signature_sort_key(
+        &func.type_params,
+        &func.params,
+        Some(func.ret),
+        cache,
+        in_progress,
+      )),
+      TypeExprKind::Constructor(func) => TypeSortKey::Constructor(self.signature_sort_key(
+        &func.type_params,
+        &func.params,
+        Some(func.ret),
+        cache,
+        in_progress,
+      )),
+      TypeExprKind::TypeLiteral(lit) => TypeSortKey::TypeLiteral(
+        lit
+          .members
+          .iter()
+          .map(|id| self.type_member_sort_key(*id, cache, in_progress))
+          .collect(),
+      ),
       TypeExprKind::Parenthesized(inner) => self.type_expr_sort_key(*inner, cache, in_progress),
-      _ => TypeSortKey::Other {
-        discriminant: self.type_kind_discriminant(&expr.kind),
-        span_start: expr.span.start,
-        span_end: expr.span.end,
+      TypeExprKind::TypeQuery(name) => TypeSortKey::TypeQuery(self.type_name_sort_key(name)),
+      TypeExprKind::KeyOf(inner) => {
+        TypeSortKey::KeyOf(Box::new(self.type_expr_sort_key(*inner, cache, in_progress)))
+      }
+      TypeExprKind::IndexedAccess {
+        object_type,
+        index_type,
+      } => TypeSortKey::IndexedAccess {
+        object_type: Box::new(self.type_expr_sort_key(*object_type, cache, in_progress)),
+        index_type: Box::new(self.type_expr_sort_key(*index_type, cache, in_progress)),
       },
+      TypeExprKind::Conditional(cond) => TypeSortKey::Conditional {
+        check_type: Box::new(self.type_expr_sort_key(cond.check_type, cache, in_progress)),
+        extends_type: Box::new(self.type_expr_sort_key(cond.extends_type, cache, in_progress)),
+        true_type: Box::new(self.type_expr_sort_key(cond.true_type, cache, in_progress)),
+        false_type: Box::new(self.type_expr_sort_key(cond.false_type, cache, in_progress)),
+      },
+      TypeExprKind::Infer(type_param) => {
+        TypeSortKey::Infer(self.type_param_sort_key(*type_param, cache, in_progress))
+      }
+      TypeExprKind::Mapped(mapped) => TypeSortKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress)),
+      TypeExprKind::TemplateLiteral(tmpl) => TypeSortKey::TemplateLiteral(TemplateLiteralKey {
+        head: tmpl.head.clone(),
+        spans: tmpl
+          .spans
+          .iter()
+          .map(|span| TemplateLiteralSpanKey {
+            type_expr: self.type_expr_sort_key(span.type_expr, cache, in_progress),
+            literal: span.literal.clone(),
+          })
+          .collect(),
+      }),
+      TypeExprKind::TypePredicate(pred) => TypeSortKey::TypePredicate(TypePredicateKey {
+        asserts: pred.asserts,
+        parameter: self.name_id_to_string(pred.parameter),
+        type_annotation: pred
+          .type_annotation
+          .map(|ty| Box::new(self.type_expr_sort_key(ty, cache, in_progress))),
+      }),
+      TypeExprKind::Import(import) => TypeSortKey::Import(ImportKey {
+        module: import.module.clone(),
+        qualifier: import
+          .qualifier
+          .as_ref()
+          .map(|name| self.type_name_sort_key(name)),
+        type_args: import
+          .type_args
+          .iter()
+          .map(|arg| self.type_expr_sort_key(*arg, cache, in_progress))
+          .collect(),
+      }),
     };
 
     in_progress.remove(&id);
     cache.insert(id, key.clone());
     key
+  }
+
+  fn signature_sort_key(
+    &self,
+    type_params: &[TypeParamId],
+    params: &[TypeFnParam],
+    return_type: Option<TypeExprId>,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> SignatureKey {
+    SignatureKey {
+      type_params: type_params
+        .iter()
+        .map(|id| self.type_param_sort_key(*id, cache, in_progress))
+        .collect(),
+      params: params
+        .iter()
+        .map(|param| self.fn_param_sort_key(param, cache, in_progress))
+        .collect(),
+      return_type: return_type.map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
+    }
+  }
+
+  fn fn_param_sort_key(
+    &self,
+    param: &TypeFnParam,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> FnParamKey {
+    FnParamKey {
+      ty: self.type_expr_sort_key(param.ty, cache, in_progress),
+      optional: param.optional,
+      rest: param.rest,
+      name: param.name.map(|id| self.name_id_to_string(id)),
+    }
+  }
+
+  fn type_param_sort_key(
+    &self,
+    id: TypeParamId,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> TypeParamKey {
+    let param = &self.type_params[id.0 as usize];
+    TypeParamKey {
+      name: self.name_id_to_string(param.name),
+      constraint: param
+        .constraint
+        .map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
+      default: param
+        .default
+        .map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
+      variance: param.variance.map(Self::variance_sort_key),
+      const_: param.const_,
+      is_infer: param.is_infer,
+    }
+  }
+
+  fn variance_sort_key(variance: TypeVariance) -> VarianceKey {
+    match variance {
+      TypeVariance::In => VarianceKey::In,
+      TypeVariance::Out => VarianceKey::Out,
+      TypeVariance::InOut => VarianceKey::InOut,
+    }
+  }
+
+  fn mapped_sort_key(
+    &self,
+    mapped: &HirTypeMapped,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> MappedKey {
+    MappedKey {
+      type_param: self.type_param_sort_key(mapped.type_param, cache, in_progress),
+      constraint: Box::new(self.type_expr_sort_key(mapped.constraint, cache, in_progress)),
+      name_type: mapped
+        .name_type
+        .map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
+      value_type: Box::new(self.type_expr_sort_key(mapped.value_type, cache, in_progress)),
+      readonly: mapped.readonly.map(Self::mapped_modifier_sort_key),
+      optional: mapped.optional.map(Self::mapped_modifier_sort_key),
+    }
+  }
+
+  fn mapped_modifier_sort_key(modifier: TypeMappedModifier) -> MappedModifierKey {
+    match modifier {
+      TypeMappedModifier::Plus => MappedModifierKey::Plus,
+      TypeMappedModifier::Minus => MappedModifierKey::Minus,
+      TypeMappedModifier::None => MappedModifierKey::None,
+    }
+  }
+
+  fn type_member_sort_key(
+    &self,
+    id: TypeMemberId,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> TypeMemberKey {
+    let member = &self.type_members[id.0 as usize];
+    match &member.kind {
+      TypeMemberKind::Property(prop) => TypeMemberKey::Property {
+        readonly: prop.readonly,
+        optional: prop.optional,
+        name: self.property_name_key(&prop.name),
+        type_annotation: prop
+          .type_annotation
+          .map(|id| self.type_expr_sort_key(id, cache, in_progress)),
+      },
+      TypeMemberKind::Method(method) => TypeMemberKey::Method {
+        optional: method.optional,
+        name: self.property_name_key(&method.name),
+        signature: self.signature_sort_key(
+          &method.type_params,
+          &method.params,
+          method.return_type,
+          cache,
+          in_progress,
+        ),
+      },
+      TypeMemberKind::Constructor(signature) => TypeMemberKey::Constructor(self.signature_sort_key(
+        &signature.type_params,
+        &signature.params,
+        signature.return_type,
+        cache,
+        in_progress,
+      )),
+      TypeMemberKind::CallSignature(signature) => TypeMemberKey::CallSignature(self.signature_sort_key(
+        &signature.type_params,
+        &signature.params,
+        signature.return_type,
+        cache,
+        in_progress,
+      )),
+      TypeMemberKind::IndexSignature(signature) => TypeMemberKey::IndexSignature(IndexSignatureKey {
+        readonly: signature.readonly,
+        parameter_type: self.type_expr_sort_key(signature.parameter_type, cache, in_progress),
+        type_annotation: self.type_expr_sort_key(signature.type_annotation, cache, in_progress),
+      }),
+      TypeMemberKind::Getter(getter) => TypeMemberKey::Getter {
+        name: self.property_name_key(&getter.name),
+        return_type: getter
+          .return_type
+          .map(|id| self.type_expr_sort_key(id, cache, in_progress)),
+      },
+      TypeMemberKind::Setter(setter) => TypeMemberKey::Setter {
+        name: self.property_name_key(&setter.name),
+        parameter: self.fn_param_sort_key(&setter.parameter, cache, in_progress),
+      },
+      TypeMemberKind::Mapped(mapped) => TypeMemberKey::Mapped(self.mapped_sort_key(mapped, cache, in_progress)),
+    }
   }
 
   fn literal_sort_key(&self, literal: &HirTypeLiteral) -> LiteralKey {
@@ -1386,16 +1621,142 @@ enum TypeSortKey {
     readonly: bool,
     elements: Vec<TupleElementKey>,
   },
-  Other {
-    discriminant: u8,
-    span_start: u32,
-    span_end: u32,
+  Union(Vec<TypeSortKey>),
+  Intersection(Vec<TypeSortKey>),
+  Function(SignatureKey),
+  Constructor(SignatureKey),
+  TypeLiteral(Vec<TypeMemberKey>),
+  TypeQuery(TypeNameKey),
+  KeyOf(Box<TypeSortKey>),
+  IndexedAccess {
+    object_type: Box<TypeSortKey>,
+    index_type: Box<TypeSortKey>,
   },
+  Conditional {
+    check_type: Box<TypeSortKey>,
+    extends_type: Box<TypeSortKey>,
+    true_type: Box<TypeSortKey>,
+    false_type: Box<TypeSortKey>,
+  },
+  Infer(TypeParamKey),
+  Mapped(MappedKey),
+  TemplateLiteral(TemplateLiteralKey),
+  TypePredicate(TypePredicateKey),
+  Import(ImportKey),
   Cycle {
     discriminant: u8,
     span_start: u32,
     span_end: u32,
   },
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct SignatureKey {
+  type_params: Vec<TypeParamKey>,
+  params: Vec<FnParamKey>,
+  return_type: Option<Box<TypeSortKey>>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct FnParamKey {
+  ty: TypeSortKey,
+  optional: bool,
+  rest: bool,
+  name: Option<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TypeParamKey {
+  name: String,
+  constraint: Option<Box<TypeSortKey>>,
+  default: Option<Box<TypeSortKey>>,
+  variance: Option<VarianceKey>,
+  const_: bool,
+  is_infer: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum VarianceKey {
+  In,
+  Out,
+  InOut,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct MappedKey {
+  type_param: TypeParamKey,
+  constraint: Box<TypeSortKey>,
+  name_type: Option<Box<TypeSortKey>>,
+  value_type: Box<TypeSortKey>,
+  readonly: Option<MappedModifierKey>,
+  optional: Option<MappedModifierKey>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum MappedModifierKey {
+  Plus,
+  Minus,
+  None,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TemplateLiteralKey {
+  head: String,
+  spans: Vec<TemplateLiteralSpanKey>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TemplateLiteralSpanKey {
+  type_expr: TypeSortKey,
+  literal: String,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TypePredicateKey {
+  asserts: bool,
+  parameter: String,
+  type_annotation: Option<Box<TypeSortKey>>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct ImportKey {
+  module: String,
+  qualifier: Option<TypeNameKey>,
+  type_args: Vec<TypeSortKey>,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum TypeMemberKey {
+  Property {
+    readonly: bool,
+    optional: bool,
+    name: String,
+    type_annotation: Option<TypeSortKey>,
+  },
+  Method {
+    optional: bool,
+    name: String,
+    signature: SignatureKey,
+  },
+  Constructor(SignatureKey),
+  CallSignature(SignatureKey),
+  IndexSignature(IndexSignatureKey),
+  Getter {
+    name: String,
+    return_type: Option<TypeSortKey>,
+  },
+  Setter {
+    name: String,
+    parameter: FnParamKey,
+  },
+  Mapped(MappedKey),
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct IndexSignatureKey {
+  readonly: bool,
+  parameter_type: TypeSortKey,
+  type_annotation: TypeSortKey,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
