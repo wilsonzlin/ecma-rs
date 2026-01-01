@@ -2458,4 +2458,54 @@ mod tests {
     let expected = file_set.resolve("/foo.d.mts").unwrap();
     assert_eq!(resolved, expected);
   }
+
+  #[cfg(all(unix, feature = "with-node"))]
+  #[test]
+  fn tsc_pool_kills_hung_runner_and_recovers() {
+    use serde_json::Map;
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let tmp = tempdir().unwrap();
+    let script_path = tmp.path().join("fake-node");
+    let state_path = tmp.path().join("state");
+    fs::write(
+      &script_path,
+      r#"#!/bin/sh
+set -eu
+DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
+STATE_FILE="$DIR/state"
+if [ ! -f "$STATE_FILE" ]; then
+  : > "$STATE_FILE"
+  exec sleep 2
+fi
+IFS= read -r LINE || exit 0
+echo '{"diagnostics":[]}'
+"#,
+    )
+    .unwrap();
+    let mut perms = fs::metadata(&script_path).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&script_path, perms).unwrap();
+
+    let pool = TscRunnerPool::new(script_path, 1);
+    let file_set = HarnessFileSet::new(&[VirtualFile {
+      name: "case.ts".to_string(),
+      content: "const value = 1;\n".to_string(),
+    }]);
+    let options = Map::new();
+
+    let first_deadline = Instant::now() + Duration::from_millis(200);
+    let first = pool.run(&file_set, &options, first_deadline);
+    assert!(matches!(first, Err(TscPoolError::Timeout)));
+    assert!(
+      state_path.exists(),
+      "expected fake node runner to have started and created a state file"
+    );
+
+    let second_deadline = Instant::now() + Duration::from_secs(1);
+    let second = pool.run(&file_set, &options, second_deadline);
+    assert!(second.is_ok(), "expected runner to recover: {second:?}");
+  }
 }

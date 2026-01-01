@@ -361,11 +361,14 @@ impl TscRunner {
 
   fn spawn(&mut self) -> anyhow::Result<()> {
     let _ = self.process.take();
-    let existing = {
+    // Do not hold the kill switch mutex while waiting/spawning; timeouts call
+    // `TscKillSwitch::kill()` from other threads and must never block on slow
+    // process management.
+    let existing_child = {
       let mut child_guard = self.kill_switch.state.lock().unwrap();
       child_guard.child.take()
     };
-    if let Some(mut child) = existing {
+    if let Some(mut child) = existing_child {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
@@ -448,11 +451,11 @@ impl TscRunner {
 impl Drop for TscRunner {
   fn drop(&mut self) {
     let _ = self.process.take();
-    let existing = {
+    let child = {
       let mut child_guard = self.kill_switch.state.lock().unwrap();
       child_guard.child.take()
     };
-    if let Some(mut child) = existing {
+    if let Some(mut child) = child {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
