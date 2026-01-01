@@ -119,19 +119,28 @@ pub fn normalize_tsc_diagnostics_with_options(
 }
 
 pub fn sort_diagnostics(diags: &mut Vec<NormalizedDiagnostic>) {
+  fn compare_codes(a: &Option<DiagnosticCode>, b: &Option<DiagnosticCode>) -> std::cmp::Ordering {
+    match (a, b) {
+      (None, None) => std::cmp::Ordering::Equal,
+      // Sort diagnostics without codes last (they are generally less actionable).
+      (None, Some(_)) => std::cmp::Ordering::Greater,
+      (Some(_), None) => std::cmp::Ordering::Less,
+      (Some(DiagnosticCode::Rust(a)), Some(DiagnosticCode::Rust(b))) => a.cmp(b),
+      (Some(DiagnosticCode::Tsc(a)), Some(DiagnosticCode::Tsc(b))) => a.cmp(b),
+      // Keep Rust/tsc codes grouped for determinism (and easier reading).
+      (Some(DiagnosticCode::Rust(_)), Some(DiagnosticCode::Tsc(_))) => std::cmp::Ordering::Less,
+      (Some(DiagnosticCode::Tsc(_)), Some(DiagnosticCode::Rust(_))) => std::cmp::Ordering::Greater,
+    }
+  }
+
   diags.sort_by(|a, b| {
-    (
-      a.file.as_deref().unwrap_or(""),
-      a.start,
-      a.end,
-      code_key(&a.code),
-    )
-      .cmp(&(
-        b.file.as_deref().unwrap_or(""),
-        b.start,
-        b.end,
-        code_key(&b.code),
-      ))
+    a.file
+      .as_deref()
+      .unwrap_or("")
+      .cmp(b.file.as_deref().unwrap_or(""))
+      .then_with(|| a.start.cmp(&b.start))
+      .then_with(|| a.end.cmp(&b.end))
+      .then_with(|| compare_codes(&a.code, &b.code))
   });
 }
 
@@ -288,14 +297,6 @@ fn normalize_severity(raw: Option<&str>, options: &NormalizationOptions) -> Opti
     "note" | "help" => "info".to_string(),
     other => other.to_string(),
   })
-}
-
-fn code_key(code: &Option<DiagnosticCode>) -> (u8, String) {
-  match code {
-    Some(DiagnosticCode::Rust(val)) => (0, val.clone()),
-    Some(DiagnosticCode::Tsc(val)) => (1, val.to_string()),
-    None => (2, String::new()),
-  }
 }
 
 fn code_to_string(code: &DiagnosticCode) -> String {
