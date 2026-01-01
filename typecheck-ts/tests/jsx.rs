@@ -98,6 +98,15 @@ fn jsx_lib_file() -> LibFile {
   }
 }
 
+fn empty_lib_file() -> LibFile {
+  LibFile {
+    key: FileKey::new("empty.d.ts"),
+    name: Arc::from("empty.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(""),
+  }
+}
+
 #[test]
 fn jsx_requires_compiler_option() {
   let mut options = CompilerOptions::default();
@@ -120,6 +129,31 @@ fn jsx_requires_compiler_option() {
     diagnostics[0].code.as_str(),
     codes::JSX_DISABLED.as_str(),
     "expected JSX_DISABLED, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn jsx_namespace_missing_emits_diagnostic() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let host = TestHost::new(options)
+    .with_lib(empty_lib_file())
+    .with_file(entry.clone(), "const el = <div />;");
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::JSX_NAMESPACE_MISSING.as_str(),
+    "expected JSX_NAMESPACE_MISSING, got {diagnostics:?}"
   );
 }
 
