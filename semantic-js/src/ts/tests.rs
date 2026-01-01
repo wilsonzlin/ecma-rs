@@ -185,6 +185,44 @@ fn locals_resolve_object_literal_shorthand() {
 }
 
 #[test]
+fn locals_type_only_namespace_import_resolves_qualified_type_reference() {
+  let source = r#"
+    import type * as NS from "mod";
+    type T = NS.Foo;
+  "#;
+  let mut ast = parse(source).expect("parse type-only namespace import");
+  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+
+  let root = locals.root_scope();
+  let (ns_symbol, ns_data) = locals
+    .symbols
+    .iter()
+    .find_map(|(id, sym)| {
+      if sym.decl_scope != root {
+        return None;
+      }
+      let name = locals.names.get(&sym.name)?;
+      (name == "NS").then_some((*id, sym))
+    })
+    .expect("NS symbol should be declared in root scope");
+
+  assert!(
+    ns_data.namespaces.contains(Namespace::NAMESPACE),
+    "type-only namespace imports should declare the namespace namespace"
+  );
+
+  let ns_offset = positions(source, "NS.Foo")
+    .first()
+    .copied()
+    .expect("expected NS.Foo occurrence");
+  let resolved = locals
+    .resolve_type_at_offset(ns_offset)
+    .map(|(_, sym)| sym)
+    .expect("qualified type reference should resolve in namespace space");
+  assert_eq!(resolved, ns_symbol);
+}
+
+#[test]
 fn reexport_chain_uses_original_symbols() {
   let file_a = FileId(1);
   let file_b = FileId(2);
@@ -991,6 +1029,52 @@ fn type_only_imports_skip_value_namespace() {
     } => assert_eq!(*from, file_a),
     other => panic!("expected import origin, got {:?}", other),
   }
+}
+
+#[test]
+fn type_only_namespace_import_includes_namespace_namespace() {
+  let file_a = FileId(62);
+  let file_b = FileId(63);
+
+  let a = HirFile::module(file_a);
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: span(90),
+    default: None,
+    namespace: Some(ImportNamespace {
+      local: "NS".to_string(),
+      local_span: span(91),
+      is_type_only: true,
+    }),
+    named: Vec::new(),
+    is_type_only: true,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+  assert!(
+    semantics
+      .resolve_in_module(file_b, "NS", Namespace::NAMESPACE)
+      .is_some(),
+    "type-only namespace imports should be available in namespace namespace"
+  );
+  assert!(
+    semantics
+      .resolve_in_module(file_b, "NS", Namespace::VALUE)
+      .is_none(),
+    "type-only namespace imports should not be available in value namespace"
+  );
 }
 
 #[test]

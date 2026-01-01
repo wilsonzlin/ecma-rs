@@ -1155,12 +1155,17 @@ impl DeclarePass {
     } else {
       Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
     };
+    let namespace_ns = if import.stx.type_only {
+      Namespace::TYPE | Namespace::NAMESPACE
+    } else {
+      base_ns
+    };
     if let Some(default) = &mut import.stx.default {
       self.walk_pat_decl(default, base_ns);
     }
     if let Some(names) = &mut import.stx.names {
       match names {
-        ImportNames::All(pat) => self.walk_pat_decl(pat, base_ns),
+        ImportNames::All(pat) => self.walk_pat_decl(pat, namespace_ns),
         ImportNames::Specific(list) => {
           for item in list.iter_mut() {
             let ns = if item.stx.type_only {
@@ -2464,12 +2469,17 @@ impl DeclareTablesPass {
     } else {
       Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
     };
+    let namespace_ns = if import.stx.type_only {
+      Namespace::TYPE | Namespace::NAMESPACE
+    } else {
+      base_ns
+    };
     if let Some(default) = &import.stx.default {
       self.walk_pat_decl(default, base_ns);
     }
     if let Some(names) = &import.stx.names {
       match names {
-        ImportNames::All(pat) => self.walk_pat_decl(pat, base_ns),
+        ImportNames::All(pat) => self.walk_pat_decl(pat, namespace_ns),
         ImportNames::Specific(list) => {
           for item in list.iter() {
             let ns = if item.stx.type_only {

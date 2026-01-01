@@ -1067,13 +1067,17 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
     }
 
+    let is_namespace_import = matches!(&entry.imported, ImportItem::Namespace);
     let namespaces = if entry.type_only {
-      Namespace::TYPE
-    } else {
-      match entry.imported {
-        ImportItem::Namespace => Namespace::VALUE | Namespace::NAMESPACE | Namespace::TYPE,
-        _ => Namespace::VALUE | Namespace::TYPE,
+      if is_namespace_import {
+        Namespace::TYPE | Namespace::NAMESPACE
+      } else {
+        Namespace::TYPE
       }
+    } else if is_namespace_import {
+      Namespace::VALUE | Namespace::NAMESPACE | Namespace::TYPE
+    } else {
+      Namespace::VALUE | Namespace::TYPE
     };
     let order = entry.local_span.start;
     let decl_id = self.symbols.alloc_decl(
