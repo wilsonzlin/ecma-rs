@@ -1,11 +1,15 @@
 use crate::directives::parse_directive;
 use crate::directives::HarnessDirective;
-use diagnostics::paths::normalize_ts_path;
+use diagnostics::paths::{normalize_ts_path, normalize_ts_path_into};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 pub(crate) fn normalize_name(name: &str) -> String {
   normalize_ts_path(name)
+}
+
+pub(crate) fn normalize_name_into(name: &str, out: &mut String) {
+  normalize_ts_path_into(name, out)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

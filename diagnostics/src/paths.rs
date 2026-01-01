@@ -15,6 +15,16 @@ use std::path::Path;
 
 /// Normalize a path-like string into a canonical, forward-slashed virtual path.
 pub fn normalize_ts_path(raw: &str) -> String {
+  let mut out = String::with_capacity(raw.len() + 1);
+  normalize_ts_path_into(raw, &mut out);
+  out
+}
+
+/// Normalize a path-like string into a canonical, forward-slashed virtual path, writing the result
+/// into an existing string buffer.
+///
+/// This is useful for hot paths that want to reuse an allocation across many normalization calls.
+pub fn normalize_ts_path_into(raw: &str, normalized: &mut String) {
   let raw = raw
     .strip_prefix(r"\\?\")
     .or_else(|| raw.strip_prefix("//?/"))
@@ -45,7 +55,8 @@ pub fn normalize_ts_path(raw: &str) -> String {
 
   // Build the normalized output directly, using the output buffer itself as the "stack" for `..`
   // segment popping. This avoids allocating a temporary `Vec<&str>` of components.
-  let mut normalized = String::with_capacity(raw.len() + 1);
+  normalized.clear();
+  normalized.reserve(raw.len() + 1);
   if let Some(drive) = drive {
     normalized.push(drive);
     normalized.push(':');
@@ -104,8 +115,6 @@ pub fn normalize_ts_path(raw: &str) -> String {
       normalized.push_str(part);
     }
   }
-
-  normalized
 }
 
 /// Convenience wrapper for normalizing OS paths into virtual paths.
