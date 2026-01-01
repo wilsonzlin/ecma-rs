@@ -123,8 +123,7 @@ fn resolve_imports_specifier(
 fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) -> Option<FileKey> {
   let package_json = normalize_name(&virtual_join(dir, "package.json"));
   let package_key = files.resolve(&package_json)?;
-  let raw = files.content(&package_key)?;
-  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let parsed = files.package_json(&package_key)?;
   let imports = parsed.get("imports")?.as_object()?;
 
   let (target, star_match) = if let Some(target) = imports.get(specifier) {
@@ -216,8 +215,7 @@ fn resolve_as_file_or_directory_inner(
 fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> Option<FileKey> {
   let package_json = normalize_name(&virtual_join(dir, "package.json"));
   let package_key = files.resolve(&package_json)?;
-  let raw = files.content(&package_key)?;
-  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let parsed = files.package_json(&package_key)?;
 
   if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
     if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
@@ -271,8 +269,7 @@ fn resolve_via_exports(
 ) -> Option<FileKey> {
   let package_json = normalize_name(&virtual_join(package_dir, "package.json"));
   let package_key = files.resolve(&package_json)?;
-  let raw = files.content(&package_key)?;
-  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let parsed = files.package_json(&package_key)?;
   let exports = parsed.get("exports")?;
   let (target, star_match) = select_exports_target(exports, subpath)?;
   resolve_json_target_to_file(files, package_dir, target, star_match.as_deref(), depth)

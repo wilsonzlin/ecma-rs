@@ -8,6 +8,7 @@ pub mod directives;
 pub mod discover;
 pub mod expectations;
 mod file_kind;
+pub mod module_resolution;
 pub mod multifile;
 pub mod profile;
 mod resolve;

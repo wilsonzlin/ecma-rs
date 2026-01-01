@@ -310,10 +310,16 @@ struct HarnessFile {
 }
 
 #[derive(Clone)]
-pub(crate) struct HarnessFileSet {
+pub struct HarnessFileSet {
   files: Vec<HarnessFile>,
   name_to_key: HashMap<String, FileKey>,
   key_to_name: HashMap<FileKey, String>,
+  package_json_cache: Arc<PackageJsonCache>,
+}
+
+#[derive(Debug, Default)]
+struct PackageJsonCache {
+  parsed: Mutex<HashMap<FileKey, Option<Arc<Value>>>>,
 }
 
 #[derive(Clone)]
@@ -323,7 +329,7 @@ struct PlannedCase {
 }
 
 impl HarnessFileSet {
-  pub(crate) fn new(files: &[VirtualFile]) -> Self {
+  pub fn new(files: &[VirtualFile]) -> Self {
     let mut normalized_names = Vec::with_capacity(files.len());
     for file in files {
       normalized_names.push(normalize_name(&file.name));
@@ -356,6 +362,7 @@ impl HarnessFileSet {
       files: stored,
       name_to_key,
       key_to_name,
+      package_json_cache: Arc::new(PackageJsonCache::default()),
     }
   }
 
@@ -382,6 +389,22 @@ impl HarnessFileSet {
 
   pub(crate) fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     resolve_module_specifier(self, from, specifier)
+  }
+
+  pub(crate) fn package_json(&self, key: &FileKey) -> Option<Arc<Value>> {
+    {
+      let guard = self.package_json_cache.parsed.lock().unwrap();
+      if let Some(cached) = guard.get(key) {
+        return cached.clone();
+      }
+    }
+
+    let raw = self.content(key)?;
+    let parsed: Option<Value> = serde_json::from_str(&raw).ok();
+    let parsed = parsed.map(Arc::new);
+    let mut guard = self.package_json_cache.parsed.lock().unwrap();
+    guard.insert(key.clone(), parsed.clone());
+    parsed
   }
 
   pub(crate) fn name_for_key(&self, key: &FileKey) -> Option<String> {
