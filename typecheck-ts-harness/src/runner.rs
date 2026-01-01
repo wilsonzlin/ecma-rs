@@ -494,7 +494,11 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 
   let job_count = opts.jobs.max(1);
   let timeout_manager = Arc::new(TimeoutManager::new());
-  let tsc_pool = Arc::new(TscRunnerPool::new(opts.node_path.clone(), job_count));
+  let needs_live_tsc = tsc_available
+    && (compare_mode == CompareMode::Tsc
+      || (opts.update_snapshots && compare_mode == CompareMode::Snapshot));
+  let tsc_pool =
+    needs_live_tsc.then(|| Arc::new(TscRunnerPool::new(opts.node_path.clone(), job_count)));
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -795,7 +799,7 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
 fn run_single_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_pool: Arc<TscRunnerPool>,
+  tsc_pool: Option<Arc<TscRunnerPool>>,
   timeout_manager: Arc<TimeoutManager>,
   tsc_available: bool,
   snapshots: &SnapshotStore,
@@ -825,7 +829,7 @@ fn run_single_case(
 fn execute_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_pool: Arc<TscRunnerPool>,
+  tsc_pool: Option<Arc<TscRunnerPool>>,
   tsc_available: bool,
   snapshots: SnapshotStore,
   span_tolerance: u32,
@@ -876,9 +880,14 @@ fn execute_case(
     if !tsc_available {
       return Some(EngineDiagnostics::crashed(unavailable));
     }
+    let Some(tsc_pool) = tsc_pool.as_deref() else {
+      return Some(EngineDiagnostics::crashed(
+        "tsc pool unavailable".to_string(),
+      ));
+    };
 
     let tsc_start = Instant::now();
-    match run_tsc_with_raw(&tsc_pool, &file_set, &tsc_options, deadline) {
+    match run_tsc_with_raw(tsc_pool, &file_set, &tsc_options, deadline) {
       TscRunResult::Completed { diagnostics, raw } => {
         tsc_ms = Some(tsc_start.elapsed().as_millis());
         diff_start = Instant::now();
