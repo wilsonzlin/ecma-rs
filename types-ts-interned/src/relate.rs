@@ -23,6 +23,11 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[cfg(test)]
+static NORMALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelationKind {
@@ -36,6 +41,7 @@ bitflags! {
   pub struct RelationMode: u8 {
     const NONE = 0;
     const BIVARIANT_PARAMS = 1 << 0;
+    const SKIP_NORMALIZE = 1 << 1;
   }
 }
 
@@ -261,6 +267,19 @@ impl<'a> RelateCtx<'a> {
       .result
   }
 
+  pub(crate) fn is_assignable_no_normalize(&self, src: TypeId, dst: TypeId) -> bool {
+    self
+      .relate_internal(
+        src,
+        dst,
+        RelationKind::Assignable,
+        RelationMode::SKIP_NORMALIZE,
+        false,
+        0,
+      )
+      .result
+  }
+
   pub fn explain_assignable(&self, src: TypeId, dst: TypeId) -> RelationResult {
     self.reset_reason_budget();
     self.relate_internal(
@@ -474,32 +493,53 @@ impl<'a> RelateCtx<'a> {
       };
     }
 
-    let normalized_src = self.normalize_type(src);
-    let normalized_dst = self.normalize_type(dst);
-    if normalized_src != src || normalized_dst != dst {
-      let related = self.relate_internal(
-        normalized_src,
-        normalized_dst,
-        RelationKind::Assignable,
-        mode,
-        record,
-        depth + 1,
-      );
-      return RelationResult {
-        result: related.result,
-        reason: self.join_reasons(
+    if !mode.contains(RelationMode::SKIP_NORMALIZE) {
+      let normalized_src = self.normalize_type(src);
+      let normalized_dst = self.normalize_type(dst);
+      if normalized_src != src || normalized_dst != dst {
+        let related = self.relate_internal(
+          normalized_src,
+          normalized_dst,
+          RelationKind::Assignable,
+          mode,
           record,
-          key,
-          vec![related.reason],
-          related.result,
-          Some("normalized".into()),
-          depth,
-        ),
-      };
+          depth + 1,
+        );
+        return RelationResult {
+          result: related.result,
+          reason: self.join_reasons(
+            record,
+            key,
+            vec![related.reason],
+            related.result,
+            Some("normalized".into()),
+            depth,
+          ),
+        };
+      }
     }
 
     let src_kind = self.store.type_kind(src);
     let dst_kind = self.store.type_kind(dst);
+
+    if mode.contains(RelationMode::SKIP_NORMALIZE) {
+      debug_assert!(
+        !matches!(
+          &src_kind,
+          TypeKind::Conditional { .. }
+            | TypeKind::Mapped(_)
+            | TypeKind::IndexedAccess { .. }
+            | TypeKind::KeyOf(_)
+        ) && !matches!(
+          &dst_kind,
+          TypeKind::Conditional { .. }
+            | TypeKind::Mapped(_)
+            | TypeKind::IndexedAccess { .. }
+            | TypeKind::KeyOf(_)
+        ),
+        "SKIP_NORMALIZE assignability expects evaluated types"
+      );
+    }
 
     if let Some(res) = self.assignable_special(&src_kind, &dst_kind) {
       return RelationResult {
@@ -1920,6 +1960,10 @@ impl<'a> RelateCtx<'a> {
   }
 
   fn normalize_type(&self, ty: TypeId) -> TypeId {
+    #[cfg(test)]
+    {
+      NORMALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
+    }
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
@@ -2042,7 +2086,7 @@ impl<'a> RelateCtx<'a> {
           if dst_prop.data.optional {
             continue;
           }
-          if let Some(index) = self.indexer_for_prop(&src_shape, &dst_prop.key) {
+          if let Some(index) = self.indexer_for_prop(&src_shape, &dst_prop.key, mode) {
             if !dst_prop.data.readonly && index.readonly {
               return RelationResult {
                 result: false,
@@ -2137,7 +2181,7 @@ impl<'a> RelateCtx<'a> {
         }
       } else {
         for prop in &src_shape.properties {
-          if !self.indexer_accepts_prop(dst_index, &prop.key) {
+          if !self.indexer_accepts_prop(dst_index, &prop.key, mode) {
             continue;
           }
           let related = self.relate_internal(
@@ -2277,17 +2321,42 @@ impl<'a> RelateCtx<'a> {
     }
   }
 
-  fn indexer_for_prop<'b>(&self, shape: &'b Shape, name: &PropKey) -> Option<&'b Indexer> {
+  fn indexer_for_prop<'b>(
+    &self,
+    shape: &'b Shape,
+    name: &PropKey,
+    mode: RelationMode,
+  ) -> Option<&'b Indexer> {
     let key_ty = self.prop_key_type(name);
     shape
       .indexers
       .iter()
-      .find(|idx| self.is_assignable(key_ty, idx.key_type))
+      .find(|idx| {
+        self
+          .relate_internal(
+            key_ty,
+            idx.key_type,
+            RelationKind::Assignable,
+            mode,
+            false,
+            0,
+          )
+          .result
+      })
   }
 
-  fn indexer_accepts_prop(&self, idx: &Indexer, key: &PropKey) -> bool {
+  fn indexer_accepts_prop(&self, idx: &Indexer, key: &PropKey, mode: RelationMode) -> bool {
     let key_ty = self.prop_key_type(key);
-    self.is_assignable(key_ty, idx.key_type)
+    self
+      .relate_internal(
+        key_ty,
+        idx.key_type,
+        RelationKind::Assignable,
+        mode,
+        false,
+        0,
+      )
+      .result
   }
 
   fn find_matching_indexer<'b>(
@@ -2333,5 +2402,57 @@ impl<'a> RelateCtx<'a> {
       .hooks
       .expander
       .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, args))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::{Indexer, ObjectType, PropData, PropKey, Property, Shape, TypeKind, TypeStore};
+
+  #[test]
+  fn assignable_skip_normalize_does_not_invoke_normalize_type() {
+    NORMALIZE_CALLS.store(0, Ordering::Relaxed);
+
+    let store = TypeStore::new();
+    let ctx = RelateCtx::new(store.clone(), store.options());
+    let primitives = store.primitive_ids();
+
+    // src: { [key: string | number]: number }
+    let key_type = store.union(vec![primitives.string, primitives.number]);
+    let mut src_shape = Shape::new();
+    src_shape.indexers.push(Indexer {
+      key_type,
+      value_type: primitives.number,
+      readonly: false,
+    });
+    let src_shape_id = store.intern_shape(src_shape);
+    let src_obj = store.intern_object(ObjectType { shape: src_shape_id });
+    let src_ty = store.intern_type(TypeKind::Object(src_obj));
+
+    // dst: { foo: number }
+    let foo = store.intern_name("foo");
+    let mut dst_shape = Shape::new();
+    dst_shape.properties.push(Property {
+      key: PropKey::String(foo),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    });
+    let dst_shape_id = store.intern_shape(dst_shape);
+    let dst_obj = store.intern_object(ObjectType { shape: dst_shape_id });
+    let dst_ty = store.intern_type(TypeKind::Object(dst_obj));
+
+    assert!(ctx.is_assignable_no_normalize(src_ty, dst_ty));
+    assert_eq!(NORMALIZE_CALLS.load(Ordering::Relaxed), 0);
+
+    assert!(ctx.is_assignable(src_ty, dst_ty));
+    assert!(NORMALIZE_CALLS.load(Ordering::Relaxed) > 0);
   }
 }
