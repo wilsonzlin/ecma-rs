@@ -1460,6 +1460,10 @@ impl<'a> TypeLowerer<'a> {
       ty: self.type_expr_sort_key(param.ty, cache, in_progress),
       optional: param.optional,
       rest: param.rest,
+      this_param: matches!(
+        param.name.and_then(|id| self.names.resolve(id)),
+        Some("this")
+      ),
     }
   }
 
@@ -1719,6 +1723,7 @@ struct FnParamKey {
   ty: TypeSortKey,
   optional: bool,
   rest: bool,
+  this_param: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
