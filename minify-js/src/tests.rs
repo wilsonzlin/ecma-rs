@@ -318,6 +318,24 @@ fn optimizes_arrow_functions_in_class_field_initializers() {
 }
 
 #[test]
+fn with_in_outer_scope_does_not_disable_dce_in_inner_arrow() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const f=()=>{with({}){}return()=>{let x=1;return 2;};};",
+  );
+  assert_eq!(result, "const f=()=>{with({});return()=>{return 2;};};");
+}
+
+#[test]
+fn direct_eval_in_outer_scope_does_not_disable_dce_in_inner_arrow() {
+  let result = minified(
+    TopLevelMode::Global,
+    r#"const f=()=>{eval("x");return()=>{let y=1;return 2;};};"#,
+  );
+  assert_eq!(result, r#"const f=()=>{eval("x");return()=>{return 2;};};"#);
+}
+
+#[test]
 fn removes_unused_var_decls_with_pure_initializers() {
   let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
   assert_eq!(result, "console.log(2);");
