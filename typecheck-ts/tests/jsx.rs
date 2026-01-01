@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, JsxMode, LibFile};
-use typecheck_ts::{FileKey, Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program, TypeKindSummary};
 
 const JSX_LIB: &str = r#"
 declare namespace JSX {
@@ -201,6 +201,103 @@ const bad = <Foo x={"no"} />;
         || d.code.as_str() == codes::NO_OVERLOAD.as_str()
     }),
     "expected a prop type error for bad JSX usage, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn nested_jsx_child_elements_record_types_for_type_at() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = "const el = <div><span /></div>;";
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry.clone()]);
+  let file_id = program.file_id(&entry).expect("file id");
+
+  let offset = source.find("<span").expect("span tag") as u32 + 1;
+  let ty = program.type_at(file_id, offset).expect("type at <span>");
+  assert_ne!(
+    program.type_kind(ty),
+    TypeKindSummary::Unknown,
+    "expected nested JSX element to have a non-unknown type"
+  );
+}
+
+#[test]
+fn jsx_empty_expression_container_is_ignored() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"const el = <div>{/* comment */}</div>;"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics for JSX empty expression container, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn jsx_spread_attrs_are_merged_before_props_check() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let component = FileKey::new("component.ts");
+  let main = FileKey::new("main.tsx");
+
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(
+      component.clone(),
+      r#"export function Foo(props: { x: number }) { return null as any; }"#,
+    )
+    .with_file(
+      main.clone(),
+      r#"
+import { Foo } from "./component";
+const ok = <Foo {...{ x: 1 }} {...{}} />;
+"#,
+    )
+    .link(main.clone(), "./component", component);
+
+  let program = Program::new(host, vec![main]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics for merged spreads, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn jsx_spread_children_are_checked_against_children_prop() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"const el = <div>{...[1]}</div>;"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str()),
+    "expected a type mismatch diagnostic for spread children, got {diagnostics:?}"
   );
 }
 
