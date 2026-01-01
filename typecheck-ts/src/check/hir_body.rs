@@ -1603,6 +1603,23 @@ impl<'a> Checker<'a> {
       AstExpr::SatisfiesExpr(expr) => {
         let target_ty = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
         let value_ty = self.check_expr_with_expected(&expr.stx.expression, target_ty);
+        if !matches!(
+          self.store.type_kind(target_ty),
+          TypeKind::Any | TypeKind::Unknown
+        ) {
+          if let AstExpr::LitObj(obj) = expr.stx.expression.stx.as_ref() {
+            if self.has_excess_properties(obj, target_ty) {
+              self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                "excess property",
+                Span {
+                  file: self.file,
+                  range: loc_to_range(self.file, expr.stx.expression.loc),
+                },
+              ));
+              return value_ty;
+            }
+          }
+        }
         if !self.relate.is_assignable(value_ty, target_ty) {
           self.diagnostics.push(codes::TYPE_MISMATCH.error(
             "expression does not satisfy target type",

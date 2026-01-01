@@ -116,3 +116,15 @@ fn call_argument_checks_excess_properties() {
   );
   assert_eq!(diagnostics.len(), 1);
 }
+
+#[test]
+fn satisfies_checks_excess_properties() {
+  let diagnostics = run("const x = ({ foo: 1, bar: 2 } satisfies { foo: number });");
+  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
+  );
+}
