@@ -233,7 +233,10 @@ fn dce_keeps_class_expr_static_blocks_with_side_effects() {
     TopLevelMode::Global,
     "function f(){let C=class{static{sideEffect()}};return 1;}f();",
   );
-  assert_eq!(result, "function f(){let a=class{static{sideEffect();}};return 1;}f();");
+  assert_eq!(
+    result,
+    "function f(){let a=class{static{sideEffect();}};return 1;}f();"
+  );
 }
 
 #[test]
