@@ -4043,11 +4043,7 @@ impl<'a> Checker<'a> {
         ty
       }
       AstExpr::ArrowFunc(_) | AstExpr::Func(_) => {
-        if let Some(sig) = self.first_callable_signature(expected) {
-          let sig_id = self.store.intern_signature(sig);
-          let callable = self.store.intern_type(TypeKind::Callable {
-            overloads: vec![sig_id],
-          });
+        if let Some(callable) = self.contextual_callable_type(expected) {
           self.record_expr_type(expr.loc, callable);
           callable
         } else {
@@ -4123,6 +4119,38 @@ impl<'a> Checker<'a> {
         .and_then(|expanded| self.first_callable_signature(expanded)),
       _ => None,
     }
+  }
+
+  fn contextual_callable_type(&mut self, ty: TypeId) -> Option<TypeId> {
+    fn inner(checker: &mut Checker<'_>, ty: TypeId, seen: &mut HashSet<TypeId>) -> Option<TypeId> {
+      if !seen.insert(ty) {
+        return None;
+      }
+      match checker.store.type_kind(ty) {
+        TypeKind::Callable { .. } => Some(ty),
+        TypeKind::Object(obj) => {
+          let shape = checker.store.shape(checker.store.object(obj).shape);
+          if shape.call_signatures.is_empty() {
+            None
+          } else {
+            let mut overloads = shape.call_signatures.clone();
+            overloads.sort();
+            overloads.dedup();
+            Some(checker.store.intern_type(TypeKind::Callable { overloads }))
+          }
+        }
+        TypeKind::Union(members) | TypeKind::Intersection(members) => members
+          .iter()
+          .copied()
+          .find_map(|member| inner(checker, member, seen)),
+        TypeKind::Ref { def, args } => checker
+          .ref_expander
+          .and_then(|expander| expander.expand_ref(checker.store.as_ref(), def, &args))
+          .and_then(|expanded| inner(checker, expanded, seen)),
+        _ => None,
+      }
+    }
+    inner(self, ty, &mut HashSet::new())
   }
 
   fn bind_pattern(&mut self, pat: &Node<AstPat>, value: TypeId) {
