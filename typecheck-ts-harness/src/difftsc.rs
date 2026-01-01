@@ -4,7 +4,7 @@ use crate::diagnostic_norm::{
 };
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
-use crate::multifile::normalize_name;
+use crate::multifile::{normalize_name, normalize_name_into};
 use crate::runner::{
   build_tsc_request, is_source_root, run_rust, EngineStatus, HarnessFileSet, HarnessHost,
   TscRunnerPool,
@@ -1608,15 +1608,16 @@ fn collect_export_type_facts(
   expected: &[ExportTypeFact],
 ) -> Vec<ExportTypeFact> {
   let mut cache: HashMap<typecheck_ts::FileId, typecheck_ts::ExportMap> = HashMap::new();
-  let mut seen: HashSet<(String, String)> = HashSet::new();
+  let mut seen: HashSet<(&str, &str)> = HashSet::new();
   let mut facts = Vec::new();
+  let mut normalized_buf = String::new();
 
   for export in expected {
-    if !seen.insert((export.file.clone(), export.name.clone())) {
+    if !seen.insert((export.file.as_str(), export.name.as_str())) {
       continue;
     }
-    let normalized = normalize_name(&export.file);
-    let Some(file_key) = file_set.resolve(&normalized) else {
+    normalize_name_into(&export.file, &mut normalized_buf);
+    let Some(file_key) = file_set.resolve(&normalized_buf) else {
       continue;
     };
     let Some(file_id) = program.file_id(&file_key) else {
@@ -1648,9 +1649,10 @@ fn collect_marker_type_facts(
   markers: &[TypeQuery],
 ) -> Vec<TypeAtFact> {
   let mut facts = Vec::new();
+  let mut normalized_buf = String::new();
   for marker in markers {
-    let normalized = normalize_name(&marker.file);
-    let Some(file) = file_set.resolve(&normalized) else {
+    normalize_name_into(&marker.file, &mut normalized_buf);
+    let Some(file) = file_set.resolve(&normalized_buf) else {
       continue;
     };
     let Some(file_id) = program.file_id(&file) else {
