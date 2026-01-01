@@ -79,6 +79,63 @@ fn value_exports_follow_reexport_chain() {
 }
 
 #[test]
+fn string_literal_exports_follow_reexport_chain_and_export_star() {
+  let mut host = MemoryHost::default();
+  let key_dep = fk(410);
+  let key_mid = fk(411);
+  let key_root = fk(412);
+  let key_entry = fk(413);
+  host.insert(key_dep.clone(), "export const foo: number = 1;");
+  host.insert(key_mid.clone(), "export { foo as \"a-b\" } from \"./dep\";");
+  host.insert(key_root.clone(), "export * from \"./mid\";");
+  host.insert(
+    key_entry.clone(),
+    "import { \"a-b\" as bar } from \"./root\";\nbar satisfies number;\n",
+  );
+  host.link(key_mid.clone(), "./dep", key_dep.clone());
+  host.link(key_root.clone(), "./mid", key_mid.clone());
+  host.link(key_entry.clone(), "./root", key_root.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_dep = program.file_id(&key_dep).expect("dep file");
+  let file_mid = program.file_id(&key_mid).expect("mid file");
+  let file_root = program.file_id(&key_root).expect("root file");
+  let file_entry = program.file_id(&key_entry).expect("entry file");
+
+  let exports_dep = program.exports_of(file_dep);
+  let foo = exports_dep.get("foo").expect("foo export in dep");
+  assert!(foo.def.is_some());
+  let foo_ty = foo.type_id.expect("type for foo");
+  assert_eq!(program.display_type(foo_ty).to_string(), "number");
+
+  let exports_mid = program.exports_of(file_mid);
+  let mid_entry = exports_mid.get("a-b").expect("a-b export in mid");
+  assert!(mid_entry.def.is_none());
+  let mid_ty = mid_entry.type_id.expect("type for a-b in mid");
+  assert_eq!(program.display_type(mid_ty).to_string(), "number");
+
+  let exports_root = program.exports_of(file_root);
+  let root_entry = exports_root.get("a-b").expect("a-b export in root");
+  assert!(root_entry.def.is_none());
+  let root_ty = root_entry.type_id.expect("type for a-b in root");
+  assert_eq!(program.display_type(root_ty).to_string(), "number");
+
+  let bar_def = program
+    .definitions_in_file(file_entry)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("bar"))
+    .expect("imported bar def");
+  let bar_ty = program.type_of_def_interned(bar_def);
+  assert_eq!(program.display_type(bar_ty).to_string(), "number");
+}
+
+#[test]
 fn default_export_has_type() {
   let mut host = MemoryHost::default();
   let key = FileKey::new("default.ts");
