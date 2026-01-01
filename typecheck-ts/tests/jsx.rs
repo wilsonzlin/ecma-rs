@@ -508,3 +508,26 @@ declare namespace JSX {
     "expected no diagnostics for ElementChildrenAttribute, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn qualified_jsx_element_return_type_is_resolved() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo(): JSX.Element { return null as any; }
+const ok = <Foo />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+}

@@ -3706,18 +3706,29 @@ impl QuerySpan {
 struct DeclTypeResolver {
   file: FileId,
   defs: Arc<HashMap<(FileId, String), DefId>>,
+  qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
   by_name: HashMap<String, DefId>,
 }
 
 impl DeclTypeResolver {
-  fn new(file: FileId, defs: Arc<HashMap<(FileId, String), DefId>>) -> Self {
+  fn new(
+    file: FileId,
+    defs: Arc<HashMap<(FileId, String), DefId>>,
+    qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
+  ) -> Self {
     let mut by_name = HashMap::new();
-    for ((_, name), def) in defs.iter() {
-      by_name.entry(name.clone()).or_insert(*def);
+    let mut ordered: Vec<(FileId, String, DefId)> = defs
+      .iter()
+      .map(|((file, name), def)| (*file, name.clone(), *def))
+      .collect();
+    ordered.sort_by(|a, b| (a.1.as_str(), a.0 .0, a.2 .0).cmp(&(b.1.as_str(), b.0 .0, b.2 .0)));
+    for (_file, name, def) in ordered.into_iter() {
+      by_name.entry(name).or_insert(def);
     }
     DeclTypeResolver {
       file,
       defs,
+      qualified_def_members,
       by_name,
     }
   }
@@ -3729,15 +3740,40 @@ impl DeclTypeResolver {
       .copied()
       .or_else(|| self.by_name.get(name).copied())
   }
+
+  fn resolve_qualified(&self, path: &[String], final_ns: sem_ts::Namespace) -> Option<DefId> {
+    let (first, rest) = path.split_first()?;
+    let mut current = self.resolve_name(first)?;
+    for (idx, segment) in rest.iter().enumerate() {
+      let is_last = idx + 1 == rest.len();
+      let ns = if is_last {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      };
+      current = *self
+        .qualified_def_members
+        .get(&(current, segment.clone(), ns))?;
+    }
+    Some(current)
+  }
 }
 
 impl TypeResolver for DeclTypeResolver {
   fn resolve_type_name(&self, path: &[String]) -> Option<tti::DefId> {
-    path.last().and_then(|name| self.resolve_name(name))
+    if path.len() < 2 {
+      path.last().and_then(|name| self.resolve_name(name))
+    } else {
+      self.resolve_qualified(path, sem_ts::Namespace::TYPE)
+    }
   }
 
   fn resolve_typeof(&self, path: &[String]) -> Option<tti::DefId> {
-    self.resolve_type_name(path)
+    if path.len() < 2 {
+      self.resolve_type_name(path)
+    } else {
+      self.resolve_qualified(path, sem_ts::Namespace::VALUE)
+    }
   }
 }
 
@@ -5787,7 +5823,11 @@ impl ProgramState {
     let mut sigs_by_name: HashMap<(FileId, String), Vec<(tti::SignatureId, bool)>> = HashMap::new();
     let mut def_type_params: HashMap<DefId, Vec<TypeParamId>> = HashMap::new();
     for (file, ast) in ast_entries.into_iter() {
-      let resolver = Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
+      let resolver = Arc::new(DeclTypeResolver::new(
+        file,
+        Arc::clone(&resolver_defs),
+        Arc::clone(&self.qualified_def_members),
+      ));
       for stmt in ast.stx.body.iter() {
         let Stmt::FunctionDecl(func) = stmt.stx.as_ref() else {
           continue;
