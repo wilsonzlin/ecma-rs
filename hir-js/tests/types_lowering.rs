@@ -628,10 +628,8 @@ fn union_dedups_type_predicate_function_types_ignoring_param_names() {
 
 #[test]
 fn union_dedups_duplicate_constructor_types() {
-  let result = lower_from_source(
-    "type A = (new (x: string) => Foo) | (new (y: string) => Foo);",
-  )
-  .expect("lower");
+  let result = lower_from_source("type A = (new (x: string) => Foo) | (new (y: string) => Foo);")
+    .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -673,9 +671,8 @@ fn union_dedups_duplicate_template_literal_types() {
 
 #[test]
 fn union_dedups_duplicate_mapped_types() {
-  let result =
-    lower_from_source("type A = { [K in keyof T]: T[K] } | { [K in keyof T]: T[K] };")
-      .expect("lower");
+  let result = lower_from_source("type A = { [K in keyof T]: T[K] } | { [K in keyof T]: T[K] };")
+    .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
