@@ -1578,9 +1578,14 @@ impl<'a> Checker<'a> {
         self.member_type(obj_ty, &mem.stx.right)
       }
       AstExpr::ComputedMember(mem) => {
+        let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.object);
         let _ = self.check_expr(&mem.stx.member);
-        self.member_type(obj_ty, "<computed>")
+        let mut ty = self.member_type(obj_ty, "<computed>");
+        if self.relate.options.no_unchecked_indexed_access {
+          ty = self.store.union(vec![ty, prim.undefined]);
+        }
+        ty
       }
       AstExpr::LitArr(arr) => self.array_literal_type(arr),
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
@@ -4774,13 +4779,20 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
-        let prop_ty = if let Some(binding) = self.ident_binding(mem.object) {
-          let key = FlowKey::root(binding).with_segment(PathSegment::String(self.member_key(mem)));
-          env
-            .get_path(&key)
-            .unwrap_or_else(|| self.member_type(obj_ty, &mem))
-        } else {
-          self.member_type(obj_ty, &mem)
+        if let ObjectKey::Computed(expr) = &mem.property {
+          let _ = self.eval_expr(*expr, env);
+        }
+        let prop_ty = match (
+          self.ident_binding(mem.object),
+          self.member_property_name(&mem.property),
+        ) {
+          (Some(binding), Some(prop)) => {
+            let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
+            env
+              .get_path(&key)
+              .unwrap_or_else(|| self.member_type(obj_ty, mem))
+          }
+          _ => self.member_type(obj_ty, mem),
         };
         if mem.optional {
           if let Some(name) = self.optional_chain_root(mem.object) {
@@ -5556,13 +5568,10 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
-        let prop_ty = match &mem.property {
-          ObjectKey::Computed(prop) => {
-            let _ = self.eval_expr(*prop, env);
-            prim.unknown
-          }
-          _ => self.member_type(obj_ty, mem),
-        };
+        if let ObjectKey::Computed(prop) = &mem.property {
+          let _ = self.eval_expr(*prop, env);
+        }
+        let prop_ty = self.member_type(obj_ty, mem);
         let root = self.assignment_target_root_expr(mem.object);
         (
           prop_ty,
@@ -6028,50 +6037,227 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn member_type(&mut self, obj: TypeId, mem: &MemberExpr) -> TypeId {
-    let ty = match &mem.property {
+    let prim = self.store.primitive_ids();
+
+    let mut ty = match &mem.property {
       ObjectKey::Computed(expr) => {
-        let _ = self.eval_expr(*expr, &mut Env::new());
-        None
+        let key_ty = self.expr_types[expr.0 as usize];
+        let literal_key = self
+          .literal_value(*expr)
+          .and_then(|lit| match lit {
+            LiteralValue::String(s) | LiteralValue::Number(s) => Some(s),
+            _ => None,
+          })
+          .or_else(|| match self.store.type_kind(key_ty) {
+            TypeKind::StringLiteral(id) => Some(self.store.name(id)),
+            TypeKind::NumberLiteral(num) => Some(num.0.to_string()),
+            _ => None,
+          });
+
+        if let Some(key) = literal_key {
+          self.member_type_for_known_key(obj, &key)
+        } else {
+          self.member_type_for_index_key(obj, key_ty)
+        }
       }
       _ => {
-        let key = self.member_key(mem);
-        let ty = match self.store.type_kind(obj) {
-          TypeKind::Ref { def, args } => {
-            let expanded = self
-              .ref_expander
-              .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args));
-            if std::env::var("DEBUG_MEMBER").is_ok() {
-              eprintln!(
-                "DEBUG_MEMBER lookup {:?} expanded {:?}",
-                def,
-                expanded
-                  .as_ref()
-                  .map(|ty| self.store.type_kind(*ty).clone())
-              );
-            }
-            expanded.and_then(|expanded| self.object_prop_type(expanded, &key))
-          }
-          _ => self.object_prop_type(obj, &key),
+        let Some(key) = self.member_property_name(&mem.property) else {
+          return prim.unknown;
         };
-        if ty.is_none() && std::env::var("DEBUG_MEMBER").is_ok() {
-          eprintln!(
-            "DEBUG_MEMBER missing property {} on {:?}",
-            key,
-            self.store.type_kind(obj)
-          );
-        }
-        ty
+        self.member_type_for_known_key(obj, &key)
       }
     };
-    ty.unwrap_or_else(|| self.store.primitive_ids().unknown)
+
+    if matches!(
+      mem.property,
+      ObjectKey::Computed(_) | ObjectKey::String(_) | ObjectKey::Number(_)
+    ) && self.relate.options.no_unchecked_indexed_access
+    {
+      ty = self.store.union(vec![ty, prim.undefined]);
+    }
+
+    ty
   }
 
-  fn member_key(&self, mem: &MemberExpr) -> String {
-    match &mem.property {
-      ObjectKey::Ident(id) => self.hir_name(*id),
-      ObjectKey::String(s) => s.clone(),
-      ObjectKey::Number(n) => n.clone(),
-      ObjectKey::Computed(_) => String::new(),
+  fn member_type_for_known_key(&self, obj: TypeId, key: &str) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(obj) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_known_key(member, key));
+        }
+        self.store.union(collected)
+      }
+      TypeKind::Intersection(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_known_key(member, key));
+        }
+        self.store.intersection(collected)
+      }
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.member_type_for_known_key(expanded, key))
+        .unwrap_or(prim.unknown),
+      TypeKind::Tuple(elems) => match key.parse::<usize>() {
+        Ok(idx) => {
+          let options = self.relate.options;
+          if let Some(elem) = elems.get(idx) {
+            let mut ty = elem.ty;
+            if elem.optional && !options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            ty
+          } else {
+            prim.undefined
+          }
+        }
+        Err(_) => {
+          let Ok(parsed) = key.parse::<f64>() else {
+            return prim.unknown;
+          };
+          if parsed.fract() != 0.0 || parsed < 0.0 {
+            return prim.unknown;
+          }
+          let idx = parsed as usize;
+          let options = self.relate.options;
+          if let Some(elem) = elems.get(idx) {
+            let mut ty = elem.ty;
+            if elem.optional && !options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            ty
+          } else {
+            prim.undefined
+          }
+        }
+      },
+      _ => self.object_prop_type(obj, key).unwrap_or(prim.unknown),
+    }
+  }
+
+  fn member_type_for_index_key(&self, obj: TypeId, key_ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let key_ty = self.store.canon(key_ty);
+
+    match self.store.type_kind(key_ty) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(obj, member));
+        }
+        return self.store.union(collected);
+      }
+      TypeKind::Intersection(members) => {
+        // Keep this conservative: treat intersections of key types similarly to unions.
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(obj, member));
+        }
+        return self.store.union(collected);
+      }
+      _ => {}
+    }
+
+    match self.store.type_kind(obj) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(member, key_ty));
+        }
+        self.store.union(collected)
+      }
+      TypeKind::Intersection(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          collected.push(self.member_type_for_index_key(member, key_ty));
+        }
+        self.store.intersection(collected)
+      }
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.member_type_for_index_key(expanded, key_ty))
+        .unwrap_or(prim.unknown),
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        let mut matches = Vec::new();
+        for idx in shape.indexers.iter() {
+          if self.indexer_key_matches(idx.key_type, key_ty) {
+            matches.push(idx.value_type);
+          }
+        }
+        if matches.is_empty() {
+          prim.unknown
+        } else if matches.len() == 1 {
+          matches[0]
+        } else {
+          matches.sort_by(|a, b| self.store.type_cmp(*a, *b));
+          matches.dedup();
+          self.store.union(matches)
+        }
+      }
+      TypeKind::Array { ty, .. } => {
+        if self.relate.is_assignable(key_ty, prim.number) {
+          ty
+        } else {
+          prim.unknown
+        }
+      }
+      TypeKind::Tuple(elems) => match self.store.type_kind(key_ty) {
+        TypeKind::NumberLiteral(num) => {
+          let raw = num.0;
+          if raw.fract() != 0.0 || raw < 0.0 {
+            return prim.unknown;
+          }
+          let idx = raw as usize;
+          if let Some(elem) = elems.get(idx) {
+            let mut ty = elem.ty;
+            if elem.optional && !self.relate.options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            ty
+          } else {
+            prim.undefined
+          }
+        }
+        _ => {
+          if !self.relate.is_assignable(key_ty, prim.number) {
+            return prim.unknown;
+          }
+          let mut members = Vec::new();
+          for elem in elems {
+            let mut ty = elem.ty;
+            if elem.optional && !self.relate.options.exact_optional_property_types {
+              ty = self.store.union(vec![ty, prim.undefined]);
+            }
+            members.push(ty);
+          }
+          self.store.union(members)
+        }
+      },
+      _ => prim.unknown,
+    }
+  }
+
+  fn indexer_key_matches(&self, indexer_key: TypeId, key_ty: TypeId) -> bool {
+    if self.relate.is_assignable(key_ty, indexer_key) {
+      return true;
+    }
+
+    match self.store.type_kind(indexer_key) {
+      TypeKind::String | TypeKind::StringLiteral(_) => {
+        matches!(
+          self.store.type_kind(key_ty),
+          TypeKind::Number | TypeKind::NumberLiteral(_)
+        )
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .any(|member| self.indexer_key_matches(*member, key_ty)),
+      _ => false,
     }
   }
 

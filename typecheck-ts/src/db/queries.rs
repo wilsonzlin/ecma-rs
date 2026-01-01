@@ -2156,10 +2156,22 @@ pub(crate) fn var_initializer_in_file(
     }
   }
 
-  let mut best: Option<(u64, (usize, usize, usize, usize, u32), VarInit)> = None;
+  // Prefer initializer bodies over containing statements when multiple HIR bodies contain the same
+  // initializer span (e.g. the main `TopLevel` body and the synthesized `Initializer` body). Using
+  // the initializer body yields more deterministic typing: external bindings can be seeded from
+  // the ambient environment rather than relying on flow state built up by earlier statements in
+  // the top-level body.
+  let mut best: Option<((u8, u64), (usize, usize, usize, usize, u32), VarInit)> = None;
 
   for (body_order, (body_id, _)) in lowered.body_index.iter().enumerate() {
     let body = lowered.body(*body_id)?;
+    let body_kind_rank = match body.kind {
+      hir_js::BodyKind::Initializer => 0,
+      hir_js::BodyKind::TopLevel => 1,
+      hir_js::BodyKind::Function => 2,
+      hir_js::BodyKind::Class => 3,
+      hir_js::BodyKind::Unknown => 4,
+    };
     for (stmt_idx, stmt) in body.stmts.iter().enumerate() {
       let decl = match &stmt.kind {
         StmtKind::Var(decl) => decl,
@@ -2171,13 +2183,33 @@ pub(crate) fn var_initializer_in_file(
         };
         if let Some(found_pat) = find_pat_by_span(body, declarator.pat, def_span) {
           let span = body.pats.get(found_pat.0 as usize).map(|p| p.span)?;
-          return Some(VarInit {
+          let candidate = VarInit {
             body: *body_id,
             expr,
             decl_kind: decl.kind,
             pat: Some(found_pat),
             span: Some(span),
-          });
+          };
+          let key = (
+            (body_kind_rank, 0),
+            (
+              body_order,
+              stmt_idx,
+              decl_idx,
+              // `found_pat` is an exact span match, so traversal order is irrelevant; keep the
+              // key stable by using `0` here and breaking ties with the pat id.
+              0,
+              found_pat.0,
+            ),
+          );
+          let replace = best
+            .as_ref()
+            .map(|current| key < (current.0, current.1))
+            .unwrap_or(true);
+          if replace {
+            best = Some((key.0, key.1, candidate));
+          }
+          continue;
         }
 
         let Some(name) = def_name else {
@@ -2196,7 +2228,7 @@ pub(crate) fn var_initializer_in_file(
         for (candidate_pat, span, traversal_idx) in candidates {
           let dist = span_distance(span, def_span);
           let key = (
-            dist,
+            (body_kind_rank, dist),
             (
               body_order,
               stmt_idx,
@@ -2217,17 +2249,7 @@ pub(crate) fn var_initializer_in_file(
             .map(|current| key < (current.0, current.1))
             .unwrap_or(true);
           if replace {
-            best = Some((
-              dist,
-              (
-                body_order,
-                stmt_idx,
-                decl_idx,
-                traversal_idx,
-                candidate_pat.0,
-              ),
-              candidate,
-            ));
+            best = Some((key.0, key.1, candidate));
           }
         }
       }

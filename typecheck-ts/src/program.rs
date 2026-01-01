@@ -10009,7 +10009,15 @@ impl ProgramState {
             let Some(locals) = local_semantics else {
               continue;
             };
-            let Some(binding_id) = locals.resolve_expr(body, hir_js::ExprId(idx as u32)) else {
+            let expr_id = hir_js::ExprId(idx as u32);
+            // Prefer the precomputed flow binding table since it includes span-based fallbacks for
+            // synthesized bodies (e.g. initializer bodies) where the exact expression span might
+            // not match the locals binder key.
+            let binding_id = flow_bindings
+              .as_ref()
+              .and_then(|bindings| bindings.binding_for_expr(expr_id))
+              .or_else(|| locals.resolve_expr(body, expr_id));
+            let Some(binding_id) = binding_id else {
               continue;
             };
             let symbol = locals.symbol(binding_id);
@@ -11424,18 +11432,39 @@ impl ProgramState {
           if is_param_def {
             return Ok(self.param_type_for_def(def, def_data.file)?);
           }
-          let init = self.var_initializer(def);
-          let decl_kind =
-            init
-              .as_ref()
-              .map(|init| init.decl_kind)
-              .unwrap_or_else(|| match var.mode {
-                VarDeclMode::Var => HirVarDeclKind::Var,
-                VarDeclMode::Let => HirVarDeclKind::Let,
-                VarDeclMode::Const => HirVarDeclKind::Const,
-                VarDeclMode::Using => HirVarDeclKind::Using,
-                VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
-              });
+          fn pat_for_span(state: &ProgramState, body_id: BodyId, span: TextRange) -> Option<PatId> {
+            let meta = state.body_map.get(&body_id)?;
+            let hir_id = meta.hir?;
+            let lowered = state.hir_lowered.get(&meta.file)?;
+            let body = lowered.body(hir_id)?;
+            body
+              .pats
+              .iter()
+              .enumerate()
+              .find_map(|(idx, pat)| (pat.span == span).then_some(PatId(idx as u32)))
+          }
+
+          let mode_decl_kind = match var.mode {
+            VarDeclMode::Var => HirVarDeclKind::Var,
+            VarDeclMode::Let => HirVarDeclKind::Let,
+            VarDeclMode::Const => HirVarDeclKind::Const,
+            VarDeclMode::Using => HirVarDeclKind::Using,
+            VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
+          };
+          let init = self.var_initializer(def).or_else(|| {
+            if var.body.0 == u32::MAX {
+              return None;
+            }
+            let expr = var.init?;
+            Some(VarInit {
+              body: var.body,
+              expr,
+              decl_kind: mode_decl_kind,
+              pat: pat_for_span(self, var.body, def_data.span),
+              span: Some(def_data.span),
+            })
+          });
+          let decl_kind = init.as_ref().map(|init| init.decl_kind).unwrap_or(mode_decl_kind);
           let mut init_span_for_const = None;
           let mut init_pat_is_root = true;
           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
