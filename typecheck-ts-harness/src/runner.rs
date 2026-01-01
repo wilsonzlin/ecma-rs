@@ -572,12 +572,12 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   }
 
   let job_count = opts.jobs.max(1);
-  let timeout_manager = Arc::new(TimeoutManager::new());
+  let timeout_manager = TimeoutManager::new();
   let needs_live_tsc = tsc_available
     && (compare_mode == CompareMode::Tsc
       || (opts.update_snapshots && compare_mode == CompareMode::Snapshot));
-  let tsc_pool =
-    needs_live_tsc.then(|| Arc::new(TscRunnerPool::new(opts.node_path.clone(), job_count)));
+  let tsc_pool = needs_live_tsc.then(|| TscRunnerPool::new(opts.node_path.clone(), job_count));
+  let tsc_pool_ref = tsc_pool.as_ref();
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -600,8 +600,8 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
             Ok(case) => run_single_case(
               case,
               compare_mode,
-              tsc_pool.clone(),
-              timeout_manager.clone(),
+              tsc_pool_ref,
+              &timeout_manager,
               tsc_available,
               &snapshot_store,
               &opts,
@@ -946,8 +946,8 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
 fn run_single_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_pool: Option<Arc<TscRunnerPool>>,
-  timeout_manager: Arc<TimeoutManager>,
+  tsc_pool: Option<&TscRunnerPool>,
+  timeout_manager: &TimeoutManager,
   tsc_available: bool,
   snapshots: &SnapshotStore,
   opts: &ConformanceOptions,
@@ -962,7 +962,7 @@ fn run_single_case(
     compare_mode,
     tsc_pool,
     tsc_available,
-    snapshots.clone(),
+    snapshots,
     opts.span_tolerance,
     opts.update_snapshots,
     opts.profile,
@@ -976,9 +976,9 @@ fn run_single_case(
 fn execute_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_pool: Option<Arc<TscRunnerPool>>,
+  tsc_pool: Option<&TscRunnerPool>,
   tsc_available: bool,
-  snapshots: SnapshotStore,
+  snapshots: &SnapshotStore,
   span_tolerance: u32,
   update_snapshots: bool,
   collect_query_stats: bool,
@@ -1044,7 +1044,7 @@ fn execute_case(
     if !tsc_available {
       return Some(EngineDiagnostics::crashed(unavailable));
     }
-    let Some(tsc_pool) = tsc_pool.as_deref() else {
+    let Some(tsc_pool) = tsc_pool else {
       return Some(EngineDiagnostics::crashed(
         "tsc pool unavailable".to_string(),
       ));
