@@ -1,5 +1,7 @@
 # Contributing
 
+This repository pins the Rust toolchain (including `rustfmt`) via `rust-toolchain.toml` so formatting output is reproducible across CI and developer machines. If `cargo fmt --all --check` fails unexpectedly, ensure you're using the pinned toolchain.
+
 This workspace is kept warning-free and treats `Cargo.lock` as a generated artifact (the repository is a library workspace). CI regenerates the lockfile and runs with `--locked`; generate one locally before running the same checks:
 
 - `cargo generate-lockfile` (untracked because `Cargo.lock` is gitignored)
