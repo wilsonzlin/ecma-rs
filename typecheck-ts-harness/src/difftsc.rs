@@ -1681,6 +1681,7 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
   entries.sort_by_key(|entry| entry.file_name());
 
   let mut tests = Vec::new();
+  let mut sources: HashMap<String, Vec<PathBuf>> = HashMap::new();
 
   for entry in entries {
     let path = entry.path();
@@ -1690,10 +1691,12 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
         .and_then(|n| n.to_str())
         .context("test directory missing name")?
         .to_string();
+      sources.entry(name.clone()).or_default().push(path.clone());
       let files = collect_files_recursively(&path)?;
       tests.push(TestCase { name, files });
     } else if is_source_file(&path) {
       let name = test_name_from_path(&path)?;
+      sources.entry(name.clone()).or_default().push(path.clone());
       let content =
         read_utf8_file(&path).with_context(|| format!("read test file {}", path.display()))?;
       tests.push(TestCase {
@@ -1707,6 +1710,41 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
         }],
       });
     }
+  }
+
+  let mut duplicates: Vec<_> = sources
+    .into_iter()
+    .filter(|(_, paths)| paths.len() > 1)
+    .collect();
+
+  if !duplicates.is_empty() {
+    duplicates.sort_by(|(a, _), (b, _)| a.cmp(b));
+    let mut message = String::new();
+    let _ = writeln!(
+      &mut message,
+      "duplicate difftsc test name(s) in suite `{}`",
+      suite_path.display()
+    );
+    let _ = writeln!(
+      &mut message,
+      "baselines are stored as `baselines/<suite>/<name>.json`, so names must be unique."
+    );
+    for (name, mut paths) in duplicates {
+      paths.sort();
+      let _ = writeln!(&mut message, "");
+      let _ = writeln!(&mut message, "name `{name}` is used by:");
+      for path in paths {
+        let relative = path.strip_prefix(suite_path).unwrap_or(&path);
+        let suffix = if path.is_dir() { "/" } else { "" };
+        let _ = writeln!(&mut message, "  - {}{suffix}", relative.display());
+      }
+    }
+    let _ = writeln!(&mut message, "");
+    let _ = writeln!(
+      &mut message,
+      "Rename one test or move it into a subdirectory to disambiguate."
+    );
+    return Err(anyhow!(message));
   }
 
   Ok(tests)
@@ -1882,6 +1920,23 @@ mod tests {
     assert_eq!(tests[0].name, "multi");
     assert_eq!(tests[0].files.len(), 2);
     assert_eq!(tests[1].name, "one");
+  }
+
+  #[test]
+  fn errors_on_duplicate_test_names() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.ts"), "const x = 1;").unwrap();
+    fs::write(dir.path().join("a.d.ts"), "declare const x: number;").unwrap();
+
+    let error = collect_tests(dir.path()).unwrap_err().to_string();
+    assert!(error.contains("duplicate difftsc test name"), "{error}");
+    assert!(error.contains("a.ts"), "{error}");
+    assert!(error.contains("a.d.ts"), "{error}");
+    assert!(
+      error.to_lowercase().contains("rename one test")
+        || error.to_lowercase().contains("move it into a subdirectory"),
+      "{error}"
+    );
   }
 
   #[test]

@@ -208,9 +208,10 @@ the suite name (e.g. `difftsc/assignability`).
 - Fixtures live under `fixtures/<suite>/`:
   - Single-file tests are `<name>.ts/tsx/js/...`
   - Multi-file tests are directories (all TS/JS files inside are included).
-  - Test names come from the file stem or directory name.
-- Baselines live under `baselines/<suite>/<test>.json` (the test id plus `.json`,
-  so single-file tests become e.g. `<name>.ts.json`).
+  - Test names come from the file stem or directory name and must be unique within
+    a suite (for example, avoid both `foo.ts` and `foo.d.ts` at the suite root).
+- Baselines live under `baselines/<suite>/<test>.json` (the derived test name plus
+  `.json`, so single-file tests become e.g. `<name>.json`).
 - Baselines carry a schema version plus the `typescript` version/options used to
   generate them.
 - To add/update tests:
