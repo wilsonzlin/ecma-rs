@@ -603,13 +603,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         })
       }
       TypeExprKind::TypeLiteral(obj) => {
-        let mut shape = Shape::new();
-        for member in obj.members.iter() {
-          self.lower_member(&mut shape, *member, names);
+        if obj.members.is_empty() {
+          self.store.intern_type(TypeKind::EmptyObject)
+        } else {
+          let mut shape = Shape::new();
+          for member in obj.members.iter() {
+            self.lower_member(&mut shape, *member, names);
+          }
+          let shape_id = self.store.intern_shape(shape);
+          let obj = self.store.intern_object(ObjectType { shape: shape_id });
+          self.store.intern_type(TypeKind::Object(obj))
         }
-        let shape_id = self.store.intern_shape(shape);
-        let obj = self.store.intern_object(ObjectType { shape: shape_id });
-        self.store.intern_type(TypeKind::Object(obj))
       }
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(inner, names),
       TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names),

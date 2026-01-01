@@ -191,6 +191,45 @@ fn lowers_empty_object_type_literal() {
 }
 
 #[test]
+fn hir_decl_lowering_lowers_empty_object_type_literal() {
+  let source = "type T = {};";
+  let lowered = lower_from_source(source).expect("lowering should succeed");
+  let alias = lowered
+    .defs
+    .iter()
+    .find(|def| matches!(def.type_info, Some(DefTypeInfo::TypeAlias { .. })))
+    .expect("type alias");
+
+  let store = TypeStore::new();
+  let mut diagnostics: Vec<Diagnostic> = Vec::new();
+  let mut lowerer = HirDeclLowerer::new(
+    store.clone(),
+    &lowered.types,
+    None,
+    HashMap::new(),
+    alias.path.module,
+    None,
+    HashMap::new(),
+    &mut diagnostics,
+    None,
+    None,
+    None,
+    None,
+    None,
+    None,
+  );
+  let (ty, _) =
+    lowerer.lower_type_info(alias.id, alias.type_info.as_ref().unwrap(), &lowered.names);
+
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
+  assert!(matches!(store.type_kind(ty), TypeKind::EmptyObject));
+}
+
+#[test]
 fn captures_type_predicate_details() {
   let alias = parse_type_alias("type Pred = (value: unknown) => value is string;");
   let store = TypeStore::new();
