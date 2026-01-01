@@ -644,6 +644,7 @@ pub fn check_body_with_expander(
     scopes: vec![Scope::default()],
     namespace_scopes: HashMap::new(),
     expected_return: None,
+    in_async_function: false,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
     no_implicit_any,
@@ -741,6 +742,7 @@ struct Checker<'a> {
   scopes: Vec<Scope>,
   namespace_scopes: HashMap<String, Scope>,
   expected_return: Option<TypeId>,
+  in_async_function: bool,
   check_var_assignments: bool,
   widen_object_literals: bool,
   no_implicit_any: bool,
@@ -851,6 +853,7 @@ impl<'a> Checker<'a> {
       self.check_cancelled();
       let func_node = unsafe { &*func.func };
       let prev_return = self.expected_return;
+      let prev_async = self.in_async_function;
       let mut type_param_decls = Vec::new();
       let mut has_type_params = false;
       if let Some(params) = func_node.stx.type_parameters.as_ref() {
@@ -864,14 +867,19 @@ impl<'a> Checker<'a> {
         .return_type
         .as_ref()
         .map(|ret| self.lowerer.lower_type_expr(ret));
-      self.expected_return =
-        annotated_return.or_else(|| contextual_sig.as_ref().map(|sig| sig.ret));
+      self.in_async_function = func_node.stx.async_;
+      let mut expected = annotated_return.or_else(|| contextual_sig.as_ref().map(|sig| sig.ret));
+      if func_node.stx.async_ {
+        expected = expected.map(|ty| awaited_type(self.store.as_ref(), ty, self.ref_expander));
+      }
+      self.expected_return = expected;
       self.bind_params(func_node, &type_param_decls, contextual_sig.as_ref());
       self.check_function_body(func_node);
       if has_type_params {
         self.lowerer.pop_type_param_scope();
       }
       self.expected_return = prev_return;
+      self.in_async_function = prev_async;
       return true;
     }
     false
@@ -1101,7 +1109,12 @@ impl<'a> Checker<'a> {
         self.check_stmt_list(block);
       }
       Some(FuncBody::Expression(expr)) => {
-        let ty = self.check_expr(expr);
+        let expr_ty = self.check_expr(expr);
+        let ty = if self.in_async_function {
+          awaited_type(self.store.as_ref(), expr_ty, self.ref_expander)
+        } else {
+          expr_ty
+        };
         if let Some(expected) = self.expected_return {
           self.check_assignable(expr, ty, expected);
         }
@@ -1137,12 +1150,17 @@ impl<'a> Checker<'a> {
         self.check_expr(&default_expr.stx.expression);
       }
       Stmt::Return(ret) => {
-        let ty = ret
+        let expr_ty = ret
           .stx
           .value
           .as_ref()
           .map(|v| self.check_expr(v))
           .unwrap_or(self.store.primitive_ids().undefined);
+        let ty = if self.in_async_function {
+          awaited_type(self.store.as_ref(), expr_ty, self.ref_expander)
+        } else {
+          expr_ty
+        };
         if let (Some(expected), Some(value)) = (self.expected_return, ret.stx.value.as_ref()) {
           self.check_assignable(value, ty, expected);
         }
@@ -2987,6 +3005,10 @@ impl<'a> Checker<'a> {
       OperatorName::UnaryPlus | OperatorName::UnaryNegation | OperatorName::BitwiseNot => {
         self.store.primitive_ids().number
       }
+      OperatorName::Await => {
+        let inner = self.check_expr(arg);
+        awaited_type(self.store.as_ref(), inner, self.ref_expander)
+      }
       OperatorName::Typeof => self.store.primitive_ids().string,
       OperatorName::Void => self.store.primitive_ids().undefined,
       _ => {
@@ -3168,9 +3190,15 @@ impl<'a> Checker<'a> {
     let expected_sig = self.first_callable_signature(expected)?;
 
     let saved_expected = self.expected_return;
+    let saved_async = self.in_async_function;
     let saved_returns = std::mem::take(&mut self.return_types);
 
-    self.expected_return = Some(expected_sig.ret);
+    self.in_async_function = func.stx.async_;
+    self.expected_return = Some(if func.stx.async_ {
+      awaited_type(self.store.as_ref(), expected_sig.ret, self.ref_expander)
+    } else {
+      expected_sig.ret
+    });
     self.scopes.push(Scope::default());
     self.bind_params(func, &[], Some(&expected_sig));
     self.check_function_body(func);
@@ -3185,9 +3213,14 @@ impl<'a> Checker<'a> {
 
     self.return_types = saved_returns;
     self.expected_return = saved_expected;
+    self.in_async_function = saved_async;
 
     let mut instantiated = expected_sig;
-    instantiated.ret = inferred_ret;
+    instantiated.ret = if func.stx.async_ {
+      self.async_function_return_type(inferred_ret)
+    } else {
+      inferred_ret
+    };
     let sig_id = self.store.intern_signature(instantiated);
     Some(self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
@@ -3382,6 +3415,21 @@ impl<'a> Checker<'a> {
     }
   }
 
+  fn promise_type(&self, inner: TypeId) -> Option<TypeId> {
+    let resolver = self.type_resolver.as_ref()?;
+    let def = resolver.resolve_type_name(&["Promise".to_string()])?;
+    Some(self.store.canon(self.store.intern_type(TypeKind::Ref {
+      def,
+      args: vec![inner],
+    })))
+  }
+
+  fn async_function_return_type(&self, ret: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let inner = awaited_type(self.store.as_ref(), ret, self.ref_expander);
+    self.promise_type(inner).unwrap_or(prim.unknown)
+  }
+
   fn function_type(&mut self, func: &Node<Func>) -> TypeId {
     let mut type_params = Vec::new();
     let pushed_type_params = func.stx.type_parameters.is_some();
@@ -3417,6 +3465,11 @@ impl<'a> Checker<'a> {
       .as_ref()
       .map(|t| self.lowerer.lower_type_expr(t))
       .unwrap_or(self.store.primitive_ids().unknown);
+    let ret = if func.stx.async_ {
+      self.async_function_return_type(ret)
+    } else {
+      ret
+    };
     if pushed_type_params {
       self.lowerer.pop_type_param_scope();
     }
@@ -3778,6 +3831,192 @@ fn parse_canonical_index_str(s: &str) -> Option<i64> {
   } else {
     None
   }
+}
+
+fn awaited_type(
+  store: &TypeStore,
+  ty: TypeId,
+  ref_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+) -> TypeId {
+  struct AwaitedTypeCalc<'a> {
+    store: &'a TypeStore,
+    ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
+    awaited_stack: HashSet<TypeId>,
+    thenable_stack: HashSet<TypeId>,
+    then_name: types_ts_interned::NameId,
+  }
+
+  impl<'a> AwaitedTypeCalc<'a> {
+    const MAX_DEPTH: usize = 32;
+
+    fn awaited(&mut self, ty: TypeId, depth: usize) -> TypeId {
+      let ty = self.store.canon(ty);
+      if depth > Self::MAX_DEPTH {
+        return ty;
+      }
+      if !self.awaited_stack.insert(ty) {
+        return ty;
+      }
+      let prim = self.store.primitive_ids();
+      let out = match self.store.type_kind(ty) {
+        TypeKind::Any | TypeKind::Unknown | TypeKind::Never => ty,
+        TypeKind::Union(members) => {
+          let mapped: Vec<_> = members
+            .iter()
+            .copied()
+            .map(|member| self.awaited(member, depth + 1))
+            .collect();
+          self.store.union(mapped)
+        }
+        _ => match self.thenable_resolved(ty, depth + 1) {
+          Some(resolved) => self.awaited(resolved, depth + 1),
+          None => ty,
+        },
+      };
+      self.awaited_stack.remove(&ty);
+      if out == prim.never {
+        prim.never
+      } else {
+        out
+      }
+    }
+
+    fn thenable_resolved(&mut self, ty: TypeId, depth: usize) -> Option<TypeId> {
+      let ty = self.store.canon(ty);
+      if depth > Self::MAX_DEPTH {
+        return None;
+      }
+      if !self.thenable_stack.insert(ty) {
+        return None;
+      }
+      let out = match self.store.type_kind(ty) {
+        TypeKind::Ref { def, args } => self
+          .ref_expander
+          .and_then(|expander| expander.expand_ref(self.store, def, &args))
+          .and_then(|expanded| self.thenable_resolved(expanded, depth + 1)),
+        TypeKind::Object(obj) => self.thenable_from_object(obj, depth + 1),
+        TypeKind::Intersection(members) => {
+          let mut resolved = Vec::new();
+          for member in members.iter().copied() {
+            if let Some(inner) = self.thenable_resolved(member, depth + 1) {
+              resolved.push(inner);
+            }
+          }
+          match resolved.len() {
+            0 => None,
+            1 => resolved.into_iter().next(),
+            _ => Some(self.store.intersection(resolved)),
+          }
+        }
+        _ => None,
+      };
+      self.thenable_stack.remove(&ty);
+      out
+    }
+
+    fn thenable_from_object(&mut self, obj: types_ts_interned::ObjectId, depth: usize) -> Option<TypeId> {
+      let shape = self.store.shape(self.store.object(obj).shape);
+      let then_prop = shape.properties.iter().find(|prop| match prop.key {
+        PropKey::String(name) => name == self.then_name,
+        _ => false,
+      })?;
+      let then_ty = then_prop.data.ty;
+      let mut then_sigs = Vec::new();
+      self.collect_call_signatures(then_ty, &mut then_sigs, &mut HashSet::new(), depth + 1);
+      if then_sigs.is_empty() {
+        return None;
+      }
+      then_sigs.sort();
+      then_sigs.dedup();
+
+      let prim = self.store.primitive_ids();
+      let mut resolved = Vec::new();
+      for sig_id in then_sigs {
+        let sig = self.store.signature(sig_id);
+        let Some(onfulfilled) = sig.params.first() else {
+          continue;
+        };
+        let mut cb_sigs = Vec::new();
+        self.collect_call_signatures(
+          onfulfilled.ty,
+          &mut cb_sigs,
+          &mut HashSet::new(),
+          depth + 1,
+        );
+        if cb_sigs.is_empty() {
+          continue;
+        }
+        cb_sigs.sort();
+        cb_sigs.dedup();
+        let mut cb_values = Vec::new();
+        for cb_sig_id in cb_sigs {
+          let cb_sig = self.store.signature(cb_sig_id);
+          if let Some(value) = cb_sig.params.first() {
+            cb_values.push(value.ty);
+          }
+        }
+        let value_ty = match cb_values.len() {
+          0 => prim.unknown,
+          1 => cb_values[0],
+          _ => self.store.union(cb_values),
+        };
+        resolved.push(value_ty);
+      }
+      match resolved.len() {
+        0 => None,
+        1 => resolved.into_iter().next(),
+        _ => Some(self.store.union(resolved)),
+      }
+    }
+
+    fn collect_call_signatures(
+      &self,
+      ty: TypeId,
+      out: &mut Vec<types_ts_interned::SignatureId>,
+      seen: &mut HashSet<TypeId>,
+      depth: usize,
+    ) {
+      let ty = self.store.canon(ty);
+      if depth > Self::MAX_DEPTH {
+        return;
+      }
+      if !seen.insert(ty) {
+        return;
+      }
+      match self.store.type_kind(ty) {
+        TypeKind::Callable { overloads } => {
+          out.extend(overloads.iter().copied());
+        }
+        TypeKind::Object(obj) => {
+          let shape = self.store.shape(self.store.object(obj).shape);
+          out.extend(shape.call_signatures.iter().copied());
+        }
+        TypeKind::Union(members) | TypeKind::Intersection(members) => {
+          for member in members.iter().copied() {
+            self.collect_call_signatures(member, out, seen, depth + 1);
+          }
+        }
+        TypeKind::Ref { def, args } => {
+          if let Some(expander) = self.ref_expander {
+            if let Some(expanded) = expander.expand_ref(self.store, def, &args) {
+              self.collect_call_signatures(expanded, out, seen, depth + 1);
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let then_name = store.intern_name("then");
+  let mut calc = AwaitedTypeCalc {
+    store,
+    ref_expander,
+    awaited_stack: HashSet::new(),
+    thenable_stack: HashSet::new(),
+    then_name,
+  };
+  calc.awaited(ty, 0)
 }
 
 /// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
@@ -4740,9 +4979,14 @@ impl<'a> FlowBodyChecker<'a> {
           env.apply_map(&facts.assertions);
         }
         StmtKind::Return(expr) => {
-          let ty = match expr {
+          let expr_ty = match expr {
             Some(id) => self.eval_expr(*id, &mut env).0,
             None => self.store.primitive_ids().undefined,
+          };
+          let ty = if self.body.function.as_ref().is_some_and(|f| f.async_) {
+            awaited_type(self.store.as_ref(), expr_ty, self.ref_expander)
+          } else {
+            expr_ty
           };
           self.record_return(*stmt_id, ty);
           // return/throw terminate flow; no successors.
@@ -5289,7 +5533,10 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::ClassExpr { .. } => prim.unknown,
       ExprKind::Template(_) => prim.string,
       ExprKind::TaggedTemplate { .. } => prim.unknown,
-      ExprKind::Await { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::Await { expr } => {
+        let inner = self.eval_expr(*expr, env).0;
+        awaited_type(self.store.as_ref(), inner, self.ref_expander)
+      }
       ExprKind::Yield { expr, .. } => expr
         .map(|id| self.eval_expr(id, env).0)
         .unwrap_or(prim.undefined),

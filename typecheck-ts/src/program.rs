@@ -9590,20 +9590,41 @@ impl ProgramState {
         }
       });
 
+      let should_infer_callable_return = state.def_data.get(&def).is_some_and(|data| {
+        matches!(data.kind, DefKind::Function(FuncData { return_ann: None, body: Some(_), .. }))
+      });
       let cached_interned = state
         .interned_def_types
         .get(&def)
         .copied()
         .map(|ty| store.canon(ty))
         .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown));
+      let cached_interned = cached_interned.filter(|ty| {
+        !should_infer_callable_return || !callable_return_is_unknown(store, *ty)
+      });
       let cached_legacy = state
         .def_types
         .get(&def)
         .copied()
         .map(|ty| canon_or_convert(state, store, cache, ty))
         .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown));
-      let computed = if nested_check || Some(def) == owner {
+      let cached_legacy = cached_legacy.filter(|ty| {
+        !should_infer_callable_return || !callable_return_is_unknown(store, *ty)
+      });
+      let computed = if Some(def) == owner {
         None
+      } else if nested_check {
+        // Nested body checks (e.g. while resolving other defs) still need to
+        // compute referenced function types so async/await and return inference
+        // can see real call signatures. Other defs are skipped to avoid deep
+        // recursion and duplicate diagnostics.
+        match state.def_data.get(&def).map(|data| &data.kind) {
+          Some(DefKind::Function(_)) => state
+            .type_of_def(def)
+            .ok()
+            .map(|ty| canon_or_convert(state, store, cache, ty)),
+          _ => None,
+        }
       } else {
         state
           .type_of_def(def)
@@ -9657,7 +9678,7 @@ impl ProgramState {
       }
     };
 
-    let file_binding_entries: Vec<_> = self
+    let mut file_binding_entries: Vec<_> = self
       .files
       .get(&file)
       .map(|state| {
@@ -9668,6 +9689,17 @@ impl ProgramState {
           .collect::<Vec<_>>()
       })
       .unwrap_or_default();
+    file_binding_entries.sort_by(|(name_a, binding_a), (name_b, binding_b)| {
+      let def_key_a = binding_a
+        .def
+        .and_then(|def| self.def_data.get(&def).map(|data| (data.span.start, data.span.end, def.0)))
+        .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
+      let def_key_b = binding_b
+        .def
+        .and_then(|def| self.def_data.get(&def).map(|data| (data.span.start, data.span.end, def.0)))
+        .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
+      def_key_a.cmp(&def_key_b).then_with(|| name_a.cmp(name_b))
+    });
     let file_binding_names: HashSet<_> = file_binding_entries
       .iter()
       .map(|(name, _)| name.clone())
@@ -11883,6 +11915,7 @@ impl ProgramState {
           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
           let annotated_raw = declared_ann.or(var.typ);
           let annotated = annotated_raw;
+          let mut preserved_interned_init: Option<TypeId> = None;
           if let Some(annotated) = annotated {
             if let Some(store) = self.interned_store.as_ref() {
               if store.contains_type_id(annotated) {
@@ -11941,8 +11974,11 @@ impl ProgramState {
               let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
               if let Some(init_ty) = init_ty {
                 let init_ty = self.resolve_value_ref_type(init_ty)?;
-                if let Some(store) = self.interned_store.as_ref() {
+                let init_ty = if let Some(store) = self.interned_store.as_ref() {
                   let init_ty = store.canon(init_ty);
+                  if matches!(store.type_kind(init_ty), tti::TypeKind::Ref { .. }) {
+                    preserved_interned_init = Some(init_ty);
+                  }
                   self
                     .interned_def_types
                     .entry(def)
@@ -11951,7 +11987,10 @@ impl ProgramState {
                         ProgramState::merge_interned_decl_types(store, *existing, init_ty);
                     })
                     .or_insert(init_ty);
-                }
+                  init_ty
+                } else {
+                  init_ty
+                };
                 self.import_interned_type(init_ty)
               } else {
                 self.builtin.unknown
@@ -12024,7 +12063,13 @@ impl ProgramState {
           };
           if let Some(store) = self.interned_store.as_ref() {
             let mut cache = HashMap::new();
-            let interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+            let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+            let prim = store.primitive_ids();
+            if annotated.is_none() && interned == prim.unknown {
+              if let Some(preserved) = preserved_interned_init.take() {
+                interned = preserved;
+              }
+            }
             if annotated.is_some() {
               self
                 .interned_def_types
@@ -12282,13 +12327,14 @@ impl ProgramState {
     let Some(body) = func.body else {
       return Ok(None);
     };
+    let is_async = self.body_is_async_function(body);
     let tti::TypeKind::Callable { overloads } = store.type_kind(callable_ty) else {
       return Ok(None);
     };
     if overloads.len() != 1 {
       return Ok(None);
     }
-    let ret = if self.checking_bodies.contains(&body) {
+    let mut ret = if self.checking_bodies.contains(&body) {
       store.primitive_ids().unknown
     } else {
       let res = self.check_body(body)?;
@@ -12304,6 +12350,10 @@ impl ProgramState {
         store.union(members)
       }
     };
+    let prim = store.primitive_ids();
+    if is_async && ret != prim.unknown {
+      ret = self.promise_ref(store.as_ref(), ret).unwrap_or(prim.unknown);
+    }
     let sig_id = overloads[0];
     let mut sig = store.signature(sig_id);
     if sig.ret == ret {
@@ -12328,6 +12378,58 @@ impl ProgramState {
     Ok(Some(callable_ty))
   }
 
+  fn body_is_async_function(&self, body_id: BodyId) -> bool {
+    let Some(meta) = self.body_map.get(&body_id) else {
+      return false;
+    };
+    let Some(hir_body_id) = meta.hir else {
+      return false;
+    };
+    let Some(lowered) = self.hir_lowered.get(&meta.file) else {
+      return false;
+    };
+    let Some(body) = lowered.body(hir_body_id) else {
+      return false;
+    };
+    body.function.as_ref().is_some_and(|f| f.async_)
+  }
+
+  fn resolve_promise_def(&self) -> Option<tti::DefId> {
+    let mut best: Option<((u8, u8, u32, u32, u32), DefId)> = None;
+    for (def, data) in self.def_data.iter() {
+      if data.name != "Promise" {
+        continue;
+      }
+      let pri = self.def_priority(*def, sem_ts::Namespace::TYPE);
+      if pri == u8::MAX {
+        continue;
+      }
+      let origin = self.file_registry.lookup_origin(data.file);
+      let origin_rank = if self.current_file == Some(data.file) {
+        0
+      } else if matches!(origin, Some(FileOrigin::Source)) {
+        1
+      } else {
+        2
+      };
+      let span = data.span;
+      let key = (origin_rank, pri, span.start, span.end, def.0);
+      best = match best {
+        Some((best_key, best_def)) if best_key <= key => Some((best_key, best_def)),
+        _ => Some((key, *def)),
+      };
+    }
+    best.map(|(_, def)| tti::DefId(def.0))
+  }
+
+  fn promise_ref(&self, store: &tti::TypeStore, inner: TypeId) -> Option<TypeId> {
+    let def = self.resolve_promise_def()?;
+    Some(store.canon(store.intern_type(tti::TypeKind::Ref {
+      def,
+      args: vec![store.canon(inner)],
+    })))
+  }
+
   fn function_type(&mut self, def: DefId, func: FuncData) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let param_types: Vec<TypeId> = func
@@ -12335,6 +12437,7 @@ impl ProgramState {
       .iter()
       .map(|p| p.typ.unwrap_or(self.builtin.any))
       .collect();
+    let inferred_from_body = func.return_ann.is_none() && func.body.is_some();
     let ret = if let Some(ret) = func.return_ann {
       ret
     } else if let Some(body) = func.body {
@@ -12360,8 +12463,26 @@ impl ProgramState {
     let ty = self.type_store.function(param_types, ret);
     if let Some(store) = self.interned_store.as_ref() {
       let mut cache = HashMap::new();
-      let interned = convert_type_for_display(ty, self, store, &mut cache);
-      let interned = store.canon(interned);
+      let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+      if inferred_from_body && func.body.is_some_and(|body| self.body_is_async_function(body)) {
+        let prim = store.primitive_ids();
+        if let tti::TypeKind::Callable { overloads } = store.type_kind(interned) {
+          if overloads.len() == 1 {
+            let sig_id = overloads[0];
+            let mut sig = store.signature(sig_id);
+            if sig.ret != prim.unknown {
+              let wrapped = self.promise_ref(store.as_ref(), sig.ret).unwrap_or(prim.unknown);
+              if wrapped != sig.ret {
+                sig.ret = wrapped;
+                let sig_id = store.intern_signature(sig);
+                interned = store.canon(store.intern_type(tti::TypeKind::Callable {
+                  overloads: vec![sig_id],
+                }));
+              }
+            }
+          }
+        }
+      }
       self.interned_def_types.insert(def, interned);
     }
     self.def_types.insert(def, ty);
