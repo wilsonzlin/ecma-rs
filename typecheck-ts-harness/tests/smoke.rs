@@ -82,6 +82,9 @@ fn normalize_report(report: &mut JsonReport) {
   report.results.sort_by(|a, b| a.id.cmp(&b.id));
   for result in report.results.iter_mut() {
     result.duration_ms = 0;
+    result.rust_ms = None;
+    result.tsc_ms = None;
+    result.diff_ms = None;
   }
 }
 
@@ -154,6 +157,9 @@ fn repeated_runs_produce_identical_reports() {
   for report in [&mut first, &mut second] {
     for result in report.results.iter_mut() {
       result.duration_ms = 0;
+      result.rust_ms = None;
+      result.tsc_ms = None;
+      result.diff_ms = None;
     }
   }
 

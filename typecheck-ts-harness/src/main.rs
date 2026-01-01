@@ -75,6 +75,10 @@ enum Commands {
     #[arg(long)]
     profile: bool,
 
+    /// Write the profile JSON output to this path (only used with --profile)
+    #[arg(long, default_value = "typecheck_profile.json")]
+    profile_out: std::path::PathBuf,
+
     /// Override the conformance root directory
     #[arg(long)]
     root: Option<std::path::PathBuf>,
@@ -142,6 +146,7 @@ fn main() -> ExitCode {
       timeout_secs,
       trace,
       profile,
+      profile_out,
       root,
       allow_mismatches,
       allow_empty,
@@ -184,7 +189,7 @@ fn main() -> ExitCode {
         timeout: Duration::from_secs(timeout_secs),
         trace,
         profile,
-        profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
+        profile_out,
         compare: compare.into(),
         node_path: node,
         span_tolerance,

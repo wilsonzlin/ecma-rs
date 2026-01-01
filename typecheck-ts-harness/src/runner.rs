@@ -219,6 +219,12 @@ pub struct TestResult {
   pub path: String,
   pub outcome: TestOutcome,
   pub duration_ms: u128,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub rust_ms: Option<u128>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tsc_ms: Option<u128>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub diff_ms: Option<u128>,
   pub rust: EngineDiagnostics,
   pub tsc: EngineDiagnostics,
   pub options: TestOptions,
@@ -410,6 +416,9 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   let tsc_available = tsc_runner.available();
   let snapshot_store = SnapshotStore::new(&opts.root);
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
+  if let Some(builder) = profile_builder.as_mut() {
+    builder.set_compare_mode(compare_mode);
+  }
 
   let job_count = opts.jobs.max(1);
   let tsc_limiter = Arc::new(ConcurrencyLimiter::new(job_count));
@@ -497,6 +506,9 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     path: case.path.display().to_string(),
     outcome: TestOutcome::Match,
     duration_ms: 0,
+    rust_ms: None,
+    tsc_ms: None,
+    diff_ms: None,
     rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     options: build_test_options(&case.options, &tsc_options),
@@ -591,6 +603,9 @@ fn run_single_case(
       path: timeout_path,
       outcome: TestOutcome::Timeout,
       duration_ms: timeout.as_millis(),
+      rust_ms: None,
+      tsc_ms: None,
+      diff_ms: None,
       rust: EngineDiagnostics::skipped(None),
       tsc: EngineDiagnostics::skipped(None),
       options: timeout_options,
@@ -614,7 +629,7 @@ fn execute_case(
   collect_query_stats: bool,
   tsc_limiter: Arc<ConcurrencyLimiter>,
 ) -> TestResult {
-  let start = Instant::now();
+  let total_start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
     std::thread::sleep(delay);
   }
@@ -622,16 +637,26 @@ fn execute_case(
   let file_set = HarnessFileSet::new(&case.deduped_files);
   let harness_options = case.options.clone();
 
+  let rust_start = Instant::now();
   let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
+  let rust_ms = rust_start.elapsed().as_millis();
   let tsc_options = harness_options.to_tsc_options_map();
   let options = build_test_options(&harness_options, &tsc_options);
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
+  let mut tsc_ms: Option<u128> = None;
+  // The diff/normalization phase begins after we have Rust diagnostics. If we
+  // invoke tsc, we reset this clock after tsc completes so `diff_ms` does not
+  // include `tsc_ms`.
+  let mut diff_start = Instant::now();
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => {
       if tsc_available {
+        let tsc_start = Instant::now();
         let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+        tsc_ms = Some(tsc_start.elapsed().as_millis());
+        diff_start = Instant::now();
         tsc_raw = raw;
         diag
       } else {
@@ -641,7 +666,10 @@ fn execute_case(
     CompareMode::Snapshot => {
       if update_snapshots {
         if tsc_available {
+          let tsc_start = Instant::now();
           let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+          tsc_ms = Some(tsc_start.elapsed().as_millis());
+          diff_start = Instant::now();
           tsc_raw = raw;
           diag
         } else {
@@ -667,12 +695,16 @@ fn execute_case(
   }
 
   let (outcome, detail) = compute_outcome(compare_mode, &rust, &tsc, span_tolerance);
+  let diff_ms = diff_start.elapsed().as_millis();
 
   TestResult {
     id: case.id,
     path: case.path.display().to_string(),
     outcome,
-    duration_ms: start.elapsed().as_millis(),
+    duration_ms: total_start.elapsed().as_millis(),
+    rust_ms: Some(rust_ms),
+    tsc_ms,
+    diff_ms: Some(diff_ms),
     rust,
     tsc,
     options,

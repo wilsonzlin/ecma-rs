@@ -1,6 +1,6 @@
 use crate::discover::Filter;
 use crate::runner::Summary;
-use crate::{ConformanceOptions, HarnessError, TestOutcome, TestResult};
+use crate::{CompareMode, ConformanceOptions, HarnessError, TestOutcome, TestResult};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -8,8 +8,11 @@ use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use typecheck_ts::QueryStats;
 
+const PROFILE_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Serialize)]
 pub struct ProfileReport {
+  pub schema_version: u32,
   pub metadata: RunMetadata,
   pub tests: Vec<TestEntry>,
   pub summary: ProfileSummary,
@@ -33,6 +36,8 @@ pub struct ProfileOptions {
   pub shard: Option<String>,
   pub json: bool,
   pub update_snapshots: bool,
+  pub compare_mode: CompareMode,
+  pub span_tolerance: u32,
   pub timeout_secs: u64,
   pub trace: bool,
   pub profile: bool,
@@ -93,6 +98,10 @@ impl ProfileBuilder {
     }
   }
 
+  pub fn set_compare_mode(&mut self, compare_mode: CompareMode) {
+    self.metadata.options.compare_mode = compare_mode;
+  }
+
   pub fn record_test(&mut self, result: &TestResult) {
     if let Some(stats) = &result.query_stats {
       self.query_stats.merge(stats);
@@ -101,9 +110,9 @@ impl ProfileBuilder {
       id: result.id.clone(),
       status: result.outcome,
       durations: TestDurations {
-        rust_ms: Some(result.duration_ms),
-        tsc_ms: None,
-        diff_ms: None,
+        rust_ms: result.rust_ms,
+        tsc_ms: result.tsc_ms,
+        diff_ms: result.diff_ms,
         total_ms: result.duration_ms,
       },
     });
@@ -133,12 +142,14 @@ impl ProfileBuilder {
   }
 
   fn finish(&mut self, summary: &Summary, wall_time: Duration) -> ProfileReport {
+    self.tests.sort_by(|a, b| a.id.cmp(&b.id));
     let mut samples: Vec<_> = self.tests.iter().map(|t| t.durations.total_ms).collect();
     samples.sort_unstable();
 
     let percentiles_ms = Percentiles::from_samples(&samples);
 
     ProfileReport {
+      schema_version: PROFILE_SCHEMA_VERSION,
       metadata: RunMetadata {
         mode: self.metadata.mode,
         timestamp_ms: self.metadata.timestamp_ms,
@@ -179,6 +190,8 @@ impl ProfileOptions {
       shard,
       json: opts.json,
       update_snapshots: opts.update_snapshots,
+      compare_mode: opts.compare,
+      span_tolerance: opts.span_tolerance,
       timeout_secs: opts.timeout.as_secs(),
       trace: opts.trace,
       profile: opts.profile,
@@ -251,5 +264,26 @@ fn describe_filter(filter: &Filter) -> String {
     Filter::All => "all".to_string(),
     Filter::Glob(_) => "glob".to_string(),
     Filter::Regex(_) => "regex".to_string(),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn percentiles_empty_samples_are_zeroed() {
+    let percentiles = Percentiles::from_samples(&[]);
+    assert_eq!(percentiles.p50, 0.0);
+    assert_eq!(percentiles.p90, 0.0);
+    assert_eq!(percentiles.p99, 0.0);
+  }
+
+  #[test]
+  fn percentiles_single_sample_returns_that_value() {
+    let percentiles = Percentiles::from_samples(&[42]);
+    assert_eq!(percentiles.p50, 42.0);
+    assert_eq!(percentiles.p90, 42.0);
+    assert_eq!(percentiles.p99, 42.0);
   }
 }
