@@ -17,7 +17,8 @@ The runner expects the following directories under `--data-dir`:
 - `fail/` — programs that must fail to parse
 - `early/` — programs that trigger early errors
 
-Module vs. script mode is inferred from the filename suffix (`.module.js` → module, otherwise script).
+Module vs. script mode is inferred from filenames containing `.module.` (e.g.
+`*.module.js` → module, otherwise script).
 
 ## Running locally
 
