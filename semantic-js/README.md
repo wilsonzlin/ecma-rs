@@ -81,7 +81,11 @@ on `symbol-js`'s map ordering, and downstream crates have been migrated to it.
   - bind top-level globals in `TopLevelMode::Global` (top-level declarations are
     intentionally skipped so hosts can map globals separately).
 - TS mode does not bind inside statement bodies, nor does it track locals or
-  contextual type-only exports beyond the provided flags. `export =` is rejected
-  with a diagnostic, and module augmentation/global merging are not modeled.
+  statement-level scopes. It focuses on module-level declaration merging and
+  import/export maps:
+  - `export = Identifier` is supported by synthesizing a `default` export entry;
+    other export assignment expressions are rejected with a diagnostic.
+  - Module augmentation/global merging semantics are still incomplete compared to
+    TypeScript.
 - Determinism relies on caller-controlled inputs: changing file ids, HIR spans,
   or resolver results will change derived IDs.
