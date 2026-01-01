@@ -91,6 +91,9 @@ other crates use this for structured errors and spans.
   independent of insertion order and safe under parallel requests.
 - Relation/normalization helpers: `RelateCtx`, `RelateHooks`, `RelationKind`,
   `TypeEvaluator`, `TypeExpander`, and `TypeDisplay`.
+- Conditional type evaluation uses structural assignability via `RelateCtx` in
+  `RelationMode::SKIP_NORMALIZE` (avoids relate ↔ evaluate normalization cycles)
+  and is cache-backed by `TypeEvaluator` (`EvaluatorCaches`).
 - Single maintained type representation for the workspace; the former
   placeholder `types-ts` crate was removed to avoid drift.
 
