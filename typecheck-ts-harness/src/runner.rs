@@ -1236,7 +1236,20 @@ impl SnapshotStore {
       Ok(data) => data,
       Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
         let legacy = self.legacy_path_for(id);
-        read_utf8_file(&legacy)?
+        match read_utf8_file(&legacy) {
+          Ok(data) => data,
+          Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(std::io::Error::new(
+              std::io::ErrorKind::NotFound,
+              format!(
+                "snapshot not found for {id} (tried {} and {})",
+                path.display(),
+                legacy.display()
+              ),
+            ));
+          }
+          Err(err) => return Err(err),
+        }
       }
       Err(err) => return Err(err),
     };
