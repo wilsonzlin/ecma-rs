@@ -52,6 +52,14 @@ fn import_alias_can_be_string_literal() {
 }
 
 #[test]
+fn string_import_alias_can_be_reexported() {
+  roundtrip(
+    "import { \"a-b\" as \"c-d\" } from \"x\"; export { \"c-d\" as \"e-f\" };",
+    "import{\"a-b\"as\"c-d\"}from\"x\";export{\"c-d\"as\"e-f\"};",
+  );
+}
+
+#[test]
 fn import_string_name_can_have_identifier_alias() {
   roundtrip(
     "import { \"a-b\" as bar } from \"x\";",

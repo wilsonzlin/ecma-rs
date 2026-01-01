@@ -55,6 +55,14 @@ fn hir_emits_string_literal_import_alias() {
 }
 
 #[test]
+fn hir_emits_reexport_of_string_import_alias() {
+  roundtrip(
+    "import { \"a-b\" as \"c-d\" } from \"x\"; export { \"c-d\" as \"e-f\" };",
+    "import{\"a-b\"as\"c-d\"}from\"x\";export{\"c-d\"as\"e-f\"};",
+  );
+}
+
+#[test]
 fn hir_emits_string_literal_import_with_identifier_alias() {
   roundtrip(
     "import { \"a-b\" as bar } from \"x\";",
