@@ -201,7 +201,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
       ExportKind::ExportAll(all) => {
         check_specifier(&all.source, &mut diagnostics);
       }
-      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
+      ExportKind::Default(_) | ExportKind::Assignment(_) | ExportKind::AsNamespace(_) => {}
     }
   }
 

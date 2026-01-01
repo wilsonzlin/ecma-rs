@@ -229,6 +229,8 @@ fn emit_export(em: &mut Emitter, ctx: &HirContext<'_>, export: &Export) -> EmitR
       em.write_semicolon();
       Ok(())
     }
+    // TypeScript-only declaration; no runtime output.
+    ExportKind::AsNamespace(_) => Ok(()),
   }
 }
 

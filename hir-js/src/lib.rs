@@ -27,6 +27,7 @@ pub use hir::EnumMemberValue;
 pub use hir::Export;
 pub use hir::ExportAlias;
 pub use hir::ExportAll;
+pub use hir::ExportAsNamespace;
 pub use hir::ExportAssignment;
 pub use hir::ExportDefault;
 pub use hir::ExportDefaultValue;

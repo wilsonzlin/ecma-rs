@@ -1459,6 +1459,67 @@ fn lowers_imports_and_exports() {
 }
 
 #[test]
+fn lowers_export_import_equals() {
+  let source = r#"export import Foo = require("bar");"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let names = &result.names;
+
+  assert_eq!(result.hir.imports.len(), 1);
+  let import_equals = result
+    .hir
+    .imports
+    .iter()
+    .find_map(|import| match &import.kind {
+      ImportKind::ImportEquals(ie) => Some(ie),
+      _ => None,
+    })
+    .expect("import equals entry");
+  assert_eq!(names.resolve(import_equals.local.local), Some("Foo"));
+
+  let foo_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::ImportBinding && names.resolve(def.name) == Some("Foo"))
+    .expect("Foo import binding definition");
+  assert!(foo_def.is_exported, "export import should mark binding exported");
+  assert_eq!(
+    import_equals.local.local_def,
+    Some(foo_def.id),
+    "import binding should resolve to DefId"
+  );
+
+  let exports = &result.hir.exports;
+  assert!(
+    exports.iter().any(|export| match &export.kind {
+      ExportKind::Named(named) => named
+        .specifiers
+        .iter()
+        .any(|spec| spec.local_def == Some(foo_def.id) && names.resolve(spec.exported) == Some("Foo")),
+      _ => false,
+    }),
+    "export import should create a file-level export for Foo"
+  );
+}
+
+#[test]
+fn lowers_export_as_namespace() {
+  let source = "export as namespace Foo;";
+  let result = lower_from_source_with_kind(FileKind::Dts, source).expect("lower");
+  let names = &result.names;
+
+  let export = result
+    .hir
+    .exports
+    .iter()
+    .find_map(|export| match &export.kind {
+      ExportKind::AsNamespace(ns) => Some(ns),
+      _ => None,
+    })
+    .expect("export as namespace entry");
+  assert_eq!(names.resolve(export.name), Some("Foo"));
+}
+
+#[test]
 fn nested_exports_do_not_create_file_exports() {
   let source = r#"export namespace NS { export const x = 1; export function f() {} }"#;
   let ast = parse(source).expect("parse");

@@ -105,12 +105,23 @@ pub struct Export {
   pub kind: ExportKind,
 }
 
+/// TypeScript `export as namespace Foo;` declaration.
+///
+/// This is used by UMD-style declaration files to describe the global name that
+/// should be exposed when the module is loaded in a script/global context.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportAsNamespace {
+  pub name: NameId,
+  pub span: TextRange,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExportKind {
   Named(ExportNamed),
   ExportAll(ExportAll),
   Default(ExportDefault),
   Assignment(ExportAssignment),
+  AsNamespace(ExportAsNamespace),
 }
 
 #[derive(Debug, Clone, PartialEq)]

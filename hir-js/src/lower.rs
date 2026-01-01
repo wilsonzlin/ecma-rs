@@ -1,12 +1,13 @@
 use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
   CallArg, CallExpr, CatchClause, DefData, DefTypeInfo, Export, ExportAlias, ExportAll,
-  ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier,
-  Expr, ExprKind, FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile, Import,
-  ImportBinding, ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed, JsxElement,
-  JsxElementKind, Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey, ObjectLiteral,
-  ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind, SwitchCase,
-  TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
+  ExportAsNamespace, ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed,
+  ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile,
+  Import, ImportBinding, ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed,
+  JsxElement, JsxElementKind, Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey,
+  ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind,
+  SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
+  VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -227,6 +228,7 @@ enum ModuleItemKind<'a> {
   ExportDefaultExpr(&'a Node<ExportDefaultExprStmt>),
   ExportType(&'a Node<ExportTypeDecl>),
   ExportAssignment(&'a Node<ExportAssignmentDecl>),
+  ExportAsNamespace(&'a Node<ExportAsNamespaceDecl>),
   ExportedDecl(ExportedDecl<'a>),
 }
 
@@ -2774,6 +2776,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.parent = parent;
+      desc.is_exported = ie.stx.export;
       descriptors.push(desc);
     }
     AstStmt::ExportAssignmentDecl(assign) => {
@@ -2800,6 +2803,19 @@ fn collect_stmt<'a>(
         ctx.warn_non_module_export(
           span,
           "export assignment is only allowed at the module top level",
+        );
+      }
+    }
+    AstStmt::ExportAsNamespaceDecl(export_ns) => {
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportAsNamespace(export_ns),
+        });
+      } else {
+        ctx.warn_non_module_export(
+          span,
+          "export as namespace is only allowed at the module top level",
         );
       }
     }
@@ -4625,6 +4641,7 @@ fn lower_module_items(
       }
       ModuleItemKind::ImportEquals(ie) => {
         let name_id = names.intern(&ie.stx.name);
+        let local_def = find_def(defs, DefKind::ImportBinding, item.span).map(|d| d.id);
         let target = match &ie.stx.rhs {
           ImportEqualsRhs::Require { module } => ImportEqualsTarget::Module(ModuleSpecifier {
             value: module.clone(),
@@ -4640,12 +4657,24 @@ fn lower_module_items(
           kind: ImportKind::ImportEquals(ImportEquals {
             local: ImportBinding {
               local: name_id,
-              local_def: find_def(defs, DefKind::ImportBinding, item.span).map(|d| d.id),
+              local_def,
               span: item.span,
             },
             target,
           }),
         });
+        if ie.stx.export {
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            item.span,
+            name_id,
+            local_def,
+            false,
+          );
+        }
         next_import += 1;
       }
       ModuleItemKind::ExportList(export) => {
@@ -4777,6 +4806,18 @@ fn lower_module_items(
             next_export += 1;
           }
         }
+      }
+      ModuleItemKind::ExportAsNamespace(export_ns) => {
+        let name_id = names.intern(&export_ns.stx.name);
+        exports.push(Export {
+          id: ExportId(next_export),
+          span: item.span,
+          kind: ExportKind::AsNamespace(ExportAsNamespace {
+            name: name_id,
+            span: item.span,
+          }),
+        });
+        next_export += 1;
       }
       ModuleItemKind::ExportedDecl(decl) => match decl.kind {
         ExportedDeclKind::Func(func) => {

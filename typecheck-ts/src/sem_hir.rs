@@ -57,6 +57,23 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     .filter_map(|import| map_import_from_lower(import, &resolve_name))
     .collect();
   let import_equals: Vec<sem_ts::ImportEquals> = Vec::new();
+  let export_as_namespace: Vec<_> = lowered
+    .hir
+    .exports
+    .iter()
+    .filter(|export| {
+      !namespace_spans
+        .iter()
+        .any(|span| export.span.start >= span.start && export.span.end <= span.end)
+    })
+    .filter_map(|export| match &export.kind {
+      HirExportKind::AsNamespace(ns) => Some(sem_ts::ExportAsNamespace {
+        name: resolve_name(ns.name),
+        span: ns.span,
+      }),
+      _ => None,
+    })
+    .collect();
   let exports: Vec<_> = lowered
     .hir
     .exports
@@ -71,6 +88,7 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
   let module_kind = if imports.is_empty()
     && import_equals.is_empty()
     && exports.is_empty()
+    && export_as_namespace.is_empty()
     && decls
       .iter()
       .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
@@ -94,7 +112,7 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     imports,
     import_equals,
     exports,
-    export_as_namespace: Vec::new(),
+    export_as_namespace,
     ambient_modules: collect_ambient_modules(ast.stx.body.as_slice()),
   }
 }
@@ -215,6 +233,7 @@ fn map_export_from_lower(
       expr: String::new(),
       span: export.span,
     }),
+    HirExportKind::AsNamespace(_) => None,
   }
 }
 
