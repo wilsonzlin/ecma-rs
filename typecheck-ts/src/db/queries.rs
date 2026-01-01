@@ -1516,10 +1516,9 @@ fn collect_type_only_module_specifiers_from_ast(
   use derive_visitor::Visitor;
   use parse_js::ast::expr::Expr;
   use parse_js::ast::node::Node;
-  use parse_js::ast::type_expr::{TypeEntityName, TypeImport, TypeQuery};
+  use parse_js::ast::type_expr::{TypeEntityName, TypeExpr};
 
-  type TypeImportNode = Node<TypeImport>;
-  type TypeQueryNode = Node<TypeQuery>;
+  type TypeExprNode = Node<TypeExpr>;
 
   fn collect_from_entity_name(name: &TypeEntityName, specs: &mut Vec<(Arc<str>, TextRange)>) {
     match name {
@@ -1534,21 +1533,24 @@ fn collect_type_only_module_specifiers_from_ast(
   }
 
   #[derive(Default, Visitor)]
-  #[visitor(TypeImportNode(enter), TypeQueryNode(enter))]
+  #[visitor(TypeExprNode(enter))]
   struct Collector {
     specs: Vec<(Arc<str>, TextRange)>,
   }
 
   impl Collector {
-    fn enter_type_import_node(&mut self, node: &TypeImportNode) {
-      self.specs.push((
-        Arc::from(node.stx.module_specifier.clone()),
-        node.loc.into(),
-      ));
-    }
-
-    fn enter_type_query_node(&mut self, node: &TypeQueryNode) {
-      collect_from_entity_name(&node.stx.expr_name, &mut self.specs);
+    fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
+      match node.stx.as_ref() {
+        TypeExpr::ImportType(import) => {
+          self
+            .specs
+            .push((Arc::from(import.stx.module_specifier.clone()), node.loc.into()));
+        }
+        TypeExpr::TypeQuery(query) => {
+          collect_from_entity_name(&query.stx.expr_name, &mut self.specs);
+        }
+        _ => {}
+      }
     }
   }
 

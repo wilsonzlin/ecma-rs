@@ -108,6 +108,42 @@ fn unresolved_import_points_at_specifier() {
 }
 
 #[test]
+fn unresolved_import_type_points_at_specifier() {
+  let source = r#"type T = import("./missing").Thing;"#;
+  let host = MissingImportHost {
+    text: Arc::from(source.to_string()),
+  };
+
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
+  let diagnostics = program.check();
+  let file_id = program.file_id(&FileKey::new("entry.ts")).unwrap();
+
+  let unresolved = diagnostics
+    .iter()
+    .find(|diag| diag.code.as_str() == codes::UNRESOLVED_MODULE.as_str())
+    .expect("expected UNRESOLVED_MODULE diagnostic");
+  assert_unresolved_diag_covers_specifier(unresolved, file_id, source, "\"./missing\"");
+}
+
+#[test]
+fn unresolved_typeof_import_points_at_specifier() {
+  let source = r#"type T = typeof import("./missing").value;"#;
+  let host = MissingImportHost {
+    text: Arc::from(source.to_string()),
+  };
+
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
+  let diagnostics = program.check();
+  let file_id = program.file_id(&FileKey::new("entry.ts")).unwrap();
+
+  let unresolved = diagnostics
+    .iter()
+    .find(|diag| diag.code.as_str() == codes::UNRESOLVED_MODULE.as_str())
+    .expect("expected UNRESOLVED_MODULE diagnostic");
+  assert_unresolved_diag_covers_specifier(unresolved, file_id, source, "\"./missing\"");
+}
+
+#[test]
 fn db_unresolved_import_points_at_specifier() {
   let source = r#"import { Foo } from "./missing";"#;
   let file = FileId(10);
@@ -133,9 +169,51 @@ fn db_unresolved_import_points_at_specifier() {
 }
 
 #[test]
+fn db_unresolved_import_type_points_at_specifier() {
+  let source = r#"type T = import("./missing").Thing;"#;
+  let file = FileId(12);
+  let key = FileKey::new("entry.ts");
+  let mut db = TypecheckDb::default();
+  db.set_roots(Arc::from([key.clone()]));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from(source),
+    FileOrigin::Source,
+  );
+  db.set_module_resolution(file, Arc::<str>::from("./missing"), None);
+
+  let diags = unresolved_module_diagnostics(&db, file);
+  assert_eq!(diags.len(), 1);
+  assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing\"");
+}
+
+#[test]
+fn db_unresolved_typeof_import_points_at_specifier() {
+  let source = r#"type T = typeof import("./missing").value;"#;
+  let file = FileId(13);
+  let key = FileKey::new("entry.ts");
+  let mut db = TypecheckDb::default();
+  db.set_roots(Arc::from([key.clone()]));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from(source),
+    FileOrigin::Source,
+  );
+  db.set_module_resolution(file, Arc::<str>::from("./missing"), None);
+
+  let diags = unresolved_module_diagnostics(&db, file);
+  assert_eq!(diags.len(), 1);
+  assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing\"");
+}
+
+#[test]
 fn db_unresolved_export_all_and_import_equals_point_at_specifier() {
   let source = r#"import foo = require("./missing-import-equals");
-export * from "./missing-export-all";"#;
+ export * from "./missing-export-all";"#;
   let file = FileId(11);
   let key = FileKey::new("entry.ts");
   let mut db = TypecheckDb::default();
