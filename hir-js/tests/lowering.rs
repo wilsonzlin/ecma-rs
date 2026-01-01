@@ -878,18 +878,15 @@ fn class_member_defs_have_stable_ids() {
     "arrow function in method should be lowered"
   );
 
-  let z_members: Vec<_> = result
-    .defs
-    .iter()
-    .filter(|def| def.path.kind == DefKind::Method && result.names.resolve(def.name) == Some("z"))
-    .collect();
-  assert_eq!(z_members.len(), 2, "expected getter and setter for z");
-  for member in z_members {
-    assert_eq!(member.parent, Some(class_id));
-    assert!(member.body.is_some(), "accessor should have a body");
-  }
+  let getter_z = find_def(DefKind::Getter, "z");
+  assert_eq!(getter_z.parent, Some(class_id));
+  assert!(getter_z.body.is_some(), "getter should have a body");
 
-  let static_block = find_def(DefKind::Method, "<static_block>");
+  let setter_z = find_def(DefKind::Setter, "z");
+  assert_eq!(setter_z.parent, Some(class_id));
+  assert!(setter_z.body.is_some(), "setter should have a body");
+
+  let static_block = find_def(DefKind::StaticBlock, "<static_block>");
   assert_eq!(static_block.parent, Some(class_id));
   assert!(static_block.is_static);
   let static_block_body = result
@@ -970,7 +967,7 @@ fn span_map_indexes_class_members() {
     "method def should map to its span start"
   );
 
-  let static_block = find_def(DefKind::Method, "<static_block>");
+  let static_block = find_def(DefKind::StaticBlock, "<static_block>");
   let static_span = span_map
     .def_span(static_block.id)
     .expect("static block span");
@@ -979,6 +976,70 @@ fn span_map_indexes_class_members() {
     Some(static_block.id),
     "static block def should map to its span start"
   );
+}
+
+#[test]
+fn accessor_def_kinds_are_distinct() {
+  let source = "class C { get x(){return 1} set x(v){} }";
+  let result = lower_from_source(source).expect("lower");
+
+  let getters: Vec<_> = result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Getter && result.names.resolve(def.name) == Some("x"))
+    .collect();
+  let setters: Vec<_> = result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Setter && result.names.resolve(def.name) == Some("x"))
+    .collect();
+
+  assert_eq!(getters.len(), 1, "expected exactly one getter for x");
+  assert_eq!(setters.len(), 1, "expected exactly one setter for x");
+  assert_ne!(
+    getters[0].id, setters[0].id,
+    "getter and setter should have distinct DefIds"
+  );
+}
+
+#[test]
+fn accessor_ids_stable_under_unrelated_member_insertions() {
+  let base_source = "class C { get x(){return 1} set x(v){} }";
+  let base = lower_from_source(base_source).expect("lower base");
+
+  let base_getter = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Getter && base.names.resolve(def.name) == Some("x"))
+    .expect("getter for x");
+  let base_setter = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Setter && base.names.resolve(def.name) == Some("x"))
+    .expect("setter for x");
+
+  let variants = [
+    "class C { method(){} get x(){return 1} set x(v){} }",
+    "class C { get x(){return 1} set x(v){} method(){} }",
+  ];
+  for source in variants {
+    let variant = lower_from_source(source).expect("lower variant");
+    let getter_id = variant
+      .def_id_for_path(&base_getter.path)
+      .expect("getter path should exist in variant");
+    assert_eq!(
+      getter_id, base_getter.id,
+      "getter DefId changed after unrelated member insertion"
+    );
+
+    let setter_id = variant
+      .def_id_for_path(&base_setter.path)
+      .expect("setter path should exist in variant");
+    assert_eq!(
+      setter_id, base_setter.id,
+      "setter DefId changed after unrelated member insertion"
+    );
+  }
 }
 
 #[test]

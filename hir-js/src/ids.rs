@@ -158,6 +158,9 @@ pub enum DefKind {
   ExportAlias,
   TypeParam,
   Unknown,
+  Getter,
+  Setter,
+  StaticBlock,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

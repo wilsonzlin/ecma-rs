@@ -3162,7 +3162,7 @@ fn collect_class_members<'a>(
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
         let getter_raw = RawNode::from(getter);
         let mut desc = DefDescriptor::new(
-          DefKind::Method,
+          DefKind::Getter,
           name_id,
           name_text,
           span,
@@ -3199,7 +3199,7 @@ fn collect_class_members<'a>(
         let (name_id, name_text) = obj_key_name(&member.stx.key, names);
         let setter_raw = RawNode::from(setter);
         let mut desc = DefDescriptor::new(
-          DefKind::Method,
+          DefKind::Setter,
           name_id,
           name_text,
           span,
@@ -3266,7 +3266,7 @@ fn collect_class_members<'a>(
         let name_text = names.resolve(name_id).unwrap().to_string();
         let block_raw = RawNode::from(block);
         let mut desc = DefDescriptor::new(
-          DefKind::Method,
+          DefKind::StaticBlock,
           name_id,
           name_text,
           span,
@@ -4129,7 +4129,7 @@ fn collect_expr<'a>(
             ClassOrObjVal::Getter(getter) => {
               let (name_id, name_text) = obj_key_name(key, names);
               let mut desc = DefDescriptor::new(
-                DefKind::Method,
+                DefKind::Getter,
                 name_id,
                 name_text,
                 ctx.to_range(getter.loc),
@@ -4165,7 +4165,7 @@ fn collect_expr<'a>(
             ClassOrObjVal::Setter(setter) => {
               let (name_id, name_text) = obj_key_name(key, names);
               let mut desc = DefDescriptor::new(
-                DefKind::Method,
+                DefKind::Setter,
                 name_id,
                 name_text,
                 ctx.to_range(setter.loc),
