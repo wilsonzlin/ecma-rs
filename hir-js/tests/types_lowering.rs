@@ -611,6 +611,27 @@ fn union_does_not_dedup_distinct_computed_string_property_names() {
   assert_eq!(members, vec!["bar", "foo"]);
 }
 
+#[test]
+fn union_canonicalization_is_span_stable_for_type_literals() {
+  let base = lower_from_source("type A = ({ a: string } | { b: number });").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = boolean;\ntype A = ({ a: string } | { b: number });")
+      .expect("lower with padding");
+
+  let base_members = union_member_first_property_names(&base, "A");
+  let with_padding_members = union_member_first_property_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["a", "b"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn union_dedups_duplicate_type_literals() {
+  let result = lower_from_source("type A = { a: string } | { a: string };").expect("lower");
+  let members = union_member_first_property_names(&result, "A");
+  assert_eq!(members, vec!["a"]);
+}
+
 fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
