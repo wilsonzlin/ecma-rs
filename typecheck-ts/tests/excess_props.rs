@@ -77,7 +77,12 @@ fn return_context_triggers_excess_property_check() {
     "function make(): { foo: number } { return { foo: 1, bar: 2 }; }\n\
      make();",
   );
-  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::EXCESS_PROPERTY.as_str(),
@@ -89,7 +94,12 @@ fn return_context_triggers_excess_property_check() {
 #[test]
 fn nested_contextual_object_literal_checks_excess_properties() {
   let diagnostics = run("let x: { nested: { foo: number } } = { nested: { foo: 1, bar: 2 } };");
-  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::EXCESS_PROPERTY.as_str(),
