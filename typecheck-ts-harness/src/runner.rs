@@ -3,7 +3,9 @@ use crate::diagnostic_norm::{
   within_tolerance, NormalizedDiagnostic,
 };
 use crate::directives::HarnessOptions;
-use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
+use crate::discover::{
+  discover_conformance_test_paths, Filter, Shard, TestCase, TestCasePath, DEFAULT_EXTENSIONS,
+};
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
@@ -400,7 +402,7 @@ struct PackageJsonCache {
 
 #[derive(Clone)]
 struct PlannedCase {
-  case: TestCase,
+  case: TestCasePath,
   expectation: AppliedExpectation,
 }
 
@@ -518,7 +520,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     opts.extensions.clone()
   };
 
-  let mut cases = discover_conformance_tests(&opts.root, &opts.filter, &extensions)?;
+  let mut cases = discover_conformance_test_paths(&opts.root, &opts.filter, &extensions)?;
   let root_missing = !opts.root.is_dir();
   if (root_missing || cases.is_empty()) && !opts.allow_empty {
     return Err(crate::HarnessError::EmptySuite {
@@ -586,18 +588,23 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     planned_cases
       .par_iter()
       .map(|planned| {
-        let base_result = if planned.expectation.expectation.kind == ExpectationKind::Skip {
-          build_skipped_result(&planned.case)
-        } else {
-          run_single_case(
-            &planned.case,
-            compare_mode,
-            tsc_pool.clone(),
-            timeout_manager.clone(),
-            tsc_available,
-            &snapshot_store,
-            &opts,
-          )
+        let base_result = match planned.expectation.expectation.kind {
+          ExpectationKind::Skip => match load_case_for_run(&planned.case) {
+            Ok(case) => build_skipped_result(&case),
+            Err(err) => build_load_error_result(&planned.case, &err),
+          },
+          _ => match load_case_for_run(&planned.case) {
+            Ok(case) => run_single_case(
+              &case,
+              compare_mode,
+              tsc_pool.clone(),
+              timeout_manager.clone(),
+              tsc_available,
+              &snapshot_store,
+              &opts,
+            ),
+            Err(err) => build_load_error_result(&planned.case, &err),
+          },
         };
         apply_expectation(base_result, &planned.expectation)
       })
@@ -668,6 +675,42 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     options: build_test_options(&case.options, &tsc_options),
     query_stats: None,
     notes: case.notes.clone(),
+    detail: None,
+    expectation: None,
+    mismatched: false,
+  }
+}
+
+fn load_case_for_run(case: &TestCasePath) -> Result<TestCase> {
+  let content = crate::read_utf8_file(&case.path)?;
+  let split = crate::split_test_file(&case.path, &content);
+  Ok(TestCase {
+    id: case.id.clone(),
+    path: case.path.clone(),
+    files: split.files,
+    deduped_files: split.deduped_files,
+    directives: split.directives.clone(),
+    options: HarnessOptions::from_directives(&split.directives),
+    notes: split.notes,
+  })
+}
+
+fn build_load_error_result(case: &TestCasePath, err: &crate::HarnessError) -> TestResult {
+  let harness_options = HarnessOptions::default();
+  let tsc_options = harness_options.to_tsc_options_map();
+  TestResult {
+    id: case.id.clone(),
+    path: case.path.display().to_string(),
+    outcome: TestOutcome::RustIce,
+    duration_ms: 0,
+    rust_ms: None,
+    tsc_ms: None,
+    diff_ms: None,
+    rust: EngineDiagnostics::ice(format!("failed to load test input: {err}")),
+    tsc: EngineDiagnostics::skipped(Some("skipped: failed to load test input".to_string())),
+    options: build_test_options(&harness_options, &tsc_options),
+    query_stats: None,
+    notes: Vec::new(),
     detail: None,
     expectation: None,
     mismatched: false,

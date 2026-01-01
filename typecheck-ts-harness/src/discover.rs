@@ -28,6 +28,12 @@ pub struct TestCase {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct TestCasePath {
+  pub id: String,
+  pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub enum Filter {
   All,
   Glob(GlobSet),
@@ -100,6 +106,18 @@ pub fn discover_conformance_tests(
   filter: &Filter,
   extensions: &[String],
 ) -> Result<Vec<TestCase>> {
+  let entries = discover_conformance_test_paths(root, filter, extensions)?;
+  entries
+    .into_iter()
+    .map(|entry| load_conformance_test_from_path(entry))
+    .collect()
+}
+
+pub(crate) fn discover_conformance_test_paths(
+  root: &Path,
+  filter: &Filter,
+  extensions: &[String],
+) -> Result<Vec<TestCasePath>> {
   if !root.exists() {
     return Ok(Vec::new());
   }
@@ -129,22 +147,26 @@ pub fn discover_conformance_tests(
       continue;
     }
 
-    let content = read_utf8_file(&path)?;
-    let split = split_test_file(&path, &content);
-
-    cases.push(TestCase {
-      id,
-      path,
-      files: split.files,
-      deduped_files: split.deduped_files,
-      directives: split.directives.clone(),
-      options: HarnessOptions::from_directives(&split.directives),
-      notes: split.notes,
-    });
+    cases.push(TestCasePath { id, path });
   }
 
   cases.sort_by(|a, b| a.id.cmp(&b.id));
   Ok(cases)
+}
+
+fn load_conformance_test_from_path(case: TestCasePath) -> Result<TestCase> {
+  let content = read_utf8_file(&case.path)?;
+  let split = split_test_file(&case.path, &content);
+
+  Ok(TestCase {
+    id: case.id,
+    path: case.path,
+    files: split.files,
+    deduped_files: split.deduped_files,
+    directives: split.directives.clone(),
+    options: HarnessOptions::from_directives(&split.directives),
+    notes: split.notes,
+  })
 }
 
 fn normalize_extensions(extensions: &[String]) -> Vec<String> {
