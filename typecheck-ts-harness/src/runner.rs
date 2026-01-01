@@ -372,13 +372,14 @@ pub struct ExpectationOutcome {
 }
 
 fn build_test_options(
-  harness_options: &HarnessOptions,
-  tsc_options: &Map<String, Value>,
+  harness_options: HarnessOptions,
+  rust_options: CompilerOptions,
+  tsc_options: Map<String, Value>,
 ) -> TestOptions {
   TestOptions {
-    harness: harness_options.clone(),
-    rust: harness_options.to_compiler_options(),
-    tsc: tsc_options.clone(),
+    harness: harness_options,
+    rust: rust_options,
+    tsc: tsc_options,
   }
 }
 
@@ -582,22 +583,22 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     .build()
     .map_err(|err| crate::HarnessError::Typecheck(format!("create thread pool: {err}")))?;
 
-  // `planned_cases` is sorted by test id, and `par_iter()` on slices is an indexed
-  // parallel iterator. Rayon preserves iteration order when collecting indexed
-  // iterators into a `Vec`, so the final results remain deterministically sorted
-  // without an explicit sort step.
+  // `planned_cases` is sorted by test id, and Rayon preserves iteration order
+  // when collecting indexed parallel iterators into a `Vec`, so the final
+  // results remain deterministically sorted without an explicit sort step.
   let results: Vec<TestResult> = pool.install(|| {
     planned_cases
-      .par_iter()
+      .into_par_iter()
       .map(|planned| {
-        let base_result = match planned.expectation.expectation.kind {
-          ExpectationKind::Skip => match load_case_for_run(&planned.case) {
-            Ok(case) => build_skipped_result(&case),
-            Err(err) => build_load_error_result(&planned.case, &err),
+        let PlannedCase { case, expectation } = planned;
+        let base_result = match expectation.expectation.kind {
+          ExpectationKind::Skip => match load_case_for_run(case) {
+            Ok(case) => build_skipped_result(case),
+            Err((case, err)) => build_load_error_result(case, &err),
           },
-          _ => match load_case_for_run(&planned.case) {
+          _ => match load_case_for_run(case) {
             Ok(case) => run_single_case(
-              &case,
+              case,
               compare_mode,
               tsc_pool.clone(),
               timeout_manager.clone(),
@@ -605,10 +606,10 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
               &snapshot_store,
               &opts,
             ),
-            Err(err) => build_load_error_result(&planned.case, &err),
+            Err((case, err)) => build_load_error_result(case, &err),
           },
         };
-        apply_expectation(base_result, &planned.expectation)
+        apply_expectation(base_result, &expectation)
       })
       .collect()
   });
@@ -659,11 +660,20 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   })
 }
 
-fn build_skipped_result(case: &TestCase) -> TestResult {
-  let tsc_options = case.options.to_tsc_options_map();
+fn build_skipped_result(case: TestCase) -> TestResult {
+  let TestCase {
+    id,
+    path,
+    files: _,
+    directives: _,
+    options: harness_options,
+    notes,
+  } = case;
+  let tsc_options = harness_options.to_tsc_options_map();
+  let rust_options = harness_options.to_compiler_options();
   TestResult {
-    id: case.id.clone(),
-    path: case.path.display().to_string(),
+    id,
+    path: path.display().to_string(),
     outcome: TestOutcome::Match,
     duration_ms: 0,
     rust_ms: None,
@@ -671,34 +681,40 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     diff_ms: None,
     rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
-    options: build_test_options(&case.options, &tsc_options),
+    options: build_test_options(harness_options, rust_options, tsc_options),
     query_stats: None,
-    notes: case.notes.clone(),
+    notes,
     detail: None,
     expectation: None,
     mismatched: false,
   }
 }
 
-fn load_case_for_run(case: &TestCasePath) -> Result<TestCase> {
-  let content = crate::read_utf8_file(&case.path)?;
+fn load_case_for_run(case: TestCasePath) -> std::result::Result<TestCase, (TestCasePath, crate::HarnessError)> {
+  let content = match crate::read_utf8_file(&case.path) {
+    Ok(content) => content,
+    Err(err) => return Err((case, err.into())),
+  };
   let split = crate::split_test_file(&case.path, &content);
+  let options = HarnessOptions::from_directives(&split.directives);
   Ok(TestCase {
-    id: case.id.clone(),
-    path: case.path.clone(),
+    id: case.id,
+    path: case.path,
     files: split.files,
-    directives: split.directives.clone(),
-    options: HarnessOptions::from_directives(&split.directives),
+    directives: split.directives,
+    options,
     notes: split.notes,
   })
 }
 
-fn build_load_error_result(case: &TestCasePath, err: &crate::HarnessError) -> TestResult {
+fn build_load_error_result(case: TestCasePath, err: &crate::HarnessError) -> TestResult {
+  let TestCasePath { id, path } = case;
   let harness_options = HarnessOptions::default();
   let tsc_options = harness_options.to_tsc_options_map();
+  let rust_options = harness_options.to_compiler_options();
   TestResult {
-    id: case.id.clone(),
-    path: case.path.display().to_string(),
+    id,
+    path: path.display().to_string(),
     outcome: TestOutcome::RustIce,
     duration_ms: 0,
     rust_ms: None,
@@ -706,7 +722,7 @@ fn build_load_error_result(case: &TestCasePath, err: &crate::HarnessError) -> Te
     diff_ms: None,
     rust: EngineDiagnostics::ice(format!("failed to load test input: {err}")),
     tsc: EngineDiagnostics::skipped(Some("skipped: failed to load test input".to_string())),
-    options: build_test_options(&harness_options, &tsc_options),
+    options: build_test_options(harness_options, rust_options, tsc_options),
     query_stats: None,
     notes: Vec::new(),
     detail: None,
@@ -715,11 +731,18 @@ fn build_load_error_result(case: &TestCasePath, err: &crate::HarnessError) -> Te
   }
 }
 
-fn build_timeout_result(case: &TestCase, timeout: Duration) -> TestResult {
-  let tsc_options = case.options.to_tsc_options_map();
+fn build_timeout_result(
+  id: String,
+  path: PathBuf,
+  harness_options: HarnessOptions,
+  notes: Vec<String>,
+  timeout: Duration,
+) -> TestResult {
+  let tsc_options = harness_options.to_tsc_options_map();
+  let rust_options = harness_options.to_compiler_options();
   TestResult {
-    id: case.id.clone(),
-    path: case.path.display().to_string(),
+    id,
+    path: path.display().to_string(),
     outcome: TestOutcome::Timeout,
     duration_ms: timeout.as_millis(),
     rust_ms: None,
@@ -727,9 +750,9 @@ fn build_timeout_result(case: &TestCase, timeout: Duration) -> TestResult {
     diff_ms: None,
     rust: EngineDiagnostics::timeout(Some(format!("timed out after {}ms", timeout.as_millis()))),
     tsc: EngineDiagnostics::timeout(Some(format!("timed out after {}ms", timeout.as_millis()))),
-    options: build_test_options(&case.options, &tsc_options),
+    options: build_test_options(harness_options, rust_options, tsc_options),
     query_stats: None,
-    notes: case.notes.clone(),
+    notes,
     detail: None,
     expectation: None,
     mismatched: false,
@@ -921,7 +944,7 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
 }
 
 fn run_single_case(
-  case: &TestCase,
+  case: TestCase,
   compare_mode: CompareMode,
   tsc_pool: Option<Arc<TscRunnerPool>>,
   timeout_manager: Arc<TimeoutManager>,
@@ -951,7 +974,7 @@ fn run_single_case(
 }
 
 fn execute_case(
-  case: &TestCase,
+  case: TestCase,
   compare_mode: CompareMode,
   tsc_pool: Option<Arc<TscRunnerPool>>,
   tsc_available: bool,
@@ -971,14 +994,25 @@ fn execute_case(
   #[cfg(test)]
   let _active_case_guard = ActiveCaseGuard::new();
 
-  if let Some(delay) = harness_sleep_for_case(&case.id) {
+  let TestCase {
+    id,
+    path,
+    files,
+    directives: _,
+    options: harness_options,
+    notes,
+  } = case;
+
+  if let Some(delay) = harness_sleep_for_case(&id) {
     if sleep_with_deadline(delay, deadline) {
-      return build_timeout_result(case, timeout);
+      return build_timeout_result(id, path, harness_options, notes, timeout);
     }
   }
-  let notes = case.notes.clone();
-  let file_set = HarnessFileSet::new(&case.files);
-  let harness_options = case.options.clone();
+
+  let file_set = HarnessFileSet::new(&files);
+  // Release the original `VirtualFile` names/vec as soon as possible; the file
+  // set holds the canonicalized names and shared `Arc<str>` contents.
+  drop(files);
 
   let rust_start = Instant::now();
   let compiler_options = harness_options.to_compiler_options();
@@ -993,13 +1027,12 @@ fn execute_case(
       diagnostics,
       query_stats,
     } => (diagnostics, query_stats),
-    RustRunResult::Cancelled => return build_timeout_result(case, timeout),
+    RustRunResult::Cancelled => return build_timeout_result(id, path, harness_options, notes, timeout),
   };
   if Instant::now() >= deadline {
-    return build_timeout_result(case, timeout);
+    return build_timeout_result(id, path, harness_options, notes, timeout);
   }
   let tsc_options = harness_options.to_tsc_options_map();
-  let options = build_test_options(&harness_options, &tsc_options);
 
   let mut tsc_raw: Option<TscDiagnostics> = None;
   let mut tsc_ms: Option<u128> = None;
@@ -1033,15 +1066,15 @@ fn execute_case(
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => match run_live_tsc("tsc unavailable") {
       Some(diag) => diag,
-      None => return build_timeout_result(case, timeout),
+      None => return build_timeout_result(id, path, harness_options, notes, timeout),
     },
     CompareMode::Snapshot if update_snapshots => {
       match run_live_tsc("tsc unavailable for snapshot update") {
         Some(diag) => diag,
-        None => return build_timeout_result(case, timeout),
+        None => return build_timeout_result(id, path, harness_options, notes, timeout),
       }
     }
-    CompareMode::Snapshot => match snapshots.load(&case.id) {
+    CompareMode::Snapshot => match snapshots.load(&id) {
       Ok(snapshot) => {
         let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
         let crashed = snapshot
@@ -1057,24 +1090,28 @@ fn execute_case(
   };
 
   if Instant::now() >= deadline {
-    return build_timeout_result(case, timeout);
+    return build_timeout_result(id, path, harness_options, notes, timeout);
   }
 
   if update_snapshots && tsc.status == EngineStatus::Ok {
     if let Some(raw) = tsc_raw.as_ref() {
-      let _ = snapshots.save(&case.id, raw);
+      let _ = snapshots.save(&id, raw);
     }
   }
 
   let (outcome, detail) = compute_outcome(compare_mode, &rust, &tsc, span_tolerance);
   let diff_ms = diff_start.elapsed().as_millis();
   if Instant::now() >= deadline {
-    return build_timeout_result(case, timeout);
+    return build_timeout_result(id, path, harness_options, notes, timeout);
   }
 
+  let options = build_test_options(harness_options, compiler_options, tsc_options);
+  let notes = notes;
+  let path_display = path.display().to_string();
+
   TestResult {
-    id: case.id.clone(),
-    path: case.path.display().to_string(),
+    id,
+    path: path_display,
     outcome,
     duration_ms: total_start.elapsed().as_millis(),
     rust_ms: Some(rust_ms),
@@ -2794,7 +2831,14 @@ echo '{"diagnostics":[]}'
       notes: Vec::new(),
     };
 
-    let result = build_timeout_result(&case, Duration::from_millis(123));
+    let TestCase {
+      id,
+      path,
+      options,
+      notes,
+      ..
+    } = case;
+    let result = build_timeout_result(id, path, options, notes, Duration::from_millis(123));
     assert_eq!(result.outcome, TestOutcome::Timeout);
     assert_eq!(result.rust.status, EngineStatus::Timeout);
     assert_eq!(result.tsc.status, EngineStatus::Timeout);
