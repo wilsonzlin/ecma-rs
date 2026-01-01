@@ -1,4 +1,4 @@
-use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitTemplatePart};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -79,10 +79,49 @@ pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
       ObjMemberType::Shorthand { .. } => false,
       ObjMemberType::Rest { .. } => false,
     }),
+    Expr::Class(class) => {
+      if !class.stx.decorators.is_empty() {
+        return false;
+      }
+      if class.stx.extends.is_some() {
+        // Conservatively treat `extends` as potentially throwing even if the
+        // expression itself is "pure" (e.g. `class extends 1 {}` throws).
+        return false;
+      }
+      class
+        .stx
+        .members
+        .iter()
+        .all(|member| is_side_effect_free_class_member(member))
+    }
     Expr::LitTemplate(tpl) => tpl.stx.parts.iter().all(|part| match part {
       LitTemplatePart::String(_) => true,
       LitTemplatePart::Substitution(expr) => is_side_effect_free_expr(expr),
     }),
     _ => false,
+  }
+}
+
+fn is_side_effect_free_class_member(member: &Node<ClassMember>) -> bool {
+  if !member.stx.decorators.is_empty() {
+    return false;
+  }
+  if matches!(&member.stx.key, ClassOrObjKey::Computed(_)) {
+    return false;
+  }
+  match &member.stx.val {
+    ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) | ClassOrObjVal::Method(_) => true,
+    ClassOrObjVal::Prop(init) => {
+      if member.stx.static_ {
+        init.as_ref().map_or(true, is_side_effect_free_expr)
+      } else {
+        // Instance field initializers are not evaluated at class-definition
+        // time.
+        true
+      }
+    }
+    ClassOrObjVal::IndexSignature(_) => true,
+    // Static blocks execute during class definition.
+    ClassOrObjVal::StaticBlock(_) => false,
   }
 }

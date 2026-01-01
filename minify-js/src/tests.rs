@@ -222,6 +222,21 @@ fn dce_eliminates_transitively_unused_closure_chains() {
 }
 
 #[test]
+fn dce_removes_unused_class_expr_initializers() {
+  let result = minified(TopLevelMode::Module, "let C=class{m(){}};console.log(2);");
+  assert_eq!(result, "console.log(2);");
+}
+
+#[test]
+fn dce_keeps_class_expr_static_blocks_with_side_effects() {
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let C=class{static{sideEffect()}};return 1;}f();",
+  );
+  assert_eq!(result, "function f(){let a=class{static{sideEffect();}};return 1;}f();");
+}
+
+#[test]
 fn direct_eval_disables_dce_in_nested_arrow_expr_bodies() {
   let result = minified(
     TopLevelMode::Global,
