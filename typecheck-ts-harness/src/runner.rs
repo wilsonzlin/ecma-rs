@@ -7,6 +7,7 @@ use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAU
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
+use crate::resolve::resolve_module_specifier;
 use crate::tsc::{
   node_available, typescript_available, TscDiagnostics, TscRequest, TscRunner,
   TSC_BASELINE_SCHEMA_VERSION,
@@ -341,52 +342,7 @@ impl HarnessFileSet {
   }
 
   pub(crate) fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
-    if !is_relative {
-      let normalized = normalize_name(specifier);
-      return self.resolve(&normalized);
-    }
-
-    let base = self.name_for_key(from)?;
-    let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
-    let joined = parent.join(specifier);
-    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
-
-    let mut candidates = Vec::new();
-    candidates.push(base_candidate.clone());
-
-    if base_candidate.ends_with(".js") {
-      let trimmed = base_candidate.trim_end_matches(".js");
-      candidates.push(format!("{trimmed}.ts"));
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if base_candidate.ends_with(".jsx") {
-      let trimmed = base_candidate.trim_end_matches(".jsx");
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if !has_known_extension(&base_candidate) {
-      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
-        candidates.push(format!("{base_candidate}.{ext}"));
-      }
-    }
-
-    let base_path = Path::new(&base_candidate);
-    for ext in [
-      "index.ts",
-      "index.tsx",
-      "index.d.ts",
-      "index.js",
-      "index.jsx",
-    ] {
-      let joined = base_path.join(ext);
-      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
-    }
-
-    for cand in candidates {
-      if let Some(found) = self.resolve(&cand) {
-        return Some(found);
-      }
-    }
-
-    None
+    resolve_module_specifier(self, from, specifier)
   }
 
   pub(crate) fn name_for_key(&self, key: &FileKey) -> Option<String> {
@@ -1049,14 +1005,6 @@ impl Host for HarnessHost {
   }
 }
 
-fn has_known_extension(name: &str) -> bool {
-  name.ends_with(".d.ts")
-    || name.ends_with(".ts")
-    || name.ends_with(".tsx")
-    || name.ends_with(".js")
-    || name.ends_with(".jsx")
-}
-
 pub(crate) struct TscRunnerPool {
   node_path: PathBuf,
   limiter: Arc<ConcurrencyLimiter>,
@@ -1493,5 +1441,97 @@ mod tests {
       parse_diags.is_empty(),
       "expected no parse-js diagnostics for TSX input, got: {parse_diags:?}"
     );
+  }
+
+  #[test]
+  fn resolves_bare_specifier_via_node_modules() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/foo/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_prefers_nearest_node_modules() {
+    let files = vec![
+      VirtualFile {
+        name: "/src/b.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/src/node_modules/foo/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/index.d.ts".to_string(),
+        content: "export const x: string;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/src/b.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/src/node_modules/foo/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_falls_back_to_ancestor_node_modules() {
+    let files = vec![
+      VirtualFile {
+        name: "/src/b.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/src/b.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/foo/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_via_at_types_fallback() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/@types/foo/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/@types/foo/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
   }
 }

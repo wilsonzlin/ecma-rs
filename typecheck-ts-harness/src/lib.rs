@@ -10,6 +10,7 @@ pub mod expectations;
 mod file_kind;
 pub mod multifile;
 pub mod profile;
+mod resolve;
 pub mod runner;
 mod serde_helpers;
 pub mod tsc;
