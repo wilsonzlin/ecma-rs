@@ -1844,7 +1844,7 @@ fn lower_expr(
     }
     AstExpr::ImportMeta(_) => ExprKind::ImportMeta,
     AstExpr::NewTarget(_) => ExprKind::NewTarget,
-    AstExpr::JsxElem(elem) => ExprKind::Jsx(lower_jsx_elem(elem, builder)),
+    AstExpr::JsxElem(elem) => ExprKind::Jsx(lower_jsx_elem(elem, builder, ctx)),
     AstExpr::JsxExprContainer(container) => {
       let expr_id = lower_expr(&container.stx.value, builder, ctx);
       ExprKind::Jsx(JsxElement {
@@ -2186,7 +2186,45 @@ fn lower_template_literal(
   TemplateLiteral { head, spans }
 }
 
-fn lower_jsx_elem(elem: &Node<jsx::JsxElem>, builder: &mut BodyBuilder<'_>) -> JsxElement {
+fn lower_jsx_elem(
+  elem: &Node<jsx::JsxElem>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> JsxElement {
+  for attr in elem.stx.attributes.iter() {
+    match attr {
+      jsx::JsxAttr::Named { value, .. } => {
+        let Some(value) = value else {
+          continue;
+        };
+        match value {
+          jsx::JsxAttrVal::Expression(container) => {
+            let _ = lower_expr(&container.stx.value, builder, ctx);
+          }
+          jsx::JsxAttrVal::Element(child) => {
+            let _ = lower_jsx_elem_as_expr(child, builder, ctx);
+          }
+          jsx::JsxAttrVal::Text(_) => {}
+        }
+      }
+      jsx::JsxAttr::Spread { value } => {
+        let _ = lower_expr(&value.stx.value, builder, ctx);
+      }
+    }
+  }
+
+  for child in elem.stx.children.iter() {
+    match child {
+      jsx::JsxElemChild::Expr(container) => {
+        let _ = lower_expr(&container.stx.value, builder, ctx);
+      }
+      jsx::JsxElemChild::Element(child) => {
+        let _ = lower_jsx_elem_as_expr(child, builder, ctx);
+      }
+      jsx::JsxElemChild::Text(_) => {}
+    }
+  }
+
   let kind = match &elem.stx.name {
     Some(jsx::JsxElemName::Id(id)) => JsxElementKind::Element(builder.intern_name(&id.stx.name)),
     Some(jsx::JsxElemName::Name(name)) => {
@@ -2203,6 +2241,15 @@ fn lower_jsx_elem(elem: &Node<jsx::JsxElem>, builder: &mut BodyBuilder<'_>) -> J
     None => JsxElementKind::Fragment,
   };
   JsxElement { kind }
+}
+
+fn lower_jsx_elem_as_expr(
+  elem: &Node<jsx::JsxElem>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> ExprId {
+  let kind = ExprKind::Jsx(lower_jsx_elem(elem, builder, ctx));
+  builder.alloc_expr(ctx.to_range(elem.loc), kind)
 }
 
 fn lower_pat(

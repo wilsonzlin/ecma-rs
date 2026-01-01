@@ -1,4 +1,5 @@
 use diagnostics::FileId;
+use diagnostics::TextRange;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source;
@@ -1933,6 +1934,64 @@ fn parses_jsx_and_tsx_file_kinds() {
     .exprs
     .iter()
     .any(|e| matches!(e.kind, ExprKind::Jsx(_))));
+}
+
+#[test]
+fn lowers_jsx_inner_expressions() {
+  let source = "const bar = 1; const props = {}; const el = <div foo={bar} {...props}>{bar}</div>;";
+  let result = lower_from_source_with_kind(FileKind::Tsx, source).expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+
+  let names: HashSet<_> = body
+    .exprs
+    .iter()
+    .filter_map(|expr| match expr.kind {
+      ExprKind::Ident(name) => result.names.resolve(name).map(|s| s.to_string()),
+      _ => None,
+    })
+    .collect();
+
+  assert!(names.contains("bar"));
+  assert!(names.contains("props"));
+}
+
+#[test]
+fn lowers_nested_jsx_elements_as_expressions() {
+  let source = "const el = <div><span/></div>;";
+  let result = lower_from_source_with_kind(FileKind::Tsx, source).expect("lower");
+  let body = result.body(result.root_body()).expect("root body");
+
+  let child_start = source
+    .find("<span/>")
+    .expect("child span should exist") as u32;
+  let child_end = child_start + "<span/>".len() as u32;
+  let child_range = TextRange::new(child_start, child_end);
+
+  let parent_start = source
+    .find("<div><span/></div>")
+    .expect("parent div should exist") as u32;
+  let parent_end = parent_start + "<div><span/></div>".len() as u32;
+  let parent_range = TextRange::new(parent_start, parent_end);
+
+  let child_expr_idx = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| {
+      (expr.span == child_range && matches!(expr.kind, ExprKind::Jsx(_))).then_some(idx)
+    })
+    .expect("child JSX element should be lowered as an expression");
+
+  let parent_expr_idx = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| {
+      (expr.span == parent_range && matches!(expr.kind, ExprKind::Jsx(_))).then_some(idx)
+    })
+    .expect("parent JSX element should be lowered as an expression");
+
+  assert!(child_expr_idx < parent_expr_idx);
 }
 
 #[test]
