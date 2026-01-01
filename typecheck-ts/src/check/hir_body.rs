@@ -1819,11 +1819,11 @@ impl<'a> Checker<'a> {
     }
 
     let element_ty = self.jsx_element_type(elem.loc);
-    let actual_props = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children);
 
     match &elem.stx.name {
       None => {
         // Fragment; no attributes, but still typecheck children.
+        let _ = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
       }
       Some(JsxElemName::Name(name)) => {
         let tag_buf = name
@@ -1833,40 +1833,64 @@ impl<'a> Checker<'a> {
           .map(|ns| format!("{ns}:{}", name.stx.name));
         let tag = tag_buf.as_deref().unwrap_or_else(|| name.stx.name.as_str());
         let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
-        if intrinsic_elements != prim.unknown {
-          let expected_props_ty = self.member_type(intrinsic_elements, tag);
-          if expected_props_ty == prim.unknown {
+        let expected_props_ty = if intrinsic_elements != prim.unknown {
+          self.member_type(intrinsic_elements, tag)
+        } else {
+          prim.unknown
+        };
+        if expected_props_ty == prim.unknown {
+          let _ = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
+          if intrinsic_elements != prim.unknown {
             self
               .diagnostics
               .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
                 format!("unknown JSX intrinsic element `{tag}`"),
                 Span::new(self.file, loc_to_range(self.file, name.loc)),
               ));
-          } else {
-            let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
-            self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
+        } else {
+          let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
+          let actual_props = self.jsx_actual_props(
+            elem.loc,
+            &elem.stx.attributes,
+            &elem.stx.children,
+            Some(expected_props_ty),
+          );
+          self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
         }
       }
       Some(JsxElemName::Id(id)) => {
         let name = id.stx.name.as_str();
         if name.contains(':') || name.contains('-') {
           let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
-          if intrinsic_elements != prim.unknown {
-            let expected_props_ty = self.member_type(intrinsic_elements, name);
-            if expected_props_ty == prim.unknown {
+          let expected_props_ty = if intrinsic_elements != prim.unknown {
+            self.member_type(intrinsic_elements, name)
+          } else {
+            prim.unknown
+          };
+          if expected_props_ty == prim.unknown {
+            let _ = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
+            if intrinsic_elements != prim.unknown {
               self
                 .diagnostics
                 .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
                   format!("unknown JSX intrinsic element `{name}`"),
                   Span::new(self.file, loc_to_range(self.file, id.loc)),
                 ));
-            } else {
-              let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
-              self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
+          } else {
+            let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
+            let actual_props = self.jsx_actual_props(
+              elem.loc,
+              &elem.stx.attributes,
+              &elem.stx.children,
+              Some(expected_props_ty),
+            );
+            self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         } else {
+          let actual_props =
+            self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
           let component_ty = self
             .lookup(name)
             .map(|binding| binding.ty)
@@ -1889,21 +1913,34 @@ impl<'a> Checker<'a> {
             tag.push_str(segment);
           }
           let intrinsic_elements = self.jsx_intrinsic_elements_type(elem.loc);
-          if intrinsic_elements != prim.unknown {
-            let expected_props_ty = self.member_type(intrinsic_elements, &tag);
-            if expected_props_ty == prim.unknown {
+          let expected_props_ty = if intrinsic_elements != prim.unknown {
+            self.member_type(intrinsic_elements, &tag)
+          } else {
+            prim.unknown
+          };
+          if expected_props_ty == prim.unknown {
+            let _ = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
+            if intrinsic_elements != prim.unknown {
               self
                 .diagnostics
                 .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
                   format!("unknown JSX intrinsic element `{tag}`"),
                   Span::new(self.file, loc_to_range(self.file, member.loc)),
                 ));
-            } else {
-              let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
-              self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
+          } else {
+            let expected_props_ty = self.jsx_apply_intrinsic_attributes(expected_props_ty);
+            let actual_props = self.jsx_actual_props(
+              elem.loc,
+              &elem.stx.attributes,
+              &elem.stx.children,
+              Some(expected_props_ty),
+            );
+            self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         } else {
+          let actual_props =
+            self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
           // Member expressions like `<Foo.Bar />` are treated like looking up
           // `Foo` and then checking `.Bar` as a value.
           let mut current = self
@@ -2018,6 +2055,7 @@ impl<'a> Checker<'a> {
     loc: Loc,
     attrs: &[JsxAttr],
     children: &[JsxElemChild],
+    expected: Option<TypeId>,
   ) -> JsxActualProps {
     let prim = self.store.primitive_ids();
     let mut props = HashSet::new();
@@ -2033,7 +2071,7 @@ impl<'a> Checker<'a> {
             name.stx.name.clone()
           };
           props.insert(key_string.clone());
-          let key = PropKey::String(self.store.intern_name(key_string));
+          let key = PropKey::String(self.store.intern_name(key_string.clone()));
           let value_ty = match value {
             None => self.store.intern_type(TypeKind::BooleanLiteral(true)),
             Some(JsxAttrVal::Text(text)) => self.jsx_attr_text_type(text),
@@ -2041,7 +2079,13 @@ impl<'a> Checker<'a> {
               if is_empty_jsx_expr_placeholder(&expr.stx.value) {
                 prim.unknown
               } else {
-                self.check_expr(&expr.stx.value)
+                let expected_ty = expected
+                  .filter(|ty| {
+                    !matches!(self.store.type_kind(*ty), TypeKind::Any | TypeKind::Unknown)
+                  })
+                  .map(|props_ty| self.member_type(props_ty, &key_string))
+                  .unwrap_or(prim.unknown);
+                self.check_expr_with_expected(&expr.stx.value, expected_ty)
               }
             }
             Some(JsxAttrVal::Element(elem)) => self.check_jsx_elem(elem),
