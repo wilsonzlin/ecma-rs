@@ -1135,7 +1135,11 @@ fn mapped_over_keyof_any_produces_broad_indexers() {
   assert!(shape.properties.is_empty());
   assert_eq!(shape.indexers.len(), 3);
   assert_eq!(
-    shape.indexers.iter().map(|idx| idx.key_type).collect::<Vec<_>>(),
+    shape
+      .indexers
+      .iter()
+      .map(|idx| idx.key_type)
+      .collect::<Vec<_>>(),
     vec![primitives.number, primitives.string, primitives.symbol]
   );
   assert!(shape
@@ -1171,7 +1175,11 @@ fn mapped_remap_as_any_widens_to_broad_indexers() {
   assert!(shape.properties.is_empty());
   assert_eq!(shape.indexers.len(), 3);
   assert_eq!(
-    shape.indexers.iter().map(|idx| idx.key_type).collect::<Vec<_>>(),
+    shape
+      .indexers
+      .iter()
+      .map(|idx| idx.key_type)
+      .collect::<Vec<_>>(),
     vec![primitives.number, primitives.string, primitives.symbol]
   );
   assert!(shape
