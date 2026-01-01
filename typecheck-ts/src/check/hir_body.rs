@@ -2301,13 +2301,12 @@ impl<'a> Checker<'a> {
     }
 
     let expected_children_ty = expected.unwrap_or(prim.unknown);
-    let expected_spread_ty = if has_spread_child
-      && self.spread_element_type(expected_children_ty) != prim.unknown
-    {
-      expected_children_ty
-    } else {
-      prim.unknown
-    };
+    let expected_spread_ty =
+      if has_spread_child && self.spread_element_type(expected_children_ty) != prim.unknown {
+        expected_children_ty
+      } else {
+        prim.unknown
+      };
     let expected_child_ty = if has_spread_child || meaningful > 1 {
       self.spread_element_type(expected_children_ty)
     } else {
@@ -3400,11 +3399,17 @@ impl<'a> Checker<'a> {
       TypeKind::Any => prim.any,
       TypeKind::Unknown => prim.unknown,
       TypeKind::Union(members) => {
-        let elems: Vec<_> = members.into_iter().map(|m| self.spread_element_type(m)).collect();
+        let elems: Vec<_> = members
+          .into_iter()
+          .map(|m| self.spread_element_type(m))
+          .collect();
         self.store.union(elems)
       }
       TypeKind::Intersection(members) => {
-        let elems: Vec<_> = members.into_iter().map(|m| self.spread_element_type(m)).collect();
+        let elems: Vec<_> = members
+          .into_iter()
+          .map(|m| self.spread_element_type(m))
+          .collect();
         self.store.intersection(elems)
       }
       TypeKind::Array { ty, .. } => ty,
