@@ -148,13 +148,26 @@ pub fn iife_stmt(
   body: Vec<Node<Stmt>>,
 ) -> Node<Stmt> {
   let param = param.into();
+  // The IIFE parameter shadows the outer binding (e.g. `var E; (function(E){...})(E||(E={}))`).
+  //
+  // This code is synthesized during TS erasure, so the `function(E){}` parameter
+  // does not exist in the original source. If we reuse the same source span for
+  // both the outer `var E;` declarator and the IIFE function expression,
+  // `SpanMap::def_at_offset` can return a non-exported def when the HIR emitter
+  // checks whether `export` should be printed for the `var` statement (because
+  // defs are ordered by `DefId`, not insertion order).
+  //
+  // Give the IIFE a distinct (but stable) synthetic span that starts after the
+  // enclosing statement so the outer binding remains unambiguous.
+  let iife_start = if loc.0 < loc.1 { loc.0 + 1 } else { loc.0 };
+  let iife_loc = Loc(iife_start, loc.1);
   let func = Func {
     arrow: false,
     async_: false,
     generator: false,
     type_parameters: None,
     parameters: vec![Node::new(
-      loc,
+      iife_loc,
       ParamDecl {
         decorators: vec![],
         rest: false,
@@ -162,9 +175,9 @@ pub fn iife_stmt(
         accessibility: None,
         readonly: false,
         pattern: Node::new(
-          loc,
+          iife_loc,
           PatDecl {
-            pat: Node::new(loc, Pat::Id(Node::new(loc, IdPat { name: param }))),
+            pat: Node::new(iife_loc, Pat::Id(Node::new(iife_loc, IdPat { name: param }))),
           },
         ),
         type_annotation: None,
@@ -175,28 +188,28 @@ pub fn iife_stmt(
     body: Some(FuncBody::Block(body)),
   };
   let func_expr = Expr::Func(Node::new(
-    loc,
+    iife_loc,
     FuncExpr {
       name: None,
-      func: Node::new(loc, func),
+      func: Node::new(iife_loc, func),
     },
   ));
   let call = CallExpr {
     optional_chaining: false,
-    callee: Node::new(loc, func_expr),
+    callee: Node::new(iife_loc, func_expr),
     arguments: vec![Node::new(
-      loc,
+      iife_loc,
       CallArg {
         spread: false,
         value: arg,
       },
     )],
   };
-  let call_expr = Node::new(loc, Expr::Call(Node::new(loc, call)));
+  let call_expr = Node::new(iife_loc, Expr::Call(Node::new(iife_loc, call)));
   // Ensure the expression statement doesn't start with `function`, which would
   // otherwise be parsed as a declaration.
   expr_stmt(
-    loc,
-    binary_expr(loc, OperatorName::Comma, number(loc, 0.0), call_expr),
+    iife_loc,
+    binary_expr(iife_loc, OperatorName::Comma, number(iife_loc, 0.0), call_expr),
   )
 }
