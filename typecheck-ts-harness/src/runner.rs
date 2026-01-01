@@ -383,7 +383,7 @@ fn build_test_options(
   }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct HarnessFile {
   key: FileKey,
   content: Arc<str>,
@@ -391,9 +391,15 @@ struct HarnessFile {
 
 #[derive(Clone)]
 pub struct HarnessFileSet {
+  inner: Arc<HarnessFileSetInner>,
+}
+
+#[derive(Debug)]
+struct HarnessFileSetInner {
   files: Vec<HarnessFile>,
   name_to_index: HashMap<Arc<str>, usize>,
-  package_json_cache: Arc<PackageJsonCache>,
+  roots: Vec<FileKey>,
+  package_json_cache: PackageJsonCache,
 }
 
 #[derive(Debug, Default)]
@@ -429,10 +435,20 @@ impl HarnessFileSet {
       name_to_index.insert(normalized, idx);
     }
 
+    let mut roots: Vec<_> = stored
+      .iter()
+      .filter(|file| is_source_root(file.key.as_str()))
+      .map(|file| file.key.clone())
+      .collect();
+    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+
     Self {
-      files: stored,
-      name_to_index,
-      package_json_cache: Arc::new(PackageJsonCache::default()),
+      inner: Arc::new(HarnessFileSetInner {
+        files: stored,
+        name_to_index,
+        roots,
+        package_json_cache: PackageJsonCache::default(),
+      }),
     }
   }
 
@@ -443,21 +459,15 @@ impl HarnessFileSet {
   /// the host/tsc runner, but should not be parsed/typechecked as compilation
   /// roots.
   pub(crate) fn root_keys(&self) -> Vec<FileKey> {
-    let mut roots: Vec<_> = self
-      .files
-      .iter()
-      .filter(|file| is_source_root(file.key.as_str()))
-      .map(|file| file.key.clone())
-      .collect();
-    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    roots
+    self.inner.roots.clone()
   }
 
   pub(crate) fn resolve(&self, normalized: &str) -> Option<FileKey> {
     self
+      .inner
       .name_to_index
       .get(normalized)
-      .and_then(|idx| self.files.get(*idx))
+      .and_then(|idx| self.inner.files.get(*idx))
       .map(|file| file.key.clone())
   }
 
@@ -467,7 +477,7 @@ impl HarnessFileSet {
 
   pub(crate) fn package_json(&self, key: &FileKey) -> Option<Arc<Value>> {
     {
-      let guard = self.package_json_cache.parsed.lock().unwrap();
+      let guard = self.inner.package_json_cache.parsed.lock().unwrap();
       if let Some(cached) = guard.get(key) {
         return cached.clone();
       }
@@ -476,27 +486,29 @@ impl HarnessFileSet {
     let raw = self.content(key)?;
     let parsed: Option<Value> = serde_json::from_str(&raw).ok();
     let parsed = parsed.map(Arc::new);
-    let mut guard = self.package_json_cache.parsed.lock().unwrap();
+    let mut guard = self.inner.package_json_cache.parsed.lock().unwrap();
     guard.insert(key.clone(), parsed.clone());
     parsed
   }
 
-  pub(crate) fn name_for_key(&self, key: &FileKey) -> Option<String> {
+  pub(crate) fn name_for_key<'a>(&self, key: &'a FileKey) -> Option<&'a str> {
     self
+      .inner
       .name_to_index
       .contains_key(key.as_str())
-      .then(|| key.as_str().to_string())
+      .then_some(key.as_str())
   }
 
   fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
-    self.files.iter()
+    self.inner.files.iter()
   }
 
   pub(crate) fn content(&self, key: &FileKey) -> Option<Arc<str>> {
     self
+      .inner
       .name_to_index
       .get(key.as_str())
-      .and_then(|idx| self.files.get(*idx))
+      .and_then(|idx| self.inner.files.get(*idx))
       .map(|f| Arc::clone(&f.content))
   }
 }
@@ -1173,7 +1185,7 @@ fn run_rust_with_profile(
       diagnostics: EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
         program
           .file_key(id)
-          .and_then(|key| file_set.name_for_key(&key))
+          .and_then(|key| file_set.name_for_key(&key).map(|name| name.to_string()))
       })),
       query_stats: collect_profile.then(|| program.query_stats()),
     },
@@ -1506,11 +1518,7 @@ impl Host for HarnessHost {
   }
 
   fn file_kind(&self, file: &FileKey) -> FileKind {
-    let name = self
-      .files
-      .name_for_key(file)
-      .unwrap_or_else(|| file.as_str().to_string());
-    crate::file_kind::infer_file_kind(&name)
+    crate::file_kind::infer_file_kind(file.as_str())
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -1800,7 +1808,7 @@ pub(crate) fn build_tsc_request(
   options: &Map<String, Value>,
   diagnostics_only: bool,
 ) -> TscRequest {
-  let mut files = HashMap::new();
+  let mut files = HashMap::with_capacity(file_set.inner.files.len());
 
   for file in file_set.iter() {
     let name = file.key.as_str().to_string();

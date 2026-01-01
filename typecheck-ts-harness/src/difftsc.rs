@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
-use std::io::Write;
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use typecheck_ts::Program;
@@ -1831,16 +1831,18 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 
   let mut diagnostics = diagnostics.clone();
   diagnostics.canonicalize_for_baseline();
-  let json = serde_json::to_string_pretty(&diagnostics)?;
-  fs::write(path, format!("{json}\n"))
-    .with_context(|| format!("write baseline at {}", path.display()))?;
+  let file = fs::File::create(path).with_context(|| format!("write baseline at {}", path.display()))?;
+  let mut writer = BufWriter::new(file);
+  serde_json::to_writer_pretty(&mut writer, &diagnostics)?;
+  writeln!(writer)?;
 
   Ok(())
 }
 
 fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
-  let data = read_utf8_file(path).with_context(|| format!("read baseline {}", path.display()))?;
-  let parsed: TscDiagnostics = serde_json::from_str(&data).context("parse baseline JSON")?;
+  let file = fs::File::open(path).with_context(|| format!("read baseline {}", path.display()))?;
+  let reader = BufReader::new(file);
+  let parsed: TscDiagnostics = serde_json::from_reader(reader).context("parse baseline JSON")?;
   let version = parsed.schema_version.unwrap_or(0);
   if version != TSC_BASELINE_SCHEMA_VERSION {
     return Err(anyhow!(

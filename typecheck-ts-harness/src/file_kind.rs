@@ -5,29 +5,32 @@ use typecheck_ts::lib_support::FileKind;
 /// Paths are typically normalized via `diagnostics::paths::normalize_ts_path`
 /// (e.g. `/a.ts`, `/dir/file.tsx`, `c:/foo/bar.ts`).
 pub(crate) fn infer_file_kind(path: &str) -> FileKind {
-  let lower = path.to_ascii_lowercase();
+  let ends_with = |suffix: &str| {
+    path.len() >= suffix.len()
+      && path.as_bytes()[path.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
+  };
 
-  if lower.ends_with(".d.ts") || lower.ends_with(".d.mts") || lower.ends_with(".d.cts") {
+  if ends_with(".d.ts") || ends_with(".d.mts") || ends_with(".d.cts") {
     return FileKind::Dts;
   }
-  if lower.ends_with(".tsx") {
+  if ends_with(".tsx") {
     return FileKind::Tsx;
   }
-  if lower.ends_with(".ts") {
+  if ends_with(".ts") {
     return FileKind::Ts;
   }
-  if lower.ends_with(".jsx") {
+  if ends_with(".jsx") {
     return FileKind::Jsx;
   }
-  if lower.ends_with(".js") {
+  if ends_with(".js") {
     return FileKind::Js;
   }
   // `typecheck-ts` does not currently distinguish module-suffixed extensions,
   // so map them to the closest supported kind.
-  if lower.ends_with(".mts") || lower.ends_with(".cts") {
+  if ends_with(".mts") || ends_with(".cts") {
     return FileKind::Ts;
   }
-  if lower.ends_with(".mjs") || lower.ends_with(".cjs") {
+  if ends_with(".mjs") || ends_with(".cjs") {
     return FileKind::Js;
   }
 

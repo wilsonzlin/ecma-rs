@@ -35,7 +35,7 @@ pub(crate) fn resolve_module_specifier(
 
 fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> Option<FileKey> {
   let base = files.name_for_key(from)?;
-  let parent = virtual_parent_dir(&base);
+  let parent = virtual_parent_dir(base);
   let joined = virtual_join(&parent, specifier);
   resolve_as_file_or_directory(files, &joined)
 }
@@ -65,7 +65,7 @@ fn resolve_non_relative(
   let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
   let subpath = package_rest.trim_start_matches('/');
   let has_subpath = !subpath.is_empty();
-  let mut dir = virtual_parent_dir(&from_name);
+  let mut dir = virtual_parent_dir(from_name);
   loop {
     let package_dir = virtual_join(&virtual_join(&dir, "node_modules"), package_name);
     if has_subpath {
@@ -105,7 +105,7 @@ fn resolve_imports_specifier(
   specifier: &str,
 ) -> Option<FileKey> {
   let from_name = files.name_for_key(from)?;
-  let mut dir = virtual_parent_dir(&from_name);
+  let mut dir = virtual_parent_dir(from_name);
   loop {
     if let Some(found) = resolve_imports_in_dir(files, &dir, specifier) {
       return Some(found);
