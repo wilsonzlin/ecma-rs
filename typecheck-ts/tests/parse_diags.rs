@@ -1,3 +1,4 @@
+use parse_js::ast::stmt::Stmt;
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{Diagnostic, FileId, TextRange};
 use std::sync::Arc;
@@ -6,9 +7,11 @@ use typecheck_ts::db::{
   program_diagnostics as db_program_diagnostics, reset_parse_query_count,
   unresolved_module_diagnostics, TypecheckDb,
 };
+use typecheck_ts::check::type_expr::TypeLowerer;
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};
+use types_ts_interned::TypeStore;
 
 struct SingleFile<'a> {
   name: &'a str,
@@ -92,6 +95,30 @@ fn assert_unresolved_diag_covers_specifier(
   );
 }
 
+fn assert_diag_covers_substring(
+  diag: &Diagnostic,
+  expected_code: &codes::Code,
+  file_id: FileId,
+  source: &str,
+  substring: &str,
+) {
+  assert_eq!(diag.code.as_str(), expected_code.as_str());
+  assert_eq!(diag.primary.file, file_id);
+
+  let start = source
+    .find(substring)
+    .unwrap_or_else(|| panic!("missing substring {substring:?} in source"));
+  let start = start as u32;
+  let end = start + substring.len() as u32;
+  let expected_span = TextRange::new(start, end);
+  assert!(
+    diag.primary.range.start <= expected_span.start && diag.primary.range.end >= expected_span.end,
+    "diagnostic span {:?} should cover substring {:?}",
+    diag.primary.range,
+    expected_span
+  );
+}
+
 #[test]
 fn unresolved_import_points_at_specifier() {
   let source = r#"import { Foo } from "./missing";"#;
@@ -141,6 +168,66 @@ fn unresolved_typeof_import_points_at_specifier() {
     .find(|diag| diag.code.as_str() == codes::UNRESOLVED_MODULE.as_str())
     .expect("expected UNRESOLVED_MODULE diagnostic");
   assert_unresolved_diag_covers_specifier(unresolved, file_id, source, "\"./missing\"");
+}
+
+#[test]
+fn unresolved_import_type_diagnostic_span_covers_expression() {
+  let source = r#"type T = import("./dep");"#;
+  let file = FileId(0);
+  let parsed = parse::parse(file, FileKind::Ts, source);
+  let ast = parsed.ast.expect("expected valid AST");
+  let stmt = ast.stx.body.first().expect("expected statement");
+  let Stmt::TypeAliasDecl(alias) = stmt.stx.as_ref() else {
+    panic!("expected type alias declaration");
+  };
+
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store);
+  lowerer.set_file(file);
+  lowerer.lower_type_expr(&alias.stx.type_expr);
+  let diagnostics = lowerer.take_diagnostics();
+
+  let unresolved = diagnostics
+    .iter()
+    .find(|diag| diag.code.as_str() == codes::UNRESOLVED_IMPORT_TYPE.as_str())
+    .expect("expected UNRESOLVED_IMPORT_TYPE diagnostic from TypeLowerer");
+  assert_diag_covers_substring(
+    unresolved,
+    &codes::UNRESOLVED_IMPORT_TYPE,
+    file,
+    source,
+    "\"./dep\"",
+  );
+}
+
+#[test]
+fn unresolved_type_query_diagnostic_span_covers_reference() {
+  let source = "type T = typeof missing;";
+  let file = FileId(0);
+  let parsed = parse::parse(file, FileKind::Ts, source);
+  let ast = parsed.ast.expect("expected valid AST");
+  let stmt = ast.stx.body.first().expect("expected statement");
+  let Stmt::TypeAliasDecl(alias) = stmt.stx.as_ref() else {
+    panic!("expected type alias declaration");
+  };
+
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store);
+  lowerer.set_file(file);
+  lowerer.lower_type_expr(&alias.stx.type_expr);
+  let diagnostics = lowerer.take_diagnostics();
+
+  let unresolved = diagnostics
+    .iter()
+    .find(|diag| diag.code.as_str() == codes::UNRESOLVED_TYPE_QUERY.as_str())
+    .expect("expected UNRESOLVED_TYPE_QUERY diagnostic from TypeLowerer");
+  assert_diag_covers_substring(
+    unresolved,
+    &codes::UNRESOLVED_TYPE_QUERY,
+    file,
+    source,
+    "missing",
+  );
 }
 
 #[test]

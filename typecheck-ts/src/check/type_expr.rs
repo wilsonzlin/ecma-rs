@@ -273,8 +273,8 @@ impl TypeLowerer {
       TypeExpr::MappedType(mapped) => self.lower_mapped_type(mapped),
       TypeExpr::TemplateLiteralType(tpl) => self.lower_template_literal(tpl),
       TypeExpr::TypePredicate(pred) => self.lower_type_predicate(pred),
-      TypeExpr::TypeQuery(query) => self.lower_type_query(query),
-      TypeExpr::ImportType(import) => self.lower_import_type(import),
+      TypeExpr::TypeQuery(query) => self.lower_type_query(expr.loc, query),
+      TypeExpr::ImportType(import) => self.lower_import_type(expr.loc, import),
       TypeExpr::InferType(infer) => self.lower_infer_type(infer),
     }
   }
@@ -673,7 +673,11 @@ impl TypeLowerer {
     }
   }
 
-  fn lower_type_query(&mut self, query: &Node<parse_js::ast::type_expr::TypeQuery>) -> TypeId {
+  fn lower_type_query(
+    &mut self,
+    outer_loc: Loc,
+    query: &Node<parse_js::ast::type_expr::TypeQuery>,
+  ) -> TypeId {
     if let Some((module, qualifier)) = import_typeof_target(&query.stx.expr_name) {
       let qualifier_opt = (!qualifier.is_empty()).then_some(qualifier);
       if let Some(resolver) = &self.resolver {
@@ -689,12 +693,12 @@ impl TypeLowerer {
         message.push('.');
         message.push_str(&path.join("."));
       }
-      self.push_diag(query.loc, &codes::UNRESOLVED_TYPE_QUERY, message);
+      self.push_diag(outer_loc, &codes::UNRESOLVED_TYPE_QUERY, message);
       return self.store.primitive_ids().unknown;
     }
     let Some(path) = entity_name_segments(&query.stx.expr_name) else {
       self.push_diag(
-        query.loc,
+        outer_loc,
         &codes::UNRESOLVED_TYPE_QUERY,
         "unsupported typeof query target",
       );
@@ -704,14 +708,18 @@ impl TypeLowerer {
       return resolved;
     }
     self.push_diag(
-      query.loc,
+      outer_loc,
       &codes::UNRESOLVED_TYPE_QUERY,
       format!("cannot resolve typeof {}", path.join(".")),
     );
     self.store.primitive_ids().unknown
   }
 
-  fn lower_import_type(&mut self, import: &Node<parse_js::ast::type_expr::TypeImport>) -> TypeId {
+  fn lower_import_type(
+    &mut self,
+    outer_loc: Loc,
+    import: &Node<parse_js::ast::type_expr::TypeImport>,
+  ) -> TypeId {
     let qualifier = import
       .stx
       .qualifier
@@ -735,7 +743,7 @@ impl TypeLowerer {
     if let Some(path) = qualifier.as_ref() {
       message.push_str(&format!(" for {}", path.join(".")));
     }
-    self.push_diag(import.loc, &codes::UNRESOLVED_IMPORT_TYPE, message);
+    self.push_diag(outer_loc, &codes::UNRESOLVED_IMPORT_TYPE, message);
     self.store.primitive_ids().unknown
   }
 
