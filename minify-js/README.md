@@ -11,7 +11,7 @@ Extremely fast JavaScript minifier, written in Rust.
 
 ## Performance
 
-Comparison with esbuild, run on [common libraries](./bench).
+Comparison with esbuild, run on [common libraries](../bench).
 
 <img width="400" alt="Chart showing speed of JS minifiers" src="https://static.wilsonl.in/minify-js/bench/0.6.0/total-times.svg"><img width="400" alt="Chart showing compression of JS minifiers" src="https://static.wilsonl.in/minify-js/bench/0.6.0/average-sizes.svg">
 
