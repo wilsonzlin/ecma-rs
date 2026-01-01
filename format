@@ -4,8 +4,8 @@ set -Eeuxo pipefail
 
 pushd "$(dirname "$0")" >/dev/null
 
-npx prettier@2.3.2 -w 'version' '.github/**/*.yaml' 'minify-js-nodejs/*.{js,json,ts}'
-
 cargo fmt --all
+
+npx prettier@2.3.2 -w 'version' '.github/**/*.yaml' 'minify-js-nodejs/*.{js,json,ts}'
 
 popd >/dev/null
