@@ -40,3 +40,46 @@ fn conformance_snapshot_mode_loads_stored_baselines() {
     );
   }
 }
+
+#[cfg(unix)]
+#[test]
+fn conformance_snapshot_mode_does_not_probe_node() {
+  use std::fs;
+  use std::os::unix::fs::PermissionsExt;
+  use std::time::Instant;
+  use tempfile::tempdir;
+
+  let tmp = tempdir().expect("tempdir");
+  let fake_node = tmp.path().join("fake-node");
+  fs::write(&fake_node, "#!/bin/sh\nsleep 10\n").expect("write fake node");
+  let mut perms = fs::metadata(&fake_node).expect("metadata").permissions();
+  perms.set_mode(0o755);
+  fs::set_permissions(&fake_node, perms).expect("chmod fake node");
+
+  let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    .join("fixtures")
+    .join("conformance-mini");
+
+  let mut builder = GlobSetBuilder::new();
+  builder.add(Glob::new("match/basic.ts").unwrap());
+  builder.add(Glob::new("mismatch/type_error.ts").unwrap());
+  let filter = Filter::Glob(builder.build().unwrap());
+
+  let mut options = ConformanceOptions::new(root);
+  options.filter = filter;
+  options.timeout = Duration::from_secs(5);
+  options.compare = CompareMode::Snapshot;
+  options.node_path = fake_node;
+  options.allow_mismatches = true;
+  options.jobs = 1;
+
+  let start = Instant::now();
+  let report = run_conformance(options).expect("run conformance");
+  let elapsed = start.elapsed();
+  assert!(
+    elapsed < Duration::from_secs(5),
+    "snapshot mode should not invoke the node binary; elapsed={elapsed:?}"
+  );
+
+  assert_eq!(report.summary.total, 2);
+}
