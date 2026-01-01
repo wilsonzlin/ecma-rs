@@ -283,16 +283,18 @@ impl<'a> Parser<'a> {
     }
 
     let loc = self.since_checkpoint(&start);
-    Ok(Node::new(
-      loc,
-      ImportEqualsDecl {
-        export,
-        type_only,
-        name,
-        rhs,
-      },
+    Ok(
+      Node::new(
+        loc,
+        ImportEqualsDecl {
+          export,
+          type_only,
+          name,
+          rhs,
+        },
+      )
+      .into_wrapped(),
     )
-    .into_wrapped())
   }
 
   pub fn export_list_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportListStmt>> {

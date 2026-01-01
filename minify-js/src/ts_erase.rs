@@ -2088,10 +2088,7 @@ fn strip_module_decl(
   strip_namespace_decl(ctx, ns_decl, loc, assoc, is_top_level, parent_namespace)
 }
 
-fn strip_switch_branch(
-  ctx: &mut StripContext,
-  branch: Node<SwitchBranch>,
-) -> Node<SwitchBranch> {
+fn strip_switch_branch(ctx: &mut StripContext, branch: Node<SwitchBranch>) -> Node<SwitchBranch> {
   let mut branch = branch;
   if let Some(case) = branch.stx.case.take() {
     branch.stx.case = Some(strip_expr(ctx, case));
