@@ -1376,6 +1376,39 @@ fn constructor_parameter_properties_preserve_directive_prologue() {
 }
 
 #[test]
+fn drops_method_signatures_in_abstract_classes() {
+  let src = r#"
+    abstract class C {
+      foo(): void;
+      bar() {}
+    }
+  "#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 1);
+  let class_decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::ClassDecl(decl) => decl,
+    other => panic!("expected class decl, got {other:?}"),
+  };
+  assert!(!class_decl.stx.abstract_);
+  assert_eq!(class_decl.stx.members.len(), 1);
+  let member = class_decl.stx.members.first().expect("class member");
+  match &member.stx.key {
+    ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "bar"),
+    other => panic!("expected direct class member key, got {other:?}"),
+  };
+}
+
+#[test]
 fn string_enum_aliases_do_not_emit_reverse_mappings() {
   let src = r#"enum S { A = "a", B = A }"#;
   let mut parsed = parse_with_options(
