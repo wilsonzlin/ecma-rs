@@ -210,11 +210,16 @@ fn has_allowed_extension(
 }
 
 fn normalize_id(root: &Path, path: &Path) -> String {
-  path
+  let mut id = path
     .strip_prefix(root)
     .unwrap_or(path)
     .to_string_lossy()
-    .replace('\\', "/")
+    .into_owned();
+  // On Unix this avoids allocating a second String just to do a no-op replace.
+  if id.contains('\\') {
+    id = id.replace('\\', "/");
+  }
+  id
 }
 
 pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
