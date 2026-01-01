@@ -1,5 +1,6 @@
 force_explicit_abi = true
 hard_tabs = false
+newline_style = "Unix"
 merge_derives = true
 remove_nested_parens = true
 reorder_imports = true
