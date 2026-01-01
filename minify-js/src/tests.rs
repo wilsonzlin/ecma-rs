@@ -96,7 +96,7 @@ fn test_unknown_globals_not_shadowed() {
     TopLevelMode::Global,
     "console.log(x);(()=>{let console=1;})();",
   );
-  assert_eq!(result, "console.log(x);(()=>{let a=1;})();");
+  assert_eq!(result, "console.log(x);(()=>{})();");
 }
 
 #[test]
@@ -168,6 +168,39 @@ fn rewrites_if_to_ternary_expression() {
 fn removes_unreachable_if_branches() {
   let result = minified(TopLevelMode::Global, "if(false)foo();bar();");
   assert_eq!(result, "bar();");
+}
+
+#[test]
+fn removes_unreachable_if_branches_in_arrow_expr_bodies() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const f=()=>{if(false){sideEffect()}return 1;};",
+  );
+  assert_eq!(result, "const f=()=>{return 1;};");
+}
+
+#[test]
+fn dce_removes_unused_locals_in_arrow_expr_bodies() {
+  let result = minified(TopLevelMode::Global, "const f=()=>{let x=1;return 2;};");
+  assert_eq!(result, "const f=()=>{return 2;};");
+}
+
+#[test]
+fn direct_eval_disables_dce_in_nested_arrow_expr_bodies() {
+  let result = minified(
+    TopLevelMode::Global,
+    r#"const f=()=>{if(false){sideEffect()}let x=1;eval("x");return 2;};"#,
+  );
+  assert_eq!(result, r#"const f=()=>{let x=1;eval("x");return 2;};"#);
+}
+
+#[test]
+fn optimizes_object_literal_methods_in_expression_position() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const o={m(){if(false){sideEffect()}return 1;}};",
+  );
+  assert_eq!(result, "const o={m(){return 1;}};");
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::func::{Func, FuncBody};
@@ -15,10 +16,7 @@ impl Pass for CleanupPass {
   }
 
   fn run(&mut self, _cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    let mut changed = false;
-    let body = std::mem::take(&mut top.stx.body);
-    top.stx.body = clean_stmts(body, &mut changed);
-    changed
+    apply_to_function_like_bodies(top, clean_stmts)
   }
 }
 

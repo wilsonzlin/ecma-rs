@@ -125,10 +125,10 @@ fn emit_minified(
 /// ```
 /// use minify_js::{TopLevelMode, minify};
 ///
-/// let code: &str = "const main = () => { let my_first_variable = 1; };";
+/// let code: &str = "const main = () => { let my_first_variable = 1; return my_first_variable; };";
 /// let mut out = Vec::new();
 /// minify(TopLevelMode::Global, code, &mut out).unwrap();
-/// assert_eq!(out.as_slice(), b"const main=()=>{let a=1;};");
+/// assert_eq!(out.as_slice(), b"const main=()=>{let a=1;return a;};");
 /// ```
 /// Options controlling how input is parsed before minification.
 pub struct MinifyOptions {

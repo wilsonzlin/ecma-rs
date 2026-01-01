@@ -14,6 +14,7 @@ mod dce;
 mod sem_rewrite;
 mod side_effects;
 mod stmt_rewrite;
+mod traverse;
 
 pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Node<TopLevel>) {
   let mut cx = OptCtx::new(file, top_level_mode);
@@ -25,14 +26,24 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
   ]);
   pre.run(&mut cx, top, 4);
 
-  cx.bind(top);
-
+  // Post-bind passes may create new identifier nodes (e.g. semantic rewrites) or
+  // remove declarations (DCE). Re-bind at the start of each iteration so
+  // subsequent passes always operate on up-to-date scope/symbol associations.
   let mut post = PassPipeline::new(vec![
-    Box::new(sem_rewrite::SemanticRewritePass),
     Box::new(dce::DcePass),
+    Box::new(sem_rewrite::SemanticRewritePass),
     Box::new(cleanup::CleanupPass),
   ]);
-  post.run(&mut cx, top, 2);
+  for _ in 0..2 {
+    cx.bind(top);
+    let mut changed = false;
+    for pass in post.passes.iter_mut() {
+      changed |= pass.run(&mut cx, top);
+    }
+    if !changed {
+      break;
+    }
+  }
 }
 
 struct OptCtx {

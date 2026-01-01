@@ -1,4 +1,5 @@
 use super::side_effects::is_side_effect_free_expr;
+use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use ahash::HashSet;
 use derive_visitor::{Drive, Visitor};
@@ -26,11 +27,7 @@ impl Pass for DcePass {
     let mut used = collect_used_symbols(top);
     // Exported symbols are always considered used.
     used.extend(cx.usage().exported.iter().copied());
-
-    let mut changed = false;
-    let body = std::mem::take(&mut top.stx.body);
-    top.stx.body = dce_stmts(body, cx, &used, &mut changed);
-    changed
+    apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed))
   }
 }
 

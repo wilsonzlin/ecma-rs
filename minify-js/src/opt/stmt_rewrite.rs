@@ -1,3 +1,4 @@
+use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
@@ -18,10 +19,7 @@ impl Pass for StmtRewritePass {
   }
 
   fn run(&mut self, _cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    let mut changed = false;
-    let body = std::mem::take(&mut top.stx.body);
-    top.stx.body = rewrite_stmts(body, &mut changed);
-    changed
+    apply_to_function_like_bodies(top, rewrite_stmts)
   }
 }
 
