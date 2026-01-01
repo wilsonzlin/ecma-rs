@@ -298,6 +298,21 @@ impl TscRunner {
   }
 
   pub fn check(&mut self, request: TscRequest) -> anyhow::Result<TscDiagnostics> {
+    self.check_with_cancel(request, || false)
+  }
+
+  pub(crate) fn check_with_cancel<F>(
+    &mut self,
+    request: TscRequest,
+    mut is_cancelled: F,
+  ) -> anyhow::Result<TscDiagnostics>
+  where
+    F: FnMut() -> bool,
+  {
+    if is_cancelled() {
+      bail!("cancelled");
+    }
+
     self.ensure_running()?;
 
     let cancel = AtomicU64::new(0);

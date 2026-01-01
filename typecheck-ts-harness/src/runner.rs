@@ -20,6 +20,8 @@ use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -30,6 +32,70 @@ use typecheck_ts::{FileKey, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
+
+#[cfg(test)]
+static HARNESS_THREAD_SPAWN_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+static ACTIVE_CASE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(test)]
+static EXECUTOR_THREAD_IDS: std::sync::OnceLock<
+  Mutex<std::collections::HashSet<std::thread::ThreadId>>,
+> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn record_executor_thread_id() {
+  let ids = EXECUTOR_THREAD_IDS.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+  ids.lock().unwrap().insert(std::thread::current().id());
+}
+
+#[cfg(test)]
+fn clear_executor_thread_ids() {
+  if let Some(ids) = EXECUTOR_THREAD_IDS.get() {
+    ids.lock().unwrap().clear();
+  }
+}
+
+#[cfg(test)]
+fn executor_thread_id_count() -> usize {
+  EXECUTOR_THREAD_IDS
+    .get()
+    .map(|ids| ids.lock().unwrap().len())
+    .unwrap_or(0)
+}
+
+fn spawn_harness_thread<F>(name: impl Into<String>, f: F) -> std::thread::JoinHandle<()>
+where
+  F: FnOnce() + Send + 'static,
+{
+  #[cfg(test)]
+  {
+    HARNESS_THREAD_SPAWN_COUNT.fetch_add(1, Ordering::SeqCst);
+  }
+  std::thread::Builder::new()
+    .name(name.into())
+    .spawn(f)
+    .expect("spawn harness thread")
+}
+
+#[cfg(test)]
+struct ActiveCaseGuard;
+
+#[cfg(test)]
+impl ActiveCaseGuard {
+  fn new() -> Self {
+    ACTIVE_CASE_COUNT.fetch_add(1, Ordering::SeqCst);
+    Self
+  }
+}
+
+#[cfg(test)]
+impl Drop for ActiveCaseGuard {
+  fn drop(&mut self) {
+    ACTIVE_CASE_COUNT.fetch_sub(1, Ordering::SeqCst);
+  }
+}
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -694,7 +760,9 @@ impl TimeoutManager {
       cv: Condvar::new(),
     });
     let thread_inner = Arc::clone(&inner);
-    let handle = std::thread::spawn(move || timeout_thread(thread_inner));
+    let handle = spawn_harness_thread("conformance-timeout-manager", move || {
+      timeout_thread(thread_inner)
+    });
     Self {
       inner,
       thread: Mutex::new(Some(handle)),
@@ -843,6 +911,13 @@ fn execute_case(
   deadline: Instant,
   timeout_guard: TimeoutGuard,
 ) -> TestResult {
+  #[cfg(test)]
+  {
+    record_executor_thread_id();
+  }
+  #[cfg(test)]
+  let _active_case_guard = ActiveCaseGuard::new();
+
   if let Some(delay) = harness_sleep_for_case(&case.id) {
     if sleep_with_deadline(delay, deadline) {
       return build_timeout_result(&case, timeout);
@@ -1364,16 +1439,19 @@ impl TscRunnerPool {
       let thread_kill_switch = kill_switch.clone();
       let thread_node = node_path.clone();
 
-      threads.push(std::thread::spawn(move || {
-        tsc_worker_loop(
-          worker_idx,
-          thread_node,
-          thread_kill_switch,
-          thread_cancel,
-          thread_availability,
-          rx,
-        )
-      }));
+      threads.push(spawn_harness_thread(
+        format!("conformance-tsc-worker-{worker_idx}"),
+        move || {
+          tsc_worker_loop(
+            worker_idx,
+            thread_node,
+            thread_kill_switch,
+            thread_cancel,
+            thread_availability,
+            rx,
+          )
+        },
+      ));
 
       workers.push(TscWorker {
         tx,
@@ -1732,7 +1810,35 @@ impl SnapshotStore {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::fs;
+  use std::sync::Mutex as StdMutex;
+  use std::time::{Duration, Instant};
   use tempfile::tempdir;
+
+  static CONFORMANCE_ENV_LOCK: StdMutex<()> = StdMutex::new(());
+
+  struct EnvGuard {
+    key: &'static str,
+    prev: Option<String>,
+  }
+
+  impl EnvGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+      let prev = std::env::var(key).ok();
+      std::env::set_var(key, value);
+      Self { key, prev }
+    }
+  }
+
+  impl Drop for EnvGuard {
+    fn drop(&mut self) {
+      if let Some(prev) = self.prev.take() {
+        std::env::set_var(self.key, prev);
+      } else {
+        std::env::remove_var(self.key);
+      }
+    }
+  }
 
   #[test]
   fn shard_parse_rejects_invalid() {
@@ -2478,6 +2584,9 @@ mod tests {
   #[cfg(all(unix, feature = "with-node"))]
   #[test]
   fn tsc_pool_kills_hung_runner_and_recovers() {
+    let _lock = CONFORMANCE_ENV_LOCK
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     use serde_json::Map;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
@@ -2527,6 +2636,9 @@ echo '{"diagnostics":[]}'
 
   #[test]
   fn timeout_guard_cancels_program_when_deadline_passed() {
+    let _lock = CONFORMANCE_ENV_LOCK
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use typecheck_ts::FatalError;
@@ -2556,6 +2668,9 @@ echo '{"diagnostics":[]}'
 
   #[test]
   fn timeout_manager_thread_cancels_program_after_deadline() {
+    let _lock = CONFORMANCE_ENV_LOCK
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
     use std::sync::Arc;
     use std::time::{Duration, Instant};
     use typecheck_ts::FatalError;
@@ -2594,5 +2709,114 @@ echo '{"diagnostics":[]}'
         Err(other) => panic!("unexpected fatal error: {other}"),
       }
     }
+  }
+
+  #[test]
+  fn conformance_does_not_spawn_os_thread_per_case() {
+    let _lock = CONFORMANCE_ENV_LOCK
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    HARNESS_THREAD_SPAWN_COUNT.store(0, Ordering::SeqCst);
+    ACTIVE_CASE_COUNT.store(0, Ordering::SeqCst);
+    clear_executor_thread_ids();
+
+    let dir = tempdir().expect("tempdir");
+    for idx in 0..100 {
+      fs::write(dir.path().join(format!("case{idx}.ts")), "const x = 1;\n").unwrap();
+    }
+
+    let jobs = 4;
+    let opts = ConformanceOptions {
+      root: dir.path().to_path_buf(),
+      filter: crate::build_filter(None).unwrap(),
+      filter_pattern: None,
+      shard: None,
+      json: false,
+      update_snapshots: false,
+      timeout: Duration::from_secs(5),
+      trace: false,
+      profile: false,
+      profile_out: crate::DEFAULT_PROFILE_OUT.into(),
+      extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+      allow_empty: false,
+      compare: CompareMode::None,
+      node_path: "node".into(),
+      span_tolerance: 0,
+      allow_mismatches: true,
+      jobs,
+      manifest: None,
+      fail_on: FailOn::New,
+    };
+
+    let report = run_conformance(opts).expect("run_conformance");
+    assert_eq!(report.summary.total, 100);
+    assert_eq!(ACTIVE_CASE_COUNT.load(Ordering::SeqCst), 0);
+
+    // `rayon::ThreadPool::install` can execute tasks on the calling thread in
+    // addition to the worker threads, so allow a +1 here.
+    let max_executor_threads = jobs + 1;
+    assert!(
+      executor_thread_id_count() <= max_executor_threads,
+      "expected <= {max_executor_threads} executor threads, got {}",
+      executor_thread_id_count()
+    );
+
+    // The harness should only spawn a fixed number of non-rayon threads (e.g.
+    // watchdog), rather than one per case.
+    assert!(
+      HARNESS_THREAD_SPAWN_COUNT.load(Ordering::SeqCst) <= 2,
+      "spawned too many harness threads: {}",
+      HARNESS_THREAD_SPAWN_COUNT.load(Ordering::SeqCst)
+    );
+  }
+
+  #[test]
+  fn timeout_cancels_case_execution_without_leaking_background_work() {
+    let _lock = CONFORMANCE_ENV_LOCK
+      .lock()
+      .unwrap_or_else(|poisoned| poisoned.into_inner());
+    ACTIVE_CASE_COUNT.store(0, Ordering::SeqCst);
+    clear_executor_thread_ids();
+
+    let dir = tempdir().expect("tempdir");
+    fs::write(dir.path().join("fast.ts"), "const fast = 1;\n").unwrap();
+    fs::write(dir.path().join("slow.ts"), "const slow = 1;\n").unwrap();
+    let _env = EnvGuard::set(HARNESS_SLEEP_ENV, "slow=2000");
+
+    let start = Instant::now();
+    let opts = ConformanceOptions {
+      root: dir.path().to_path_buf(),
+      filter: crate::build_filter(None).unwrap(),
+      filter_pattern: None,
+      shard: None,
+      json: false,
+      update_snapshots: false,
+      timeout: Duration::from_millis(100),
+      trace: false,
+      profile: false,
+      profile_out: crate::DEFAULT_PROFILE_OUT.into(),
+      extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+      allow_empty: false,
+      compare: CompareMode::None,
+      node_path: "node".into(),
+      span_tolerance: 0,
+      allow_mismatches: true,
+      jobs: 2,
+      manifest: None,
+      fail_on: FailOn::New,
+    };
+    let report = run_conformance(opts).expect("run_conformance");
+    let elapsed = start.elapsed();
+
+    assert_eq!(report.summary.total, 2);
+    assert_eq!(report.summary.outcomes.timeout, 1);
+    assert_eq!(ACTIVE_CASE_COUNT.load(Ordering::SeqCst), 0);
+
+    // If a timed-out case is not actually cancelled, the full sleep duration
+    // would be observed here.
+    assert!(
+      elapsed < Duration::from_secs(1),
+      "expected cancelled run to finish quickly; elapsed={elapsed:?}"
+    );
   }
 }

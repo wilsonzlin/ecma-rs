@@ -6423,20 +6423,22 @@ impl ProgramState {
     let mut lowered_defs: Vec<_> = lowered.defs.iter().collect();
     lowered_defs.sort_by_key(|def| (def.span.start, def.span.end, def.id.0));
     for def in lowered_defs {
-      let mut name = lowered
+      let raw_name = lowered
         .names
         .resolve(def.name)
         .unwrap_or_default()
         .to_string();
-      // `hir-js` emits `VarDeclarator` defs to hang initializer bodies off of a
-      // single declarator (e.g. `const x = 1`). They are not user-visible
-      // bindings, but we still keep them in the program's def set so HIR IDs
-      // remain round-trippable. Use a synthetic name so callers looking up
-      // bindings by name don't accidentally select a declarator def.
-      let is_var_declarator = matches!(def.path.kind, HirDefKind::VarDeclarator);
-      if is_var_declarator {
-        name = format!("<var_decl:{name}>");
-      }
+      // `hir-js` emits `VarDeclarator` defs as a container for the declaration
+      // itself, alongside `Var` defs for the bound identifiers. Keep the
+      // declarator defs addressable by ID, but avoid treating them as the named
+      // binding to keep `definitions_in_file` name-based queries focused on
+      // actual bindings.
+      let is_var_declarator = def.path.kind == HirDefKind::VarDeclarator;
+      let name = if is_var_declarator {
+        format!("<var_decl:{raw_name}>")
+      } else {
+        raw_name.clone()
+      };
       let match_kind = match_kind_from_hir(def.path.kind);
       // `hir-js` models variable declarations as a `VarDeclarator` node that owns the initializer
       // body plus one or more child `Var` defs for the bindings (to support destructuring).
@@ -6573,7 +6575,7 @@ impl ProgramState {
 
       if !is_var_declarator {
         bindings
-          .entry(name.clone())
+          .entry(raw_name.clone())
           .and_modify(|binding| {
             binding.symbol = data.symbol;
             binding.def = Some(def_id);
@@ -6589,7 +6591,7 @@ impl ProgramState {
         let export_name = if def.is_default_export {
           "default".to_string()
         } else {
-          name.clone()
+          raw_name.clone()
         };
         exports.insert(
           export_name,
@@ -9168,6 +9170,24 @@ impl ProgramState {
 
     let mut visited = HashSet::new();
     let mut current = self.body_parents.get(&body_id).copied();
+    if let Some(meta) = self.body_map.get(&body_id).copied() {
+      if matches!(meta.kind, HirBodyKind::Initializer) {
+        if let (Some(hir_id), Some(lowered)) = (meta.hir, self.hir_lowered.get(&meta.file)) {
+          if let Some(hir_body) = lowered.body(hir_id) {
+            if let Some(owner_def) = lowered.def(hir_body.owner) {
+              if let Some(parent_def) = owner_def.parent {
+                if let Some(parent_body) = lowered.def(parent_def).and_then(|def| def.body) {
+                  if parent_body != body_id {
+                    self.body_parents.insert(body_id, parent_body);
+                    current = Some(parent_body);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
     while let Some(parent) = current {
       self.check_cancelled()?;
       if !visited.insert(parent) {
@@ -11036,6 +11056,28 @@ impl ProgramState {
   }
 
   fn var_initializer(&self, def: DefId) -> Option<VarInit> {
+    if let Some(def_data) = self.def_data.get(&def) {
+      if let DefKind::Var(var) = &def_data.kind {
+        if var.body.0 != u32::MAX {
+          if let Some(expr) = var.init {
+            let decl_kind = match var.mode {
+              VarDeclMode::Var => HirVarDeclKind::Var,
+              VarDeclMode::Let => HirVarDeclKind::Let,
+              VarDeclMode::Const => HirVarDeclKind::Const,
+              VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
+            };
+            return Some(VarInit {
+              body: var.body,
+              expr,
+              decl_kind,
+              pat: None,
+              span: Some(def_data.span),
+            });
+          }
+        }
+      }
+    }
+
     if let Some(init) = crate::db::var_initializer(&self.typecheck_db, def) {
       if std::env::var("DEBUG_OVERLOAD").is_ok() {
         if let Some(data) = self.def_data.get(&def) {
@@ -11870,6 +11912,7 @@ impl ProgramState {
                 .filter(|ty| !self.is_unknown_type_id(*ty));
               let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
               if let Some(init_ty) = init_ty {
+                let init_ty = self.resolve_value_ref_type(init_ty)?;
                 if let Some(store) = self.interned_store.as_ref() {
                   let init_ty = store.canon(init_ty);
                   self
