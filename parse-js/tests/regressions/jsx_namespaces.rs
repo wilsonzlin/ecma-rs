@@ -30,6 +30,44 @@ fn jsx_namespaced_member_allows_dotted_path() {
 }
 
 #[test]
+fn jsx_namespaced_uppercase_is_parsed_as_intrinsic_name() {
+  let parsed = parse_with_options("<Svg:Path></Svg:Path>;", tsx_opts()).unwrap();
+  let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {
+    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::JsxElem(elem) => elem,
+      other => panic!("expected JSX element, got {:?}", other),
+    },
+    other => panic!("expected expression statement, got {:?}", other),
+  };
+  match &elem.stx.name {
+    Some(JsxElemName::Name(name)) => {
+      assert_eq!(name.stx.namespace.as_deref(), Some("Svg"));
+      assert_eq!(name.stx.name, "Path");
+    }
+    other => panic!("expected namespaced name, got {:?}", other),
+  }
+}
+
+#[test]
+fn jsx_hyphenated_uppercase_is_parsed_as_intrinsic_name() {
+  let parsed = parse_with_options("<My-Tag></My-Tag>;", tsx_opts()).unwrap();
+  let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {
+    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::JsxElem(elem) => elem,
+      other => panic!("expected JSX element, got {:?}", other),
+    },
+    other => panic!("expected expression statement, got {:?}", other),
+  };
+  match &elem.stx.name {
+    Some(JsxElemName::Name(name)) => {
+      assert!(name.stx.namespace.is_none());
+      assert_eq!(name.stx.name, "My-Tag");
+    }
+    other => panic!("expected hyphenated name, got {:?}", other),
+  }
+}
+
+#[test]
 fn jsx_attribute_missing_value_recovers_as_empty_text() {
   let parsed = parse_with_options("<div attr= />", tsx_opts()).unwrap();
   let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {

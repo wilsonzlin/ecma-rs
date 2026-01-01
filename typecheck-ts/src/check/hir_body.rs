@@ -16,9 +16,7 @@ use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjVal, ClassStaticBlock, ObjMemberType,
 };
-use parse_js::ast::expr::jsx::{
-  JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxName, JsxText,
-};
+use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxText};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -1639,7 +1637,6 @@ impl<'a> Checker<'a> {
         }
         value_ty
       }
-      AstExpr::JsxElem(elem) => self.check_jsx_elem(elem),
       _ => self.store.primitive_ids().unknown,
     };
     self.record_expr_type(expr.loc, ty);
@@ -1664,7 +1661,12 @@ impl<'a> Checker<'a> {
         // Fragment; no attributes, but still typecheck children.
       }
       Some(JsxElemName::Name(name)) => {
-        let tag = name.stx.name.as_str();
+        let tag_buf = name
+          .stx
+          .namespace
+          .as_ref()
+          .map(|ns| format!("{ns}:{}", name.stx.name));
+        let tag = tag_buf.as_deref().unwrap_or_else(|| name.stx.name.as_str());
         let intrinsic_elements = self.jsx_intrinsic_elements_type();
         if intrinsic_elements != prim.unknown {
           let found = self.member_type(intrinsic_elements, tag);

@@ -96,11 +96,13 @@ impl<'a> Parser<'a> {
       ))));
     }
 
-    let name = if base_name
+    let is_identifier_component = base_name
       .chars()
       .next()
       .is_some_and(|c| !c.is_ascii_lowercase())
-    {
+      && !base_name.contains('-')
+      && !base_name.contains(':');
+    let name = if is_identifier_component {
       JsxElemName::Id(Node::new(base_loc, IdExpr { name: base_name }))
     } else {
       let (namespace, name) = if let Some((ns, name)) = base_name.split_once(':') {
