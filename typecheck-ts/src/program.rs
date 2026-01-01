@@ -8980,20 +8980,49 @@ impl ProgramState {
           if idx % 4096 == 0 {
             self.check_cancelled()?;
           }
-          let hir_js::ExprKind::Ident(name_id) = expr.kind else {
-            continue;
-          };
-          let Some(name) = lowered.names.resolve(name_id) else {
-            continue;
-          };
-          let resolved_root = match locals.resolve_expr(body, hir_js::ExprId(idx as u32)) {
-            Some(binding_id) => locals.symbol(binding_id).decl_scope == locals.root_scope(),
-            // If locals didn't record the binding, fall back to the textual name so we still
-            // seed file/global bindings for the body checker.
-            None => true,
-          };
-          if resolved_root {
-            names.insert(name.to_string());
+          match &expr.kind {
+            hir_js::ExprKind::Ident(name_id) => {
+              let Some(name) = lowered.names.resolve(*name_id) else {
+                continue;
+              };
+              let resolved_root = match locals.resolve_expr(body, hir_js::ExprId(idx as u32)) {
+                Some(binding_id) => locals.symbol(binding_id).decl_scope == locals.root_scope(),
+                // If locals didn't record the binding, fall back to the textual name so we still
+                // seed file/global bindings for the body checker.
+                None => true,
+              };
+              if resolved_root {
+                names.insert(name.to_string());
+              }
+            }
+            hir_js::ExprKind::Jsx(jsxe) => match &jsxe.kind {
+              hir_js::JsxElementKind::Member(parts) => {
+                let Some(first) = parts.first() else {
+                  continue;
+                };
+                let Some(name) = lowered.names.resolve(*first) else {
+                  continue;
+                };
+                names.insert(name.to_string());
+              }
+              hir_js::JsxElementKind::Element(name_id) => {
+                let Some(name) = lowered.names.resolve(*name_id) else {
+                  continue;
+                };
+                let Some(first_char) = name.chars().next() else {
+                  continue;
+                };
+                if !first_char.is_ascii_lowercase() {
+                  names.insert(name.to_string());
+                }
+              }
+              hir_js::JsxElementKind::Fragment
+              | hir_js::JsxElementKind::Text(_)
+              | hir_js::JsxElementKind::Expr(_)
+              | hir_js::JsxElementKind::Spread(_)
+              | hir_js::JsxElementKind::Name(_) => {}
+            },
+            _ => {}
           }
         }
         names
@@ -9001,8 +9030,24 @@ impl ProgramState {
       None => body
         .exprs
         .iter()
-        .filter_map(|expr| match expr.kind {
-          hir_js::ExprKind::Ident(name_id) => lowered.names.resolve(name_id).map(|n| n.to_string()),
+        .filter_map(|expr| match &expr.kind {
+          hir_js::ExprKind::Ident(name_id) => lowered.names.resolve(*name_id).map(|n| n.to_string()),
+          hir_js::ExprKind::Jsx(jsxe) => match &jsxe.kind {
+            hir_js::JsxElementKind::Member(parts) => parts
+              .first()
+              .and_then(|first| lowered.names.resolve(*first))
+              .map(|n| n.to_string()),
+            hir_js::JsxElementKind::Element(name_id) => {
+              let name = lowered.names.resolve(*name_id)?;
+              let first_char = name.chars().next()?;
+              (!first_char.is_ascii_lowercase()).then(|| name.to_string())
+            }
+            hir_js::JsxElementKind::Fragment
+            | hir_js::JsxElementKind::Text(_)
+            | hir_js::JsxElementKind::Expr(_)
+            | hir_js::JsxElementKind::Spread(_)
+            | hir_js::JsxElementKind::Name(_) => None,
+          },
           _ => None,
         })
         .collect(),
