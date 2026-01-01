@@ -722,6 +722,27 @@ fn intersection_flattens_parenthesized_nested_intersections() {
   assert_eq!(members, vec!["Bar", "Baz", "Foo"]);
 }
 
+#[test]
+fn intersection_canonicalization_is_span_stable_for_type_literals() {
+  let base = lower_from_source("type A = ({ a: string } & { b: number });").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = boolean;\ntype A = ({ a: string } & { b: number });")
+      .expect("lower with padding");
+
+  let base_members = intersection_member_first_property_names(&base, "A");
+  let with_padding_members = intersection_member_first_property_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["a", "b"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn intersection_dedups_duplicate_type_literals() {
+  let result = lower_from_source("type A = { a: string } & { a: string };").expect("lower");
+  let members = intersection_member_first_property_names(&result, "A");
+  assert_eq!(members, vec!["a"]);
+}
+
 fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
@@ -755,6 +776,45 @@ fn intersection_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<S
   members
     .iter()
     .map(|id| type_name(&result.names, &arenas.type_exprs[id.0 as usize].kind))
+    .collect()
+}
+
+fn intersection_member_first_property_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let lit = match member_kind {
+        TypeExprKind::TypeLiteral(lit) => lit,
+        other => panic!("expected type literal member, got {other:?}"),
+      };
+
+      let first_member_id = lit.members.first().expect("type literal member");
+      match &arenas.type_members[first_member_id.0 as usize].kind {
+        TypeMemberKind::Property(prop) => match &prop.name {
+          PropertyName::Ident(id) => result.names.resolve(*id).unwrap().to_string(),
+          PropertyName::String(s) => s.clone(),
+          PropertyName::Number(n) => n.clone(),
+          PropertyName::Computed => "[computed]".to_string(),
+        },
+        other => panic!("expected property member, got {other:?}"),
+      }
+    })
     .collect()
 }
 
