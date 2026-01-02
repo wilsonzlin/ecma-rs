@@ -342,6 +342,15 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
             return None;
           }
 
+          if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
+            return resolve_as_file_or_directory_inner_with_scratch(
+              files,
+              entry,
+              depth + 1,
+              resolve_scratch,
+            );
+          }
+
           // Most `package.json` entries are written as `./foo/bar`. Strip the leading `./` so the
           // joined path is already normalized and we can skip an extra `normalize_name` allocation.
           let entry = entry.strip_prefix("./").unwrap_or(entry);
@@ -357,7 +366,7 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           virtual_join_into(scratch, base_candidate, entry);
           // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
           // Fall back to the normalizing path to preserve resolution behaviour.
-          if entry.starts_with('/') || subpath_needs_normalization(entry) {
+          if entry.starts_with('/') || entry.starts_with('\\') || subpath_needs_normalization(entry) {
             resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth + 1, resolve_scratch)
           } else {
             resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth + 1, resolve_scratch)
@@ -493,7 +502,7 @@ fn resolve_json_string_to_file(
   if entry.is_empty() {
     return None;
   }
-  if entry.starts_with('/') || starts_with_drive_letter(entry) {
+  if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
     return resolve_as_file_or_directory_inner_with_scratch(files, entry, depth, resolve_scratch);
   }
 
@@ -527,7 +536,7 @@ fn resolve_json_string_to_file_with_star(
     return None;
   }
 
-  if entry.starts_with('/') || starts_with_drive_letter(entry) {
+  if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
     scratch.clear();
     scratch.reserve(entry.len() + star.len());
     push_star_replaced(scratch, entry, star);
