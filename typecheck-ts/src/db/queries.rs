@@ -96,9 +96,7 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
     collect_module_specifiers(lowered, &mut specs);
   }
   if let Some(ast) = parsed.ast.as_deref() {
-    let type_only = collect_type_only_module_specifiers_from_ast(ast);
-    specs.reserve(type_only.len());
-    specs.extend(type_only.into_iter().map(|(s, _)| s));
+    collect_type_only_module_specifier_values_from_ast(ast, &mut specs);
   }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
@@ -1742,6 +1740,56 @@ fn collect_type_only_module_specifiers_from_ast(
   let mut collector = Collector::default();
   ast.drive(&mut collector);
   collector.specs
+}
+
+fn collect_type_only_module_specifier_values_from_ast(
+  ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
+  specs: &mut Vec<Arc<str>>,
+) {
+  use derive_visitor::Drive;
+  use derive_visitor::Visitor;
+  use parse_js::ast::expr::Expr;
+  use parse_js::ast::node::Node;
+  use parse_js::ast::type_expr::{TypeEntityName, TypeExpr};
+
+  type TypeExprNode = Node<TypeExpr>;
+
+  fn collect_from_entity_name(name: &TypeEntityName, specs: &mut Vec<Arc<str>>) {
+    match name {
+      TypeEntityName::Qualified(qualified) => collect_from_entity_name(&qualified.left, specs),
+      TypeEntityName::Import(import) => {
+        if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
+          specs.push(Arc::<str>::from(spec.stx.value.as_str()));
+        }
+      }
+      _ => {}
+    }
+  }
+
+  #[derive(Visitor)]
+  #[visitor(TypeExprNode(enter))]
+  struct Collector<'a> {
+    specs: &'a mut Vec<Arc<str>>,
+  }
+
+  impl<'a> Collector<'a> {
+    fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
+      match node.stx.as_ref() {
+        TypeExpr::ImportType(import) => {
+          self
+            .specs
+            .push(Arc::<str>::from(import.stx.module_specifier.as_str()));
+        }
+        TypeExpr::TypeQuery(query) => {
+          collect_from_entity_name(&query.stx.expr_name, self.specs);
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let mut collector = Collector { specs };
+  ast.drive(&mut collector);
 }
 
 /// Current compiler options.
