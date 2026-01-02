@@ -886,5 +886,10 @@ fn push_candidates(path: &Path, candidates: &mut Vec<String>) {
 }
 
 fn normalize(path: &Path) -> String {
-  path.to_string_lossy().replace('\\', "/")
+  let raw = path.to_string_lossy();
+  if raw.contains('\\') {
+    raw.replace('\\', "/")
+  } else {
+    raw.into_owned()
+  }
 }
