@@ -493,7 +493,7 @@ fn resolve_json_string_to_file(
   if entry.is_empty() {
     return None;
   }
-  if entry.starts_with('/') || is_drive_root(entry) {
+  if entry.starts_with('/') || starts_with_drive_letter(entry) {
     return resolve_as_file_or_directory_inner_with_scratch(files, entry, depth, resolve_scratch);
   }
 
@@ -527,7 +527,7 @@ fn resolve_json_string_to_file_with_star(
     return None;
   }
 
-  if entry.starts_with('/') || is_drive_root(entry) {
+  if entry.starts_with('/') || starts_with_drive_letter(entry) {
     scratch.clear();
     scratch.reserve(entry.len() + star.len());
     push_star_replaced(scratch, entry, star);

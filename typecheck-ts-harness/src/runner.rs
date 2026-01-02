@@ -2497,6 +2497,34 @@ mod tests {
   }
 
   #[test]
+  fn resolves_bare_specifier_via_package_json_exports_absolute_drive_target() {
+    let files = vec![
+      VirtualFile {
+        name: "c:/a.ts".to_string(),
+        content: "import { x } from \"foo\";".into(),
+      },
+      VirtualFile {
+        name: "c:/node_modules/foo/package.json".to_string(),
+        content: r#"{ "name": "foo", "exports": { ".": { "types": "C:/node_modules/foo/dist/index.d.ts" } } }"#.into(),
+      },
+      VirtualFile {
+        name: "c:/node_modules/foo/dist/index.d.ts".to_string(),
+        content: "export const x: number;".into(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("c:/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set
+      .resolve("c:/node_modules/foo/dist/index.d.ts")
+      .unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
   fn resolves_bare_specifier_via_package_json_exports_fallback_when_first_missing() {
     let files = vec![
       VirtualFile {
