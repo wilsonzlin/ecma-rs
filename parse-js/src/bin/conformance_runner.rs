@@ -184,6 +184,86 @@ fn normalize_virtual_path(path: &str) -> String {
   }
 }
 
+fn baseline_reference_dir() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/TypeScript/tests/baselines/reference")
+}
+
+fn baseline_error_file(path: &Path, directives: &[HarnessDirective]) -> Option<PathBuf> {
+  let stem = path.file_stem()?.to_string_lossy();
+  let base = baseline_reference_dir();
+  let plain = base.join(format!("{stem}.errors.txt"));
+  if plain.is_file() {
+    return Some(plain);
+  }
+  let module = directives
+    .iter()
+    .rev()
+    .find(|d| d.name == "module")
+    .and_then(|d| d.value.as_deref())
+    .and_then(|v| v.split(',').next())
+    .map(|v| v.trim().to_ascii_lowercase());
+  let target = directives
+    .iter()
+    .rev()
+    .find(|d| d.name == "target")
+    .and_then(|d| d.value.as_deref())
+    .and_then(|v| v.split(',').next())
+    .map(|v| v.trim().to_ascii_lowercase());
+
+  if let (Some(module), Some(target)) = (module.as_deref(), target.as_deref()) {
+    let candidate = base.join(format!("{stem}(module={module},target={target}).errors.txt"));
+    if candidate.is_file() {
+      return Some(candidate);
+    }
+  }
+
+  if let Some(module) = module.as_deref() {
+    let candidate = base.join(format!("{stem}(module={module}).errors.txt"));
+    if candidate.is_file() {
+      return Some(candidate);
+    }
+  }
+
+  None
+}
+
+fn parse_baseline_error_line(line: &str) -> Option<(String, u32)> {
+  let marker = ": error TS";
+  let idx = line.find(marker)?;
+  let left = &line[..idx];
+  let paren = left.rfind('(')?;
+  let file = normalize_virtual_path(left[..paren].trim());
+
+  let rest = &line[idx + marker.len()..];
+  let colon = rest.find(':')?;
+  let code = rest[..colon].trim().parse::<u32>().ok()?;
+  Some((file, code))
+}
+
+fn expected_parse_error_files(
+  path: &Path,
+  directives: &[HarnessDirective],
+) -> Option<HashSet<String>> {
+  let baseline = baseline_error_file(path, directives)?;
+  let contents = fs::read_to_string(baseline).ok()?;
+  let mut out = HashSet::new();
+  for line in contents.lines() {
+    let Some((file, code)) = parse_baseline_error_line(line) else {
+      continue;
+    };
+    // Treat syntax/parse-related TypeScript diagnostics as expected parse failures.
+    //
+    // TypeScript uses:
+    // - TS1xxx for many grammar errors (`Identifier expected`, etc.)
+    // - TS170xx for some syntax-like errors that still allow parsing (e.g.
+    //   invalid `import.*` meta-properties).
+    if (1000..2000).contains(&code) || (17000..18000).contains(&code) {
+      out.insert(file);
+    }
+  }
+  Some(out)
+}
+
 fn parse_directive(line: &str) -> Option<HarnessDirective> {
   let trimmed = line.trim_start();
   if !trimmed.starts_with("//") {
@@ -384,6 +464,7 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     return timeout_test_result(path, timeout_secs);
   };
   base_result.directives = directives;
+  let expected_parse_errors = expected_parse_error_files(path, &base_result.directives);
   for vf in &mut virtual_files {
     if vf.name.contains('\\') {
       vf.name = normalize_virtual_path(&vf.name);
@@ -403,6 +484,9 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     let mut diagnostics = Vec::new();
 
     if should_parse {
+      let expects_parse_error = expected_parse_errors
+        .as_ref()
+        .is_some_and(|files| files.contains(&normalized_name));
       let dialect = match vf.kind {
         FileKind::TypeScript => Dialect::Ts,
         FileKind::Tsx => Dialect::Tsx,
@@ -419,11 +503,28 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
         },
       };
 
-      if let Err(err) = parse_with_options_cancellable(&vf.content, opts, Arc::clone(cancel)) {
-        if err.typ == SyntaxErrorType::Cancelled {
-          return timeout_test_result(path, timeout_secs);
+      match parse_with_options_cancellable(&vf.content, opts, Arc::clone(cancel)) {
+        Ok(_) => {
+          if expects_parse_error {
+            let end = u32::try_from(vf.content.len()).unwrap_or(u32::MAX);
+            diagnostics.push(Diagnostic::error(
+              "CONF0003",
+              "expected parse error (TypeScript baseline includes syntax errors)",
+              Span {
+                file: file_id,
+                range: TextRange::new(0, end),
+              },
+            ));
+          }
         }
-        diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
+        Err(err) => {
+          if err.typ == SyntaxErrorType::Cancelled {
+            return timeout_test_result(path, timeout_secs);
+          }
+          if !expects_parse_error {
+            diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
+          }
+        }
       }
     }
 
