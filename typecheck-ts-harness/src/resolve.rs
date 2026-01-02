@@ -263,8 +263,7 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
     return Some(found);
   }
 
-  scratch.clear();
-  scratch.reserve(base_candidate.len() + 1 + "package.json".len());
+  let base_is_source_root = is_source_root(base_candidate);
 
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
@@ -318,7 +317,7 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
         return Some(found);
       }
     }
-  } else if !is_source_root(base_candidate) {
+  } else if !base_is_source_root {
     scratch.clear();
     scratch.push_str(base_candidate);
     scratch.push('.');
@@ -332,7 +331,7 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
     }
   }
 
-  if !is_source_root(base_candidate) {
+  if !base_is_source_root {
     virtual_join_into(scratch, base_candidate, "package.json");
     if let Some(package_key) = files.resolve_ref(&scratch) {
       if let Some(parsed) = files.package_json(package_key) {
