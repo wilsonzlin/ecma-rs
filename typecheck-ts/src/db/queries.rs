@@ -1,11 +1,12 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::panic::panic_any;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ahash::AHashSet;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   lower_file_with_diagnostics_with_cancellation, DefKind, ExportDefaultValue, ExportKind, ExprKind,
@@ -1588,7 +1589,7 @@ impl std::fmt::Debug for TsSemantics {
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   panic_if_cancelled(db);
-  let mut visited = HashSet::new();
+  let mut visited = AHashSet::new();
   let mut queue: VecDeque<FileId> = db
     .roots_input()
     .roots(db)

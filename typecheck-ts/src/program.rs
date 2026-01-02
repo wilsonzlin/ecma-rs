@@ -27,6 +27,7 @@ use parse_js::{
   parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
+use ahash::AHashSet;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -4739,7 +4740,7 @@ impl ProgramState {
     self.sync_typecheck_roots();
     let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
     queue.extend(lib_queue);
-    let mut seen: HashSet<FileId> = HashSet::new();
+    let mut seen: AHashSet<FileId> = AHashSet::new();
     while let Some(file) = queue.pop_front() {
       self.check_cancelled()?;
       let prev_file = self.current_file;
