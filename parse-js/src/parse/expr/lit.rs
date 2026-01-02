@@ -587,6 +587,7 @@ impl<'a> Parser<'a> {
           ));
         } else {
           let rest = p.consume_if(TT::DotDotDot).is_match();
+          let mut allow_semicolon_separator = false;
           if rest {
             let value = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
             members.push(Node::new(
@@ -603,6 +604,7 @@ impl<'a> Parser<'a> {
               &mut Asi::no(),
               false, // Object literals don't have abstract methods
             )?;
+            allow_semicolon_separator = matches!(value, ClassOrObjVal::IndexSignature(_));
             let typ = match value {
               ClassOrObjVal::Prop(None) => {
                 // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
@@ -682,14 +684,19 @@ impl<'a> Parser<'a> {
             };
             members.push(Node::new(member_start, ObjMember { typ }));
           }
-        }
-        // Accept both comma and semicolon as separators for error recovery / TS style object literals in expressions
-        if p.consume_if(TT::Comma).is_match() {
-          continue;
-        }
-        let _ = p.consume_if(TT::Semicolon);
-        if p.peek().typ == TT::BraceClose {
-          break;
+          if p.consume_if(TT::Comma).is_match() {
+            continue;
+          }
+          if p.peek().typ == TT::Semicolon {
+            let semi = p.consume();
+            if allow_semicolon_separator {
+              continue;
+            }
+            return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
+          }
+          if p.peek().typ == TT::BraceClose {
+            break;
+          }
         }
       }
       p.require(TT::BraceClose)?;

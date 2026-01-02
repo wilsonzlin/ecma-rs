@@ -1059,7 +1059,7 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
     return lexer.drive(false, |lexer| {
       let mut len = 0;
       for ch in lexer.source[lexer.next..].chars() {
-        if matches!(ch, '{' | '<') {
+        if matches!(ch, '{' | '<' | '}' | '>') {
           break;
         }
         len += ch.len_utf8();
@@ -1125,6 +1125,11 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
   };
 
   let mut token = lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
+    // `</*` begins a comment after `<`, not a JSX closing tag or `</` token.
+    if lexer.source[lexer.next..].starts_with("</*") {
+      lexer.skip_expect(1);
+      return Ok(TT::ChevronLeft);
+    }
     if mode == LexMode::JsxTag {
       // In JSX tag context, treat consecutive '>' characters as separate tokens so
       // `></div>` doesn't get lexed as a single shift operator.

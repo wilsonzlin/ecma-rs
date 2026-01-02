@@ -154,7 +154,7 @@ impl<'a> Parser<'a> {
   /// - `import a, {"b" as c, d, e as f, default as g} from "module"`
   /// - TypeScript import equals: `import a = require("module")` or `import a = Foo.Bar`
   pub fn import_stmt(&mut self, ctx: ParseCtx, export: bool) -> SyntaxResult<Node<Stmt>> {
-    if !ctx.top_level || ctx.in_namespace {
+    if !ctx.top_level {
       return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
         "import declarations must be at top level",
       )));
@@ -177,9 +177,19 @@ impl<'a> Parser<'a> {
         self.consume(); // =
         return self.import_equals_decl(export, type_only, alias, start);
       }
+      if ctx.in_namespace {
+        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
+          "import equals declarations must use `=`",
+        )));
+      }
 
       (Some(alias), self.consume_if(TT::Comma).is_match())
     } else {
+      if ctx.in_namespace {
+        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
+          "import equals declarations require an identifier",
+        )));
+      }
       (None, true)
     };
     let names = if !can_have_names {

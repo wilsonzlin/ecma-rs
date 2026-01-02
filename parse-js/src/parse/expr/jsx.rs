@@ -17,6 +17,26 @@ use crate::parse::ParseCtx;
 use crate::parse::Parser;
 use crate::token::TT;
 
+fn jsx_elem_name_string(name: &JsxElemName) -> String {
+  match name {
+    JsxElemName::Id(id) => id.stx.name.clone(),
+    JsxElemName::Name(name) => name
+      .stx
+      .namespace
+      .as_ref()
+      .map(|ns| format!("{ns}:{}", name.stx.name))
+      .unwrap_or_else(|| name.stx.name.clone()),
+    JsxElemName::Member(member) => {
+      let mut out = member.stx.base.stx.name.clone();
+      for part in &member.stx.path {
+        out.push('.');
+        out.push_str(part);
+      }
+      out
+    }
+  }
+}
+
 impl<'a> Parser<'a> {
   /// Gets a token that can be used as a JSX name (attribute name, tag name part, etc.).
   /// JSX allows any identifier including JavaScript keywords.
@@ -24,17 +44,14 @@ impl<'a> Parser<'a> {
     let tok = self.peek_with_mode(LexMode::JsxTag);
     // Accept identifiers and any keywords as JSX names
     if tok.typ == TT::Identifier || tok.typ.is_keyword() {
+      // TypeScript disallows unicode escapes in JSX tag/attribute names.
+      if self.bytes(tok.loc).contains('\\') {
+        return Err(tok.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      }
       self.consume_with_mode(LexMode::JsxTag);
       return Ok(tok);
     }
-
-    // Error recovery: treat unexpected tokens as synthetic identifiers to keep parsing.
-    self.consume_with_mode(LexMode::JsxTag);
-    Ok(crate::token::Token {
-      typ: TT::Identifier,
-      loc: tok.loc,
-      preceded_by_line_terminator: tok.preceded_by_line_terminator,
-    })
+    Err(tok.error(SyntaxErrorType::ExpectedSyntax("identifier")))
   }
 
   pub fn jsx_name(&mut self) -> SyntaxResult<Node<JsxName>> {
@@ -65,23 +82,37 @@ impl<'a> Parser<'a> {
     let mut base_name = self.string(start_tok.loc);
     let mut base_loc = start_tok.loc;
     let mut path = Vec::<String>::new();
+    let mut has_namespace = false;
 
     if self
       .maybe_consume_with_mode(TT::Colon, LexMode::JsxTag)
       .is_match()
     {
+      has_namespace = true;
       let name = self.jsx_name_token()?;
       base_name = format!("{}:{}", base_name, self.string(name.loc));
       base_loc += name.loc;
+
+      // TypeScript disallows JSX member expressions on namespaced names (e.g.
+      // `<ns:tag.prop>`).
+      if self.peek_with_mode(LexMode::JsxTag).typ == TT::Dot {
+        let dot = self.peek_with_mode(LexMode::JsxTag);
+        return Err(dot.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      }
     }
 
     // Member expression after identifier or namespaced name: ns:component.path
-    if !self.bytes(base_loc).contains('-') {
+    if !has_namespace && !self.bytes(base_loc).contains('-') {
       while self
         .maybe_consume_with_mode(TT::Dot, LexMode::JsxTag)
         .is_match()
       {
-        let part = self.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+        let part = self.jsx_name_token()?;
+        if self.bytes(part.loc).contains('-')
+          || self.peek_with_mode(LexMode::JsxTag).typ == TT::Colon
+        {
+          return Err(part.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+        }
         base_loc += part.loc;
         path.push(self.string(part.loc));
       }
@@ -122,66 +153,30 @@ impl<'a> Parser<'a> {
     if matches!(next.typ, TT::Slash | TT::ChevronRight) {
       return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")));
     }
+    if next.typ == TT::ChevronLeft {
+      return Err(
+        next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")),
+      );
+    }
 
-    // Attr values can be an element/fragment directly e.g. `a=<div/>`, or an expression in braces, or a string
-    let val = if self.peek().typ == TT::ChevronLeft {
-      // JSX element or fragment as attribute value
-      let elem = self.jsx_elem(ctx)?;
-      JsxAttrVal::Element(elem)
-    } else if self.consume_if(TT::BraceOpen).is_match() {
-      // Check for empty expression: <div prop={} />
+    // Attr values can be an expression in braces or a string.
+    let val = if self.consume_if(TT::BraceOpen).is_match() {
       if self.peek().typ == TT::BraceClose {
-        // Empty expression - create empty container
-        let loc = self.peek().loc;
-        self.consume(); // consume }
-                        // For empty expressions, we still need a valid expression node
-                        // Use an empty identifier or similar placeholder
-        use crate::ast::expr::Expr;
-        use crate::ast::expr::IdExpr;
-        use crate::ast::node::Node;
-        use crate::loc::Loc;
-        let empty_expr = Node::new(
-          Loc(loc.0, loc.0),
-          Expr::Id(Node::new(
-            Loc(loc.0, loc.0),
-            IdExpr {
-              name: String::new(),
-            },
-          )),
-        );
-        let expr = Node::new(
-          loc,
-          JsxExprContainer {
-            spread: false,
-            value: empty_expr,
-          },
-        );
-        JsxAttrVal::Expression(expr)
-      } else if self.peek().typ == TT::DotDotDot {
-        // Error recovery: allow `{...expr}` in attribute values even though it's invalid
-        self.consume(); // ...
-        let value = self.expr(ctx, [TT::BraceClose])?;
-        let expr = Node::new(
-          value.loc,
-          JsxExprContainer {
-            spread: true,
-            value,
-          },
-        );
-        self.require(TT::BraceClose)?;
-        JsxAttrVal::Expression(expr)
-      } else {
-        let value = self.expr(ctx, [TT::BraceClose])?;
-        let expr = Node::new(
-          value.loc,
-          JsxExprContainer {
-            spread: false,
-            value,
-          },
-        );
-        self.require(TT::BraceClose)?;
-        JsxAttrVal::Expression(expr)
+        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("expression")));
       }
+      if self.peek().typ == TT::DotDotDot {
+        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("expression")));
+      }
+      let value = self.expr(ctx, [TT::BraceClose])?;
+      let expr = Node::new(
+        value.loc,
+        JsxExprContainer {
+          spread: false,
+          value,
+        },
+      );
+      self.require(TT::BraceClose)?;
+      JsxAttrVal::Expression(expr)
     } else {
       JsxAttrVal::Text(self.with_loc(|p| {
         p.lit_str_val_with_mode(LexMode::JsxTag)
@@ -250,18 +245,9 @@ impl<'a> Parser<'a> {
                 value,
               },
             )));
-            let _ = self.consume_if(TT::BraceClose);
+            self.require(TT::BraceClose)?;
           } else {
-            let value = self.expr(ctx, [TT::BraceClose]).unwrap_or_else(|_| {
-              let loc = self.peek().loc;
-              Node::new(
-                loc,
-                IdExpr {
-                  name: String::new(),
-                },
-              )
-              .into_wrapped()
-            });
+            let value = self.expr(ctx, [TT::BraceClose])?;
             children.push(JsxElemChild::Expr(Node::new(
               value.loc,
               JsxExprContainer {
@@ -269,7 +255,7 @@ impl<'a> Parser<'a> {
                 value,
               },
             )));
-            let _ = self.consume_if(TT::BraceClose);
+            self.require(TT::BraceClose)?;
           }
         }
         TT::BraceClose | TT::ChevronRight => break,
@@ -290,8 +276,11 @@ impl<'a> Parser<'a> {
     ) {
       let next = self.peek_with_mode(LexMode::JsxTag);
       if next.typ == TT::ChevronLeft {
-        self.skip_jsx_type_arguments()?;
-        continue;
+        if self.is_typescript() {
+          self.skip_jsx_type_arguments()?;
+          continue;
+        }
+        return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute")));
       }
       attrs.push(if next.typ == TT::BraceOpen {
         self.jsx_spread_attr(ctx)?
@@ -305,6 +294,10 @@ impl<'a> Parser<'a> {
   /// Skips over a sequence like `<T, U>` that appears inside a JSX tag name in JS files.
   fn skip_jsx_type_arguments(&mut self) -> SyntaxResult<()> {
     self.require_with_mode(TT::ChevronLeft, LexMode::JsxTag)?;
+    if self.peek_with_mode(LexMode::JsxTag).typ == TT::ChevronRight {
+      let next = self.peek_with_mode(LexMode::JsxTag);
+      return Err(next.error(SyntaxErrorType::ExpectedSyntax("type argument")));
+    }
     let mut depth = 1usize;
     while depth > 0 {
       let tok = self.consume_with_mode(LexMode::JsxTag);
@@ -348,7 +341,9 @@ impl<'a> Parser<'a> {
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require_with_mode(TT::ChevronLeftSlash, LexMode::JsxTag)?;
       let end_name = p.jsx_elem_name()?;
-      let _ = (closing, end_name);
+      if tag_name.as_ref().map(jsx_elem_name_string) != end_name.as_ref().map(jsx_elem_name_string) {
+        return Err(closing.error(SyntaxErrorType::JsxClosingTagMismatch));
+      }
       p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
       Ok(JsxElem {
         name: tag_name,

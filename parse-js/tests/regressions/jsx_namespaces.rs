@@ -13,22 +13,10 @@ fn tsx_opts() -> ParseOptions {
 }
 
 #[test]
-fn jsx_namespaced_member_allows_dotted_path() {
-  let parsed = parse_with_options("<b:c.x></b:c.x>;", tsx_opts()).unwrap();
-  let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {
-    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
-      Expr::JsxElem(elem) => elem,
-      other => panic!("expected JSX element, got {:?}", other),
-    },
-    other => panic!("expected expression statement, got {:?}", other),
-  };
-  match &elem.stx.name {
-    Some(JsxElemName::Member(member)) => {
-      assert_eq!(member.stx.base.stx.name, "b:c");
-      assert_eq!(member.stx.path, vec!["x".to_string()]);
-    }
-    other => panic!("expected member name, got {:?}", other),
-  }
+fn jsx_namespaced_member_is_syntax_error() {
+  let err = parse_with_options("<b:c.x></b:c.x>;", tsx_opts()).unwrap_err();
+  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("identifier"));
+  assert_eq!(err.actual_token, Some(TT::Dot));
 }
 
 #[test]
@@ -82,6 +70,8 @@ fn jsx_type_arguments_are_skipped_in_jsx() {
 }
 
 #[test]
-fn jsx_attribute_value_allows_spread_recovery() {
-  parse_with_options("<X a={...props} />", tsx_opts()).unwrap();
+fn jsx_attribute_value_spread_is_syntax_error() {
+  let err = parse_with_options("<X a={...props} />", tsx_opts()).unwrap_err();
+  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("expression"));
+  assert_eq!(err.actual_token, Some(TT::DotDotDot));
 }

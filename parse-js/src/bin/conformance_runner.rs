@@ -381,11 +381,27 @@ fn parse_baseline_error_line(line: &str) -> Option<(String, u32)> {
 fn is_expected_parse_error_code(code: u32) -> bool {
   // Treat syntax/parse-related TypeScript diagnostics as expected parse failures.
   //
-  // TypeScript uses:
-  // - TS1xxx for many grammar errors (`Identifier expected`, etc.)
-  // - TS170xx for some syntax-like errors that still allow parsing (e.g.
-  //   invalid `import.*` meta-properties).
-  (1000..2000).contains(&code) || (17000..18000).contains(&code)
+  // TypeScript uses TS1xxx for the bulk of grammar errors, but also reports
+  // some early/grammar-like errors under other codes (notably some TS170xx
+  // "early error" diagnostics, and TS2657 for multiple-root JSX expressions).
+  //
+  // Note: TS170xx is a broad bucket and includes many semantic/typechecking
+  // errors (e.g. `super`-before-`this` checks). We keep a small allowlist of
+  // TS170xx codes that are syntax-like and relevant for parser conformance.
+  (1000..2000).contains(&code)
+    || matches!(
+      code,
+      2657 // JSX expressions must have one parent element
+        | 17002 // Expected corresponding JSX closing tag
+        | 17004 // Cannot use JSX unless the '--jsx' flag is provided
+        | 17006
+        | 17007 // Exponentiation operator early errors
+        | 17008 // JSX element has no corresponding closing tag
+        | 17012 // Invalid import.meta property
+        | 17014
+        | 17015 // JSX fragment closing-tag errors
+        | 17021 // Unicode escape sequence cannot appear here
+    )
 }
 
 fn parse_directive(line: &str) -> Option<HarnessDirective> {
@@ -1353,6 +1369,8 @@ mod tests {
   fn expected_parse_error_code_ranges_match_ts_baselines() {
     assert!(is_expected_parse_error_code(1003));
     assert!(is_expected_parse_error_code(17012));
+    assert!(is_expected_parse_error_code(2657));
+    assert!(!is_expected_parse_error_code(17017));
     assert!(!is_expected_parse_error_code(2305));
     assert!(!is_expected_parse_error_code(2339));
   }
