@@ -783,48 +783,43 @@ fn diff_diagnostics(
   actual: &[NormalizedDiagnostic],
   normalization: &NormalizationOptions,
 ) -> Option<MismatchReport> {
-  let mut expected_sorted = expected.to_vec();
-  let mut actual_sorted = actual.to_vec();
-  sort_diagnostics(&mut expected_sorted);
-  sort_diagnostics(&mut actual_sorted);
-
-  let mut used = vec![false; actual_sorted.len()];
+  let mut used = vec![false; actual.len()];
   let mut diff = MismatchReport::default();
 
-  for exp in expected_sorted {
-    if let Some(idx) = find_match(&actual_sorted, &used, |act| exp.matches(act, normalization)) {
+  for exp in expected {
+    if let Some(idx) = find_match(actual, &used, |act| exp.matches(act, normalization)) {
       used[idx] = true;
       continue;
     }
 
     if let Some((idx, reason)) =
-      find_code_or_severity_match(&actual_sorted, &used, &exp, normalization)
+      find_code_or_severity_match(actual, &used, exp, normalization)
     {
       used[idx] = true;
       diff.code.push(MismatchPair {
         expected: exp.clone(),
-        actual: actual_sorted[idx].clone(),
+        actual: actual[idx].clone(),
         reason: Some(reason),
       });
       continue;
     }
 
-    if let Some(idx) = find_span_mismatch(&actual_sorted, &used, &exp) {
+    if let Some(idx) = find_span_mismatch(actual, &used, exp) {
       used[idx] = true;
       diff.span.push(MismatchPair {
         expected: exp.clone(),
-        actual: actual_sorted[idx].clone(),
+        actual: actual[idx].clone(),
         reason: None,
       });
       continue;
     }
 
-    diff.missing.push(exp);
+    diff.missing.push(exp.clone());
   }
 
-  for (idx, act) in actual_sorted.into_iter().enumerate() {
+  for (idx, act) in actual.iter().enumerate() {
     if !used[idx] {
-      diff.unexpected.push(act);
+      diff.unexpected.push(act.clone());
     }
   }
 
@@ -1961,8 +1956,10 @@ mod tests {
     }];
     let tolerant = NormalizationOptions::with_span_tolerance(1);
     let strict = NormalizationOptions::with_span_tolerance(0);
-    let expected = normalize_tsc_diagnostics_with_options(&expected_raw, &tolerant);
-    let actual = normalize_tsc_diagnostics_with_options(&actual_raw, &tolerant);
+    let mut expected = normalize_tsc_diagnostics_with_options(&expected_raw, &tolerant);
+    let mut actual = normalize_tsc_diagnostics_with_options(&actual_raw, &tolerant);
+    sort_diagnostics(&mut expected);
+    sort_diagnostics(&mut actual);
     assert!(diff_diagnostics(&expected, &actual, &strict).is_some());
     assert!(diff_diagnostics(&expected, &actual, &tolerant).is_none());
   }
@@ -1978,7 +1975,7 @@ mod tests {
       }],
     };
     let opts = NormalizationOptions::default();
-    let expected = vec![
+    let mut expected = vec![
       NormalizedDiagnostic {
         engine: DiagnosticEngine::Tsc,
         code: Some(DiagnosticCode::Tsc(1)),
@@ -2007,7 +2004,7 @@ mod tests {
         message: None,
       },
     ];
-    let actual = vec![
+    let mut actual = vec![
       NormalizedDiagnostic {
         engine: DiagnosticEngine::Rust,
         code: Some(DiagnosticCode::Rust("3".to_string())),
@@ -2036,6 +2033,8 @@ mod tests {
         message: None,
       },
     ];
+    sort_diagnostics(&mut expected);
+    sort_diagnostics(&mut actual);
     let diff = diff_diagnostics(&expected, &actual, &opts).expect("diff");
     let files = build_file_map(&test.files, &opts);
     let report = render_mismatch_report(&diff, &files);
