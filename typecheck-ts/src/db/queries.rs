@@ -1641,9 +1641,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     );
   }
 
-  let mut roots: Vec<_> = files.iter().map(|id| sem_ts::FileId(id.0)).collect();
-  roots.sort();
-  roots.dedup();
+  let roots: Vec<_> = files.iter().map(|id| sem_ts::FileId(id.0)).collect();
   let resolver = DbResolver { db };
   let cancelled_flag = cancelled(db);
   let (semantics, mut bind_diags) = sem_ts::bind_ts_program_with_cancellation(
