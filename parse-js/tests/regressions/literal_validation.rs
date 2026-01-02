@@ -23,6 +23,24 @@ fn string_with_line_terminator_is_invalid() {
 }
 
 #[test]
+fn string_allows_unescaped_line_separator_codepoints() {
+  let source = format!("'hello{}world'", '\u{2028}');
+  parse(&source).unwrap();
+  let source = format!("'hello{}world'", '\u{2029}');
+  parse(&source).unwrap();
+}
+
+#[test]
+fn string_allows_surrogate_escapes() {
+  // Rust `String` cannot represent surrogate code points directly; the parser
+  // maps them to U+FFFD while still accepting the literal.
+  parse("\"\\u{D800}\"").unwrap();
+  parse("\"\\uD800\"").unwrap();
+  // Surrogate pair should decode into a valid scalar.
+  parse("\"\\uD83D\\uDE00\"").unwrap();
+}
+
+#[test]
 fn invalid_template_escape_reports_error() {
   let err = parse("`\\u{110000}`").unwrap_err();
   assert_eq!(err.typ, SyntaxErrorType::InvalidCharacterEscape);

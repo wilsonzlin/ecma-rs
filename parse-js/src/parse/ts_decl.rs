@@ -245,7 +245,9 @@ impl<'a> Parser<'a> {
       p.require(TT::Identifier)?;
 
       p.require(TT::BraceOpen)?;
-      let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
+      // `declare global { ... }` contains top-level-like module declarations (not block statements),
+      // including `export { ... }` lists.
+      let body = p.stmts(ctx.with_top_level(true), TT::BraceClose)?;
       p.require(TT::BraceClose)?;
 
       Ok(GlobalDecl { body })

@@ -468,6 +468,12 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, TT::KeywordAsync | TT::KeywordFunction) | (TT::KeywordAsync | TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass | TT::KeywordAbstract, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export const enum
+      (TT::KeywordConst, TT::KeywordEnum) => {
+        self.consume(); // export
+        self.consume(); // const
+        self.enum_decl(ctx, true, false, true)?.into_wrapped()
+      },
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing | TT::KeywordAwait, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)

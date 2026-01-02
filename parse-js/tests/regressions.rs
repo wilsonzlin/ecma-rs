@@ -30,5 +30,7 @@ mod numeric_literal_overflow;
 mod numeric_separators;
 #[path = "regressions/private_index_signature.rs"]
 mod private_index_signature;
+#[path = "regressions/ts_module_blocks.rs"]
+mod ts_module_blocks;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;

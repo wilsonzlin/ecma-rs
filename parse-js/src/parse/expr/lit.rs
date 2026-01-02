@@ -199,14 +199,21 @@ fn decode_escape_sequence(
             len: 1,
           });
         }
-        let cp = u32::from_str_radix(hex, 16)
-          .ok()
-          .and_then(char::from_u32)
-          .ok_or(LiteralError {
+        let value = u32::from_str_radix(hex, 16).ok().ok_or(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        })?;
+        if value > 0x10FFFF {
+          return Err(LiteralError {
             kind: LiteralErrorKind::InvalidEscape,
             offset: escape_start,
             len: 1,
-          })?;
+          });
+        }
+        // JavaScript strings are UTF-16; allow surrogate code points by mapping
+        // them to U+FFFD so we can represent them in Rust `String`s.
+        let cp = char::from_u32(value).unwrap_or('\u{FFFD}');
         let consumed = first.len_utf8() + end + 1;
         Ok((consumed, Some(cp)))
       } else {
@@ -230,14 +237,31 @@ fn decode_escape_sequence(
             len: 1,
           });
         }
-        let cp = u32::from_str_radix(&hex, 16)
-          .ok()
-          .and_then(char::from_u32)
-          .ok_or(LiteralError {
-            kind: LiteralErrorKind::InvalidEscape,
-            offset: escape_start,
-            len: 1,
-          })?;
+        let value = u32::from_str_radix(&hex, 16).ok().ok_or(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        })?;
+        // Combine surrogate pairs when possible so sequences like `\\uD83D\\uDE00`
+        // decode to a valid Unicode scalar.
+        if (0xD800..=0xDBFF).contains(&value) {
+          let rest = &after_u[4..];
+          if rest.len() >= 6 && rest.starts_with("\\u") {
+            let low_hex = &rest[2..6];
+            if low_hex.chars().all(|c| c.is_ascii_hexdigit()) {
+              let low = u32::from_str_radix(low_hex, 16).unwrap();
+              if (0xDC00..=0xDFFF).contains(&low) {
+                let high_ten = (value - 0xD800) << 10;
+                let low_ten = low - 0xDC00;
+                let combined = 0x10000 + high_ten + low_ten;
+                if let Some(cp) = char::from_u32(combined) {
+                  return Ok((consumed + 6, Some(cp)));
+                }
+              }
+            }
+          }
+        }
+        let cp = char::from_u32(value).unwrap_or('\u{FFFD}');
         Ok((consumed, Some(cp)))
       }
     }
@@ -261,7 +285,9 @@ fn decode_literal(raw: &str, allow_line_terminators: bool) -> Result<String, Lit
       }
       offset = after_backslash + consumed;
     } else {
-      if !allow_line_terminators && is_line_terminator(ch) {
+      // ECMAScript 2019 permits U+2028/U+2029 (line/paragraph separators) in
+      // string literals; only CR/LF terminate literal lines.
+      if !allow_line_terminators && matches!(ch, '\n' | '\r') {
         return Err(LiteralError {
           kind: LiteralErrorKind::LineTerminator,
           offset,

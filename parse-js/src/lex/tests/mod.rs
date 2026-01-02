@@ -73,8 +73,8 @@ fn test_lex_literal_strings() {
   check("'hello world\n'", [Invalid], Dialect::Tsx);
   check("'hello world\r'", [Invalid], Dialect::Tsx);
   check("'hello world\r\n'", [Invalid], Dialect::Tsx);
-  check("'hello world\u{2028}'", [Invalid], Dialect::Tsx);
-  check("'hello world\u{2029}'", [Invalid], Dialect::Tsx);
+  check("'hello world\u{2028}'", [LiteralString], Dialect::Tsx);
+  check("'hello world\u{2029}'", [LiteralString], Dialect::Tsx);
   check("'hello\\\nworld'", [LiteralString], Dialect::Tsx);
   check("'hello\\\r\nworld'", [LiteralString], Dialect::Tsx);
   check("'hello\\\u{2028}world'", [LiteralString], Dialect::Tsx);

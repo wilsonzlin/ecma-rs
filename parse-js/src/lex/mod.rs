@@ -896,14 +896,6 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
     if newline.len() < m.len() {
       m = newline;
     }
-    let line_sep = lexer.while_not_char('\u{2028}');
-    if line_sep.len() < m.len() {
-      m = line_sep;
-    }
-    let para_sep = lexer.while_not_char('\u{2029}');
-    if para_sep.len() < m.len() {
-      m = para_sep;
-    }
     lexer.consume(m);
 
     let c = lexer.peek(0)?;
@@ -935,7 +927,7 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
           lexer.skip_expect(1);
         }
       }
-      '\n' | '\u{2028}' | '\u{2029}' => {
+      '\n' => {
         invalid = true;
         lexer.skip_expect(c.len_utf8());
       }

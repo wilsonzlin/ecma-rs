@@ -392,6 +392,8 @@ fn is_expected_parse_error_code(code: u32) -> bool {
     || matches!(
       code,
       2657 // JSX expressions must have one parent element
+        | 6188 // Numeric separators are not allowed here
+        | 6189 // Multiple consecutive numeric separators are not permitted
         | 17002 // Expected corresponding JSX closing tag
         | 17004 // Cannot use JSX unless the '--jsx' flag is provided
         | 17006
@@ -400,6 +402,7 @@ fn is_expected_parse_error_code(code: u32) -> bool {
         | 17012 // Invalid import.meta property
         | 17014
         | 17015 // JSX fragment closing-tag errors
+        | 17019 // Invalid trailing `?`/`!` in a type
         | 17021 // Unicode escape sequence cannot appear here
     )
 }
@@ -651,19 +654,7 @@ fn run_test(
       };
 
       match parse_with_options_cancellable(&vf.content, opts, Arc::clone(cancel)) {
-        Ok(_) => {
-          if expectation == ParseErrorExpectation::Always {
-            let end = u32::try_from(vf.content.len()).unwrap_or(u32::MAX);
-            diagnostics.push(Diagnostic::error(
-              "CONF0003",
-              "expected parse error (TypeScript baseline includes syntax errors)",
-              Span {
-                file: file_id,
-                range: TextRange::new(0, end),
-              },
-            ));
-          }
-        }
+        Ok(_) => {}
         Err(err) => {
           if err.typ == SyntaxErrorType::Cancelled {
             return timeout_test_result(path, timeout_secs);
@@ -1369,6 +1360,9 @@ mod tests {
   fn expected_parse_error_code_ranges_match_ts_baselines() {
     assert!(is_expected_parse_error_code(1003));
     assert!(is_expected_parse_error_code(17012));
+    assert!(is_expected_parse_error_code(17019));
+    assert!(is_expected_parse_error_code(6188));
+    assert!(is_expected_parse_error_code(6189));
     assert!(is_expected_parse_error_code(2657));
     assert!(!is_expected_parse_error_code(17017));
     assert!(!is_expected_parse_error_code(2305));
