@@ -4,7 +4,7 @@ use crate::diagnostic_norm::{
 };
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
-use crate::multifile::{normalize_name, normalize_name_into};
+use crate::multifile::{normalize_name_cow, normalize_name_into};
 use crate::runner::{
   build_tsc_request, is_source_root, run_rust, EngineStatus, HarnessFileSet, HarnessHost,
   TscRunnerPool,
@@ -20,6 +20,7 @@ use num_cpus;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
@@ -1546,9 +1547,9 @@ fn marker_queries_from_type_facts(type_facts: &Option<TypeFacts>) -> Vec<TypeQue
 }
 
 fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
-  let mut ordered: Vec<(String, &VirtualFile)> = files
+  let mut ordered: Vec<(Cow<'_, str>, &VirtualFile)> = files
     .iter()
-    .map(|file| (normalize_name(&file.name), file))
+    .map(|file| (normalize_name_cow(&file.name), file))
     .collect();
   ordered.sort_by(|(a_norm, a_file), (b_norm, b_file)| {
     a_norm

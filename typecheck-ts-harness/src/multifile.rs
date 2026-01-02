@@ -1,6 +1,7 @@
 use crate::directives::parse_directive;
 use crate::directives::HarnessDirective;
 use diagnostics::paths::{normalize_ts_path, normalize_ts_path_into};
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -10,6 +11,82 @@ pub(crate) fn normalize_name(name: &str) -> String {
 
 pub(crate) fn normalize_name_into(name: &str, out: &mut String) {
   normalize_ts_path_into(name, out)
+}
+
+pub(crate) fn normalize_name_cow<'a>(name: &'a str) -> Cow<'a, str> {
+  if is_normalized_virtual_path(name) {
+    Cow::Borrowed(name)
+  } else {
+    Cow::Owned(normalize_name(name))
+  }
+}
+
+fn is_normalized_virtual_path(name: &str) -> bool {
+  if name == "/" {
+    return true;
+  }
+
+  if name.starts_with(r"\\?\") || name.starts_with("//?/") {
+    return false;
+  }
+
+  let bytes = name.as_bytes();
+  // Reject slash-prefixed drive letters (e.g. `/C:/foo`) since `normalize_ts_path` strips leading
+  // slashes and lowercases the drive.
+  let slash_drive = bytes
+    .get(..3)
+    .is_some_and(|b| b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':');
+
+  if bytes.len() >= 3 && bytes[0].is_ascii_lowercase() && bytes[1] == b':' && bytes[2] == b'/' {
+    // `normalize_ts_path` strips trailing slashes except for the drive root (`c:/`).
+    if bytes.len() > 3 && name.ends_with('/') {
+      return false;
+    }
+    return !path_needs_normalization(name);
+  }
+
+  if bytes.first() == Some(&b'/') && !slash_drive {
+    // `normalize_ts_path` collapses leading `//` and strips trailing slashes.
+    if bytes.get(1) == Some(&b'/') || name.ends_with('/') {
+      return false;
+    }
+    return !path_needs_normalization(name);
+  }
+
+  false
+}
+
+fn path_needs_normalization(path: &str) -> bool {
+  // We treat `..` segments as needing normalization even when trailing because `normalize_ts_path`
+  // collapses them to the root.
+  if path.ends_with("/.") || path.ends_with("/..") {
+    return true;
+  }
+
+  let mut prev3 = 0u8;
+  let mut prev2 = 0u8;
+  let mut prev = 0u8;
+  for &b in path.as_bytes() {
+    if b == b'\\' {
+      return true;
+    }
+    if prev == b'/' && b == b'/' {
+      return true;
+    }
+    // Detect `/./`.
+    if prev2 == b'/' && prev == b'.' && b == b'/' {
+      return true;
+    }
+    // Detect `/../`.
+    if prev3 == b'/' && prev2 == b'.' && prev == b'.' && b == b'/' {
+      return true;
+    }
+    prev3 = prev2;
+    prev2 = prev;
+    prev = b;
+  }
+
+  false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
