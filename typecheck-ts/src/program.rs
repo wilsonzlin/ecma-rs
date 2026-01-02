@@ -4710,23 +4710,11 @@ impl ProgramState {
     roots: &[FileKey],
   ) -> Result<(), FatalError> {
     if self.analyzed {
-      self.sync_typecheck_roots();
       return Ok(());
     }
     self.check_cancelled()?;
     self.module_namespace_types.clear();
     self.module_namespace_in_progress.clear();
-    let mut sorted_roots = roots.to_vec();
-    sorted_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    self
-      .typecheck_db
-      .set_roots(Arc::<[FileKey]>::from(sorted_roots));
-    self
-      .typecheck_db
-      .set_compiler_options(self.compiler_options.clone());
-    self
-      .typecheck_db
-      .set_cancellation_flag(Arc::clone(&self.cancelled));
     let libs = self.collect_libraries(host.as_ref());
     self.check_cancelled()?;
     let mut lib_queue = VecDeque::new();
@@ -4735,10 +4723,14 @@ impl ProgramState {
       .iter()
       .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
       .collect();
-    root_ids.sort_by_key(|id| id.0);
-    self.root_ids = root_ids.clone();
-    self.sync_typecheck_roots();
-    let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
+    root_ids.sort_unstable_by_key(|id| id.0);
+    self.root_ids = root_ids;
+    // `roots` is already sorted and deduplicated by `Program::with_lib_manager`, so avoid an
+    // extra sort during analysis and only update the salsa input once per reset.
+    self
+      .typecheck_db
+      .set_roots(Arc::<[FileKey]>::from(roots.to_vec()));
+    let mut queue: VecDeque<FileId> = self.root_ids.iter().copied().collect();
     queue.extend(lib_queue);
     let mut seen: AHashSet<FileId> = AHashSet::new();
     while let Some(file) = queue.pop_front() {
@@ -6201,10 +6193,9 @@ impl ProgramState {
     let mut keys: Vec<FileKey> = roots
       .iter()
       .copied()
-      .chain(self.lib_file_ids.iter().copied())
       .filter_map(|id| self.file_registry.lookup_key(id))
       .collect();
-    keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    keys.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
     keys.dedup();
     self
       .typecheck_db
@@ -6228,7 +6219,6 @@ impl ProgramState {
     self.ensure_analyzed_result(host, roots)?;
     self.ensure_interned_types(host, roots)?;
     self.body_results.clear();
-    self.sync_typecheck_roots();
     self.set_extra_diagnostics_input();
 
     let body_ids: Vec<_> = {
