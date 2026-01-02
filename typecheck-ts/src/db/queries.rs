@@ -143,61 +143,90 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
   let mut diagnostics = Vec::new();
   let file_id = file.file_id(db);
   let source = file_text_for(db, file);
-  let refine_span = |span: TextRange, value: &str| -> TextRange {
-    if (span.end as usize) <= source.len() {
-      if let Some(segment) = source.get(span.start as usize..span.end as usize) {
-        for quote in ['"', '\'', '`'] {
-          let needle = format!("{quote}{value}{quote}");
-          if let Some(idx) = segment.find(&needle) {
-            let start = span.start + idx as u32;
-            let end = start + needle.len() as u32;
-            return TextRange::new(start, end);
+  struct UnresolvedModuleChecker<'a> {
+    db: &'a dyn Db,
+    file_id: FileId,
+    semantics: &'a TsSemantics,
+    source: &'a str,
+    seen: BTreeSet<(u32, u32, String)>,
+  }
+
+  impl<'a> UnresolvedModuleChecker<'a> {
+    fn refine_span(&self, span: TextRange, value: &str) -> TextRange {
+      if (span.end as usize) <= self.source.len() {
+        if let Some(segment) = self.source.get(span.start as usize..span.end as usize) {
+          for quote in ['"', '\'', '`'] {
+            let needle = format!("{quote}{value}{quote}");
+            if let Some(idx) = segment.find(&needle) {
+              let start = span.start + idx as u32;
+              let end = start + needle.len() as u32;
+              return TextRange::new(start, end);
+            }
           }
         }
       }
+      span
     }
-    span
-  };
-  let mut seen = BTreeSet::new();
-  let mut check_specifier_value = |specifier: &str,
-                                   span: TextRange,
-                                   diags: &mut Vec<Diagnostic>| {
-    match module_resolve(db, file_id, Arc::<str>::from(specifier)) {
-      Some(_) => {}
-      None => {
-        if semantics
-          .semantics
-          .exports_of_ambient_module(specifier)
-          .is_some()
-        {
-          return;
-        }
-        let range = refine_span(span, specifier);
-        let key = (range.start, range.end, specifier.to_string());
-        if !seen.insert(key) {
-          return;
-        }
-        let mut diag = codes::UNRESOLVED_MODULE.error(
-          format!("unresolved module specifier \"{specifier}\""),
-          Span::new(file_id, range),
-        );
-        diag.push_note(format!("module specifier: \"{specifier}\""));
-        diags.push(diag);
+
+    fn emit_unresolved(&mut self, specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>) {
+      if self
+        .semantics
+        .semantics
+        .exports_of_ambient_module(specifier)
+        .is_some()
+      {
+        return;
       }
+
+      let range = self.refine_span(span, specifier);
+      let key = (range.start, range.end, specifier.to_string());
+      if !self.seen.insert(key) {
+        return;
+      }
+
+      let mut diag = codes::UNRESOLVED_MODULE.error(
+        format!("unresolved module specifier \"{specifier}\""),
+        Span::new(self.file_id, range),
+      );
+      diag.push_note(format!("module specifier: \"{specifier}\""));
+      diags.push(diag);
     }
-  };
-  let mut check_specifier = |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| {
-    check_specifier_value(&spec.value, spec.span, diags);
+
+    fn check_value(&mut self, specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>) {
+      if module_resolve(self.db, self.file_id, Arc::<str>::from(specifier)).is_some() {
+        return;
+      }
+      self.emit_unresolved(specifier, span, diags);
+    }
+
+    fn check_arc(&mut self, specifier: &Arc<str>, span: TextRange, diags: &mut Vec<Diagnostic>) {
+      if module_resolve(self.db, self.file_id, Arc::clone(specifier)).is_some() {
+        return;
+      }
+      self.emit_unresolved(specifier.as_ref(), span, diags);
+    }
+
+    fn check_specifier(&mut self, spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>) {
+      self.check_value(&spec.value, spec.span, diags);
+    }
+  }
+
+  let mut checker = UnresolvedModuleChecker {
+    db,
+    file_id,
+    semantics: semantics.as_ref(),
+    source: source.as_ref(),
+    seen: BTreeSet::new(),
   };
 
   for import in lowered.hir.imports.iter() {
     match &import.kind {
       hir_js::ImportKind::Es(es) => {
-        check_specifier(&es.specifier, &mut diagnostics);
+        checker.check_specifier(&es.specifier, &mut diagnostics);
       }
       hir_js::ImportKind::ImportEquals(eq) => {
         if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          check_specifier(module, &mut diagnostics);
+          checker.check_specifier(module, &mut diagnostics);
         }
       }
     }
@@ -207,11 +236,11 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     match &export.kind {
       ExportKind::Named(named) => {
         if let Some(source) = named.source.as_ref() {
-          check_specifier(source, &mut diagnostics);
+          checker.check_specifier(source, &mut diagnostics);
         }
       }
       ExportKind::ExportAll(all) => {
-        check_specifier(&all.source, &mut diagnostics);
+        checker.check_specifier(&all.source, &mut diagnostics);
       }
       ExportKind::Default(_) | ExportKind::Assignment(_) | ExportKind::AsNamespace(_) => {}
     }
@@ -220,7 +249,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
   let parsed = parse_for(db, file);
   if let Some(ast) = parsed.ast.as_deref() {
     for (specifier, span) in collect_type_only_module_specifiers_from_ast(ast) {
-      check_specifier_value(specifier.as_ref(), span, &mut diagnostics);
+      checker.check_arc(&specifier, span, &mut diagnostics);
     }
   }
 
