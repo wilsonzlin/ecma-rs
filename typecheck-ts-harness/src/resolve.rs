@@ -76,6 +76,24 @@ fn resolve_non_relative(
     || specifier.starts_with('\\')
     || starts_with_drive_letter(specifier)
   {
+    // Most explicit-path specifiers are already normalized. Skip the extra `normalize_name`
+    // allocation when we can prove the string cannot change.
+    let slash_drive = specifier
+      .as_bytes()
+      .get(..3)
+      .is_some_and(|b| b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':');
+    if specifier.starts_with('/')
+      && (specifier == "/" || !specifier.ends_with('/'))
+      && !slash_drive
+      && !subpath_needs_normalization(specifier)
+    {
+      if let Some(found) =
+        resolve_as_file_or_directory_normalized_with_scratch(files, specifier, 0, &mut resolve_scratch)
+      {
+        return Some(found);
+      }
+    }
+
     let normalized = normalize_name(specifier);
     // Treat the specifier as a rooted virtual path and apply file/directory expansion.
     if let Some(found) =
