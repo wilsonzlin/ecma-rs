@@ -718,7 +718,10 @@ fn is_drive_root(dir: &str) -> bool {
 
 fn starts_with_drive_letter(path: &str) -> bool {
   let bytes = path.as_bytes();
-  bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+  bytes.len() >= 3
+    && bytes[0].is_ascii_alphabetic()
+    && bytes[1] == b':'
+    && (bytes[2] == b'/' || bytes[2] == b'\\')
 }
 
 fn virtual_parent_dir_str(path: &str) -> &str {
