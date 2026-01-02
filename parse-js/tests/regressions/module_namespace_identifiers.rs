@@ -27,4 +27,5 @@ fn import_string_name_requires_as_clause() {
 fn export_list_disallows_string_literal_exportable_without_from() {
   let err = parse(r#"export { "a-b" as foo };"#).unwrap_err();
   assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("identifier"));
+  assert_eq!(err.actual_token, Some(TT::LiteralString));
 }

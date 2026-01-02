@@ -20,6 +20,7 @@ use crate::ast::stmt::ImportStmt;
 use crate::ast::stmt::Stmt;
 use crate::ast::ts_stmt::ImportEqualsDecl;
 use crate::ast::ts_stmt::ImportEqualsRhs;
+use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::KEYWORDS_MAPPING;
@@ -342,7 +343,11 @@ impl<'a> Parser<'a> {
             // string-literal module export names on the left-hand side.
             for name in &names {
               if matches!(name.stx.exportable, ModuleExportImportName::Str(_)) {
-                return Err(name.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+                return Err(SyntaxError::new(
+                  SyntaxErrorType::ExpectedSyntax("identifier"),
+                  name.loc,
+                  Some(TT::LiteralString),
+                ));
               }
             }
           }
