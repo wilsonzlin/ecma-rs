@@ -568,16 +568,51 @@ fn is_relative_specifier(specifier: &str) -> bool {
 fn subpath_needs_normalization(subpath: &str) -> bool {
   // Most package subpaths are already normalized (e.g. `pkg/dist/index.js`). Skip the more
   // expensive `normalize_name` call when the string cannot contain segments that need collapsing.
-  subpath.contains('\\')
-    || subpath.contains("//")
-    || subpath == "."
-    || subpath == ".."
-    || subpath.starts_with("./")
-    || subpath.starts_with("../")
-    || subpath.contains("/./")
-    || subpath.contains("/../")
-    || subpath.ends_with("/.")
-    || subpath.ends_with("/..")
+  //
+  // This is in the hot path for module resolution; scan once instead of calling `contains`/`starts_with`
+  // repeatedly.
+  if subpath == "." || subpath == ".." {
+    return true;
+  }
+  let bytes = subpath.as_bytes();
+  if bytes.starts_with(b"./") || bytes.starts_with(b"../") {
+    return true;
+  }
+  if bytes.len() >= 2 && bytes[bytes.len() - 2] == b'/' && bytes[bytes.len() - 1] == b'.' {
+    return true;
+  }
+  if bytes.len() >= 3
+    && bytes[bytes.len() - 3] == b'/'
+    && bytes[bytes.len() - 2] == b'.'
+    && bytes[bytes.len() - 1] == b'.'
+  {
+    return true;
+  }
+
+  let mut prev3 = 0u8;
+  let mut prev2 = 0u8;
+  let mut prev = 0u8;
+  for &b in bytes {
+    if b == b'\\' {
+      return true;
+    }
+    if prev == b'/' && b == b'/' {
+      return true;
+    }
+    // Detect `/./`.
+    if prev2 == b'/' && prev == b'.' && b == b'/' {
+      return true;
+    }
+    // Detect `/../`.
+    if prev3 == b'/' && prev2 == b'.' && prev == b'.' && b == b'/' {
+      return true;
+    }
+    prev3 = prev2;
+    prev2 = prev;
+    prev = b;
+  }
+
+  false
 }
 
 fn is_drive_root(dir: &str) -> bool {
