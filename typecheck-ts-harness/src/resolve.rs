@@ -1,4 +1,4 @@
-use crate::multifile::{normalize_name, normalize_name_into};
+use crate::multifile::{is_normalized_virtual_path, normalize_name, normalize_name_into};
 use crate::runner::{is_source_root, HarnessFileSet};
 use serde_json::{Map, Value};
 use std::borrow::Cow;
@@ -351,6 +351,14 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           }
 
           if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
+            if is_normalized_virtual_path(entry) {
+              return resolve_as_file_or_directory_normalized_with_scratch(
+                files,
+                entry,
+                depth + 1,
+                resolve_scratch,
+              );
+            }
             normalize_name_into(entry, scratch);
             return resolve_as_file_or_directory_normalized_with_scratch(
               files,
@@ -513,6 +521,14 @@ fn resolve_json_string_to_file(
     return None;
   }
   if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
+    if is_normalized_virtual_path(entry) {
+      return resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        entry,
+        depth,
+        resolve_scratch,
+      );
+    }
     normalize_name_into(entry, scratch);
     return resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch);
   }
@@ -552,6 +568,14 @@ fn resolve_json_string_to_file_with_star(
     scratch.clear();
     scratch.reserve(entry.len() + star.len());
     push_star_replaced(scratch, entry, star);
+    if is_normalized_virtual_path(scratch.as_str()) {
+      return resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        scratch,
+        depth,
+        resolve_scratch,
+      );
+    }
     normalize_name_into(scratch.as_str(), resolve_scratch);
     return resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth, scratch);
   }
