@@ -1622,11 +1622,11 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
   for import in lowered.hir.imports.iter() {
     match &import.kind {
       hir_js::ImportKind::Es(es) => {
-        specs.push((Arc::from(es.specifier.value.clone()), es.specifier.span));
+        specs.push((Arc::<str>::from(es.specifier.value.as_str()), es.specifier.span));
       }
       hir_js::ImportKind::ImportEquals(eq) => {
         if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          specs.push((Arc::from(module.value.clone()), module.span));
+          specs.push((Arc::<str>::from(module.value.as_str()), module.span));
         }
       }
     }
@@ -1635,11 +1635,11 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
     match &export.kind {
       ExportKind::Named(named) => {
         if let Some(source) = named.source.as_ref() {
-          specs.push((Arc::from(source.value.clone()), source.span));
+          specs.push((Arc::<str>::from(source.value.as_str()), source.span));
         }
       }
       ExportKind::ExportAll(all) => {
-        specs.push((Arc::from(all.source.value.clone()), all.source.span));
+        specs.push((Arc::<str>::from(all.source.value.as_str()), all.source.span));
       }
       _ => {}
     }
@@ -1650,19 +1650,19 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
         hir_js::TypeExprKind::TypeRef(type_ref) => {
           if let hir_js::TypeName::Import(import) = &type_ref.name {
             if let Some(module) = &import.module {
-              specs.push((Arc::from(module.clone()), ty.span));
+              specs.push((Arc::<str>::from(module.as_str()), ty.span));
             }
           }
         }
         hir_js::TypeExprKind::TypeQuery(name) => {
           if let hir_js::TypeName::Import(import) = name {
             if let Some(module) = &import.module {
-              specs.push((Arc::from(module.clone()), ty.span));
+              specs.push((Arc::<str>::from(module.as_str()), ty.span));
             }
           }
         }
         hir_js::TypeExprKind::Import(import) => {
-          specs.push((Arc::from(import.module.clone()), ty.span));
+          specs.push((Arc::<str>::from(import.module.as_str()), ty.span));
         }
         _ => {}
       }
@@ -1687,7 +1687,7 @@ fn collect_type_only_module_specifiers_from_ast(
       TypeEntityName::Qualified(qualified) => collect_from_entity_name(&qualified.left, specs),
       TypeEntityName::Import(import) => {
         if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
-          specs.push((Arc::from(spec.stx.value.clone()), import.loc.into()));
+          specs.push((Arc::<str>::from(spec.stx.value.as_str()), import.loc.into()));
         }
       }
       _ => {}
@@ -1705,7 +1705,7 @@ fn collect_type_only_module_specifiers_from_ast(
       match node.stx.as_ref() {
         TypeExpr::ImportType(import) => {
           self.specs.push((
-            Arc::from(import.stx.module_specifier.clone()),
+            Arc::<str>::from(import.stx.module_specifier.as_str()),
             node.loc.into(),
           ));
         }
