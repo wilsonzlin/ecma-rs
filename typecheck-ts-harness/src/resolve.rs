@@ -96,7 +96,7 @@ fn resolve_non_relative(
   });
   let mut types_specifier: Option<String> = None;
   let mut types_specifier_checked = false;
-  let mut dir = virtual_parent_dir(from_name);
+  let mut dir = virtual_parent_dir_str(from_name);
   let mut package_dir = String::with_capacity(
     dir.len() + 2 + "node_modules".len() + package_name.len() + subpath.len(),
   );
@@ -104,7 +104,7 @@ fn resolve_non_relative(
     dir.len() + 2 + "node_modules/@types".len() + specifier.len() + subpath.len(),
   );
   loop {
-    virtual_join3_into(&mut package_dir, &dir, "node_modules", package_name);
+    virtual_join3_into(&mut package_dir, dir, "node_modules", package_name);
     let package_dir_len = package_dir.len();
     if let Some(exports_subpath) = exports_subpath.as_deref() {
       // Resolve via package.json exports if present.
@@ -154,7 +154,7 @@ fn resolve_non_relative(
     if let Some(types_specifier) = types_specifier.as_deref() {
       virtual_join3_into(
         &mut types_base,
-        &dir,
+        dir,
         "node_modules/@types",
         types_specifier,
       );
@@ -165,9 +165,11 @@ fn resolve_non_relative(
       }
     }
 
-    if !virtual_pop_dir(&mut dir) {
+    let parent = virtual_parent_dir_str(dir);
+    if parent == dir {
       break;
     }
+    dir = parent;
   }
 
   None
@@ -179,14 +181,14 @@ fn resolve_imports_specifier(
   specifier: &str,
 ) -> Option<FileKey> {
   let from_name = files.name_for_key(from)?;
-  let mut dir = virtual_parent_dir(from_name);
+  let mut dir = virtual_parent_dir_str(from_name);
   let mut package_json_path = String::with_capacity(dir.len() + 1 + "package.json".len());
   let mut resolve_scratch = String::new();
   loop {
-    virtual_join_into(&mut package_json_path, &dir, "package.json");
+    virtual_join_into(&mut package_json_path, dir, "package.json");
     if let Some(found) = resolve_imports_in_dir(
       files,
-      &dir,
+      dir,
       &mut package_json_path,
       &mut resolve_scratch,
       specifier,
@@ -194,9 +196,11 @@ fn resolve_imports_specifier(
       return Some(found);
     }
 
-    if !virtual_pop_dir(&mut dir) {
+    let parent = virtual_parent_dir_str(dir);
+    if parent == dir {
       break;
     }
+    dir = parent;
   }
 
   None
@@ -718,45 +722,6 @@ fn virtual_parent_dir_str(path: &str) -> &str {
   }
 
   &trimmed[..idx]
-}
-
-fn virtual_pop_dir(path: &mut String) -> bool {
-  if path == "/" || is_drive_root(path) {
-    return false;
-  }
-
-  while path.ends_with('/') && path != "/" && !is_drive_root(path) {
-    path.pop();
-  }
-
-  if path == "/" || is_drive_root(path) {
-    return false;
-  }
-
-  let trimmed = path.as_str();
-  let Some(idx) = trimmed.rfind('/') else {
-    path.clear();
-    path.push('/');
-    return true;
-  };
-
-  if idx == 0 {
-    path.truncate(1);
-    return true;
-  }
-
-  let bytes = trimmed.as_bytes();
-  if idx == 2 && bytes.get(1) == Some(&b':') && bytes.get(2) == Some(&b'/') {
-    path.truncate(3);
-    return true;
-  }
-
-  path.truncate(idx);
-  true
-}
-
-fn virtual_parent_dir(path: &str) -> String {
-  virtual_parent_dir_str(path).to_string()
 }
 
 fn virtual_join(base: &str, segment: &str) -> String {
