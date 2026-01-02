@@ -6351,7 +6351,9 @@ impl ProgramState {
     specifier: &str,
     host: &Arc<dyn Host>,
   ) -> Option<FileId> {
-    let spec: Arc<str> = Arc::from(specifier.to_string());
+    // `Arc<str>` cannot reuse a `String` allocation (it needs an `Arc` header), so allocate once
+    // from `&str` instead of going through `to_string()`.
+    let spec: Arc<str> = Arc::from(specifier);
     let resolved = self
       .file_key_for_id(from)
       .and_then(|from_key| host.resolve(&from_key, specifier))
