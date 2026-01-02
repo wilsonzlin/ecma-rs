@@ -50,7 +50,12 @@ impl<'a> Parser<'a> {
   }
 
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
-  /// For exports, `default` can be used without an alias. For imports, it requires an alias.
+  ///
+  /// Note: "arbitrary module namespace identifiers" (string-literal module export names)
+  /// apply to the imported/exported *name* positions, not local bindings. TypeScript
+  /// still requires local import bindings to be identifiers, so string-literal
+  /// aliases are only accepted in export positions (where the alias is an
+  /// `IdentifierName`/string-literal, not a binding identifier).
   fn import_or_export_name(
     &mut self,
     ctx: ParseCtx,
@@ -67,20 +72,21 @@ impl<'a> Parser<'a> {
       t if KEYWORDS_MAPPING.contains_key(&t) => (ModuleExportImportName::Ident(self.consume_as_string()), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
-    let alias = if self.consume_if(TT::KeywordAs).is_match() {
-      // In exports, "default" is allowed as an alias name (e.g., export { a as default })
-      // In imports, keywords cannot be used as alias names
-      let t_alias = self.peek();
-      if is_export && t_alias.typ == TT::KeywordDefault {
-        self.consume();
+     let alias = if self.consume_if(TT::KeywordAs).is_match() {
+       // In exports, "default" is allowed as an alias name (e.g., export { a as default })
+       // In imports, keywords cannot be used as alias names
+       let t_alias = self.peek();
+       if is_export && t_alias.typ == TT::KeywordDefault {
+         self.consume();
         Node::new(
           t_alias.loc,
           IdPat {
             name: "default".to_string(),
           },
         )
-      } else if t_alias.typ == TT::LiteralString {
-        // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
+      } else if is_export && t_alias.typ == TT::LiteralString {
+        // ES2022: arbitrary module namespace identifiers - allow string literals
+        // for *exported* names.
         let name = self.lit_str_val()?;
         Node::new(t_alias.loc, IdPat { name })
       } else {
@@ -176,16 +182,7 @@ impl<'a> Parser<'a> {
       None
     } else if self.consume_if(TT::Asterisk).is_match() {
       self.require(TT::KeywordAs)?;
-      let alias = if self.peek().typ == TT::LiteralString {
-        // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
-        let t = self.peek();
-        let name = self.lit_str_val()?;
-        Node::new(t.loc, IdPat { name })
-          .into_wrapped()
-          .wrap(|pat| PatDecl { pat })
-      } else {
-        self.id_pat_decl(ctx)?
-      };
+      let alias = self.id_pat_decl(ctx)?;
       Some(ImportNames::All(alias))
     } else if self.peek().typ == TT::BraceOpen {
       self.require(TT::BraceOpen)?;
@@ -330,6 +327,16 @@ impl<'a> Parser<'a> {
               })
           })?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
+          if from.is_none() {
+            // Local exports must refer to local bindings, which cannot be string
+            // literals. Only re-exports (`export { ... } from "mod"`) may use
+            // string-literal module export names on the left-hand side.
+            for name in &names {
+              if matches!(name.stx.exportable, ModuleExportImportName::Str(_)) {
+                return Err(name.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+              }
+            }
+          }
           (ExportNames::Specific(names), from)
         }
         TT::Asterisk => {

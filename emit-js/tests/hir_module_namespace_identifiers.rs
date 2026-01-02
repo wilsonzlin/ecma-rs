@@ -55,10 +55,10 @@ fn hir_emits_default_export_star_alias() {
 }
 
 #[test]
-fn hir_emits_string_literal_namespace_import_alias() {
+fn hir_emits_namespace_import() {
   roundtrip(
-    "import * as \"ns-name\" from \"mod\";",
-    "import*as\"ns-name\"from\"mod\";",
+    "import * as ns from \"mod\";",
+    "import*as ns from\"mod\";",
   );
 }
 
@@ -116,34 +116,18 @@ fn hir_emits_named_import_of_default_with_alias() {
 }
 
 #[test]
-fn hir_emits_named_import_of_default_with_string_literal_alias() {
-  roundtrip(
-    r#"import { default as "a-b" } from "mod";"#,
-    r#"import{default as"a-b"}from"mod";"#,
-  );
-}
-
-#[test]
 fn hir_emits_string_named_default_import_exported_as_default() {
   roundtrip(
-    r#"import { default as "a-b" } from "mod";export { "a-b" as default };"#,
-    r#"import{default as"a-b"}from"mod";export{"a-b"as default};"#,
-  );
-}
-
-#[test]
-fn hir_emits_string_literal_import_alias() {
-  roundtrip(
-    "import { \"a-b\" as \"c-d\" } from \"x\";",
-    "import{\"a-b\"as\"c-d\"}from\"x\";",
+    r#"import { default as foo } from "mod";export { foo as default };"#,
+    r#"import{default as foo}from"mod";export{foo as default};"#,
   );
 }
 
 #[test]
 fn hir_emits_reexport_of_string_import_alias() {
   roundtrip(
-    "import { \"a-b\" as \"c-d\" } from \"x\"; export { \"c-d\" as \"e-f\" };",
-    "import{\"a-b\"as\"c-d\"}from\"x\";export{\"c-d\"as\"e-f\"};",
+    "import { \"a-b\" as c } from \"x\"; export { c as \"e-f\" };",
+    "import{\"a-b\"as c}from\"x\";export{c as\"e-f\"};",
   );
 }
 
@@ -152,14 +136,6 @@ fn hir_emits_string_literal_import_with_identifier_alias() {
   roundtrip(
     "import { \"a-b\" as bar } from \"x\";",
     "import{\"a-b\"as bar}from\"x\";",
-  );
-}
-
-#[test]
-fn hir_keeps_as_for_string_import_when_alias_matches() {
-  roundtrip(
-    "import { \"a-b\" as \"a-b\" } from \"x\";",
-    "import{\"a-b\"as\"a-b\"}from\"x\";",
   );
 }
 
@@ -185,10 +161,10 @@ fn hir_keeps_reserved_keyword_alias_quoted() {
 }
 
 #[test]
-fn hir_keeps_as_for_keyword_import_when_alias_matches() {
+fn hir_keeps_as_for_keyword_import() {
   roundtrip(
-    "import { while as \"while\" } from \"x\";",
-    "import{while as\"while\"}from\"x\";",
+    "import { while as w } from \"x\";",
+    "import{while as w}from\"x\";",
   );
 }
 

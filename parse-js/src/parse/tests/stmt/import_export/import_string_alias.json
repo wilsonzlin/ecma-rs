@@ -9,7 +9,7 @@
         "alias": {
           "pat": {
             "$t": "Id",
-            "name": "while"
+            "name": "while_"
           }
         },
         "importable": {
@@ -21,7 +21,7 @@
         "alias": {
           "pat": {
             "$t": "Id",
-            "name": "c-d"
+            "name": "c_d"
           }
         },
         "importable": {

@@ -52,10 +52,10 @@ fn export_star_alias_can_be_default_keyword() {
 }
 
 #[test]
-fn import_star_alias_can_be_string_literal() {
+fn import_star_alias_is_identifier() {
   roundtrip(
-    "import * as \"ns-name\" from \"mod\";",
-    "import*as\"ns-name\"from\"mod\";",
+    "import * as ns from \"mod\";",
+    "import*as ns from\"mod\";",
   );
 }
 
@@ -113,22 +113,6 @@ fn import_named_default_requires_as() {
 }
 
 #[test]
-fn import_named_default_can_have_string_literal_alias() {
-  roundtrip(
-    r#"import { default as "a-b" } from "mod";"#,
-    r#"import{default as"a-b"}from"mod";"#,
-  );
-}
-
-#[test]
-fn import_type_named_default_can_have_string_literal_alias() {
-  roundtrip(
-    r#"import type { default as "a-b" } from "mod";"#,
-    r#"import type{default as"a-b"}from"mod";"#,
-  );
-}
-
-#[test]
 fn import_type_named_default_requires_as() {
   roundtrip(
     r#"import type { default as foo } from "mod";"#,
@@ -137,26 +121,18 @@ fn import_type_named_default_requires_as() {
 }
 
 #[test]
-fn string_named_default_import_can_be_exported_as_default() {
+fn named_default_import_can_be_exported_as_default() {
   roundtrip(
-    r#"import { default as "a-b" } from "mod";export { "a-b" as default };"#,
-    r#"import{default as"a-b"}from"mod";export{"a-b"as default};"#,
+    r#"import { default as foo } from "mod";export { foo as default };"#,
+    r#"import{default as foo}from"mod";export{foo as default};"#,
   );
 }
 
 #[test]
-fn import_alias_can_be_string_literal() {
+fn string_import_name_can_be_exported_under_string_name() {
   roundtrip(
-    "import { \"a-b\" as \"c-d\" } from \"x\";",
-    "import{\"a-b\"as\"c-d\"}from\"x\";",
-  );
-}
-
-#[test]
-fn string_import_alias_can_be_reexported() {
-  roundtrip(
-    "import { \"a-b\" as \"c-d\" } from \"x\"; export { \"c-d\" as \"e-f\" };",
-    "import{\"a-b\"as\"c-d\"}from\"x\";export{\"c-d\"as\"e-f\"};",
+    "import { \"a-b\" as c } from \"x\"; export { c as \"e-f\" };",
+    "import{\"a-b\"as c}from\"x\";export{c as\"e-f\"};",
   );
 }
 
@@ -171,16 +147,16 @@ fn import_string_name_can_have_identifier_alias() {
 #[test]
 fn import_type_alias_can_be_string_literal() {
   roundtrip(
-    "import type { \"a-b\" as \"c-d\" } from \"x\";",
-    "import type{\"a-b\"as\"c-d\"}from\"x\";",
+    "import type { \"a-b\" as Foo } from \"x\";",
+    "import type{\"a-b\"as Foo}from\"x\";",
   );
 }
 
 #[test]
-fn import_type_star_alias_can_be_string_literal() {
+fn import_type_star_alias_is_identifier() {
   roundtrip(
-    "import type * as \"ns-name\" from \"mod\";",
-    "import type*as\"ns-name\"from\"mod\";",
+    "import type * as ns from \"mod\";",
+    "import type*as ns from\"mod\";",
   );
 }
 
@@ -230,14 +206,6 @@ fn export_type_string_name_can_be_aliased_as_default() {
 }
 
 #[test]
-fn string_import_name_still_requires_as_when_alias_matches() {
-  roundtrip(
-    "import { \"a-b\" as \"a-b\" } from \"x\";",
-    "import{\"a-b\"as\"a-b\"}from\"x\";",
-  );
-}
-
-#[test]
 fn string_export_name_still_requires_as_when_alias_matches() {
   roundtrip(
     "export { \"a-b\" as \"a-b\" } from \"x\";",
@@ -259,10 +227,10 @@ fn reserved_keyword_alias_stays_quoted() {
 }
 
 #[test]
-fn keyword_import_name_still_requires_as_when_alias_matches() {
+fn keyword_import_name_requires_as() {
   roundtrip(
-    "import { while as \"while\" } from \"x\";",
-    "import{while as\"while\"}from\"x\";",
+    "import { while as w } from \"x\";",
+    "import{while as w}from\"x\";",
   );
 }
 

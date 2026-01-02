@@ -108,57 +108,53 @@ fn test_module_export_bindings_preserved() {
 #[test]
 fn preserves_string_import_aliases() {
   // Use direct `eval` to disable renaming so we can assert the raw output
-  // contains the string literal names/aliases.
+  // contains the string literal import names.
   let result = minified(
     TopLevelMode::Module,
-    r#"eval("x");import { "a-b" as "c-d" } from "x";"#,
+    r#"eval("x");import { "a-b" as c_d } from "x";"#,
   );
-  assert_eq!(result, r#"eval("x");import{"a-b"as"c-d"}from"x";"#);
+  assert_eq!(result, r#"eval("x");import{"a-b"as c_d}from"x";"#);
 }
 
 #[test]
-fn preserves_string_namespace_import_aliases() {
+fn preserves_namespace_imports() {
   // Use direct `eval` to disable renaming so we can assert the raw output
-  // contains the string literal namespace alias.
+  // contains the namespace import.
   let result = minified(
     TopLevelMode::Module,
-    r#"eval("x");import * as "ns-name" from "x";"#,
+    r#"eval("x");import * as ns from "x";"#,
   );
-  assert_eq!(result, r#"eval("x");import*as"ns-name"from"x";"#);
+  assert_eq!(result, r#"eval("x");import*as ns from"x";"#);
 }
 
 #[test]
 fn reexport_keeps_renamed_string_import_aliases_in_sync() {
-  // Exporting a string-named import binding should keep the binding name and the
-  // export specifier's `exportable` name consistent after renaming.
-  //
-  // (Previously, export specifier symbol tracking only resolved identifier
-  // exportables, so `"c-d"` could be renamed in the import while remaining
-  // unchanged in the export list.)
+  // Exporting a binding imported from a string-named export should keep the
+  // import binding name and the export specifier's `exportable` name consistent
+  // after renaming.
   let result = minified(
     TopLevelMode::Module,
-    r#"import { "a-b" as "c-d" } from "x";export { "c-d" as "e-f" };"#,
+    r#"import { "a-b" as c_d } from "x";export { c_d as "e-f" };"#,
   );
   assert_eq!(result, r#"import{"a-b"as a}from"x";export{a as"e-f"};"#);
 }
 
 #[test]
-fn reexport_keeps_renamed_default_import_with_string_alias_in_sync() {
+fn reexport_keeps_renamed_default_import_in_sync() {
   // `default` is special-cased by the parser/emitters; ensure that importing it
-  // via a named specifier and giving it a string-literal local name still works
-  // with renaming + export specifier rewrites.
+  // via a named specifier still works with renaming + export specifier rewrites.
   let result = minified(
     TopLevelMode::Module,
-    r#"import { default as "c-d" } from "x";export { "c-d" as "e-f" };"#,
+    r#"import { default as c_d } from "x";export { c_d as "e-f" };"#,
   );
   assert_eq!(result, r#"import{default as a}from"x";export{a as"e-f"};"#);
 }
 
 #[test]
-fn export_list_keeps_renamed_default_import_with_string_alias_in_sync() {
+fn export_list_keeps_renamed_default_import_in_sync() {
   let result = minified(
     TopLevelMode::Module,
-    r#"import { default as "c-d" } from "x";export { "c-d" as default };"#,
+    r#"import { default as c_d } from "x";export { c_d as default };"#,
   );
   assert_eq!(
     result,
@@ -167,12 +163,12 @@ fn export_list_keeps_renamed_default_import_with_string_alias_in_sync() {
 }
 
 #[test]
-fn reexport_keeps_renamed_string_namespace_import_aliases_in_sync() {
-  // Namespace imports can also use string aliases. When we rename the internal
-  // binding, ensure export specifiers are updated to reference the renamed name.
+fn reexport_keeps_renamed_namespace_import_aliases_in_sync() {
+  // When we rename the internal binding, ensure export specifiers are updated
+  // to reference the renamed name.
   let result = minified(
     TopLevelMode::Module,
-    r#"import * as "ns-name" from "x";export { "ns-name" as ns };"#,
+    r#"import * as ns_name from "x";export { ns_name as ns };"#,
   );
   assert_eq!(result, r#"import*as a from"x";export{a as ns};"#);
 }
@@ -333,10 +329,10 @@ fn type_only_import_does_not_become_side_effect_import() {
 }
 
 #[test]
-fn type_only_default_import_with_string_alias_is_removed() {
+fn type_only_default_named_import_is_removed() {
   let result = minified(
     TopLevelMode::Module,
-    r#"import type { default as "a-b" } from "mod";export const x=1;"#,
+    r#"import type { default as Foo } from "mod";export const x=1;"#,
   );
   assert_eq!(result, "export const x=1;");
 }

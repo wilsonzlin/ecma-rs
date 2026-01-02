@@ -1,7 +1,7 @@
 {
   "$t": "ExportList",
   "attributes": null,
-  "from": null,
+  "from": "mod",
   "names": {
     "Specific": [
       {

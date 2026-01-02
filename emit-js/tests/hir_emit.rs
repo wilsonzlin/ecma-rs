@@ -132,7 +132,7 @@ fn hir_emission_drops_type_only_named_imports() {
 
 #[test]
 fn hir_emission_drops_import_type_default_named_import_with_string_alias() {
-  let source = r#"import type { default as "a-b" } from "mod"; export const x = 1;"#;
+  let source = r#"import type { default as Foo } from "mod"; export const x = 1;"#;
   let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower TS source");
   let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
   assert_eq!(emitted, "export const x=1;");
@@ -140,7 +140,7 @@ fn hir_emission_drops_import_type_default_named_import_with_string_alias() {
 
 #[test]
 fn hir_emission_drops_import_type_namespace_import_with_string_alias() {
-  let source = r#"import type * as "ns-name" from "mod"; export const x = 1;"#;
+  let source = r#"import type * as ns from "mod"; export const x = 1;"#;
   let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower TS source");
   let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
   assert_eq!(emitted, "export const x=1;");

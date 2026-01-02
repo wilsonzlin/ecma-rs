@@ -231,7 +231,7 @@ fn reexport_supports_string_literal_original_and_alias_names() {
 }
 
 #[test]
-fn string_literal_import_alias_can_be_reexported() {
+fn string_literal_import_name_can_be_reexported() {
   let mut host = MemoryHost::default();
   let key_dep = fk(440);
   let key_root = fk(441);
@@ -243,7 +243,7 @@ fn string_literal_import_alias_can_be_reexported() {
   );
   host.insert(
     key_root.clone(),
-    "import { \"a-b\" as \"c-d\" } from \"./dep\";\nexport { \"c-d\" as \"e-f\" };",
+    "import { \"a-b\" as c_d } from \"./dep\";\nexport { c_d as \"e-f\" };",
   );
   host.insert(
     key_entry.clone(),
@@ -276,7 +276,7 @@ fn string_literal_import_alias_can_be_reexported() {
 }
 
 #[test]
-fn string_literal_namespace_import_alias_can_be_reexported() {
+fn string_literal_namespace_export_can_be_imported() {
   let mut host = MemoryHost::default();
   let key_dep = fk(450);
   let key_root = fk(451);
@@ -288,14 +288,14 @@ fn string_literal_namespace_import_alias_can_be_reexported() {
   );
   host.insert(
     key_root.clone(),
-    "import * as \"ns-name\" from \"./dep\";\nexport { \"ns-name\" as ns };\n",
+    "export * as \"ns-name\" from \"./dep\";\n",
   );
   host.insert(
     key_entry.clone(),
-    "import { ns } from \"./root\";\n\
-     export const v = ns.value;\n\
-     export const typed: ns.Foo = { x: 1 };\n\
-     export const x = typed.x;\n",
+    "import { \"ns-name\" as ns } from \"./root\";\n\
+      export const v = ns.value;\n\
+      export const typed: ns.Foo = { x: 1 };\n\
+      export const x = typed.x;\n",
   );
   host.link(key_root.clone(), "./dep", key_dep.clone());
   host.link(key_entry.clone(), "./root", key_root.clone());
@@ -309,7 +309,9 @@ fn string_literal_namespace_import_alias_can_be_reexported() {
 
   let file_root = program.file_id(&key_root).expect("root file");
   let exports_root = program.exports_of(file_root);
-  let ns_entry = exports_root.get("ns").expect("ns export in root");
+  let ns_entry = exports_root
+    .get("ns-name")
+    .expect("ns-name export in root");
   let ns_ty = ns_entry.type_id.expect("type for ns export");
   assert_eq!(
     program.display_type(ns_ty).to_string(),
@@ -424,7 +426,7 @@ fn string_literal_export_can_be_reexported_as_default() {
 }
 
 #[test]
-fn default_import_with_string_literal_alias_can_be_reexported() {
+fn default_import_via_named_default_specifier_can_be_reexported() {
   let mut host = MemoryHost::default();
   let key_dep = fk(500);
   let key_root = fk(501);
@@ -436,7 +438,7 @@ fn default_import_with_string_literal_alias_can_be_reexported() {
   );
   host.insert(
     key_root.clone(),
-    "import { default as \"a-b\" } from \"./dep\";\nexport { \"a-b\" as foo };\n",
+    "import { default as a_b } from \"./dep\";\nexport { a_b as foo };\n",
   );
   host.insert(
     key_entry.clone(),
@@ -469,7 +471,7 @@ fn default_import_with_string_literal_alias_can_be_reexported() {
 }
 
 #[test]
-fn default_import_with_string_literal_alias_can_be_exported_as_default() {
+fn default_import_via_named_default_specifier_can_be_exported_as_default() {
   let mut host = MemoryHost::default();
   let key_dep = fk(510);
   let key_root = fk(511);
@@ -481,7 +483,7 @@ fn default_import_with_string_literal_alias_can_be_exported_as_default() {
   );
   host.insert(
     key_root.clone(),
-    "import { default as \"a-b\" } from \"./dep\";\nexport { \"a-b\" as default };\n",
+    "import { default as a_b } from \"./dep\";\nexport { a_b as default };\n",
   );
   host.insert(
     key_entry.clone(),
