@@ -34,7 +34,7 @@ pub(crate) fn resolve_module_specifier(
 }
 
 fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> Option<FileKey> {
-  let base = files.name_for_key(from)?;
+  let base = from.as_str();
   let parent = virtual_parent_dir_str(base);
   let mut resolve_scratch = String::new();
 
@@ -84,7 +84,7 @@ fn resolve_non_relative(
   }
 
   // c) Walk up `node_modules` directories starting from the importing file's directory.
-  let from_name = files.name_for_key(from)?;
+  let from_name = from.as_str();
   let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
   let subpath = package_rest.trim_start_matches('/');
   let exports_subpath = (!subpath.is_empty()).then(|| {
@@ -180,7 +180,7 @@ fn resolve_imports_specifier(
   from: &FileKey,
   specifier: &str,
 ) -> Option<FileKey> {
-  let from_name = files.name_for_key(from)?;
+  let from_name = from.as_str();
   let mut dir = virtual_parent_dir_str(from_name);
   let mut package_json_path = String::with_capacity(dir.len() + 1 + "package.json".len());
   let mut resolve_scratch = String::new();
