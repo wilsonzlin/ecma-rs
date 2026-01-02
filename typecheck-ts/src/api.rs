@@ -17,6 +17,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::borrow::Borrow;
 
 /// Stable file identifier shared across the toolchain.
 pub use diagnostics::FileId;
@@ -79,5 +80,11 @@ impl<'de> serde::Deserialize<'de> for FileKey {
 impl<T: Into<Arc<str>>> From<T> for FileKey {
   fn from(value: T) -> Self {
     FileKey::new(value)
+  }
+}
+
+impl Borrow<str> for FileKey {
+  fn borrow(&self) -> &str {
+    self.as_str()
   }
 }

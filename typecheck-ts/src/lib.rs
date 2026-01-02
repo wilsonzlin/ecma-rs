@@ -252,11 +252,13 @@ impl Host for MemoryHost {
       candidate = stripped.to_string();
     }
     let normalized = diagnostics::paths::normalize_ts_path(&candidate);
+    if let Some((key, _)) = self.files.get_key_value(candidate.as_str()) {
+      return Some(key.clone());
+    }
     self
       .files
-      .keys()
-      .find(|key| key.as_str() == candidate || key.as_str() == normalized)
-      .cloned()
+      .get_key_value(normalized.as_str())
+      .map(|(key, _)| key.clone())
   }
 
   fn compiler_options(&self) -> lib_support::CompilerOptions {
