@@ -255,12 +255,17 @@ pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
 
   let content = read_utf8_file(&canonical_path)?;
   let split = split_test_file(&canonical_path, &content);
-
-  let normalized_id = canonical_path
+ 
+  let raw_id = canonical_path
     .strip_prefix(&canonical_root)
     .unwrap_or(&canonical_path)
-    .to_string_lossy()
-    .replace('\\', "/");
+    .to_string_lossy();
+  // Avoid allocating a second String on Unix where paths already use `/`.
+  let normalized_id = if raw_id.contains('\\') {
+    raw_id.replace('\\', "/")
+  } else {
+    raw_id.into_owned()
+  };
 
   Ok(TestCase {
     id: normalized_id,
