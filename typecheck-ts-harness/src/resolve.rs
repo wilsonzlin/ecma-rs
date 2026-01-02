@@ -109,8 +109,8 @@ fn resolve_non_relative(
     if let Some(exports_subpath) = exports_subpath.as_deref() {
       // Resolve via package.json exports if present.
       virtual_join_into(&mut types_base, &package_dir, "package.json");
-      if let Some(package_key) = files.resolve(&types_base) {
-        if let Some(parsed) = files.package_json(&package_key) {
+      if let Some(package_key) = files.resolve_ref(&types_base) {
+        if let Some(parsed) = files.package_json(package_key) {
           if let Some(exports) = parsed.get("exports") {
             if let Some((target, star_match)) = select_exports_target(exports, exports_subpath) {
               if let Some(found) =
@@ -189,8 +189,8 @@ fn resolve_imports_in_dir(
   package_json: &str,
   specifier: &str,
 ) -> Option<FileKey> {
-  let package_key = files.resolve(package_json)?;
-  let parsed = files.package_json(&package_key)?;
+  let package_key = files.resolve_ref(package_json)?;
+  let parsed = files.package_json(package_key)?;
   let imports = parsed.get("imports")?.as_object()?;
 
   let (target, star_match) = if let Some(target) = imports.get(specifier) {
@@ -303,8 +303,8 @@ fn resolve_as_file_or_directory_normalized(
 
   if !is_source_root(base_candidate) {
     virtual_join_into(&mut scratch, base_candidate, "package.json");
-    if let Some(package_key) = files.resolve(&scratch) {
-      if let Some(parsed) = files.package_json(&package_key) {
+    if let Some(package_key) = files.resolve_ref(&scratch) {
+      if let Some(parsed) = files.package_json(package_key) {
         let mut resolve_package_entry = |entry: &str| -> Option<FileKey> {
           if entry.is_empty() {
             return None;

@@ -481,6 +481,15 @@ impl HarnessFileSet {
       .map(|file| file.key.clone())
   }
 
+  pub(crate) fn resolve_ref(&self, normalized: &str) -> Option<&FileKey> {
+    self
+      .inner
+      .name_to_index
+      .get(normalized)
+      .and_then(|idx| self.inner.files.get(*idx))
+      .map(|file| &file.key)
+  }
+
   pub fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     resolve_module_specifier(self, from, specifier)
   }
