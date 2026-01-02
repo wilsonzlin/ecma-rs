@@ -77,6 +77,19 @@ fn resolve_non_relative(
     || specifier.starts_with('\\')
     || starts_with_drive_letter(specifier)
   {
+    if starts_with_drive_letter(specifier) && is_normalized_virtual_path(specifier) {
+      if let Some(found) =
+        resolve_as_file_or_directory_normalized_with_scratch(
+          files,
+          specifier,
+          0,
+          &mut resolve_scratch,
+        )
+      {
+        return Some(found);
+      }
+    }
+
     // Most explicit-path specifiers are already normalized. Skip the extra `normalize_name`
     // allocation when we can prove the string cannot change.
     let slash_drive = specifier
