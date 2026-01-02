@@ -4,7 +4,7 @@ use crate::diagnostic_norm::{
 };
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
-use crate::multifile::{normalize_name_cow, normalize_name_into};
+use crate::multifile::{is_normalized_virtual_path, normalize_name_cow, normalize_name_into};
 use crate::runner::{
   build_tsc_request, is_source_root, run_rust, EngineStatus, HarnessFileSet, HarnessHost,
   TscRunnerPool,
@@ -1630,11 +1630,16 @@ fn collect_export_type_facts(
     if !seen.insert((export.file.as_str(), export.name.as_str())) {
       continue;
     }
-    normalize_name_into(&export.file, &mut normalized_buf);
-    let Some(file_key) = file_set.resolve(&normalized_buf) else {
+    let normalized = if is_normalized_virtual_path(&export.file) {
+      export.file.as_str()
+    } else {
+      normalize_name_into(&export.file, &mut normalized_buf);
+      normalized_buf.as_str()
+    };
+    let Some(file_key) = file_set.resolve_ref(normalized) else {
       continue;
     };
-    let Some(file_id) = program.file_id(&file_key) else {
+    let Some(file_id) = program.file_id(file_key) else {
       continue;
     };
 
@@ -1665,11 +1670,16 @@ fn collect_marker_type_facts(
   let mut facts = Vec::new();
   let mut normalized_buf = String::new();
   for marker in markers {
-    normalize_name_into(&marker.file, &mut normalized_buf);
-    let Some(file) = file_set.resolve(&normalized_buf) else {
+    let normalized = if is_normalized_virtual_path(&marker.file) {
+      marker.file.as_str()
+    } else {
+      normalize_name_into(&marker.file, &mut normalized_buf);
+      normalized_buf.as_str()
+    };
+    let Some(file) = file_set.resolve_ref(normalized) else {
       continue;
     };
-    let Some(file_id) = program.file_id(&file) else {
+    let Some(file_id) = program.file_id(file) else {
       continue;
     };
     // `Program::type_at` reports the inferred type for the innermost expression/pattern at
