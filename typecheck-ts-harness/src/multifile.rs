@@ -21,7 +21,7 @@ pub(crate) fn normalize_name_cow<'a>(name: &'a str) -> Cow<'a, str> {
   }
 }
 
-fn is_normalized_virtual_path(name: &str) -> bool {
+pub(crate) fn is_normalized_virtual_path(name: &str) -> bool {
   if name == "/" {
     return true;
   }

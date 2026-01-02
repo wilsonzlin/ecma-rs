@@ -7,7 +7,7 @@ use crate::discover::{
   discover_conformance_test_paths, Filter, Shard, TestCase, TestCasePath, DEFAULT_EXTENSIONS,
 };
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
-use crate::multifile::normalize_name_into;
+use crate::multifile::{is_normalized_virtual_path, normalize_name_into};
 use crate::profile::ProfileBuilder;
 use crate::resolve::resolve_module_specifier;
 use crate::tsc::{
@@ -428,13 +428,19 @@ impl HarnessFileSet {
     let mut normalized_buf = String::new();
 
     for file in files {
-      normalize_name_into(&file.name, &mut normalized_buf);
-      if let Some(&idx) = name_to_index.get(normalized_buf.as_str()) {
+      let normalized = if is_normalized_virtual_path(&file.name) {
+        file.name.as_str()
+      } else {
+        normalize_name_into(&file.name, &mut normalized_buf);
+        normalized_buf.as_str()
+      };
+
+      if let Some(&idx) = name_to_index.get(normalized) {
         stored[idx].content = Arc::clone(&file.content);
         continue;
       }
 
-      let normalized_arc: Arc<str> = Arc::from(normalized_buf.as_str());
+      let normalized_arc: Arc<str> = Arc::from(normalized);
       let key = FileKey::new(Arc::clone(&normalized_arc));
       let idx = stored.len();
       stored.push(HarnessFile {
