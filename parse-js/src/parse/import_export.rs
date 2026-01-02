@@ -93,7 +93,16 @@ impl<'a> Parser<'a> {
         self.id_pat(ctx)?
       }
     } else if alias_is_required {
-      return Err(t0.error(SyntaxErrorType::ExpectedNotFound));
+      // TypeScript reports `Identifier expected` for `import { "x" } from "mod"`
+      // and similar cases where the `as <local>` binding is mandatory (local
+      // bindings must be identifiers, so a string-literal imported name cannot
+      // be used as a shorthand specifier).
+      let err = if t0.typ == TT::LiteralString {
+        SyntaxErrorType::ExpectedSyntax("identifier")
+      } else {
+        SyntaxErrorType::ExpectedNotFound
+      };
+      return Err(t0.error(err));
     } else {
       // Create a "virtual" node representing the alias as if `a as a` was declared instead. (See AST for rationale.)
       Node::new(
