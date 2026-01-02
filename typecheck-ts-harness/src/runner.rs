@@ -527,11 +527,21 @@ impl HarnessFileSet {
 }
 
 pub(crate) fn is_source_root(name: &str) -> bool {
-  [
-    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.mts", ".d.cts",
-  ]
-  .into_iter()
-  .any(|suffix| name.ends_with(suffix))
+  match name.as_bytes().last().copied() {
+    Some(b's') => {
+      name.ends_with(".ts")
+        || name.ends_with(".d.ts")
+        || name.ends_with(".js")
+        || name.ends_with(".mjs")
+        || name.ends_with(".cjs")
+        || name.ends_with(".mts")
+        || name.ends_with(".cts")
+        || name.ends_with(".d.mts")
+        || name.ends_with(".d.cts")
+    }
+    Some(b'x') => name.ends_with(".tsx") || name.ends_with(".jsx"),
+    _ => false,
+  }
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
