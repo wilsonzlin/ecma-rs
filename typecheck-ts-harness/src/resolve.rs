@@ -1,4 +1,4 @@
-use crate::multifile::normalize_name;
+use crate::multifile::{normalize_name, normalize_name_into};
 use crate::runner::{is_source_root, HarnessFileSet};
 use serde_json::{Map, Value};
 use typecheck_ts::FileKey;
@@ -43,18 +43,20 @@ fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> 
       return resolve_as_file_or_directory_normalized_with_scratch(files, parent, 0, &mut resolve_scratch);
     }
 
-    let joined = virtual_join(parent, entry);
+    let mut joined = virtual_join(parent, entry);
     // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
     // Fall back to the normalizing path to preserve resolution behaviour.
     return if entry.starts_with('/') || subpath_needs_normalization(entry) {
-      resolve_as_file_or_directory_inner_with_scratch(files, &joined, 0, &mut resolve_scratch)
+      normalize_name_into(&joined, &mut resolve_scratch);
+      resolve_as_file_or_directory_normalized_with_scratch(files, &resolve_scratch, 0, &mut joined)
     } else {
       resolve_as_file_or_directory_normalized_with_scratch(files, &joined, 0, &mut resolve_scratch)
     };
   }
 
-  let joined = virtual_join(parent, specifier);
-  resolve_as_file_or_directory_inner_with_scratch(files, &joined, 0, &mut resolve_scratch)
+  let mut joined = virtual_join(parent, specifier);
+  normalize_name_into(&joined, &mut resolve_scratch);
+  resolve_as_file_or_directory_normalized_with_scratch(files, &resolve_scratch, 0, &mut joined)
 }
 
 fn resolve_non_relative(
@@ -133,7 +135,8 @@ fn resolve_non_relative(
       package_dir.push('/');
       package_dir.push_str(subpath);
       let found = if subpath_needs_normalization(subpath) {
-        resolve_as_file_or_directory_inner_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
+        normalize_name_into(&package_dir, &mut resolve_scratch);
+        resolve_as_file_or_directory_normalized_with_scratch(files, &resolve_scratch, 0, &mut types_base)
       } else {
         resolve_as_file_or_directory_normalized_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
       };
@@ -235,20 +238,6 @@ fn resolve_imports_in_dir(
   )
 }
 
-fn resolve_as_file_or_directory_inner_with_scratch(
-  files: &HarnessFileSet,
-  base: &str,
-  depth: usize,
-  scratch: &mut String,
-) -> Option<FileKey> {
-  if depth > 16 {
-    return None;
-  }
-
-  let base_candidate = normalize_name(base);
-  resolve_as_file_or_directory_normalized_with_scratch(files, &base_candidate, depth, scratch)
-}
-
 fn resolve_as_file_or_directory_normalized_with_scratch(
   files: &HarnessFileSet,
   base_candidate: &str,
@@ -343,9 +332,10 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           }
 
           if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
-            return resolve_as_file_or_directory_inner_with_scratch(
+            normalize_name_into(entry, scratch);
+            return resolve_as_file_or_directory_normalized_with_scratch(
               files,
-              entry,
+              scratch,
               depth + 1,
               resolve_scratch,
             );
@@ -367,7 +357,8 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
           // Fall back to the normalizing path to preserve resolution behaviour.
           if entry.starts_with('/') || entry.starts_with('\\') || subpath_needs_normalization(entry) {
-            resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth + 1, resolve_scratch)
+            normalize_name_into(scratch.as_str(), resolve_scratch);
+            resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth + 1, scratch)
           } else {
             resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth + 1, resolve_scratch)
           }
@@ -503,7 +494,8 @@ fn resolve_json_string_to_file(
     return None;
   }
   if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
-    return resolve_as_file_or_directory_inner_with_scratch(files, entry, depth, resolve_scratch);
+    normalize_name_into(entry, scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch);
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
@@ -517,7 +509,8 @@ fn resolve_json_string_to_file(
   // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
   // Fall back to the normalizing path to preserve resolution behaviour.
   if entry.starts_with('/') || subpath_needs_normalization(entry) {
-    resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch)
+    normalize_name_into(scratch.as_str(), resolve_scratch);
+    resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth, scratch)
   } else {
     resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch)
   }
@@ -540,7 +533,8 @@ fn resolve_json_string_to_file_with_star(
     scratch.clear();
     scratch.reserve(entry.len() + star.len());
     push_star_replaced(scratch, entry, star);
-    return resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch);
+    normalize_name_into(scratch.as_str(), resolve_scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth, scratch);
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
@@ -567,7 +561,8 @@ fn resolve_json_string_to_file_with_star(
   // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
   // Fall back to the normalizing path to preserve resolution behaviour.
   if replaced_entry.starts_with('/') || subpath_needs_normalization(replaced_entry) {
-    resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch)
+    normalize_name_into(scratch.as_str(), resolve_scratch);
+    resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth, scratch)
   } else {
     resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch)
   }
