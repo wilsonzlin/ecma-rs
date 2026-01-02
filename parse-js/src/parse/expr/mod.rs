@@ -1167,9 +1167,7 @@ impl<'a> Parser<'a> {
                   _ => false,
                 };
                 if !is_parenthesized && is_disallowed {
-                  return Err(t.error(SyntaxErrorType::ExpectedSyntax(
-                    "parenthesized expression",
-                  )));
+                  return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
                 }
               }
               if operator.name.is_assignment() {

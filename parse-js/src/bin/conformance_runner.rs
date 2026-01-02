@@ -262,7 +262,10 @@ fn build_baseline_error_index() -> BaselineErrorIndex {
     let Some((stem, options)) = parse_baseline_error_file_name(name) else {
       continue;
     };
-    index.entry(stem).or_default().push(BaselineErrorVariant { path, options });
+    index
+      .entry(stem)
+      .or_default()
+      .push(BaselineErrorVariant { path, options });
   }
 
   for variants in index.values_mut() {
@@ -1452,17 +1455,17 @@ mod tests {
       },
     ];
     let directive_opts = directive_option_sets(&directives);
-    assert!(!baseline_variant_matches_directives(&variant, &directive_opts));
+    assert!(!baseline_variant_matches_directives(
+      &variant,
+      &directive_opts
+    ));
   }
 
   #[test]
   fn parse_error_expectation_classifies_all_never_unknown() {
     let expectations = BaselineParseErrorExpectations {
       total: 2,
-      parse_error_counts: HashMap::from([
-        ("a.ts".to_string(), 2),
-        ("b.ts".to_string(), 1),
-      ]),
+      parse_error_counts: HashMap::from([("a.ts".to_string(), 2), ("b.ts".to_string(), 1)]),
     };
     assert_eq!(
       expectations.expectation_for("a.ts"),

@@ -12,14 +12,20 @@ fn tsx_opts() -> ParseOptions {
 #[test]
 fn jsx_text_rejects_unescaped_brace_in_text() {
   let err = parse_with_options("<div>}</div>", tsx_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::RequiredTokenNotFound(TT::ChevronLeftSlash));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::RequiredTokenNotFound(TT::ChevronLeftSlash)
+  );
   assert_eq!(err.actual_token, Some(TT::BraceClose));
 }
 
 #[test]
 fn jsx_text_rejects_unescaped_gt_in_text() {
   let err = parse_with_options("<div>></div>", tsx_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::RequiredTokenNotFound(TT::ChevronLeftSlash));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::RequiredTokenNotFound(TT::ChevronLeftSlash)
+  );
   assert_eq!(err.actual_token, Some(TT::ChevronRight));
 }
 

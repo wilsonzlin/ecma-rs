@@ -15,9 +15,9 @@
 //! same span lookups to avoid repeating expression walks when resolving offsets
 //! within a single body.
 
+use std::borrow::Borrow;
 use std::fmt;
 use std::sync::Arc;
-use std::borrow::Borrow;
 
 /// Stable file identifier shared across the toolchain.
 pub use diagnostics::FileId;

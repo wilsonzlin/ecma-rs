@@ -154,18 +154,24 @@ impl<'a> Parser<'a> {
       return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")));
     }
     if next.typ == TT::ChevronLeft {
-      return Err(
-        next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")),
-      );
+      return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")));
     }
 
     // Attr values can be an expression in braces or a string.
     let val = if self.consume_if(TT::BraceOpen).is_match() {
       if self.peek().typ == TT::BraceClose {
-        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("expression")));
+        return Err(
+          self
+            .peek()
+            .error(SyntaxErrorType::ExpectedSyntax("expression")),
+        );
       }
       if self.peek().typ == TT::DotDotDot {
-        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("expression")));
+        return Err(
+          self
+            .peek()
+            .error(SyntaxErrorType::ExpectedSyntax("expression")),
+        );
       }
       let value = self.expr(ctx, [TT::BraceClose])?;
       let expr = Node::new(
@@ -341,7 +347,8 @@ impl<'a> Parser<'a> {
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require_with_mode(TT::ChevronLeftSlash, LexMode::JsxTag)?;
       let end_name = p.jsx_elem_name()?;
-      if tag_name.as_ref().map(jsx_elem_name_string) != end_name.as_ref().map(jsx_elem_name_string) {
+      if tag_name.as_ref().map(jsx_elem_name_string) != end_name.as_ref().map(jsx_elem_name_string)
+      {
         return Err(closing.error(SyntaxErrorType::JsxClosingTagMismatch));
       }
       p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;

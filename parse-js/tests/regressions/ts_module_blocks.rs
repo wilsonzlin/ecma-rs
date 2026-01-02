@@ -20,4 +20,3 @@ fn declare_global_allows_export_lists() {
   )
   .unwrap();
 }
-

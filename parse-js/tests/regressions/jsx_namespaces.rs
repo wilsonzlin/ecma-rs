@@ -60,7 +60,10 @@ fn jsx_hyphenated_uppercase_is_parsed_as_intrinsic_name() {
 #[test]
 fn jsx_attribute_missing_value_is_syntax_error() {
   let err = parse_with_options("<div attr= />", tsx_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("JSX attribute value"));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("JSX attribute value")
+  );
   assert_eq!(err.actual_token, Some(TT::Slash));
 }
 

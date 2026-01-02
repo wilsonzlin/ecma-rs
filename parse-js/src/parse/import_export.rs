@@ -30,8 +30,8 @@ use crate::token::TT;
 impl<'a> Parser<'a> {
   fn starts_with_type_only_import(&mut self, ctx: ParseCtx) -> bool {
     let [t0, t1, t2] = self.peek_n::<3>();
-    let is_type_keyword = t0.typ == TT::KeywordType
-      || (t0.typ == TT::Identifier && self.str(t0.loc) == "type");
+    let is_type_keyword =
+      t0.typ == TT::KeywordType || (t0.typ == TT::Identifier && self.str(t0.loc) == "type");
     if !is_type_keyword {
       return false;
     }

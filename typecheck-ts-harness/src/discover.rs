@@ -255,7 +255,7 @@ pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
 
   let content = read_utf8_file(&canonical_path)?;
   let split = split_test_file(&canonical_path, &content);
- 
+
   let raw_id = canonical_path
     .strip_prefix(&canonical_root)
     .unwrap_or(&canonical_path)

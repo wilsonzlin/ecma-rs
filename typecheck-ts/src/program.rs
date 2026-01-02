@@ -3,6 +3,7 @@ use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
 use ::semantic_js::ts as sem_ts;
+use ahash::AHashSet;
 use hir_js::{
   BinaryOp as HirBinaryOp, BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind,
   ExportKind as HirExportKind, ExprKind as HirExprKind, LowerResult, NameId, PatId as HirPatId,
@@ -27,7 +28,6 @@ use parse_js::{
   parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
-use ahash::AHashSet;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;

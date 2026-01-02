@@ -4,10 +4,10 @@ mod class_heritage;
 mod class_method_overload;
 #[path = "regressions/destructuring_type_params.rs"]
 mod destructuring_type_params;
-#[path = "regressions/export_assignment_asi.rs"]
-mod export_assignment_asi;
 #[path = "regressions/exponentiation.rs"]
 mod exponentiation;
+#[path = "regressions/export_assignment_asi.rs"]
+mod export_assignment_asi;
 #[path = "regressions/for_header_asi.rs"]
 mod for_header_asi;
 #[path = "regressions/import_meta.rs"]

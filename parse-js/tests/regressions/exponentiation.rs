@@ -18,7 +18,10 @@ fn ts_opts() -> ParseOptions {
 #[test]
 fn exponentiation_rejects_unparenthesized_unary_lhs() {
   let err = parse_with_options("-1 ** 2;", js_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("parenthesized expression"));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
 }
 
 #[test]
@@ -34,7 +37,10 @@ fn exponentiation_allows_update_expression_lhs() {
 #[test]
 fn exponentiation_rejects_type_assertion_lhs_without_parentheses() {
   let err = parse_with_options("<number>temp ** 3;", ts_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("parenthesized expression"));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
 }
 
 #[test]
@@ -47,4 +53,3 @@ fn exponentiation_allows_parenthesized_type_assertion_with_unary_operand() {
 fn template_literal_allows_empty_tail_after_substitution() {
   parse_with_options("`${1}`;", js_opts()).unwrap();
 }
-

@@ -793,9 +793,7 @@ fn diff_diagnostics(
       continue;
     }
 
-    if let Some((idx, reason)) =
-      find_code_or_severity_match(actual, &used, exp, normalization)
-    {
+    if let Some((idx, reason)) = find_code_or_severity_match(actual, &used, exp, normalization) {
       used[idx] = true;
       diff.code.push(MismatchPair {
         expected: exp.clone(),

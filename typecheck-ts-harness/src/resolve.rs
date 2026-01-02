@@ -41,7 +41,12 @@ fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> 
 
   if let Some(entry) = specifier.strip_prefix("./") {
     if entry.is_empty() {
-      return resolve_as_file_or_directory_normalized_with_scratch(files, parent, 0, &mut resolve_scratch);
+      return resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        parent,
+        0,
+        &mut resolve_scratch,
+      );
     }
 
     let mut joined = virtual_join(parent, entry);
@@ -78,14 +83,12 @@ fn resolve_non_relative(
     || starts_with_drive_letter(specifier)
   {
     if starts_with_drive_letter(specifier) && is_normalized_virtual_path(specifier) {
-      if let Some(found) =
-        resolve_as_file_or_directory_normalized_with_scratch(
-          files,
-          specifier,
-          0,
-          &mut resolve_scratch,
-        )
-      {
+      if let Some(found) = resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        specifier,
+        0,
+        &mut resolve_scratch,
+      ) {
         return Some(found);
       }
     }
@@ -101,18 +104,24 @@ fn resolve_non_relative(
       && !slash_drive
       && !subpath_needs_normalization(specifier)
     {
-      if let Some(found) =
-        resolve_as_file_or_directory_normalized_with_scratch(files, specifier, 0, &mut resolve_scratch)
-      {
+      if let Some(found) = resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        specifier,
+        0,
+        &mut resolve_scratch,
+      ) {
         return Some(found);
       }
     }
 
     let normalized = normalize_name(specifier);
     // Treat the specifier as a rooted virtual path and apply file/directory expansion.
-    if let Some(found) =
-      resolve_as_file_or_directory_normalized_with_scratch(files, &normalized, 0, &mut resolve_scratch)
-    {
+    if let Some(found) = resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      &normalized,
+      0,
+      &mut resolve_scratch,
+    ) {
       return Some(found);
     }
   }
@@ -147,17 +156,15 @@ fn resolve_non_relative(
         if let Some(parsed) = files.package_json(package_key) {
           if let Some(exports) = parsed.get("exports") {
             if let Some((target, star_match)) = select_exports_target(exports, exports_subpath) {
-              if let Some(found) =
-                resolve_json_target_to_file(
-                  files,
-                  &package_dir,
-                  target,
-                  star_match,
-                  0,
-                  &mut types_base,
-                  &mut resolve_scratch,
-                )
-              {
+              if let Some(found) = resolve_json_target_to_file(
+                files,
+                &package_dir,
+                target,
+                star_match,
+                0,
+                &mut types_base,
+                &mut resolve_scratch,
+              ) {
                 return Some(found);
               }
             }
@@ -168,17 +175,30 @@ fn resolve_non_relative(
       package_dir.push_str(subpath);
       let found = if subpath_needs_normalization(subpath) {
         normalize_name_into(&package_dir, &mut resolve_scratch);
-        resolve_as_file_or_directory_normalized_with_scratch(files, &resolve_scratch, 0, &mut types_base)
+        resolve_as_file_or_directory_normalized_with_scratch(
+          files,
+          &resolve_scratch,
+          0,
+          &mut types_base,
+        )
       } else {
-        resolve_as_file_or_directory_normalized_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
+        resolve_as_file_or_directory_normalized_with_scratch(
+          files,
+          &package_dir,
+          0,
+          &mut resolve_scratch,
+        )
       };
       package_dir.truncate(package_dir_len);
       if let Some(found) = found {
         return Some(found);
       }
-    } else if let Some(found) =
-      resolve_as_file_or_directory_normalized_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
-    {
+    } else if let Some(found) = resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      &package_dir,
+      0,
+      &mut resolve_scratch,
+    ) {
       return Some(found);
     }
 
@@ -187,15 +207,13 @@ fn resolve_non_relative(
       types_specifier_checked = true;
     }
     if let Some(types_specifier) = types_specifier.as_deref() {
-      virtual_join3_into(
-        &mut types_base,
-        dir,
-        "node_modules/@types",
-        types_specifier,
-      );
-      if let Some(found) =
-        resolve_as_file_or_directory_normalized_with_scratch(files, &types_base, 0, &mut resolve_scratch)
-      {
+      virtual_join3_into(&mut types_base, dir, "node_modules/@types", types_specifier);
+      if let Some(found) = resolve_as_file_or_directory_normalized_with_scratch(
+        files,
+        &types_base,
+        0,
+        &mut resolve_scratch,
+      ) {
         return Some(found);
       }
     }
@@ -357,8 +375,10 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
     if let Some(package_key) = files.resolve_ref(&scratch) {
       if let Some(parsed) = files.package_json(package_key) {
         let mut resolve_scratch = String::new();
-        let resolve_package_entry =
-          |entry: &str, scratch: &mut String, resolve_scratch: &mut String| -> Option<FileKey> {
+        let resolve_package_entry = |entry: &str,
+                                     scratch: &mut String,
+                                     resolve_scratch: &mut String|
+         -> Option<FileKey> {
           if entry.is_empty() {
             return None;
           }
@@ -396,11 +416,22 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           virtual_join_into(scratch, base_candidate, entry);
           // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
           // Fall back to the normalizing path to preserve resolution behaviour.
-          if entry.starts_with('/') || entry.starts_with('\\') || subpath_needs_normalization(entry) {
+          if entry.starts_with('/') || entry.starts_with('\\') || subpath_needs_normalization(entry)
+          {
             normalize_name_into(scratch.as_str(), resolve_scratch);
-            resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth + 1, scratch)
+            resolve_as_file_or_directory_normalized_with_scratch(
+              files,
+              resolve_scratch,
+              depth + 1,
+              scratch,
+            )
           } else {
-            resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth + 1, resolve_scratch)
+            resolve_as_file_or_directory_normalized_with_scratch(
+              files,
+              scratch,
+              depth + 1,
+              resolve_scratch,
+            )
           }
         };
 
@@ -418,17 +449,15 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
 
         if let Some(exports) = parsed.get("exports") {
           if let Some((target, star_match)) = select_exports_target(exports, ".") {
-            if let Some(found) =
-              resolve_json_target_to_file(
-                files,
-                base_candidate,
-                target,
-                star_match,
-                depth,
-                scratch,
-                &mut resolve_scratch,
-              )
-            {
+            if let Some(found) = resolve_json_target_to_file(
+              files,
+              base_candidate,
+              target,
+              star_match,
+              depth,
+              scratch,
+              &mut resolve_scratch,
+            ) {
               return Some(found);
             }
           }
@@ -475,47 +504,43 @@ fn resolve_json_target_to_file(
 
   match value {
     Value::String(s) => match star_match {
-      Some(star) if s.contains('*') => {
-        resolve_json_string_to_file_with_star(
-          files,
-          base_dir,
-          s,
-          star,
-          depth + 1,
-          scratch,
-          resolve_scratch,
-        )
+      Some(star) if s.contains('*') => resolve_json_string_to_file_with_star(
+        files,
+        base_dir,
+        s,
+        star,
+        depth + 1,
+        scratch,
+        resolve_scratch,
+      ),
+      Some(_) => {
+        resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch, resolve_scratch)
       }
-      Some(_) => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch, resolve_scratch),
       None => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch, resolve_scratch),
     },
-    Value::Array(items) => items
-      .iter()
-      .find_map(|item| {
+    Value::Array(items) => items.iter().find_map(|item| {
+      resolve_json_target_to_file(
+        files,
+        base_dir,
+        item,
+        star_match,
+        depth + 1,
+        scratch,
+        resolve_scratch,
+      )
+    }),
+    Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
+      map.get(*cond).and_then(|next| {
         resolve_json_target_to_file(
           files,
           base_dir,
-          item,
+          next,
           star_match,
           depth + 1,
           scratch,
           resolve_scratch,
         )
-      }),
-    Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
-      map
-        .get(*cond)
-        .and_then(|next| {
-          resolve_json_target_to_file(
-            files,
-            base_dir,
-            next,
-            star_match,
-            depth + 1,
-            scratch,
-            resolve_scratch,
-          )
-        })
+      })
     }),
     Value::Null => None,
     _ => None,
@@ -543,14 +568,24 @@ fn resolve_json_string_to_file(
       );
     }
     normalize_name_into(entry, scratch);
-    return resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      scratch,
+      depth,
+      resolve_scratch,
+    );
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
   // path is already normalized and we can skip an extra `normalize_name` allocation.
   let entry = entry.strip_prefix("./").unwrap_or(entry);
   if entry.is_empty() {
-    return resolve_as_file_or_directory_normalized_with_scratch(files, base_dir, depth, resolve_scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      base_dir,
+      depth,
+      resolve_scratch,
+    );
   }
 
   virtual_join_into(scratch, base_dir, entry);
@@ -590,14 +625,24 @@ fn resolve_json_string_to_file_with_star(
       );
     }
     normalize_name_into(scratch.as_str(), resolve_scratch);
-    return resolve_as_file_or_directory_normalized_with_scratch(files, resolve_scratch, depth, scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      resolve_scratch,
+      depth,
+      scratch,
+    );
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
   // path is already normalized and we can skip an extra `normalize_name` allocation.
   let stripped = entry.strip_prefix("./").unwrap_or(entry);
   if stripped.is_empty() {
-    return resolve_as_file_or_directory_normalized_with_scratch(files, base_dir, depth, resolve_scratch);
+    return resolve_as_file_or_directory_normalized_with_scratch(
+      files,
+      base_dir,
+      depth,
+      resolve_scratch,
+    );
   }
 
   scratch.clear();

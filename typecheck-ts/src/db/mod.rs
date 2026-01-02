@@ -365,8 +365,7 @@ impl Database {
       existing.set_resolved(self).to(resolved);
     } else {
       let specifier: Arc<str> = Arc::from(specifier);
-      let input =
-        inputs::ModuleResolutionInput::new(self, from, Arc::clone(&specifier), resolved);
+      let input = inputs::ModuleResolutionInput::new(self, from, Arc::clone(&specifier), resolved);
       self
         .module_resolutions
         .entry(from)

@@ -1,6 +1,6 @@
 use parse_js::error::SyntaxErrorType;
-use parse_js::token::TT;
 use parse_js::parse;
+use parse_js::token::TT;
 
 #[test]
 fn import_named_specifier_disallows_string_literal_alias() {
