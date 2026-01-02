@@ -6,6 +6,7 @@ target/
 *.proptest-regressions
 
 # Auto-generated test reports
+typescript_conformance_failures.txt
 
 # Workspace lockfile is intentionally untracked
 Cargo.lock
