@@ -170,7 +170,7 @@ use std::sync::Arc;
 #[derive(Clone, Default)]
 pub struct MemoryHost {
   files: HashMap<FileKey, Arc<str>>,
-  edges: HashMap<(FileKey, String), FileKey>,
+  edges: HashMap<FileKey, HashMap<Arc<str>, FileKey>>,
   options: lib_support::CompilerOptions,
   libs: Vec<lib_support::LibFile>,
 }
@@ -196,7 +196,11 @@ impl MemoryHost {
 
   /// Link a module specifier from one file to another.
   pub fn link(&mut self, from: FileKey, specifier: &str, to: FileKey) {
-    self.edges.insert((from, specifier.to_string()), to);
+    self
+      .edges
+      .entry(from)
+      .or_default()
+      .insert(Arc::<str>::from(specifier), to);
   }
 
   /// Add a library file that will be returned from [`Host::lib_files`].
@@ -227,7 +231,8 @@ impl Host for MemoryHost {
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     if let Some(mapped) = self
       .edges
-      .get(&(from.clone(), specifier.to_string()))
+      .get(from)
+      .and_then(|inner| inner.get(specifier))
       .cloned()
     {
       return Some(mapped);
