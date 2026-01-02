@@ -1,6 +1,7 @@
 use crate::multifile::{normalize_name, normalize_name_into};
 use crate::runner::{is_source_root, HarnessFileSet};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use typecheck_ts::FileKey;
 
 const EXPORT_CONDITIONS: [&str; 4] = ["types", "import", "require", "default"];
@@ -114,7 +115,7 @@ fn resolve_non_relative(
     resolved.push_str(subpath);
     resolved
   });
-  let mut types_specifier: Option<String> = None;
+  let mut types_specifier: Option<Cow<'_, str>> = None;
   let mut types_specifier_checked = false;
   let mut dir = virtual_parent_dir_str(from_name);
   let mut package_dir = String::with_capacity(
@@ -796,7 +797,7 @@ fn virtual_join3_into(out: &mut String, base: &str, segment: &str, tail: &str) {
   out.push_str(tail);
 }
 
-fn types_fallback_specifier(specifier: &str) -> Option<String> {
+fn types_fallback_specifier<'a>(specifier: &'a str) -> Option<Cow<'a, str>> {
   let (package, rest) = split_package_name(specifier)?;
   if package.starts_with("@types/") {
     return None;
@@ -809,12 +810,11 @@ fn types_fallback_specifier(specifier: &str) -> Option<String> {
     mapped.push_str("__");
     mapped.push_str(name);
     mapped.push_str(rest);
-    Some(mapped)
+    Some(Cow::Owned(mapped))
   } else {
-    let mut mapped = String::with_capacity(package.len() + rest.len());
-    mapped.push_str(package);
-    mapped.push_str(rest);
-    Some(mapped)
+    // For unscoped packages, the @types fallback specifier is identical to the original specifier
+    // (including any `/subpath`).
+    Some(Cow::Borrowed(specifier))
   }
 }
 
