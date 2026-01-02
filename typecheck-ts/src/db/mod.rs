@@ -72,6 +72,11 @@ pub trait Db: salsa::Database + Send + 'static {
   fn lib_files(&self) -> Vec<FileId>;
   fn file_origin(&self, file: FileId) -> Option<FileOrigin>;
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput>;
+  fn module_resolution_input_ref(
+    &self,
+    from: FileId,
+    specifier: &str,
+  ) -> Option<inputs::ModuleResolutionInput>;
   fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput>;
   fn profiler(&self) -> Option<QueryStatsCollector>;
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>>;
@@ -87,7 +92,7 @@ pub struct Database {
   files: BTreeMap<FileId, inputs::FileInput>,
   file_keys: BTreeMap<FileKey, Vec<FileId>>,
   file_origins: BTreeMap<FileId, FileOrigin>,
-  module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
+  module_resolutions: BTreeMap<FileId, BTreeMap<Arc<str>, inputs::ModuleResolutionInput>>,
   extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
   body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
@@ -168,7 +173,23 @@ impl Db for Database {
   }
 
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput> {
-    self.module_resolutions.get(key).copied()
+    self
+      .module_resolutions
+      .get(&key.from_file)
+      .and_then(|inner| inner.get(key.specifier.as_ref()))
+      .copied()
+  }
+
+  fn module_resolution_input_ref(
+    &self,
+    from: FileId,
+    specifier: &str,
+  ) -> Option<inputs::ModuleResolutionInput> {
+    self
+      .module_resolutions
+      .get(&from)
+      .and_then(|inner| inner.get(specifier))
+      .copied()
   }
 
   fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput> {
@@ -310,14 +331,22 @@ impl Database {
     specifier: Arc<str>,
     resolved: Option<FileId>,
   ) {
-    let key = ModuleKey::new(from, specifier.clone());
-    if let Some(existing) = self.module_resolutions.get(&key).copied() {
+    if let Some(existing) = self
+      .module_resolutions
+      .get(&from)
+      .and_then(|inner| inner.get(specifier.as_ref()))
+      .copied()
+    {
       existing.set_from_file(self).to(from);
       existing.set_specifier(self).to(specifier);
       existing.set_resolved(self).to(resolved);
     } else {
-      let input = inputs::ModuleResolutionInput::new(self, from, specifier, resolved);
-      self.module_resolutions.insert(key, input);
+      let input = inputs::ModuleResolutionInput::new(self, from, Arc::clone(&specifier), resolved);
+      self
+        .module_resolutions
+        .entry(from)
+        .or_insert_with(BTreeMap::new)
+        .insert(specifier, input);
     }
   }
 

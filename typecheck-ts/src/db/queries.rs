@@ -24,7 +24,7 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
-use crate::db::{symbols, Db, ModuleKey};
+use crate::db::{symbols, Db};
 use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
 use crate::lower_metrics;
 use crate::parse_metrics;
@@ -113,7 +113,7 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
   let mut deps = Vec::new();
   for spec in specs.iter() {
     panic_if_cancelled(db);
-    if let Some(target) = module_resolve(db, file.file_id(db), Arc::clone(spec)) {
+    if let Some(target) = module_resolve_ref(db, file.file_id(db), spec.as_ref()) {
       deps.push(target);
     }
   }
@@ -189,17 +189,14 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     }
 
     fn check_value(&mut self, specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>) {
-      if module_resolve(self.db, self.file_id, Arc::<str>::from(specifier)).is_some() {
+      if module_resolve_ref(self.db, self.file_id, specifier).is_some() {
         return;
       }
       self.emit_unresolved(specifier, span, diags);
     }
 
     fn check_arc(&mut self, specifier: &Arc<str>, span: TextRange, diags: &mut Vec<Diagnostic>) {
-      if module_resolve(self.db, self.file_id, Arc::clone(specifier)).is_some() {
-        return;
-      }
-      self.emit_unresolved(specifier.as_ref(), span, diags);
+      self.check_value(specifier.as_ref(), span, diags);
     }
 
     fn check_specifier(&mut self, spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>) {
@@ -1637,7 +1634,7 @@ struct DbResolver<'db> {
 
 impl<'db> sem_ts::Resolver for DbResolver<'db> {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    module_resolve(self.db, FileId(from.0), Arc::<str>::from(specifier))
+    module_resolve_ref(self.db, FileId(from.0), specifier)
       .map(|id| sem_ts::FileId(id.0))
   }
 }
@@ -1915,8 +1912,11 @@ pub fn type_at(db: &dyn Db, file: FileId, offset: u32) -> Option<TypeId> {
 
 /// Host-provided module resolution result.
 pub fn module_resolve(db: &dyn Db, from: FileId, specifier: Arc<str>) -> Option<FileId> {
-  let key = ModuleKey::new(from, specifier);
-  db.module_resolution_input(&key)
+  module_resolve_ref(db, from, specifier.as_ref())
+}
+
+pub fn module_resolve_ref(db: &dyn Db, from: FileId, specifier: &str) -> Option<FileId> {
+  db.module_resolution_input_ref(from, specifier)
     .and_then(|input| module_resolve_for(db, input))
 }
 
