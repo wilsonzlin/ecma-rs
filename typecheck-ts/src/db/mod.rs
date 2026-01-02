@@ -337,11 +337,36 @@ impl Database {
       .and_then(|inner| inner.get(specifier.as_ref()))
       .copied()
     {
-      existing.set_from_file(self).to(from);
-      existing.set_specifier(self).to(specifier);
       existing.set_resolved(self).to(resolved);
     } else {
       let input = inputs::ModuleResolutionInput::new(self, from, Arc::clone(&specifier), resolved);
+      self
+        .module_resolutions
+        .entry(from)
+        .or_insert_with(BTreeMap::new)
+        .insert(specifier, input);
+    }
+  }
+
+  /// Seed or update a module resolution edge without allocating an `Arc<str>` key
+  /// when the resolution already exists.
+  pub fn set_module_resolution_ref(
+    &mut self,
+    from: FileId,
+    specifier: &str,
+    resolved: Option<FileId>,
+  ) {
+    if let Some(existing) = self
+      .module_resolutions
+      .get(&from)
+      .and_then(|inner| inner.get(specifier))
+      .copied()
+    {
+      existing.set_resolved(self).to(resolved);
+    } else {
+      let specifier: Arc<str> = Arc::from(specifier);
+      let input =
+        inputs::ModuleResolutionInput::new(self, from, Arc::clone(&specifier), resolved);
       self
         .module_resolutions
         .entry(from)
