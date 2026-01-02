@@ -1,6 +1,6 @@
 use crate::api::{FileId, FileKey};
+use ahash::AHashMap;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 const FALLBACK_START: u32 = 1 << 31;
@@ -47,9 +47,9 @@ fn stable_hash(key: &FileKey, origin: FileOrigin, salt: u64) -> u64 {
 /// small test IDs.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileRegistry {
-  keys: HashMap<FileKey, FileRegistryEntry>,
-  id_to_key: HashMap<FileId, FileKey>,
-  id_to_origin: HashMap<FileId, FileOrigin>,
+  keys: AHashMap<FileKey, FileRegistryEntry>,
+  id_to_key: AHashMap<FileId, FileKey>,
+  id_to_origin: AHashMap<FileId, FileOrigin>,
 }
 
 #[derive(Clone, Debug, Default)]
