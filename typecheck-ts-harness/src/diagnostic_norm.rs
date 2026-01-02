@@ -403,9 +403,10 @@ pub fn normalize_type_string(raw: &str) -> String {
     out
   }
 
-  fn split_top_level(raw: &str, delim: char) -> Option<Vec<String>> {
+  fn split_top_level<'a>(raw: &'a str, delim: char) -> Option<Vec<&'a str>> {
     let mut parts = Vec::new();
     let mut start = 0usize;
+    let mut saw_delim = false;
     let mut depth_paren = 0i32;
     let mut depth_brace = 0i32;
     let mut depth_bracket = 0i32;
@@ -428,19 +429,20 @@ pub fn normalize_type_string(raw: &str) -> String {
         && depth_bracket == 0
         && depth_angle == 0
       {
-        parts.push(raw[start..idx].trim().to_string());
+        parts.push(raw[start..idx].trim());
         start = idx + ch.len_utf8();
+        saw_delim = true;
       }
     }
-    if parts.is_empty() {
+    if !saw_delim {
       return None;
     }
-    parts.push(raw[start..].trim().to_string());
+    parts.push(raw[start..].trim());
     Some(parts)
   }
 
   fn strip_param_names(params: &str) -> String {
-    fn split_params(raw: &str) -> Vec<String> {
+    fn split_params<'a>(raw: &'a str) -> Vec<&'a str> {
       let mut parts = Vec::new();
       let mut start = 0usize;
       let mut depth_paren = 0i32;
@@ -459,14 +461,14 @@ pub fn normalize_type_string(raw: &str) -> String {
           '>' => depth_angle -= 1,
           ',' => {
             if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
-              parts.push(raw[start..idx].trim().to_string());
+              parts.push(raw[start..idx].trim());
               start = idx + 1;
             }
           }
           _ => {}
         }
       }
-      parts.push(raw[start..].trim().to_string());
+      parts.push(raw[start..].trim());
       parts
     }
 
@@ -504,7 +506,7 @@ pub fn normalize_type_string(raw: &str) -> String {
       if param.is_empty() {
         continue;
       }
-      normalized.push(strip_single_param(&param));
+      normalized.push(strip_single_param(param));
     }
     normalized.join(", ")
   }
