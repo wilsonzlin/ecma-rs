@@ -390,8 +390,7 @@ fn resolve_json_target_to_file(
   match value {
     Value::String(s) => match star_match {
       Some(star) if s.contains('*') => {
-        let entry = s.replace('*', star);
-        resolve_json_string_to_file(files, base_dir, &entry, depth + 1, scratch)
+        resolve_json_string_to_file_with_star(files, base_dir, s, star, depth + 1, scratch)
       }
       Some(_) => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch),
       None => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch),
@@ -441,6 +440,66 @@ fn resolve_json_string_to_file(
     resolve_as_file_or_directory_inner(files, scratch, depth)
   } else {
     resolve_as_file_or_directory_normalized(files, scratch, depth)
+  }
+}
+
+fn resolve_json_string_to_file_with_star(
+  files: &HarnessFileSet,
+  base_dir: &str,
+  entry: &str,
+  star: &str,
+  depth: usize,
+  scratch: &mut String,
+) -> Option<FileKey> {
+  if entry.is_empty() {
+    return None;
+  }
+
+  if entry.starts_with('/') || is_drive_root(entry) {
+    scratch.clear();
+    scratch.reserve(entry.len() + star.len());
+    push_star_replaced(scratch, entry, star);
+    return resolve_as_file_or_directory_inner(files, scratch, depth);
+  }
+
+  // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
+  // path is already normalized and we can skip an extra `normalize_name` allocation.
+  let stripped = entry.strip_prefix("./").unwrap_or(entry);
+  if stripped.is_empty() {
+    return resolve_as_file_or_directory_normalized(files, base_dir, depth);
+  }
+
+  scratch.clear();
+  scratch.reserve(base_dir.len() + stripped.len() + star.len() + 1);
+  if base_dir == "/" {
+    scratch.push('/');
+  } else {
+    scratch.push_str(base_dir);
+    if !base_dir.ends_with('/') {
+      scratch.push('/');
+    }
+  }
+  let entry_start = scratch.len();
+  push_star_replaced(scratch, stripped, star);
+  let replaced_entry = &scratch[entry_start..];
+
+  // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
+  // Fall back to the normalizing path to preserve resolution behaviour.
+  if replaced_entry.starts_with('/') || subpath_needs_normalization(replaced_entry) {
+    resolve_as_file_or_directory_inner(files, scratch, depth)
+  } else {
+    resolve_as_file_or_directory_normalized(files, scratch, depth)
+  }
+}
+
+fn push_star_replaced(out: &mut String, template: &str, star: &str) {
+  let mut parts = template.split('*');
+  if let Some(first) = parts.next() {
+    out.push_str(first);
+    for part in parts {
+      out.push_str(star);
+      out.push_str(part);
+    }
   }
 }
 
