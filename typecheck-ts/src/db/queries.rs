@@ -92,11 +92,7 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   let parsed = parse_for(db, file);
   let mut specs: Vec<Arc<str>> = Vec::new();
   if let Some(lowered) = lowered.lowered.as_deref() {
-    specs.extend(
-      collect_module_specifiers(lowered)
-        .into_iter()
-        .map(|(spec, _)| spec),
-    );
+    collect_module_specifiers(lowered, &mut specs);
   }
   if let Some(ast) = parsed.ast.as_deref() {
     specs.extend(
@@ -1646,16 +1642,15 @@ impl<'db> sem_ts::Resolver for DbResolver<'db> {
   }
 }
 
-fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, TextRange)> {
-  let mut specs = Vec::new();
+fn collect_module_specifiers(lowered: &hir_js::LowerResult, specs: &mut Vec<Arc<str>>) {
   for import in lowered.hir.imports.iter() {
     match &import.kind {
       hir_js::ImportKind::Es(es) => {
-        specs.push((Arc::<str>::from(es.specifier.value.as_str()), es.specifier.span));
+        specs.push(Arc::<str>::from(es.specifier.value.as_str()));
       }
       hir_js::ImportKind::ImportEquals(eq) => {
         if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          specs.push((Arc::<str>::from(module.value.as_str()), module.span));
+          specs.push(Arc::<str>::from(module.value.as_str()));
         }
       }
     }
@@ -1664,11 +1659,11 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
     match &export.kind {
       ExportKind::Named(named) => {
         if let Some(source) = named.source.as_ref() {
-          specs.push((Arc::<str>::from(source.value.as_str()), source.span));
+          specs.push(Arc::<str>::from(source.value.as_str()));
         }
       }
       ExportKind::ExportAll(all) => {
-        specs.push((Arc::<str>::from(all.source.value.as_str()), all.source.span));
+        specs.push(Arc::<str>::from(all.source.value.as_str()));
       }
       _ => {}
     }
@@ -1679,25 +1674,24 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
         hir_js::TypeExprKind::TypeRef(type_ref) => {
           if let hir_js::TypeName::Import(import) = &type_ref.name {
             if let Some(module) = &import.module {
-              specs.push((Arc::<str>::from(module.as_str()), ty.span));
+              specs.push(Arc::<str>::from(module.as_str()));
             }
           }
         }
         hir_js::TypeExprKind::TypeQuery(name) => {
           if let hir_js::TypeName::Import(import) = name {
             if let Some(module) = &import.module {
-              specs.push((Arc::<str>::from(module.as_str()), ty.span));
+              specs.push(Arc::<str>::from(module.as_str()));
             }
           }
         }
         hir_js::TypeExprKind::Import(import) => {
-          specs.push((Arc::<str>::from(import.module.as_str()), ty.span));
+          specs.push(Arc::<str>::from(import.module.as_str()));
         }
         _ => {}
       }
     }
   }
-  specs
 }
 
 fn collect_type_only_module_specifiers_from_ast(
