@@ -581,7 +581,9 @@ fn select_exports_target<'a, 'b>(
 ) -> Option<(&'a Value, Option<&'b str>)> {
   match exports {
     Value::Object(map) => {
-      let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
+      // `serde_json::Map` is ordered; if any subpath keys exist they sort before the conditional
+      // keys (`default`, `import`, etc.), so checking the first key avoids scanning the whole map.
+      let has_subpath_keys = map.keys().next().map_or(false, |k| k.starts_with('.'));
       if has_subpath_keys {
         if let Some(target) = map.get(subpath) {
           return Some((target, None));
