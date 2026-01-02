@@ -466,12 +466,13 @@ impl Program {
   /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
   pub fn with_lib_manager(
     host: impl Host,
-    roots: Vec<FileKey>,
+    mut roots: Vec<FileKey>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
     let host: Arc<dyn Host> = Arc::new(host);
     let query_stats = QueryStatsCollector::default();
     let cancelled = Arc::new(AtomicBool::new(false));
+    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     let program = Program {
       host: Arc::clone(&host),
       roots,
@@ -486,9 +487,7 @@ impl Program {
     };
     {
       let mut state = program.lock_state();
-      let mut roots = program.roots.clone();
-      roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-      for key in roots.into_iter() {
+      for key in program.roots.iter().cloned() {
         state.intern_file_key(key, FileOrigin::Source);
       }
     }
@@ -730,9 +729,7 @@ impl Program {
     );
     new_state.file_overrides = overrides;
     new_state.compiler_options = compiler_options;
-    let mut roots = self.roots.clone();
-    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-    for key in roots.into_iter() {
+    for key in self.roots.iter().cloned() {
       new_state.intern_file_key(key, FileOrigin::Source);
     }
     let mut state = self.lock_state();
