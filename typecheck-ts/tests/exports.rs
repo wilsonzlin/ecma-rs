@@ -309,9 +309,7 @@ fn string_literal_namespace_export_can_be_imported() {
 
   let file_root = program.file_id(&key_root).expect("root file");
   let exports_root = program.exports_of(file_root);
-  let ns_entry = exports_root
-    .get("ns-name")
-    .expect("ns-name export in root");
+  let ns_entry = exports_root.get("ns-name").expect("ns-name export in root");
   let ns_ty = ns_entry.type_id.expect("type for ns export");
   assert_eq!(
     program.display_type(ns_ty).to_string(),

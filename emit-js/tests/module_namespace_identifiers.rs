@@ -53,10 +53,7 @@ fn export_star_alias_can_be_default_keyword() {
 
 #[test]
 fn import_star_alias_is_identifier() {
-  roundtrip(
-    "import * as ns from \"mod\";",
-    "import*as ns from\"mod\";",
-  );
+  roundtrip("import * as ns from \"mod\";", "import*as ns from\"mod\";");
 }
 
 #[test]

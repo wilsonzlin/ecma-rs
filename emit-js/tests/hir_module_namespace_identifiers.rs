@@ -56,10 +56,7 @@ fn hir_emits_default_export_star_alias() {
 
 #[test]
 fn hir_emits_namespace_import() {
-  roundtrip(
-    "import * as ns from \"mod\";",
-    "import*as ns from\"mod\";",
-  );
+  roundtrip("import * as ns from \"mod\";", "import*as ns from\"mod\";");
 }
 
 #[test]

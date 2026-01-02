@@ -72,12 +72,12 @@ impl<'a> Parser<'a> {
       t if KEYWORDS_MAPPING.contains_key(&t) => (ModuleExportImportName::Ident(self.consume_as_string()), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
-     let alias = if self.consume_if(TT::KeywordAs).is_match() {
-       // In exports, "default" is allowed as an alias name (e.g., export { a as default })
-       // In imports, keywords cannot be used as alias names
-       let t_alias = self.peek();
-       if is_export && t_alias.typ == TT::KeywordDefault {
-         self.consume();
+    let alias = if self.consume_if(TT::KeywordAs).is_match() {
+      // In exports, "default" is allowed as an alias name (e.g., export { a as default })
+      // In imports, keywords cannot be used as alias names
+      let t_alias = self.peek();
+      if is_export && t_alias.typ == TT::KeywordDefault {
+        self.consume();
         Node::new(
           t_alias.loc,
           IdPat {
