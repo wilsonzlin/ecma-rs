@@ -162,9 +162,9 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
     });
   }
 
-  let mut duplicates = BTreeMap::new();
+  let mut duplicates: BTreeMap<Cow<'_, str>, usize> = BTreeMap::new();
   for file in &result.files {
-    let normalized = normalize_name(&file.name);
+    let normalized = normalize_name_cow(&file.name);
     *duplicates.entry(normalized).or_insert(0usize) += 1;
   }
 
