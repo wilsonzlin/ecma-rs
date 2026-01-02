@@ -10,6 +10,7 @@ use crate::ast::expr::jsx::JsxSpreadAttr;
 use crate::ast::expr::jsx::JsxText;
 use crate::ast::expr::IdExpr;
 use crate::ast::node::Node;
+use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
 use crate::parse::ParseCtx;
@@ -119,13 +120,7 @@ impl<'a> Parser<'a> {
   pub fn jsx_attr_val(&mut self, ctx: ParseCtx) -> SyntaxResult<JsxAttrVal> {
     let next = self.peek_with_mode(LexMode::JsxTag);
     if matches!(next.typ, TT::Slash | TT::ChevronRight) {
-      // Error recovery: missing attribute value, treat as empty string.
-      return Ok(JsxAttrVal::Text(Node::new(
-        next.loc,
-        JsxText {
-          value: String::new(),
-        },
-      )));
+      return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX attribute value")));
     }
 
     // Attr values can be an element/fragment directly e.g. `a=<div/>`, or an expression in braces, or a string

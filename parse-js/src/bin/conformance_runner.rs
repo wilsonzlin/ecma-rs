@@ -188,43 +188,181 @@ fn baseline_reference_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/TypeScript/tests/baselines/reference")
 }
 
-fn baseline_error_file(path: &Path, directives: &[HarnessDirective]) -> Option<PathBuf> {
-  let stem = path.file_stem()?.to_string_lossy();
-  let base = baseline_reference_dir();
-  let plain = base.join(format!("{stem}.errors.txt"));
-  if plain.is_file() {
-    return Some(plain);
-  }
-  let module = directives
-    .iter()
-    .rev()
-    .find(|d| d.name == "module")
-    .and_then(|d| d.value.as_deref())
-    .and_then(|v| v.split(',').next())
-    .map(|v| v.trim().to_ascii_lowercase());
-  let target = directives
-    .iter()
-    .rev()
-    .find(|d| d.name == "target")
-    .and_then(|d| d.value.as_deref())
-    .and_then(|v| v.split(',').next())
-    .map(|v| v.trim().to_ascii_lowercase());
+#[derive(Debug, Clone)]
+struct BaselineErrorVariant {
+  path: PathBuf,
+  options: BTreeMap<String, String>,
+}
 
-  if let (Some(module), Some(target)) = (module.as_deref(), target.as_deref()) {
-    let candidate = base.join(format!("{stem}(module={module},target={target}).errors.txt"));
-    if candidate.is_file() {
-      return Some(candidate);
+type BaselineErrorIndex = HashMap<String, Vec<BaselineErrorVariant>>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ParseErrorExpectation {
+  Always,
+  Never,
+  Unknown,
+}
+
+#[derive(Debug, Clone)]
+struct BaselineParseErrorExpectations {
+  total: usize,
+  parse_error_counts: HashMap<String, usize>,
+}
+
+impl BaselineParseErrorExpectations {
+  fn expectation_for(&self, file: &str) -> ParseErrorExpectation {
+    if self.total == 0 {
+      return ParseErrorExpectation::Unknown;
+    }
+    match self.parse_error_counts.get(file).copied().unwrap_or(0) {
+      0 => ParseErrorExpectation::Never,
+      n if n == self.total => ParseErrorExpectation::Always,
+      _ => ParseErrorExpectation::Unknown,
+    }
+  }
+}
+
+fn parse_baseline_error_file_name(file_name: &str) -> Option<(String, BTreeMap<String, String>)> {
+  let without_suffix = file_name.strip_suffix(".errors.txt")?;
+  if let Some((base, rest)) = without_suffix.split_once('(') {
+    let rest = rest.strip_suffix(')')?;
+    let mut options = BTreeMap::new();
+    for part in rest.split(',') {
+      let part = part.trim();
+      if part.is_empty() {
+        continue;
+      }
+      let (key, value) = part.split_once('=')?;
+      options.insert(
+        key.trim().to_ascii_lowercase(),
+        value.trim().to_ascii_lowercase(),
+      );
+    }
+    Some((base.to_string(), options))
+  } else {
+    Some((without_suffix.to_string(), BTreeMap::new()))
+  }
+}
+
+fn build_baseline_error_index() -> BaselineErrorIndex {
+  let dir = baseline_reference_dir();
+  let Ok(entries) = fs::read_dir(&dir) else {
+    return HashMap::new();
+  };
+
+  let mut index: BaselineErrorIndex = HashMap::new();
+  for entry in entries.flatten() {
+    let path = entry.path();
+    if !path.is_file() {
+      continue;
+    }
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+      continue;
+    };
+    let Some((stem, options)) = parse_baseline_error_file_name(name) else {
+      continue;
+    };
+    index.entry(stem).or_default().push(BaselineErrorVariant { path, options });
+  }
+
+  for variants in index.values_mut() {
+    variants.sort_by(|a, b| a.path.cmp(&b.path));
+  }
+
+  index
+}
+
+fn directive_option_sets(directives: &[HarnessDirective]) -> HashMap<String, HashSet<String>> {
+  let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+  for directive in directives.iter().rev() {
+    let Some(value) = directive.value.as_deref() else {
+      continue;
+    };
+    if out.contains_key(&directive.name) {
+      continue;
+    }
+    let mut values = HashSet::new();
+    for part in value.split(',') {
+      let part = part.trim();
+      if part.is_empty() {
+        continue;
+      }
+      values.insert(part.to_ascii_lowercase());
+    }
+    out.insert(directive.name.clone(), values);
+  }
+  out
+}
+
+fn baseline_variant_matches_directives(
+  variant: &BaselineErrorVariant,
+  directive_opts: &HashMap<String, HashSet<String>>,
+) -> bool {
+  for (key, value) in &variant.options {
+    let Some(allowed) = directive_opts.get(key) else {
+      continue;
+    };
+    if !allowed.contains(value) {
+      return false;
+    }
+  }
+  true
+}
+
+fn parse_error_files_from_baseline(baseline: &str) -> HashSet<String> {
+  let mut out = HashSet::new();
+  for line in baseline.lines() {
+    let Some((file, code)) = parse_baseline_error_line(line) else {
+      continue;
+    };
+    if is_expected_parse_error_code(code) {
+      out.insert(file);
+    }
+  }
+  out
+}
+
+fn expected_parse_error_files(
+  path: &Path,
+  directives: &[HarnessDirective],
+  baseline_index: &BaselineErrorIndex,
+) -> Option<BaselineParseErrorExpectations> {
+  let stem = path.file_stem()?.to_string_lossy().to_string();
+  let variants = baseline_index.get(&stem)?;
+
+  let directive_opts = directive_option_sets(directives);
+  let mut candidates: Vec<&BaselineErrorVariant> = variants
+    .iter()
+    .filter(|variant| baseline_variant_matches_directives(variant, &directive_opts))
+    .collect();
+
+  // If the directives filtered everything out, fall back to all variants. This
+  // keeps the runner useful even when the harness adds new baseline options we
+  // don't yet recognize.
+  if candidates.is_empty() {
+    candidates = variants.iter().collect();
+  }
+
+  let mut total = 0usize;
+  let mut parse_error_counts: HashMap<String, usize> = HashMap::new();
+  for variant in candidates {
+    let Ok(contents) = fs::read_to_string(&variant.path) else {
+      continue;
+    };
+    total += 1;
+    for file in parse_error_files_from_baseline(&contents) {
+      *parse_error_counts.entry(file).or_insert(0) += 1;
     }
   }
 
-  if let Some(module) = module.as_deref() {
-    let candidate = base.join(format!("{stem}(module={module}).errors.txt"));
-    if candidate.is_file() {
-      return Some(candidate);
-    }
+  if total == 0 {
+    return None;
   }
 
-  None
+  Some(BaselineParseErrorExpectations {
+    total,
+    parse_error_counts,
+  })
 }
 
 fn parse_baseline_error_line(line: &str) -> Option<(String, u32)> {
@@ -248,24 +386,6 @@ fn is_expected_parse_error_code(code: u32) -> bool {
   // - TS170xx for some syntax-like errors that still allow parsing (e.g.
   //   invalid `import.*` meta-properties).
   (1000..2000).contains(&code) || (17000..18000).contains(&code)
-}
-
-fn expected_parse_error_files(
-  path: &Path,
-  directives: &[HarnessDirective],
-) -> Option<HashSet<String>> {
-  let baseline = baseline_error_file(path, directives)?;
-  let contents = fs::read_to_string(baseline).ok()?;
-  let mut out = HashSet::new();
-  for line in contents.lines() {
-    let Some((file, code)) = parse_baseline_error_line(line) else {
-      continue;
-    };
-    if is_expected_parse_error_code(code) {
-      out.insert(file);
-    }
-  }
-  Some(out)
 }
 
 fn parse_directive(line: &str) -> Option<HarnessDirective> {
@@ -432,7 +552,12 @@ fn load_failure_paths(path: &Path) -> HashSet<String> {
     .collect()
 }
 
-fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestResult {
+fn run_test(
+  path: &Path,
+  cancel: &Arc<AtomicBool>,
+  timeout_secs: u64,
+  baseline_index: &BaselineErrorIndex,
+) -> TestResult {
   let start = Instant::now();
   if cancel.load(AtomicOrdering::Relaxed) {
     return timeout_test_result(path, timeout_secs);
@@ -468,7 +593,8 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     return timeout_test_result(path, timeout_secs);
   };
   base_result.directives = directives;
-  let expected_parse_errors = expected_parse_error_files(path, &base_result.directives);
+  let expected_parse_errors =
+    expected_parse_error_files(path, &base_result.directives, baseline_index);
   for vf in &mut virtual_files {
     if vf.name.contains('\\') {
       vf.name = normalize_virtual_path(&vf.name);
@@ -488,9 +614,10 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
     let mut diagnostics = Vec::new();
 
     if should_parse {
-      let expects_parse_error = expected_parse_errors
+      let expectation = expected_parse_errors
         .as_ref()
-        .is_some_and(|files| files.contains(&normalized_name));
+        .map(|expectations| expectations.expectation_for(&normalized_name))
+        .unwrap_or(ParseErrorExpectation::Never);
       let dialect = match vf.kind {
         FileKind::TypeScript => Dialect::Ts,
         FileKind::Tsx => Dialect::Tsx,
@@ -509,7 +636,7 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
 
       match parse_with_options_cancellable(&vf.content, opts, Arc::clone(cancel)) {
         Ok(_) => {
-          if expects_parse_error {
+          if expectation == ParseErrorExpectation::Always {
             let end = u32::try_from(vf.content.len()).unwrap_or(u32::MAX);
             diagnostics.push(Diagnostic::error(
               "CONF0003",
@@ -525,7 +652,7 @@ fn run_test(path: &Path, cancel: &Arc<AtomicBool>, timeout_secs: u64) -> TestRes
           if err.typ == SyntaxErrorType::Cancelled {
             return timeout_test_result(path, timeout_secs);
           }
-          if !expects_parse_error {
+          if expectation == ParseErrorExpectation::Never {
             diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
           }
         }
@@ -700,13 +827,18 @@ fn timeout_test_result(path: &Path, timeout_secs: u64) -> TestResult {
   result
 }
 
-fn run_test_with_timeout(path: &Path, timeout_secs: u64, timeouts: &TimeoutManager) -> TestResult {
+fn run_test_with_timeout(
+  path: &Path,
+  timeout_secs: u64,
+  timeouts: &TimeoutManager,
+  baseline_index: &BaselineErrorIndex,
+) -> TestResult {
   let start = Instant::now();
   let cancel = Arc::new(AtomicBool::new(false));
   let deadline = start + Duration::from_secs(timeout_secs);
   let _guard = timeouts.register(deadline, Arc::clone(&cancel));
   let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-    run_test(path, &cancel, timeout_secs)
+    run_test(path, &cancel, timeout_secs, baseline_index)
   }));
 
   match result {
@@ -972,6 +1104,7 @@ If you are running from the parse-js crate directory:\n  git submodule update --
   }
 
   println!("🔍 Discovering TypeScript conformance tests...");
+  let baseline_index = Arc::new(build_baseline_error_index());
   let mut tests = discover_tests(test_dir.as_path());
   tests.sort();
 
@@ -1003,6 +1136,7 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   let processed = Arc::new(AtomicUsize::new(0));
   let total = tests.len();
   let timeout_manager = Arc::new(TimeoutManager::new());
+  let baseline_index = Arc::clone(&baseline_index);
 
   let processed_clone = Arc::clone(&processed);
   let progress_handle = std::thread::spawn(move || loop {
@@ -1022,7 +1156,12 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   let results: Vec<TestResult> = tests
     .par_iter()
     .map(|test_path| {
-      let result = run_test_with_timeout(test_path, options.timeout_secs, timeout_manager.as_ref());
+      let result = run_test_with_timeout(
+        test_path,
+        options.timeout_secs,
+        timeout_manager.as_ref(),
+        baseline_index.as_ref(),
+      );
 
       let current = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
       if current % 100 == 0 {
@@ -1216,5 +1355,82 @@ mod tests {
     assert!(is_expected_parse_error_code(17012));
     assert!(!is_expected_parse_error_code(2305));
     assert!(!is_expected_parse_error_code(2339));
+  }
+
+  #[test]
+  fn baseline_file_name_parses_plain_variant() {
+    let (stem, options) = parse_baseline_error_file_name("ArrowFunction1.errors.txt").unwrap();
+    assert_eq!(stem, "ArrowFunction1");
+    assert!(options.is_empty());
+  }
+
+  #[test]
+  fn baseline_file_name_parses_single_option_variant() {
+    let (stem, options) =
+      parse_baseline_error_file_name("unicodeExtendedEscapesInStrings14(target=es6).errors.txt")
+        .unwrap();
+    assert_eq!(stem, "unicodeExtendedEscapesInStrings14");
+    assert_eq!(options.get("target").map(|v| v.as_str()), Some("es6"));
+  }
+
+  #[test]
+  fn baseline_file_name_parses_multiple_option_variant() {
+    let (stem, options) = parse_baseline_error_file_name(
+      "commentsOnJSXExpressionsArePreserved(jsx=preserve,module=system,moduledetection=auto).errors.txt",
+    )
+    .unwrap();
+    assert_eq!(stem, "commentsOnJSXExpressionsArePreserved");
+    assert_eq!(options.get("jsx").map(|v| v.as_str()), Some("preserve"));
+    assert_eq!(options.get("module").map(|v| v.as_str()), Some("system"));
+    assert_eq!(
+      options.get("moduledetection").map(|v| v.as_str()),
+      Some("auto")
+    );
+  }
+
+  #[test]
+  fn baseline_variant_filters_against_directives() {
+    let variant = BaselineErrorVariant {
+      path: PathBuf::from("placeholder"),
+      options: BTreeMap::from([
+        ("jsx".to_string(), "react".to_string()),
+        ("module".to_string(), "system".to_string()),
+      ]),
+    };
+    let directives = vec![
+      HarnessDirective {
+        name: "jsx".to_string(),
+        value: Some("preserve,react".to_string()),
+      },
+      HarnessDirective {
+        name: "module".to_string(),
+        value: Some("commonjs".to_string()),
+      },
+    ];
+    let directive_opts = directive_option_sets(&directives);
+    assert!(!baseline_variant_matches_directives(&variant, &directive_opts));
+  }
+
+  #[test]
+  fn parse_error_expectation_classifies_all_never_unknown() {
+    let expectations = BaselineParseErrorExpectations {
+      total: 2,
+      parse_error_counts: HashMap::from([
+        ("a.ts".to_string(), 2),
+        ("b.ts".to_string(), 1),
+      ]),
+    };
+    assert_eq!(
+      expectations.expectation_for("a.ts"),
+      ParseErrorExpectation::Always
+    );
+    assert_eq!(
+      expectations.expectation_for("b.ts"),
+      ParseErrorExpectation::Unknown
+    );
+    assert_eq!(
+      expectations.expectation_for("c.ts"),
+      ParseErrorExpectation::Never
+    );
   }
 }

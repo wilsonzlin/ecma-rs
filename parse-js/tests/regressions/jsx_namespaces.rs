@@ -1,6 +1,8 @@
-use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemName};
+use parse_js::ast::expr::jsx::JsxElemName;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::stmt::Stmt;
+use parse_js::error::SyntaxErrorType;
+use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 
 fn tsx_opts() -> ParseOptions {
@@ -68,24 +70,10 @@ fn jsx_hyphenated_uppercase_is_parsed_as_intrinsic_name() {
 }
 
 #[test]
-fn jsx_attribute_missing_value_recovers_as_empty_text() {
-  let parsed = parse_with_options("<div attr= />", tsx_opts()).unwrap();
-  let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {
-    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
-      Expr::JsxElem(elem) => elem,
-      other => panic!("expected JSX element, got {:?}", other),
-    },
-    other => panic!("expected expression statement, got {:?}", other),
-  };
-  let attrs = &elem.stx.attributes;
-  assert_eq!(attrs.len(), 1);
-  match &attrs[0] {
-    JsxAttr::Named { value, .. } => match value {
-      Some(JsxAttrVal::Text(text)) => assert_eq!(text.stx.value, ""),
-      other => panic!("expected text value, got {:?}", other),
-    },
-    other => panic!("expected named attribute, got {:?}", other),
-  }
+fn jsx_attribute_missing_value_is_syntax_error() {
+  let err = parse_with_options("<div attr= />", tsx_opts()).unwrap_err();
+  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("JSX attribute value"));
+  assert_eq!(err.actual_token, Some(TT::Slash));
 }
 
 #[test]
