@@ -115,7 +115,7 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
       deps.push(target);
     }
   }
-  deps.sort_by_key(|id| id.0);
+  deps.sort_unstable_by_key(|id| id.0);
   deps.dedup();
   Arc::from(deps.into_boxed_slice())
 }
@@ -1614,7 +1614,7 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
     );
   }
   let mut files: Vec<FileId> = visited.into_iter().collect();
-  files.sort_by_key(|id| id.0);
+  files.sort_unstable_by_key(|id| id.0);
   Arc::new(files)
 }
 
