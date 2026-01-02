@@ -449,7 +449,7 @@ impl HarnessFileSet {
       .filter(|file| is_source_root(file.key.as_str()))
       .map(|file| file.key.clone())
       .collect();
-    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    roots.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
     let file_count = stored.len();
 
     Self {
