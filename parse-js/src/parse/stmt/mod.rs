@@ -46,7 +46,7 @@ impl<'a> Parser<'a> {
     let checkpoint = self.checkpoint();
     self.consume(); // type
     if self.require_identifier_or_ts_keyword().is_err() {
-      self.restore_checkpoint(checkpoint);
+      self.reset_to(checkpoint.next_tok_i);
       return false;
     }
 
@@ -54,13 +54,13 @@ impl<'a> Parser<'a> {
       // Be conservative: if we fail to parse the type-parameter list, fall back to treating
       // this as a non-declaration so we don't accidentally swallow real statements.
       if self.type_parameters(ctx).is_err() {
-        self.restore_checkpoint(checkpoint);
+        self.reset_to(checkpoint.next_tok_i);
         return false;
       }
     }
 
     let is_alias = self.peek().typ == TT::Equals;
-    self.restore_checkpoint(checkpoint);
+    self.reset_to(checkpoint.next_tok_i);
     is_alias
   }
 

@@ -244,9 +244,9 @@ impl<'a> Parser<'a> {
     // - import ... from "module" assert { type: "json" }
     let attributes = {
       let next = self.peek();
-      let has_attributes = !next.preceded_by_line_terminator
-        && (next.typ == TT::KeywordWith
-          || (next.typ == TT::Identifier && self.str(next.loc) == "assert"));
+      let has_attributes_keyword = next.typ == TT::KeywordWith
+        || (next.typ == TT::Identifier && self.str(next.loc) == "assert");
+      let has_attributes = has_attributes_keyword && self.peek_n::<2>()[1].typ == TT::BraceOpen;
       if has_attributes {
         self.consume();
         let mut asi = Asi::can();
@@ -434,9 +434,9 @@ impl<'a> Parser<'a> {
       // - export ... from "module" assert { type: "json" }
       let attributes = {
         let next = p.peek();
-        let has_attributes = !next.preceded_by_line_terminator
-          && (next.typ == TT::KeywordWith
-            || (next.typ == TT::Identifier && p.str(next.loc) == "assert"));
+        let has_attributes_keyword = next.typ == TT::KeywordWith
+          || (next.typ == TT::Identifier && p.str(next.loc) == "assert");
+        let has_attributes = has_attributes_keyword && p.peek_n::<2>()[1].typ == TT::BraceOpen;
         if has_attributes {
           p.consume();
           let mut asi = Asi::can();

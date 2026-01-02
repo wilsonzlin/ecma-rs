@@ -90,7 +90,7 @@ impl<'a> Parser<'a> {
     let checkpoint = self.checkpoint();
     let stx = f(self)?;
     if stx.is_none() {
-      self.restore_checkpoint(checkpoint);
+      self.reset_to(checkpoint.next_tok_i);
     };
     Ok(stx)
   }
@@ -107,7 +107,7 @@ impl<'a> Parser<'a> {
     let stx = f(self)?;
     let loc = self.since_checkpoint(&checkpoint);
     if stx.is_none() {
-      self.restore_checkpoint(checkpoint);
+      self.reset_to(checkpoint.next_tok_i);
     };
     Ok(stx.map(|stx| Node::new(loc, stx)))
   }

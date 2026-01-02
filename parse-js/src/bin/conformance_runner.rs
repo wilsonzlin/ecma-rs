@@ -177,11 +177,15 @@ fn normalize_path(path: &Path) -> String {
 }
 
 fn normalize_virtual_path(path: &str) -> String {
-  if path.contains('\\') {
+  let mut normalized = if path.contains('\\') {
     path.replace('\\', "/")
   } else {
     path.to_string()
+  };
+  if let Some(stripped) = normalized.strip_prefix("./") {
+    normalized = stripped.to_string();
   }
+  normalized
 }
 
 fn baseline_reference_dir() -> PathBuf {
@@ -433,12 +437,54 @@ fn parse_directive(line: &str) -> Option<HarnessDirective> {
 fn contains_import_export(content: &str, cancel: &Arc<AtomicBool>) -> Option<bool> {
   use parse_js::token::TT;
   let mut lexer = Lexer::new(content);
+  let mut mode = LexMode::Standard;
 
-  loop {
+  #[derive(Clone, Copy, Debug)]
+  enum TemplateBrace {
+    Block,
+    Substitution,
+  }
+
+  let mut template_braces: Vec<TemplateBrace> = Vec::new();
+
+  let next_token = |lexer: &mut Lexer<'_>,
+                    cancel: &Arc<AtomicBool>,
+                    mode: &mut LexMode,
+                    template_braces: &mut Vec<TemplateBrace>|
+   -> Option<parse_js::token::Token> {
     if cancel.load(AtomicOrdering::Relaxed) {
       return None;
     }
-    let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+
+    let token = lex_next(lexer, *mode, Dialect::Tsx);
+    *mode = LexMode::Standard;
+
+    match token.typ {
+      TT::LiteralTemplatePartString => {
+        template_braces.push(TemplateBrace::Substitution);
+      }
+      TT::BraceOpen => {
+        if !template_braces.is_empty() {
+          template_braces.push(TemplateBrace::Block);
+        }
+      }
+      TT::BraceClose => {
+        if let Some(kind) = template_braces.pop() {
+          if matches!(kind, TemplateBrace::Substitution) {
+            *mode = LexMode::TemplateStrContinue;
+          }
+        }
+      }
+      _ => {}
+    }
+
+    Some(token)
+  };
+
+  loop {
+    let Some(token) = next_token(&mut lexer, cancel, &mut mode, &mut template_braces) else {
+      return None;
+    };
     match token.typ {
       TT::KeywordExport => {
         // Any export form makes the file a module.
@@ -450,7 +496,9 @@ fn contains_import_export(content: &str, cancel: &Arc<AtomicBool>) -> Option<boo
         // - `import x = foo.bar` (not a module indicator in TS; see topLevelAwait.2)
         // - `import x = require("x")` (module indicator)
         // - ES import declarations (module indicators)
-        let next = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+        let Some(next) = next_token(&mut lexer, cancel, &mut mode, &mut template_braces) else {
+          return None;
+        };
         match next.typ {
           TT::Dot | TT::ParenthesisOpen => {}
           // Named imports: `import { ... } from "x"`
@@ -463,16 +511,26 @@ fn contains_import_export(content: &str, cancel: &Arc<AtomicBool>) -> Option<boo
           | TT::KeywordType => return Some(true),
           _ => {
             // `import <name> ...` or `import <name> = ...`
-            let after_name = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+            let Some(after_name) =
+              next_token(&mut lexer, cancel, &mut mode, &mut template_braces)
+            else {
+              return None;
+            };
             if after_name.typ == TT::Equals {
               // TS import-equals; only treat `require(...)` forms as a module indicator.
-              let rhs = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+              let Some(rhs) = next_token(&mut lexer, cancel, &mut mode, &mut template_braces) else {
+                return None;
+              };
               let rhs_is_require = rhs.typ == TT::Identifier
                 && content
                   .get(rhs.loc.0..rhs.loc.1)
                   .is_some_and(|s| s == "require");
               if rhs_is_require {
-                let rhs_after = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+                let Some(rhs_after) =
+                  next_token(&mut lexer, cancel, &mut mode, &mut template_braces)
+                else {
+                  return None;
+                };
                 if rhs_after.typ == TT::ParenthesisOpen {
                   return Some(true);
                 }
@@ -650,9 +708,7 @@ fn run_test(
   let expected_parse_errors =
     expected_parse_error_files(path, &base_result.directives, baseline_index);
   for vf in &mut virtual_files {
-    if vf.name.contains('\\') {
-      vf.name = normalize_virtual_path(&vf.name);
-    }
+    vf.name = normalize_virtual_path(&vf.name);
   }
   virtual_files.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -1377,6 +1433,14 @@ mod tests {
   fn baseline_error_line_parses_file_and_code() {
     let (file, code) =
       parse_baseline_error_line("foo.ts(1,15): error TS1003: Identifier expected.").unwrap();
+    assert_eq!(file, "foo.ts");
+    assert_eq!(code, 1003);
+  }
+
+  #[test]
+  fn baseline_error_line_strips_dot_slash_prefix() {
+    let (file, code) =
+      parse_baseline_error_line("./foo.ts(1,15): error TS1003: Identifier expected.").unwrap();
     assert_eq!(file, "foo.ts");
     assert_eq!(code, 1003);
   }

@@ -8,6 +8,32 @@ use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
+  fn is_chevron_right_like_token(typ: TT) -> bool {
+    matches!(
+      typ,
+      TT::ChevronRight
+        | TT::ChevronRightEquals
+        | TT::ChevronRightChevronRight
+        | TT::ChevronRightChevronRightEquals
+        | TT::ChevronRightChevronRightChevronRight
+        | TT::ChevronRightChevronRightChevronRightEquals
+    )
+  }
+
+  fn consume_contiguous_chevron_right_tokens(
+    &mut self,
+    mut expected_start: usize,
+  ) -> SyntaxResult<()> {
+    loop {
+      let next = self.peek();
+      if next.loc.0 != expected_start || !Self::is_chevron_right_like_token(next.typ) {
+        break;
+      }
+      expected_start = self.require_chevron_right()?.loc.1;
+    }
+    Ok(())
+  }
+
   /// Parses mapped type modifiers: `readonly`, `+readonly`, `-readonly`, `?`, `+?`, `-?`
   fn parse_mapped_type_modifier(&mut self, keyword: TT) -> Option<MappedTypeModifier> {
     if self.consume_if(keyword).is_match() {
@@ -48,9 +74,10 @@ impl<'a> Parser<'a> {
         self.require_identifier()?
       };
 
-      // Check for 'is Type' after parameter name
-      if self.consume_if(TT::KeywordIs).is_match() {
-        // This is a type predicate: `x is Type` or `asserts x is Type`
+      let next = self.peek();
+      if next.typ == TT::KeywordIs && !next.preceded_by_line_terminator {
+        self.consume(); // `is`
+                        // This is a type predicate: `x is Type` or `asserts x is Type`
         let type_annotation = Some(Box::new(self.type_expr(ctx)?));
         let end_loc = type_annotation.as_ref().unwrap().loc;
         use crate::loc::Loc;
@@ -701,8 +728,14 @@ impl<'a> Parser<'a> {
   pub fn type_arguments(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeExpr>>> {
     self.require(TT::ChevronLeft)?;
     let mut args = Vec::new();
-    while !self.consume_if(TT::ChevronRight).is_match() {
+    loop {
+      if Self::is_chevron_right_like_token(self.peek().typ) {
+        self.require_chevron_right()?;
+        break;
+      }
+
       args.push(self.type_expr(ctx)?);
+
       if !self.consume_if(TT::Comma).is_match() {
         self.require_chevron_right()?;
         break;
@@ -788,6 +821,12 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordImport)?;
     self.require(TT::ParenthesisOpen)?;
     let module_specifier = self.lit_str_val()?;
+    if self.consume_if(TT::Comma).is_match() {
+      if self.peek().typ != TT::ParenthesisClose {
+        let _ = self.expr(ctx, [TT::Comma, TT::ParenthesisClose])?;
+        let _ = self.consume_if(TT::Comma);
+      }
+    }
     self.require(TT::ParenthesisClose)?;
 
     let (qualifier, type_arguments) = if self.consume_if(TT::Dot).is_match() {
@@ -1623,12 +1662,22 @@ impl<'a> Parser<'a> {
   pub fn type_parameters(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeParameter>>> {
     self.require(TT::ChevronLeft)?;
     let mut params = Vec::new();
-    while !self.consume_if(TT::ChevronRight).is_match() {
-      params.push(self.type_parameter(ctx)?);
-      if !self.consume_if(TT::Comma).is_match() {
-        self.require_chevron_right()?;
+
+    loop {
+      if Self::is_chevron_right_like_token(self.peek().typ) {
+        let close = self.require_chevron_right()?;
+        self.consume_contiguous_chevron_right_tokens(close.loc.1)?;
         break;
       }
+
+      params.push(self.type_parameter(ctx)?);
+      if self.consume_if(TT::Comma).is_match() {
+        continue;
+      }
+
+      let close = self.require_chevron_right()?;
+      self.consume_contiguous_chevron_right_tokens(close.loc.1)?;
+      break;
     }
     Ok(params)
   }

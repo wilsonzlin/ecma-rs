@@ -212,7 +212,7 @@ impl<'a> Parser<'a> {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
-        // TypeScript: return type annotation (after param, before =>) - may be type predicate
+        // TypeScript: return type annotation (after param, before =>) - may be type predicate.
         let return_type = if p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
         } else {
@@ -253,7 +253,7 @@ impl<'a> Parser<'a> {
           None
         };
         let params = p.func_params(ctx)?;
-        // TypeScript: return type annotation (after params, before =>) - may be type predicate
+        // TypeScript: return type annotation (after params, before =>) - may be type predicate.
         let return_type = if p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
         } else {
@@ -277,6 +277,12 @@ impl<'a> Parser<'a> {
           .expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
           .into(),
       };
+      if terminators.contains(&TT::Colon) && p.peek().typ != TT::Colon {
+        return Err(
+          p.peek()
+            .error(SyntaxErrorType::RequiredTokenNotFound(TT::Colon)),
+        );
+      }
       Ok(Func {
         arrow: true,
         async_: is_async,
@@ -901,6 +907,11 @@ impl<'a> Parser<'a> {
         }
         // TypeScript: Type assertion: expr as Type or expr as const
         TT::KeywordAs => {
+          if asi_allowed && t.preceded_by_line_terminator {
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
+            break;
+          }
           // Check if this is "as const"
           if self.peek().typ == TT::KeywordConst {
             let const_loc = self.consume().loc;
@@ -931,6 +942,11 @@ impl<'a> Parser<'a> {
         }
         // TypeScript: Satisfies expression: expr satisfies Type
         TT::KeywordSatisfies => {
+          if asi_allowed && t.preceded_by_line_terminator {
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
+            break;
+          }
           let type_annotation = self.type_expr(ctx)?;
           use crate::ast::expr::SatisfiesExpr;
           left = Node::new(
