@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   lower_file_with_diagnostics_with_cancellation, DefKind, ExportDefaultValue, ExportKind, ExprKind,
@@ -1626,7 +1626,8 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .map(|profiler| profiler.timer(QueryKind::Bind, false));
   let files = all_files_for(db);
   let mut diagnostics = Vec::new();
-  let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
+  let mut sem_hirs: AHashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = AHashMap::new();
+  sem_hirs.reserve(files.len());
   for file in files.iter() {
     panic_if_cancelled(db);
     let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
