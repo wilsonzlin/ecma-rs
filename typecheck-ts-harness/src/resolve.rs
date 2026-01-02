@@ -114,7 +114,15 @@ fn resolve_non_relative(
           if let Some(exports) = parsed.get("exports") {
             if let Some((target, star_match)) = select_exports_target(exports, exports_subpath) {
               if let Some(found) =
-                resolve_json_target_to_file(files, &package_dir, target, star_match, 0, &mut types_base)
+                resolve_json_target_to_file(
+                  files,
+                  &package_dir,
+                  target,
+                  star_match,
+                  0,
+                  &mut types_base,
+                  &mut resolve_scratch,
+                )
               {
                 return Some(found);
               }
@@ -173,9 +181,16 @@ fn resolve_imports_specifier(
   let from_name = files.name_for_key(from)?;
   let mut dir = virtual_parent_dir(from_name);
   let mut package_json_path = String::with_capacity(dir.len() + 1 + "package.json".len());
+  let mut resolve_scratch = String::new();
   loop {
     virtual_join_into(&mut package_json_path, &dir, "package.json");
-    if let Some(found) = resolve_imports_in_dir(files, &dir, &mut package_json_path, specifier) {
+    if let Some(found) = resolve_imports_in_dir(
+      files,
+      &dir,
+      &mut package_json_path,
+      &mut resolve_scratch,
+      specifier,
+    ) {
       return Some(found);
     }
 
@@ -191,6 +206,7 @@ fn resolve_imports_in_dir(
   files: &HarnessFileSet,
   dir: &str,
   package_json_path: &mut String,
+  resolve_scratch: &mut String,
   specifier: &str,
 ) -> Option<FileKey> {
   let package_key = files.resolve_ref(package_json_path.as_str())?;
@@ -204,20 +220,15 @@ fn resolve_imports_in_dir(
     (imports.get(pattern_key)?, Some(star_match))
   };
 
-  resolve_json_target_to_file(files, dir, target, star_match, 0, package_json_path)
-}
-
-fn resolve_as_file_or_directory_inner(
-  files: &HarnessFileSet,
-  base: &str,
-  depth: usize,
-) -> Option<FileKey> {
-  if depth > 16 {
-    return None;
-  }
-
-  let base_candidate = normalize_name(base);
-  resolve_as_file_or_directory_normalized(files, &base_candidate, depth)
+  resolve_json_target_to_file(
+    files,
+    dir,
+    target,
+    star_match,
+    0,
+    package_json_path,
+    resolve_scratch,
+  )
 }
 
 fn resolve_as_file_or_directory_inner_with_scratch(
@@ -232,15 +243,6 @@ fn resolve_as_file_or_directory_inner_with_scratch(
 
   let base_candidate = normalize_name(base);
   resolve_as_file_or_directory_normalized_with_scratch(files, &base_candidate, depth, scratch)
-}
-
-fn resolve_as_file_or_directory_normalized(
-  files: &HarnessFileSet,
-  base_candidate: &str,
-  depth: usize,
-) -> Option<FileKey> {
-  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
-  resolve_as_file_or_directory_normalized_with_scratch(files, base_candidate, depth, &mut scratch)
 }
 
 fn resolve_as_file_or_directory_normalized_with_scratch(
@@ -330,7 +332,9 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
     virtual_join_into(scratch, base_candidate, "package.json");
     if let Some(package_key) = files.resolve_ref(&scratch) {
       if let Some(parsed) = files.package_json(package_key) {
-        let resolve_package_entry = |entry: &str, scratch: &mut String| -> Option<FileKey> {
+        let mut resolve_scratch = String::new();
+        let resolve_package_entry =
+          |entry: &str, scratch: &mut String, resolve_scratch: &mut String| -> Option<FileKey> {
           if entry.is_empty() {
             return None;
           }
@@ -339,27 +343,32 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
           // joined path is already normalized and we can skip an extra `normalize_name` allocation.
           let entry = entry.strip_prefix("./").unwrap_or(entry);
           if entry.is_empty() {
-            return resolve_as_file_or_directory_normalized(files, base_candidate, depth + 1);
+            return resolve_as_file_or_directory_normalized_with_scratch(
+              files,
+              base_candidate,
+              depth + 1,
+              resolve_scratch,
+            );
           }
 
           virtual_join_into(scratch, base_candidate, entry);
           // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
           // Fall back to the normalizing path to preserve resolution behaviour.
           if entry.starts_with('/') || subpath_needs_normalization(entry) {
-            resolve_as_file_or_directory_inner(files, scratch, depth + 1)
+            resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth + 1, resolve_scratch)
           } else {
-            resolve_as_file_or_directory_normalized(files, scratch, depth + 1)
+            resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth + 1, resolve_scratch)
           }
         };
 
         if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch, &mut resolve_scratch) {
             return Some(found);
           }
         }
 
         if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch, &mut resolve_scratch) {
             return Some(found);
           }
         }
@@ -367,7 +376,15 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
         if let Some(exports) = parsed.get("exports") {
           if let Some((target, star_match)) = select_exports_target(exports, ".") {
             if let Some(found) =
-              resolve_json_target_to_file(files, base_candidate, target, star_match, depth, scratch)
+              resolve_json_target_to_file(
+                files,
+                base_candidate,
+                target,
+                star_match,
+                depth,
+                scratch,
+                &mut resolve_scratch,
+              )
             {
               return Some(found);
             }
@@ -375,7 +392,7 @@ fn resolve_as_file_or_directory_normalized_with_scratch(
         }
 
         if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch, &mut resolve_scratch) {
             return Some(found);
           }
         }
@@ -407,6 +424,7 @@ fn resolve_json_target_to_file(
   star_match: Option<&str>,
   depth: usize,
   scratch: &mut String,
+  resolve_scratch: &mut String,
 ) -> Option<FileKey> {
   if depth > 16 {
     return None;
@@ -415,21 +433,45 @@ fn resolve_json_target_to_file(
   match value {
     Value::String(s) => match star_match {
       Some(star) if s.contains('*') => {
-        resolve_json_string_to_file_with_star(files, base_dir, s, star, depth + 1, scratch)
+        resolve_json_string_to_file_with_star(
+          files,
+          base_dir,
+          s,
+          star,
+          depth + 1,
+          scratch,
+          resolve_scratch,
+        )
       }
-      Some(_) => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch),
-      None => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch),
+      Some(_) => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch, resolve_scratch),
+      None => resolve_json_string_to_file(files, base_dir, s, depth + 1, scratch, resolve_scratch),
     },
     Value::Array(items) => items
       .iter()
       .find_map(|item| {
-        resolve_json_target_to_file(files, base_dir, item, star_match, depth + 1, scratch)
+        resolve_json_target_to_file(
+          files,
+          base_dir,
+          item,
+          star_match,
+          depth + 1,
+          scratch,
+          resolve_scratch,
+        )
       }),
     Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
       map
         .get(*cond)
         .and_then(|next| {
-          resolve_json_target_to_file(files, base_dir, next, star_match, depth + 1, scratch)
+          resolve_json_target_to_file(
+            files,
+            base_dir,
+            next,
+            star_match,
+            depth + 1,
+            scratch,
+            resolve_scratch,
+          )
         })
     }),
     Value::Null => None,
@@ -443,28 +485,29 @@ fn resolve_json_string_to_file(
   entry: &str,
   depth: usize,
   scratch: &mut String,
+  resolve_scratch: &mut String,
 ) -> Option<FileKey> {
   if entry.is_empty() {
     return None;
   }
   if entry.starts_with('/') || is_drive_root(entry) {
-    return resolve_as_file_or_directory_inner(files, entry, depth);
+    return resolve_as_file_or_directory_inner_with_scratch(files, entry, depth, resolve_scratch);
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
   // path is already normalized and we can skip an extra `normalize_name` allocation.
   let entry = entry.strip_prefix("./").unwrap_or(entry);
   if entry.is_empty() {
-    return resolve_as_file_or_directory_normalized(files, base_dir, depth);
+    return resolve_as_file_or_directory_normalized_with_scratch(files, base_dir, depth, resolve_scratch);
   }
 
   virtual_join_into(scratch, base_dir, entry);
   // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
   // Fall back to the normalizing path to preserve resolution behaviour.
   if entry.starts_with('/') || subpath_needs_normalization(entry) {
-    resolve_as_file_or_directory_inner(files, scratch, depth)
+    resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch)
   } else {
-    resolve_as_file_or_directory_normalized(files, scratch, depth)
+    resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch)
   }
 }
 
@@ -475,6 +518,7 @@ fn resolve_json_string_to_file_with_star(
   star: &str,
   depth: usize,
   scratch: &mut String,
+  resolve_scratch: &mut String,
 ) -> Option<FileKey> {
   if entry.is_empty() {
     return None;
@@ -484,14 +528,14 @@ fn resolve_json_string_to_file_with_star(
     scratch.clear();
     scratch.reserve(entry.len() + star.len());
     push_star_replaced(scratch, entry, star);
-    return resolve_as_file_or_directory_inner(files, scratch, depth);
+    return resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch);
   }
 
   // Most `package.json` targets are written as `./foo/bar`. Strip the leading `./` so the joined
   // path is already normalized and we can skip an extra `normalize_name` allocation.
   let stripped = entry.strip_prefix("./").unwrap_or(entry);
   if stripped.is_empty() {
-    return resolve_as_file_or_directory_normalized(files, base_dir, depth);
+    return resolve_as_file_or_directory_normalized_with_scratch(files, base_dir, depth, resolve_scratch);
   }
 
   scratch.clear();
@@ -511,9 +555,9 @@ fn resolve_json_string_to_file_with_star(
   // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
   // Fall back to the normalizing path to preserve resolution behaviour.
   if replaced_entry.starts_with('/') || subpath_needs_normalization(replaced_entry) {
-    resolve_as_file_or_directory_inner(files, scratch, depth)
+    resolve_as_file_or_directory_inner_with_scratch(files, scratch, depth, resolve_scratch)
   } else {
-    resolve_as_file_or_directory_normalized(files, scratch, depth)
+    resolve_as_file_or_directory_normalized_with_scratch(files, scratch, depth, resolve_scratch)
   }
 }
 
