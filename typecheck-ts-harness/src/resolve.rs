@@ -36,24 +36,25 @@ pub(crate) fn resolve_module_specifier(
 fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> Option<FileKey> {
   let base = files.name_for_key(from)?;
   let parent = virtual_parent_dir_str(base);
+  let mut resolve_scratch = String::new();
 
   if let Some(entry) = specifier.strip_prefix("./") {
     if entry.is_empty() {
-      return resolve_as_file_or_directory_normalized(files, parent, 0);
+      return resolve_as_file_or_directory_normalized_with_scratch(files, parent, 0, &mut resolve_scratch);
     }
 
     let joined = virtual_join(parent, entry);
     // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
     // Fall back to the normalizing path to preserve resolution behaviour.
     return if entry.starts_with('/') || subpath_needs_normalization(entry) {
-      resolve_as_file_or_directory_inner(files, &joined, 0)
+      resolve_as_file_or_directory_inner_with_scratch(files, &joined, 0, &mut resolve_scratch)
     } else {
-      resolve_as_file_or_directory_normalized(files, &joined, 0)
+      resolve_as_file_or_directory_normalized_with_scratch(files, &joined, 0, &mut resolve_scratch)
     };
   }
 
   let joined = virtual_join(parent, specifier);
-  resolve_as_file_or_directory(files, &joined)
+  resolve_as_file_or_directory_inner_with_scratch(files, &joined, 0, &mut resolve_scratch)
 }
 
 fn resolve_non_relative(
@@ -61,6 +62,7 @@ fn resolve_non_relative(
   from: &FileKey,
   specifier: &str,
 ) -> Option<FileKey> {
+  let mut resolve_scratch = String::new();
   if specifier.starts_with('#') {
     return resolve_imports_specifier(files, from, specifier);
   }
@@ -73,12 +75,10 @@ fn resolve_non_relative(
     || starts_with_drive_letter(specifier)
   {
     let normalized = normalize_name(specifier);
-    if let Some(found) = files.resolve(&normalized) {
-      return Some(found);
-    }
-
-    // b) Treat the specifier as a rooted virtual path and apply file/directory expansion.
-    if let Some(found) = resolve_as_file_or_directory_normalized(files, &normalized, 0) {
+    // Treat the specifier as a rooted virtual path and apply file/directory expansion.
+    if let Some(found) =
+      resolve_as_file_or_directory_normalized_with_scratch(files, &normalized, 0, &mut resolve_scratch)
+    {
       return Some(found);
     }
   }
@@ -125,15 +125,17 @@ fn resolve_non_relative(
       package_dir.push('/');
       package_dir.push_str(subpath);
       let found = if subpath_needs_normalization(subpath) {
-        resolve_as_file_or_directory(files, &package_dir)
+        resolve_as_file_or_directory_inner_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
       } else {
-        resolve_as_file_or_directory_normalized(files, &package_dir, 0)
+        resolve_as_file_or_directory_normalized_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
       };
       package_dir.truncate(package_dir_len);
       if let Some(found) = found {
         return Some(found);
       }
-    } else if let Some(found) = resolve_as_file_or_directory_normalized(files, &package_dir, 0) {
+    } else if let Some(found) =
+      resolve_as_file_or_directory_normalized_with_scratch(files, &package_dir, 0, &mut resolve_scratch)
+    {
       return Some(found);
     }
 
@@ -148,7 +150,9 @@ fn resolve_non_relative(
         "node_modules/@types",
         types_specifier,
       );
-      if let Some(found) = resolve_as_file_or_directory_normalized(files, &types_base, 0) {
+      if let Some(found) =
+        resolve_as_file_or_directory_normalized_with_scratch(files, &types_base, 0, &mut resolve_scratch)
+      {
         return Some(found);
       }
     }
@@ -203,10 +207,6 @@ fn resolve_imports_in_dir(
   resolve_json_target_to_file(files, dir, target, star_match, 0, package_json_path)
 }
 
-fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<FileKey> {
-  resolve_as_file_or_directory_inner(files, base, 0)
-}
-
 fn resolve_as_file_or_directory_inner(
   files: &HarnessFileSet,
   base: &str,
@@ -220,10 +220,34 @@ fn resolve_as_file_or_directory_inner(
   resolve_as_file_or_directory_normalized(files, &base_candidate, depth)
 }
 
+fn resolve_as_file_or_directory_inner_with_scratch(
+  files: &HarnessFileSet,
+  base: &str,
+  depth: usize,
+  scratch: &mut String,
+) -> Option<FileKey> {
+  if depth > 16 {
+    return None;
+  }
+
+  let base_candidate = normalize_name(base);
+  resolve_as_file_or_directory_normalized_with_scratch(files, &base_candidate, depth, scratch)
+}
+
 fn resolve_as_file_or_directory_normalized(
   files: &HarnessFileSet,
   base_candidate: &str,
   depth: usize,
+) -> Option<FileKey> {
+  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
+  resolve_as_file_or_directory_normalized_with_scratch(files, base_candidate, depth, &mut scratch)
+}
+
+fn resolve_as_file_or_directory_normalized_with_scratch(
+  files: &HarnessFileSet,
+  base_candidate: &str,
+  depth: usize,
+  scratch: &mut String,
 ) -> Option<FileKey> {
   if depth > 16 {
     return None;
@@ -233,7 +257,8 @@ fn resolve_as_file_or_directory_normalized(
     return Some(found);
   }
 
-  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
+  scratch.clear();
+  scratch.reserve(base_candidate.len() + 1 + "package.json".len());
 
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
@@ -302,7 +327,7 @@ fn resolve_as_file_or_directory_normalized(
   }
 
   if !is_source_root(base_candidate) {
-    virtual_join_into(&mut scratch, base_candidate, "package.json");
+    virtual_join_into(scratch, base_candidate, "package.json");
     if let Some(package_key) = files.resolve_ref(&scratch) {
       if let Some(parsed) = files.package_json(package_key) {
         let resolve_package_entry = |entry: &str, scratch: &mut String| -> Option<FileKey> {
@@ -328,13 +353,13 @@ fn resolve_as_file_or_directory_normalized(
         };
 
         if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, &mut scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch) {
             return Some(found);
           }
         }
 
         if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, &mut scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch) {
             return Some(found);
           }
         }
@@ -342,7 +367,7 @@ fn resolve_as_file_or_directory_normalized(
         if let Some(exports) = parsed.get("exports") {
           if let Some((target, star_match)) = select_exports_target(exports, ".") {
             if let Some(found) =
-              resolve_json_target_to_file(files, base_candidate, target, star_match, depth, &mut scratch)
+              resolve_json_target_to_file(files, base_candidate, target, star_match, depth, scratch)
             {
               return Some(found);
             }
@@ -350,7 +375,7 @@ fn resolve_as_file_or_directory_normalized(
         }
 
         if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_entry(entry, &mut scratch) {
+          if let Some(found) = resolve_package_entry(entry, scratch) {
             return Some(found);
           }
         }
