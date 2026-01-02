@@ -353,13 +353,10 @@ fn normalize_severity(raw: Option<&str>, options: &NormalizationOptions) -> Opti
     return Some(lowered);
   }
 
-  Some(match lowered.as_str() {
-    "error" => "error".to_string(),
-    "warning" => "warning".to_string(),
-    "suggestion" | "message" | "hint" => "info".to_string(),
-    "note" | "help" => "info".to_string(),
-    other => other.to_string(),
-  })
+  match lowered.as_str() {
+    "suggestion" | "message" | "hint" | "note" | "help" => Some("info".to_string()),
+    _ => Some(lowered),
+  }
 }
 
 fn code_to_string(code: &DiagnosticCode) -> String {
