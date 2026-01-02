@@ -813,37 +813,52 @@ fn resolve_node_like(from: &Path, specifier: &str) -> Option<PathBuf> {
 }
 
 fn resolve_with_candidates(base: &Path) -> Option<PathBuf> {
-  let candidates = candidate_paths(base);
-  for cand in candidates {
-    if cand.is_file() {
-      if let Ok(canon) = canonicalize_path(&cand) {
-        return Some(canon);
-      }
-    }
-  }
-  None
-}
-
-fn candidate_paths(base: &Path) -> Vec<PathBuf> {
   const EXTENSIONS: &[&str] = &["ts", "d.ts", "tsx", "js", "jsx"];
-  let mut candidates = Vec::new();
   let has_extension = has_known_extension(base);
+  let check_candidate = |path: &Path| -> Option<PathBuf> {
+    if path.is_file() {
+      canonicalize_path(path).ok()
+    } else {
+      None
+    }
+  };
+
   if has_extension {
-    candidates.push(base.to_path_buf());
+    if let Some(found) = check_candidate(base) {
+      return Some(found);
+    }
   } else {
+    // Reuse a single `PathBuf` when probing extensions instead of allocating a fresh path per
+    // extension.
+    let base_buf = base.to_path_buf();
+    let mut candidate = base_buf.clone();
     for ext in EXTENSIONS {
-      candidates.push(with_extension(base, ext));
+      // `set_extension("d.ts")` produces a multi-dot extension. If we then mutate that same
+      // `PathBuf` to a single-segment extension (e.g. `"tsx"`), we'd end up with a path like
+      // `foo.d.tsx`. Reset to the base path on every iteration to preserve the exact candidates
+      // we used to generate with `base.with_extension(ext)`.
+      candidate.clone_from(&base_buf);
+      candidate.set_extension(ext);
+      if let Some(found) = check_candidate(&candidate) {
+        return Some(found);
+      }
     }
   }
 
   if !has_extension || base.is_dir() {
-    let base_dir = base;
+    // Resolve `index.*` fallbacks for directories.
+    let base_buf = base.join("index");
+    let mut candidate = base_buf.clone();
     for ext in EXTENSIONS {
-      candidates.push(base_dir.join("index").with_extension(ext));
+      candidate.clone_from(&base_buf);
+      candidate.set_extension(ext);
+      if let Some(found) = check_candidate(&candidate) {
+        return Some(found);
+      }
     }
   }
 
-  candidates
+  None
 }
 
 fn has_known_extension(path: &Path) -> bool {
@@ -853,20 +868,6 @@ fn has_known_extension(path: &Path) -> bool {
       path.extension().and_then(|e| e.to_str()),
       Some("ts" | "tsx" | "js" | "jsx")
     )
-}
-
-fn with_extension(base: &Path, ext: &str) -> PathBuf {
-  if ext == "d.ts" {
-    let mut path = base.to_path_buf();
-    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if current_ext == "ts" || current_ext == "tsx" || current_ext == "js" || current_ext == "jsx" {
-      path.set_extension("d.ts");
-      return path;
-    }
-    path.with_extension("d.ts")
-  } else {
-    base.with_extension(ext)
-  }
 }
 
 fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
