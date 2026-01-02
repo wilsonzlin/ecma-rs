@@ -20,6 +20,8 @@ mod jsx_tsx_disambiguation;
 mod literal_validation;
 #[path = "regressions/module_item_positions.rs"]
 mod module_item_positions;
+#[path = "regressions/module_namespace_identifiers.rs"]
+mod module_namespace_identifiers;
 #[path = "regressions/numeric_literal_overflow.rs"]
 mod numeric_literal_overflow;
 #[path = "regressions/numeric_separators.rs"]
