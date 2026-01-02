@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt;
 use std::panic::panic_any;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -142,7 +142,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     file_id: FileId,
     semantics: &'a TsSemantics,
     source: &'a str,
-    seen: BTreeSet<(u32, u32, String)>,
+    seen: AHashSet<(u32, u32, &'a str)>,
   }
 
   impl<'a> UnresolvedModuleChecker<'a> {
@@ -162,7 +162,12 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
       span
     }
 
-    fn emit_unresolved(&mut self, specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>) {
+    fn emit_unresolved(
+      &mut self,
+      specifier: &'a str,
+      span: TextRange,
+      diags: &mut Vec<Diagnostic>,
+    ) {
       if self
         .semantics
         .semantics
@@ -173,7 +178,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
       }
 
       let range = self.refine_span(span, specifier);
-      let key = (range.start, range.end, specifier.to_string());
+      let key = (range.start, range.end, specifier);
       if !self.seen.insert(key) {
         return;
       }
@@ -186,103 +191,78 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
       diags.push(diag);
     }
 
-    fn check_value(&mut self, specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>) {
+    fn check_value(&mut self, specifier: &'a str, span: TextRange, diags: &mut Vec<Diagnostic>) {
       if module_resolve_ref(self.db, self.file_id, specifier).is_some() {
         return;
       }
       self.emit_unresolved(specifier, span, diags);
     }
 
-    fn check_specifier(&mut self, spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>) {
-      self.check_value(&spec.value, spec.span, diags);
+    fn check_specifier(&mut self, spec: &'a hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>) {
+      self.check_value(spec.value.as_str(), spec.span, diags);
     }
   }
 
-  let mut checker = UnresolvedModuleChecker {
-    db,
-    file_id,
-    semantics: semantics.as_ref(),
-    source: source.as_ref(),
-    seen: BTreeSet::new(),
-  };
+  {
+    let mut checker = UnresolvedModuleChecker {
+      db,
+      file_id,
+      semantics: semantics.as_ref(),
+      source: source.as_ref(),
+      seen: AHashSet::new(),
+    };
 
-  for import in lowered.hir.imports.iter() {
-    match &import.kind {
-      hir_js::ImportKind::Es(es) => {
-        checker.check_specifier(&es.specifier, &mut diagnostics);
-      }
-      hir_js::ImportKind::ImportEquals(eq) => {
-        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          checker.check_specifier(module, &mut diagnostics);
+    for import in lowered.hir.imports.iter() {
+      match &import.kind {
+        hir_js::ImportKind::Es(es) => {
+          checker.check_specifier(&es.specifier, &mut diagnostics);
+        }
+        hir_js::ImportKind::ImportEquals(eq) => {
+          if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+            checker.check_specifier(module, &mut diagnostics);
+          }
         }
       }
     }
-  }
 
-  for export in lowered.hir.exports.iter() {
-    match &export.kind {
-      ExportKind::Named(named) => {
-        if let Some(source) = named.source.as_ref() {
-          checker.check_specifier(source, &mut diagnostics);
+    for export in lowered.hir.exports.iter() {
+      match &export.kind {
+        ExportKind::Named(named) => {
+          if let Some(source) = named.source.as_ref() {
+            checker.check_specifier(source, &mut diagnostics);
+          }
         }
+        ExportKind::ExportAll(all) => {
+          checker.check_specifier(&all.source, &mut diagnostics);
+        }
+        ExportKind::Default(_) | ExportKind::Assignment(_) | ExportKind::AsNamespace(_) => {}
       }
-      ExportKind::ExportAll(all) => {
-        checker.check_specifier(&all.source, &mut diagnostics);
-      }
-      ExportKind::Default(_) | ExportKind::Assignment(_) | ExportKind::AsNamespace(_) => {}
-    }
-  }
-
-  let parsed = parse_for(db, file);
-  if let Some(ast) = parsed.ast.as_deref() {
-    use derive_visitor::Drive;
-    use derive_visitor::Visitor;
-    use parse_js::ast::expr::Expr;
-    use parse_js::ast::node::Node;
-    use parse_js::ast::type_expr::{TypeEntityName, TypeExpr};
-
-    type TypeExprNode = Node<TypeExpr>;
-
-    #[derive(Visitor)]
-    #[visitor(TypeExprNode(enter))]
-    struct TypeOnlyImportChecker<'a, 'db> {
-      checker: &'a mut UnresolvedModuleChecker<'db>,
-      diags: &'a mut Vec<Diagnostic>,
     }
 
-    impl<'a, 'db> TypeOnlyImportChecker<'a, 'db> {
-      fn check_entity_name(&mut self, name: &TypeEntityName) {
-        match name {
-          TypeEntityName::Qualified(qualified) => self.check_entity_name(&qualified.left),
-          TypeEntityName::Import(import) => {
-            if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
-              self
-                .checker
-                .check_value(spec.stx.value.as_str(), import.loc.into(), self.diags);
+    for arenas in lowered.types.values() {
+      for ty in arenas.type_exprs.iter() {
+        match &ty.kind {
+          hir_js::TypeExprKind::TypeRef(type_ref) => {
+            if let hir_js::TypeName::Import(import) = &type_ref.name {
+              if let Some(module) = import.module.as_deref() {
+                checker.check_value(module, ty.span, &mut diagnostics);
+              }
             }
           }
-          _ => {}
-        }
-      }
-
-      fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
-        match node.stx.as_ref() {
-          TypeExpr::ImportType(import) => {
-            self
-              .checker
-              .check_value(import.stx.module_specifier.as_str(), node.loc.into(), self.diags);
+          hir_js::TypeExprKind::TypeQuery(name) => {
+            if let hir_js::TypeName::Import(import) = name {
+              if let Some(module) = import.module.as_deref() {
+                checker.check_value(module, ty.span, &mut diagnostics);
+              }
+            }
           }
-          TypeExpr::TypeQuery(query) => self.check_entity_name(&query.stx.expr_name),
+          hir_js::TypeExprKind::Import(import) => {
+            checker.check_value(import.module.as_str(), ty.span, &mut diagnostics);
+          }
           _ => {}
         }
       }
     }
-
-    let mut visitor = TypeOnlyImportChecker {
-      checker: &mut checker,
-      diags: &mut diagnostics,
-    };
-    ast.drive(&mut visitor);
   }
 
   diagnostics.sort_by(|a, b| {
@@ -1675,8 +1655,7 @@ struct DbResolver<'db> {
 
 impl<'db> sem_ts::Resolver for DbResolver<'db> {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    module_resolve_ref(self.db, FileId(from.0), specifier)
-      .map(|id| sem_ts::FileId(id.0))
+    module_resolve_ref(self.db, FileId(from.0), specifier).map(|id| sem_ts::FileId(id.0))
   }
 }
 
