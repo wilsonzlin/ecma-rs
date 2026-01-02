@@ -192,10 +192,6 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
       self.emit_unresolved(specifier, span, diags);
     }
 
-    fn check_arc(&mut self, specifier: &Arc<str>, span: TextRange, diags: &mut Vec<Diagnostic>) {
-      self.check_value(specifier.as_ref(), span, diags);
-    }
-
     fn check_specifier(&mut self, spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>) {
       self.check_value(&spec.value, spec.span, diags);
     }
@@ -238,9 +234,54 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
 
   let parsed = parse_for(db, file);
   if let Some(ast) = parsed.ast.as_deref() {
-    for (specifier, span) in collect_type_only_module_specifiers_from_ast(ast) {
-      checker.check_arc(&specifier, span, &mut diagnostics);
+    use derive_visitor::Drive;
+    use derive_visitor::Visitor;
+    use parse_js::ast::expr::Expr;
+    use parse_js::ast::node::Node;
+    use parse_js::ast::type_expr::{TypeEntityName, TypeExpr};
+
+    type TypeExprNode = Node<TypeExpr>;
+
+    #[derive(Visitor)]
+    #[visitor(TypeExprNode(enter))]
+    struct TypeOnlyImportChecker<'a, 'db> {
+      checker: &'a mut UnresolvedModuleChecker<'db>,
+      diags: &'a mut Vec<Diagnostic>,
     }
+
+    impl<'a, 'db> TypeOnlyImportChecker<'a, 'db> {
+      fn check_entity_name(&mut self, name: &TypeEntityName) {
+        match name {
+          TypeEntityName::Qualified(qualified) => self.check_entity_name(&qualified.left),
+          TypeEntityName::Import(import) => {
+            if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
+              self
+                .checker
+                .check_value(spec.stx.value.as_str(), import.loc.into(), self.diags);
+            }
+          }
+          _ => {}
+        }
+      }
+
+      fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
+        match node.stx.as_ref() {
+          TypeExpr::ImportType(import) => {
+            self
+              .checker
+              .check_value(import.stx.module_specifier.as_str(), node.loc.into(), self.diags);
+          }
+          TypeExpr::TypeQuery(query) => self.check_entity_name(&query.stx.expr_name),
+          _ => {}
+        }
+      }
+    }
+
+    let mut visitor = TypeOnlyImportChecker {
+      checker: &mut checker,
+      diags: &mut diagnostics,
+    };
+    ast.drive(&mut visitor);
   }
 
   diagnostics.sort_by(|a, b| {
@@ -1689,57 +1730,6 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult, specs: &mut Vec<Arc<
       }
     }
   }
-}
-
-fn collect_type_only_module_specifiers_from_ast(
-  ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
-) -> Vec<(Arc<str>, TextRange)> {
-  use derive_visitor::Drive;
-  use derive_visitor::Visitor;
-  use parse_js::ast::expr::Expr;
-  use parse_js::ast::node::Node;
-  use parse_js::ast::type_expr::{TypeEntityName, TypeExpr};
-
-  type TypeExprNode = Node<TypeExpr>;
-
-  fn collect_from_entity_name(name: &TypeEntityName, specs: &mut Vec<(Arc<str>, TextRange)>) {
-    match name {
-      TypeEntityName::Qualified(qualified) => collect_from_entity_name(&qualified.left, specs),
-      TypeEntityName::Import(import) => {
-        if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
-          specs.push((Arc::<str>::from(spec.stx.value.as_str()), import.loc.into()));
-        }
-      }
-      _ => {}
-    }
-  }
-
-  #[derive(Default, Visitor)]
-  #[visitor(TypeExprNode(enter))]
-  struct Collector {
-    specs: Vec<(Arc<str>, TextRange)>,
-  }
-
-  impl Collector {
-    fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
-      match node.stx.as_ref() {
-        TypeExpr::ImportType(import) => {
-          self.specs.push((
-            Arc::<str>::from(import.stx.module_specifier.as_str()),
-            node.loc.into(),
-          ));
-        }
-        TypeExpr::TypeQuery(query) => {
-          collect_from_entity_name(&query.stx.expr_name, &mut self.specs);
-        }
-        _ => {}
-      }
-    }
-  }
-
-  let mut collector = Collector::default();
-  ast.drive(&mut collector);
-  collector.specs
 }
 
 fn collect_type_only_module_specifier_values_from_ast(
