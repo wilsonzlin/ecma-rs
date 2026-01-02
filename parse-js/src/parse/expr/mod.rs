@@ -41,6 +41,8 @@ use pat::is_valid_pattern_identifier;
 use pat::ParsePatternRules;
 use util::lhs_expr_to_assign_target;
 
+struct ParenthesizedExpr;
+
 pub struct Asi {
   pub can_end_with_asi: bool,
   pub did_end_with_asi: bool,
@@ -153,7 +155,7 @@ impl<'a> Parser<'a> {
     self.require(TT::ParenthesisOpen)?;
     // TypeScript: Allow empty parenthesized expressions for error recovery: ()
     // Also handles comma operator with missing operands: (, x) or (x, )
-    let expr = if self.peek().typ == TT::ParenthesisClose {
+    let mut expr = if self.peek().typ == TT::ParenthesisClose {
       // Empty expression: () - create synthetic undefined
       let loc = self.peek().loc;
       self.create_synthetic_undefined(loc)
@@ -167,6 +169,7 @@ impl<'a> Parser<'a> {
         })
     };
     self.require(TT::ParenthesisClose)?;
+    expr.assoc.set(ParenthesizedExpr);
     Ok(expr)
   }
 
@@ -458,7 +461,11 @@ impl<'a> Parser<'a> {
 
   /// Try to parse angle-bracket type assertion: <Type>expr
   /// Returns parsed assertion or error if it doesn't look like a type assertion
-  fn try_parse_angle_bracket_type_assertion(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Expr>> {
+  fn try_parse_angle_bracket_type_assertion<const N: usize>(
+    &mut self,
+    ctx: ParseCtx,
+    terminators: [TT; N],
+  ) -> SyntaxResult<Node<Expr>> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
@@ -522,8 +529,9 @@ impl<'a> Parser<'a> {
           p.consume(); // consume 'const'
           p.require(TT::ChevronRight)?;
 
-          // Parse just the operand - the outer expression parser will handle operators
-          let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+          let min_prec = OPERATORS[&OperatorName::UnaryPlus].precedence;
+          let mut asi = Asi::no();
+          let expression = p.expr_with_min_prec(ctx, min_prec, terminators, &mut asi)?;
 
           use crate::ast::expr::TypeAssertionExpr;
           return Ok(
@@ -553,8 +561,9 @@ impl<'a> Parser<'a> {
           }
         }
 
-        // Parse just the operand - the outer expression parser will handle operators
-        let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+        let min_prec = OPERATORS[&OperatorName::UnaryPlus].precedence;
+        let mut asi = Asi::no();
+        let expression = p.expr_with_min_prec(ctx, min_prec, terminators, &mut asi)?;
 
         // If we're followed by a JSX closing tag, this is actually JSX, not a type assertion
         // E.g., <Comp>text</Comp> should be JSX, not <Comp>(text) as type assertion
@@ -768,7 +777,7 @@ impl<'a> Parser<'a> {
         }
 
         if allow_type_assertions {
-          if let Ok(assertion) = self.try_parse_angle_bracket_type_assertion(ctx) {
+          if let Ok(assertion) = self.try_parse_angle_bracket_type_assertion(ctx, terminators) {
             return Ok(assertion);
           }
           self.restore_checkpoint(chevron_checkpoint);
@@ -1160,6 +1169,29 @@ impl<'a> Parser<'a> {
               .into_wrapped()
             }
             _ => {
+              if operator.name == OperatorName::Exponentiation {
+                let is_parenthesized = left.assoc.get::<ParenthesizedExpr>().is_some();
+                let is_disallowed = match left.stx.as_ref() {
+                  Expr::Unary(unary) => matches!(
+                    unary.stx.operator,
+                    OperatorName::Await
+                      | OperatorName::BitwiseNot
+                      | OperatorName::Delete
+                      | OperatorName::LogicalNot
+                      | OperatorName::Typeof
+                      | OperatorName::UnaryNegation
+                      | OperatorName::UnaryPlus
+                      | OperatorName::Void
+                  ),
+                  Expr::TypeAssertion(_) => true,
+                  _ => false,
+                };
+                if !is_parenthesized && is_disallowed {
+                  return Err(t.error(SyntaxErrorType::ExpectedSyntax(
+                    "parenthesized expression",
+                  )));
+                }
+              }
               if operator.name.is_assignment() {
                 left = lhs_expr_to_assign_target(left, operator.name)?;
               };

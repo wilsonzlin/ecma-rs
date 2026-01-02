@@ -294,7 +294,7 @@ fn literal_error_to_syntax(
 fn template_content(raw: &str, is_end: bool) -> Option<(usize, &str)> {
   let mut start = 0;
   let mut end = raw.len();
-  if raw.starts_with('`') {
+  if raw.starts_with('`') && raw.len() > '`'.len_utf8() {
     start += '`'.len_utf8();
   }
   if is_end {
