@@ -240,6 +240,16 @@ fn parse_baseline_error_line(line: &str) -> Option<(String, u32)> {
   Some((file, code))
 }
 
+fn is_expected_parse_error_code(code: u32) -> bool {
+  // Treat syntax/parse-related TypeScript diagnostics as expected parse failures.
+  //
+  // TypeScript uses:
+  // - TS1xxx for many grammar errors (`Identifier expected`, etc.)
+  // - TS170xx for some syntax-like errors that still allow parsing (e.g.
+  //   invalid `import.*` meta-properties).
+  (1000..2000).contains(&code) || (17000..18000).contains(&code)
+}
+
 fn expected_parse_error_files(
   path: &Path,
   directives: &[HarnessDirective],
@@ -251,13 +261,7 @@ fn expected_parse_error_files(
     let Some((file, code)) = parse_baseline_error_line(line) else {
       continue;
     };
-    // Treat syntax/parse-related TypeScript diagnostics as expected parse failures.
-    //
-    // TypeScript uses:
-    // - TS1xxx for many grammar errors (`Identifier expected`, etc.)
-    // - TS170xx for some syntax-like errors that still allow parsing (e.g.
-    //   invalid `import.*` meta-properties).
-    if (1000..2000).contains(&code) || (17000..18000).contains(&code) {
+    if is_expected_parse_error_code(code) {
       out.insert(file);
     }
   }
@@ -1139,7 +1143,10 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   }
 
   if failed_count > 0 {
-    let report_path = "typescript_conformance_failures.txt";
+    let report_path = options
+      .failures_path
+      .clone()
+      .unwrap_or_else(|| PathBuf::from("typescript_conformance_failures.txt"));
     let mut report = String::new();
     report.push_str("TypeScript Conformance Test Failures Report\n\n");
     report.push_str(&format!(
@@ -1167,13 +1174,47 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
       }
     }
 
-    fs::write(report_path, report).ok();
-    println!("\n📝 Detailed failure report written to: {}", report_path);
+    fs::write(&report_path, report).ok();
+    println!(
+      "\n📝 Detailed failure report written to: {}",
+      report_path.display()
+    );
   }
 
   println!("\n");
 
   if failed_count > 0 {
     std::process::exit(1);
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn baseline_error_line_parses_file_and_code() {
+    let (file, code) =
+      parse_baseline_error_line("foo.ts(1,15): error TS1003: Identifier expected.").unwrap();
+    assert_eq!(file, "foo.ts");
+    assert_eq!(code, 1003);
+  }
+
+  #[test]
+  fn baseline_error_line_normalizes_windows_paths() {
+    let (file, code) = parse_baseline_error_line(
+      r#"foo\bar.ts(2,1): error TS17012: 'metal' is not a valid meta-property for keyword 'import'."#,
+    )
+    .unwrap();
+    assert_eq!(file, "foo/bar.ts");
+    assert_eq!(code, 17012);
+  }
+
+  #[test]
+  fn expected_parse_error_code_ranges_match_ts_baselines() {
+    assert!(is_expected_parse_error_code(1003));
+    assert!(is_expected_parse_error_code(17012));
+    assert!(!is_expected_parse_error_code(2305));
+    assert!(!is_expected_parse_error_code(2339));
   }
 }
