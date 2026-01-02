@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::panic::panic_any;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -92,14 +92,13 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   let parsed = parse_for(db, file);
   let mut specs: Vec<Arc<str>> = Vec::new();
   if let Some(lowered) = lowered.lowered.as_deref() {
+    specs.reserve(lowered.hir.imports.len() + lowered.hir.exports.len());
     collect_module_specifiers(lowered, &mut specs);
   }
   if let Some(ast) = parsed.ast.as_deref() {
-    specs.extend(
-      collect_type_only_module_specifiers_from_ast(ast)
-        .into_iter()
-        .map(|(s, _)| s),
-    );
+    let type_only = collect_type_only_module_specifiers_from_ast(ast);
+    specs.reserve(type_only.len());
+    specs.extend(type_only.into_iter().map(|(s, _)| s));
   }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
@@ -110,7 +109,7 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
 fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
   panic_if_cancelled(db);
   let specs = module_specifiers_for(db, file);
-  let mut deps = Vec::new();
+  let mut deps = Vec::with_capacity(specs.len());
   for spec in specs.iter() {
     panic_if_cancelled(db);
     if let Some(target) = module_resolve_ref(db, file.file_id(db), spec.as_ref()) {
@@ -1550,13 +1549,14 @@ impl std::fmt::Debug for TsSemantics {
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   panic_if_cancelled(db);
-  let mut visited = BTreeSet::new();
+  let mut visited = HashSet::new();
   let mut queue: VecDeque<FileId> = db
     .roots_input()
     .roots(db)
     .iter()
     .filter_map(|key| file_id_from_key(db, key))
     .collect();
+  visited.reserve(queue.len());
   // Always seed bundled/host libs by `FileId` to avoid losing them when a host
   // file shares the same `FileKey` as a bundled lib (two IDs, one key).
   let mut lib_files = db.lib_files();
@@ -1573,7 +1573,9 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
         .copied(),
     );
   }
-  Arc::new(visited.into_iter().collect())
+  let mut files: Vec<FileId> = visited.into_iter().collect();
+  files.sort_by_key(|id| id.0);
+  Arc::new(files)
 }
 
 #[salsa::tracked]
