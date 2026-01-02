@@ -473,6 +473,7 @@ impl Program {
     let query_stats = QueryStatsCollector::default();
     let cancelled = Arc::new(AtomicBool::new(false));
     roots.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+    roots.dedup_by(|a, b| a.as_str() == b.as_str());
     let program = Program {
       host: Arc::clone(&host),
       roots,
