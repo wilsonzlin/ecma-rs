@@ -1,0 +1,46 @@
+{
+  "$t": "ClassDecl",
+  "abstract_": false,
+  "declare": false,
+  "decorators": [],
+  "export": false,
+  "export_default": false,
+  "extends": null,
+  "implements": [],
+  "members": [
+    {
+      "abstract_": false,
+      "accessibility": null,
+      "accessor": false,
+      "decorators": [
+        {
+          "expression": {
+            "$t": "Id",
+            "name": "dec"
+          }
+        }
+      ],
+      "definite_assignment": false,
+      "key": {
+        "Direct": {
+          "key": "#x",
+          "tt": "PrivateMember"
+        }
+      },
+      "optional": false,
+      "override_": false,
+      "readonly": false,
+      "static_": false,
+      "type_annotation": {
+        "$t": "Any"
+      },
+      "val": {
+        "Prop": null
+      }
+    }
+  ],
+  "name": {
+    "name": "C"
+  },
+  "type_parameters": null
+}

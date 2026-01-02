@@ -1,0 +1,34 @@
+{
+  "$t": "FunctionDecl",
+  "export": false,
+  "export_default": false,
+  "function": {
+    "arrow": false,
+    "async_": false,
+    "body": {
+      "Block": [
+        {
+          "$t": "Return",
+          "value": {
+            "$t": "TypeAssertion",
+            "const_assertion": false,
+            "expression": {
+              "$t": "Id",
+              "name": "undefined"
+            },
+            "type_annotation": {
+              "$t": "Any"
+            }
+          }
+        }
+      ]
+    },
+    "generator": false,
+    "parameters": [],
+    "return_type": null,
+    "type_parameters": null
+  },
+  "name": {
+    "name": "f"
+  }
+}

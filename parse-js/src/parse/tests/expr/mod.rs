@@ -98,3 +98,19 @@ fn parses_jsx_element_instead_of_type_assertion() {
     ref other => panic!("expected JSX element, got {:?}", other),
   }
 }
+
+#[test]
+fn parses_angle_bracket_type_assertion_with_lowercase_qualified_type_in_ts() {
+  let expr = parse_expr_with_options(
+    "<foo.E1>0;",
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  );
+
+  match *expr.stx {
+    Expr::TypeAssertion(_) => {}
+    ref other => panic!("expected type assertion, got {:?}", other),
+  }
+}

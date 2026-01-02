@@ -36,6 +36,34 @@ use crate::token::TT;
 use decl::VarDeclParseMode;
 
 impl<'a> Parser<'a> {
+  fn starts_with_type_alias_decl(&mut self, ctx: ParseCtx) -> bool {
+    // `type` is a contextual/unreserved keyword in many positions, so only treat it as a
+    // type-alias declaration when it is followed by a plausible name and an `=` token.
+    //
+    // This matches TypeScript behaviour for cases like:
+    // - `type Foo = number;` (declaration)
+    // - `type;` / `type: label` (expression/label, not a declaration)
+    let checkpoint = self.checkpoint();
+    self.consume(); // type
+    if self.require_identifier_or_ts_keyword().is_err() {
+      self.restore_checkpoint(checkpoint);
+      return false;
+    }
+
+    if self.peek().typ == TT::ChevronLeft && self.is_start_of_type_arguments() {
+      // Be conservative: if we fail to parse the type-parameter list, fall back to treating
+      // this as a non-declaration so we don't accidentally swallow real statements.
+      if self.type_parameters(ctx).is_err() {
+        self.restore_checkpoint(checkpoint);
+        return false;
+      }
+    }
+
+    let is_alias = self.peek().typ == TT::Equals;
+    self.restore_checkpoint(checkpoint);
+    is_alias
+  }
+
   pub fn stmts(&mut self, ctx: ParseCtx, end: TT) -> SyntaxResult<Vec<Node<Stmt>>> {
     self.repeat_until_tt(end, |p| p.stmt(ctx))
   }
@@ -85,9 +113,16 @@ impl<'a> Parser<'a> {
       // Treat it as a declaration only when the next token can't start `import.meta` or `import(...)`.
       TT::KeywordImport if !matches!(t1.typ, TT::ParenthesisOpen | TT::Dot) => {
         if !self.is_module() {
-          return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
-            "import not allowed in scripts",
-          )));
+          // TypeScript: `import alias = EntityName` is permitted in scripts and does not
+          // make the file a module (e.g. `import await = foo.await`).
+          let is_import_equals = self.is_typescript()
+            && is_valid_pattern_identifier(t1.typ, ctx.rules)
+            && self.peek_n::<3>()[2].typ == TT::Equals;
+          if !is_import_equals {
+            return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
+              "import not allowed in scripts",
+            )));
+          }
         }
         if !ctx.top_level {
           return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
@@ -106,7 +141,7 @@ impl<'a> Parser<'a> {
 
       // TypeScript declarations
       TT::KeywordInterface => self.interface_decl(ctx, false, false)?.into_wrapped(),
-      TT::KeywordType => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
+      TT::KeywordType if self.starts_with_type_alias_decl(ctx) => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
       // `module` and `namespace` are contextual keywords - only treat as declarations if followed by identifier/string
       // Allow `module.exports` and `namespace.something` to be parsed as expressions

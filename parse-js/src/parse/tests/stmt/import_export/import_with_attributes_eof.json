@@ -1,0 +1,30 @@
+{
+  "$t": "Import",
+  "attributes": {
+    "$t": "LitObj",
+    "members": [
+      {
+        "typ": {
+          "Valued": {
+            "key": {
+              "Direct": {
+                "key": "type",
+                "tt": "KeywordType"
+              }
+            },
+            "val": {
+              "Prop": {
+                "$t": "LitStr",
+                "value": "json"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "default": null,
+  "module": "./0",
+  "names": null,
+  "type_only": false
+}

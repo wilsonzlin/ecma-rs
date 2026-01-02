@@ -1,0 +1,31 @@
+{
+  "$t": "ExportList",
+  "attributes": {
+    "$t": "LitObj",
+    "members": [
+      {
+        "typ": {
+          "Valued": {
+            "key": {
+              "Direct": {
+                "key": "type",
+                "tt": "KeywordType"
+              }
+            },
+            "val": {
+              "Prop": {
+                "$t": "LitStr",
+                "value": "json"
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "from": "./0",
+  "names": {
+    "Specific": []
+  },
+  "type_only": false
+}

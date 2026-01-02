@@ -465,23 +465,21 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
     terminators: [TT; N],
+    asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
 
-    // Check if it's an identifier that looks like a JSX tag (starts with lowercase)
-    // JSX built-in tags like <div>, <span> start with lowercase, while type names typically start with uppercase
-    let is_likely_jsx_tag = if t1.typ == TT::Identifier {
-      let id_str = self.str(t1.loc);
-      // If identifier starts with lowercase letter, it's likely JSX
-      id_str
+    // Heuristic: in dialects that permit JSX, `<lowercase>` is more likely to be JSX
+    // than an angle-bracket type assertion.
+    let is_likely_jsx_tag = self.allows_jsx()
+      && t1.typ == TT::Identifier
+      && self
+        .str(t1.loc)
         .chars()
         .next()
-        .map_or(false, |c| c.is_ascii_lowercase())
-    } else {
-      false
-    };
+        .map_or(false, |c| c.is_ascii_lowercase());
 
     let looks_like_type_assertion = !is_likely_jsx_tag
       && matches!(
@@ -530,8 +528,7 @@ impl<'a> Parser<'a> {
           p.require(TT::ChevronRight)?;
 
           let min_prec = OPERATORS[&OperatorName::UnaryPlus].precedence;
-          let mut asi = Asi::no();
-          let expression = p.expr_with_min_prec(ctx, min_prec, terminators, &mut asi)?;
+          let expression = p.expr_with_min_prec(ctx, min_prec, terminators, asi)?;
 
           use crate::ast::expr::TypeAssertionExpr;
           return Ok(
@@ -562,8 +559,7 @@ impl<'a> Parser<'a> {
         }
 
         let min_prec = OPERATORS[&OperatorName::UnaryPlus].precedence;
-        let mut asi = Asi::no();
-        let expression = p.expr_with_min_prec(ctx, min_prec, terminators, &mut asi)?;
+        let expression = p.expr_with_min_prec(ctx, min_prec, terminators, asi)?;
 
         // If we're followed by a JSX closing tag, this is actually JSX, not a type assertion
         // E.g., <Comp>text</Comp> should be JSX, not <Comp>(text) as type assertion
@@ -733,30 +729,12 @@ impl<'a> Parser<'a> {
       });
     };
 
-    // Check for decorators before class expression: @dec class C {}
+    // Decorated class expression: `@dec class C {}`.
     if t0.typ == TT::At {
-      // Look ahead to see if there's a class keyword after decorators
       let checkpoint = self.checkpoint();
-      let mut has_decorators = false;
-      while self.peek().typ == TT::At {
-        has_decorators = true;
-        self.consume(); // consume @
-                        // Skip the decorator expression
-        match self.expr_with_min_prec(ctx, 1, terminators, asi) {
-          Ok(_) => {}
-          Err(_) => {
-            self.restore_checkpoint(checkpoint);
-            return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
-          }
-        }
-      }
-      if has_decorators && self.peek().typ == TT::KeywordClass {
-        // Parse class expression with decorators
-        self.restore_checkpoint(checkpoint);
-        return Ok(self.class_expr_with_decorators(ctx)?.into_wrapped());
-      } else {
-        // Not a decorated class, restore and fall through to error
-        self.restore_checkpoint(checkpoint);
+      match self.class_expr_with_decorators(ctx) {
+        Ok(class) => return Ok(class.into_wrapped()),
+        Err(_) => self.restore_checkpoint(checkpoint),
       }
     }
 
@@ -777,7 +755,9 @@ impl<'a> Parser<'a> {
         }
 
         if allow_type_assertions {
-          if let Ok(assertion) = self.try_parse_angle_bracket_type_assertion(ctx, terminators) {
+          if let Ok(assertion) =
+            self.try_parse_angle_bracket_type_assertion(ctx, terminators, asi)
+          {
             return Ok(assertion);
           }
           self.restore_checkpoint(chevron_checkpoint);

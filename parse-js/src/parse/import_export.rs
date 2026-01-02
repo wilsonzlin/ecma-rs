@@ -30,7 +30,9 @@ use crate::token::TT;
 impl<'a> Parser<'a> {
   fn starts_with_type_only_import(&mut self, ctx: ParseCtx) -> bool {
     let [t0, t1, t2] = self.peek_n::<3>();
-    if t0.typ != TT::KeywordType {
+    let is_type_keyword = t0.typ == TT::KeywordType
+      || (t0.typ == TT::Identifier && self.str(t0.loc) == "type");
+    if !is_type_keyword {
       return false;
     }
     if matches!(t1.typ, TT::BraceOpen | TT::Asterisk) {
@@ -40,14 +42,6 @@ impl<'a> Parser<'a> {
       return false;
     }
     matches!(t2.typ, TT::Comma | TT::KeywordFrom | TT::Equals)
-  }
-
-  fn starts_with_type_only_named_specifier(&mut self) -> bool {
-    let [t0, t1] = self.peek_n::<2>();
-    if t0.typ != TT::KeywordType {
-      return false;
-    }
-    !matches!(t1.typ, TT::Comma | TT::BraceClose | TT::KeywordAs)
   }
 
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
@@ -74,22 +68,21 @@ impl<'a> Parser<'a> {
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
     let alias = if self.consume_if(TT::KeywordAs).is_match() {
-      // In exports, "default" is allowed as an alias name (e.g., export { a as default })
-      // In imports, keywords cannot be used as alias names
       let t_alias = self.peek();
-      if is_export && t_alias.typ == TT::KeywordDefault {
-        self.consume();
-        Node::new(
-          t_alias.loc,
-          IdPat {
-            name: "default".to_string(),
-          },
-        )
-      } else if is_export && t_alias.typ == TT::LiteralString {
+      if is_export && t_alias.typ == TT::LiteralString {
         // ES2022: arbitrary module namespace identifiers - allow string literals
         // for *exported* names.
         let name = self.lit_str_val()?;
         Node::new(t_alias.loc, IdPat { name })
+      } else if is_export && KEYWORDS_MAPPING.contains_key(&t_alias.typ) {
+        // Exported names are `IdentifierName`s, so allow keywords like `return`/`await`.
+        self.consume();
+        Node::new(
+          t_alias.loc,
+          IdPat {
+            name: self.string(t_alias.loc),
+          },
+        )
       } else {
         self.id_pat(ctx)?
       }
@@ -122,7 +115,11 @@ impl<'a> Parser<'a> {
         if p.peek().typ == TT::ParenthesisClose {
           None
         } else {
-          Some(p.expr(ctx, [TT::ParenthesisClose])?)
+          // Match call-argument parsing: allow a trailing comma after the second argument
+          // without treating it as a comma operator.
+          let expr = p.expr(ctx, [TT::Comma, TT::ParenthesisClose])?;
+          let _ = p.consume_if(TT::Comma);
+          Some(expr)
         }
       } else {
         None
@@ -201,14 +198,28 @@ impl<'a> Parser<'a> {
     } else if self.peek().typ == TT::BraceOpen {
       self.require(TT::BraceOpen)?;
       let names = self.list_with_loc(TT::Comma, TT::BraceClose, |p| {
-        // TypeScript: per-specifier type-only import
-        let type_only = if p.starts_with_type_only_named_specifier() {
-          p.consume();
-          true
+        // TypeScript: per-specifier type-only import (`import { type Foo }`)
+        // is ambiguous with importing an export named `type` (`import { type as Foo }`).
+        // Match TypeScript by speculatively parsing `type` as a modifier and
+        // backtracking if it doesn't produce a complete specifier.
+        let checkpoint = p.checkpoint();
+        let first = p.peek();
+        let is_type_modifier = first.typ == TT::KeywordType
+          || (first.typ == TT::Identifier && p.str(first.loc) == "type");
+        let (type_only, (target, alias)) = if is_type_modifier {
+          p.consume(); // type modifier
+          match p.import_or_export_name(ctx, false) {
+            Ok((target, alias)) if matches!(p.peek().typ, TT::Comma | TT::BraceClose) => {
+              (true, (target, alias))
+            }
+            _ => {
+              p.restore_checkpoint(checkpoint);
+              (false, p.import_or_export_name(ctx, false)?)
+            }
+          }
         } else {
-          false
+          (false, p.import_or_export_name(ctx, false)?)
         };
-        let (target, alias) = p.import_or_export_name(ctx, false)?;
         let alias = alias.into_wrapped();
         let alias = alias.wrap(|pat| PatDecl { pat });
         Ok(ImportName {
@@ -228,11 +239,21 @@ impl<'a> Parser<'a> {
     }
     let module = self.lit_str_val()?;
 
-    // Import attributes: import ... from "module" with { type: "json" }
-    let attributes = if self.consume_if(TT::KeywordWith).is_match() {
-      Some(self.expr(ctx, [])?)
-    } else {
-      None
+    // Import attributes / assertions:
+    // - import ... from "module" with { type: "json" }
+    // - import ... from "module" assert { type: "json" }
+    let attributes = {
+      let next = self.peek();
+      let has_attributes = !next.preceded_by_line_terminator
+        && (next.typ == TT::KeywordWith
+          || (next.typ == TT::Identifier && self.str(next.loc) == "assert"));
+      if has_attributes {
+        self.consume();
+        let mut asi = Asi::can();
+        Some(self.expr_with_asi(ctx, [], &mut asi)?)
+      } else {
+        None
+      }
     };
 
     // Allow ASI - semicolon not required at EOF or before line terminator
@@ -321,24 +342,49 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
       // TypeScript: export type
-      let type_only = p.consume_if(TT::KeywordType).is_match();
+      let type_only = if p.consume_if(TT::KeywordType).is_match() {
+        true
+      } else {
+        let next = p.peek();
+        let looks_like_statement_level_type = next.typ == TT::Identifier
+          && p.str(next.loc) == "type"
+          && matches!(p.peek_n::<2>()[1].typ, TT::BraceOpen | TT::Asterisk);
+        if looks_like_statement_level_type {
+          p.consume();
+          true
+        } else {
+          false
+        }
+      };
       let t = p.consume();
       let (names, from) = match t.typ {
         TT::BraceOpen => {
           let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
-            // TypeScript: per-specifier type-only export
-            let type_only = if p.starts_with_type_only_named_specifier() {
-              p.consume();
-              true
+            // TypeScript: per-specifier type-only export (`export { type Foo }`)
+            // is ambiguous with exporting a local binding named `type`.
+            let checkpoint = p.checkpoint();
+            let first = p.peek();
+            let is_type_modifier = first.typ == TT::KeywordType
+              || (first.typ == TT::Identifier && p.str(first.loc) == "type");
+            let (type_only, (target, alias)) = if is_type_modifier {
+              p.consume(); // type modifier
+              match p.import_or_export_name(ctx, true) {
+                Ok((target, alias)) if matches!(p.peek().typ, TT::Comma | TT::BraceClose) => {
+                  (true, (target, alias))
+                }
+                _ => {
+                  p.restore_checkpoint(checkpoint);
+                  (false, p.import_or_export_name(ctx, true)?)
+                }
+              }
             } else {
-              false
+              (false, p.import_or_export_name(ctx, true)?)
             };
-            p.import_or_export_name(ctx, true)
-              .map(|(target, alias)| ExportName {
-                type_only,
-                exportable: target,
-                alias,
-              })
+            Ok(ExportName {
+              type_only,
+              exportable: target,
+              alias,
+            })
           })?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
           if from.is_none() {
@@ -361,19 +407,17 @@ impl<'a> Parser<'a> {
           let alias = p.consume_if(TT::KeywordAs).and_then(|| {
             // ES2022: arbitrary module namespace identifiers - allow string literals
             let t = p.peek();
-            if t.typ == TT::KeywordDefault {
-              // `default` is allowed as an exported name (e.g. `export * as default from "mod"`),
-              // but it is not a valid pattern identifier so we need to special-case it here.
+            if t.typ == TT::LiteralString {
+              let name = p.lit_str_val()?;
+              Ok(Node::new(t.loc, IdPat { name }))
+            } else if KEYWORDS_MAPPING.contains_key(&t.typ) {
               p.consume();
               Ok(Node::new(
                 t.loc,
                 IdPat {
-                  name: "default".to_string(),
+                  name: p.string(t.loc),
                 },
               ))
-            } else if t.typ == TT::LiteralString {
-              let name = p.lit_str_val()?;
-              Ok(Node::new(t.loc, IdPat { name }))
             } else {
               p.id_pat(ctx)
             }
@@ -385,11 +429,21 @@ impl<'a> Parser<'a> {
         _ => return Err(t.error(SyntaxErrorType::ExpectedNotFound)),
       };
 
-      // Export attributes: export ... from "module" with { type: "json" }
-      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
-        Some(p.expr(ctx, [])?)
-      } else {
-        None
+      // Export attributes / assertions:
+      // - export ... from "module" with { type: "json" }
+      // - export ... from "module" assert { type: "json" }
+      let attributes = {
+        let next = p.peek();
+        let has_attributes = !next.preceded_by_line_terminator
+          && (next.typ == TT::KeywordWith
+            || (next.typ == TT::Identifier && p.str(next.loc) == "assert"));
+        if has_attributes {
+          p.consume();
+          let mut asi = Asi::can();
+          Some(p.expr_with_asi(ctx, [], &mut asi)?)
+        } else {
+          None
+        }
       };
 
       Ok(ExportListStmt {
@@ -425,6 +479,17 @@ impl<'a> Parser<'a> {
     let [t0, t1, t2] = self.peek_n();
     // The first token should always be `export`, but it will be parsed in the subroutines and not here.
     assert_eq!(t0.typ, TT::KeywordExport);
+
+    // TypeScript (allowJs): `export type { ... }` and `export type * from "mod"` when `type` is
+    // lexed as an identifier.
+    if t1.typ == TT::Identifier
+      && self.str(t1.loc) == "type"
+      && matches!(t2.typ, TT::BraceOpen | TT::Asterisk)
+    {
+      let stmt = self.export_list_stmt(ctx)?.into_wrapped();
+      let _ = self.consume_if(TT::Semicolon);
+      return Ok(stmt);
+    }
 
     // TypeScript: export = expression (export assignment)
     if t1.typ == TT::Equals {
@@ -544,12 +609,17 @@ impl<'a> Parser<'a> {
       },
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
+    // Export declarations may be terminated by an explicit semicolon; consume it so it doesn't
+    // become a standalone empty statement at the top level.
+    let _ = self.consume_if(TT::Semicolon);
     Ok(stmt)
   }
 }
 
 #[cfg(test)]
 mod tests {
+  use crate::ast::stmt::Stmt;
+  use crate::ast::ts_stmt::ImportEqualsRhs;
   use crate::{parse_with_options, Dialect, ParseOptions, SourceType};
 
   #[test]
@@ -559,5 +629,44 @@ mod tests {
       source_type: SourceType::Module,
     };
     assert!(parse_with_options("import { default } from \"mod\";", opts).is_err());
+  }
+
+  #[test]
+  fn parses_import_equals_in_script_with_await_alias() {
+    let opts = ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Script,
+    };
+    let ast = parse_with_options("import await = foo.await;", opts).unwrap();
+    assert_eq!(ast.stx.body.len(), 1);
+    match *ast.stx.body[0].stx {
+      Stmt::ImportEqualsDecl(ref decl) => {
+        assert_eq!(decl.stx.name, "await");
+        match decl.stx.rhs {
+          ImportEqualsRhs::EntityName { ref path } => {
+            assert_eq!(path, &["foo".to_string(), "await".to_string()]);
+          }
+          ref other => panic!("expected entity-name rhs, got {:?}", other),
+        }
+      }
+      ref other => panic!("expected import-equals declaration, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn parses_export_type_in_js_module() {
+    let opts = ParseOptions {
+      dialect: Dialect::Js,
+      source_type: SourceType::Module,
+    };
+    let ast = parse_with_options("export type * from \"./a\";", opts).unwrap();
+    assert_eq!(ast.stx.body.len(), 1);
+    match *ast.stx.body[0].stx {
+      Stmt::ExportList(ref export) => {
+        assert!(export.stx.type_only);
+        assert_eq!(export.stx.from.as_deref(), Some("./a"));
+      }
+      ref other => panic!("expected export list statement, got {:?}", other),
+    }
   }
 }

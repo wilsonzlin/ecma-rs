@@ -219,7 +219,15 @@ impl<'a> Parser<'a> {
 
       let body = if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
-        let statements = p.stmts(ctx.namespace_body(), TT::BraceClose)?;
+        // String-named `declare module "foo" {}` blocks act like top-level module
+        // scopes and permit ES import/export declarations inside. Identifier-named
+        // `declare module Foo {}` blocks are namespaces and only allow TS `import =`
+        // aliases.
+        let body_ctx = match &name {
+          ModuleName::String(_) => ctx.with_top_level(true).with_namespace(false),
+          ModuleName::Identifier(_) => ctx.namespace_body(),
+        };
+        let statements = p.stmts(body_ctx, TT::BraceClose)?;
         p.require(TT::BraceClose)?;
         Some(statements)
       } else {
@@ -294,6 +302,7 @@ impl<'a> Parser<'a> {
           TT::At,
           TT::BracketOpen,
           TT::BraceClose,
+          TT::PrivateMember,
           TT::Identifier,
         ],
         &mut asi,

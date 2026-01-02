@@ -1,0 +1,41 @@
+{
+  "$t": "ModuleDecl",
+  "body": [
+    {
+      "$t": "Import",
+      "attributes": null,
+      "default": null,
+      "module": "b",
+      "names": {
+        "Specific": [
+          {
+            "alias": {
+              "pat": {
+                "$t": "Id",
+                "name": "a"
+              }
+            },
+            "importable": {
+              "Ident": "a"
+            },
+            "type_only": false
+          }
+        ]
+      },
+      "type_only": false
+    },
+    {
+      "$t": "ExportAssignmentDecl",
+      "expression": {
+        "$t": "Id",
+        "name": "a"
+      }
+    }
+  ],
+  "declare": true,
+  "export": false,
+  "name": {
+    "$t": "String",
+    "v": "a"
+  }
+}

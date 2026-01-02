@@ -1,0 +1,7 @@
+{
+  "$t": "Expr",
+  "expr": {
+    "$t": "Id",
+    "name": "type"
+  }
+}

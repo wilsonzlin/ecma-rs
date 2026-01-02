@@ -635,6 +635,7 @@ impl<'a> Parser<'a> {
       | TT::KeywordBigIntType
       | TT::KeywordSymbolType
       | TT::KeywordObjectType => true,
+      TT::KeywordUndefinedType | TT::KeywordThis | TT::KeywordUnique => true,
 
       // Opening brackets/braces for complex types
       TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen => true,

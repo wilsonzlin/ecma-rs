@@ -427,27 +427,61 @@ fn parse_directive(line: &str) -> Option<HarnessDirective> {
   })
 }
 
-fn has_module_directive(directives: &[HarnessDirective]) -> Option<bool> {
-  directives
-    .iter()
-    .rev()
-    .find(|d| d.name == "module")
-    .map(|d| match d.value.as_deref() {
-      Some(v) if v.eq_ignore_ascii_case("none") => false,
-      _ => true,
-    })
-}
-
 fn contains_import_export(content: &str, cancel: &Arc<AtomicBool>) -> Option<bool> {
+  use parse_js::token::TT;
   let mut lexer = Lexer::new(content);
+
   loop {
     if cancel.load(AtomicOrdering::Relaxed) {
       return None;
     }
     let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
     match token.typ {
-      parse_js::token::TT::KeywordImport | parse_js::token::TT::KeywordExport => return Some(true),
-      parse_js::token::TT::EOF => return Some(false),
+      TT::KeywordExport => {
+        // Any export form makes the file a module.
+        return Some(true);
+      }
+      TT::KeywordImport => {
+        // Disambiguate:
+        // - `import("x")` / `import.meta` (not a module indicator in TS)
+        // - `import x = foo.bar` (not a module indicator in TS; see topLevelAwait.2)
+        // - `import x = require("x")` (module indicator)
+        // - ES import declarations (module indicators)
+        let next = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+        match next.typ {
+          TT::Dot | TT::ParenthesisOpen => {}
+          // Named imports: `import { ... } from "x"`
+          TT::BraceOpen
+          // Namespace import: `import * as ns from "x"`
+          | TT::Asterisk
+          // Side-effect import: `import "x"`
+          | TT::LiteralString
+          // Type-only import: `import type ...`
+          | TT::KeywordType => return Some(true),
+          _ => {
+            // `import <name> ...` or `import <name> = ...`
+            let after_name = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+            if after_name.typ == TT::Equals {
+              // TS import-equals; only treat `require(...)` forms as a module indicator.
+              let rhs = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+              let rhs_is_require = rhs.typ == TT::Identifier
+                && content
+                  .get(rhs.loc.0..rhs.loc.1)
+                  .is_some_and(|s| s == "require");
+              if rhs_is_require {
+                let rhs_after = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
+                if rhs_after.typ == TT::ParenthesisOpen {
+                  return Some(true);
+                }
+              }
+            } else {
+              // Not an import-equals: treat as an ES import declaration.
+              return Some(true);
+            }
+          }
+        }
+      }
+      TT::EOF => return Some(false),
       _ => {}
     }
   }
@@ -501,8 +535,7 @@ fn split_virtual_files(
             .unwrap_or_else(|| path.file_name().unwrap().to_string_lossy().to_string());
           let content = current_content.join("\n");
           let kind = detect_file_kind(&name);
-          let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-          let module = module_directive || contains_import_export(&content, cancel)?;
+          let module = contains_import_export(&content, cancel)?;
           files.push(VirtualFile {
             name,
             content,
@@ -527,8 +560,7 @@ fn split_virtual_files(
     return None;
   }
   let kind = detect_file_kind(&final_name);
-  let module_directive = has_module_directive(&global_directives).unwrap_or(false);
-  let module = module_directive || contains_import_export(&content, cancel)?;
+  let module = contains_import_export(&content, cancel)?;
   files.push(VirtualFile {
     name: final_name,
     content,
