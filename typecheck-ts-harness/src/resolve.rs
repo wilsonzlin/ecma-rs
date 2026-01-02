@@ -730,9 +730,9 @@ fn virtual_join3_into(out: &mut String, base: &str, segment: &str, tail: &str) {
     out.push('/');
   }
   out.push_str(segment);
-  if !out.ends_with('/') {
-    out.push('/');
-  }
+  // `segment` is always provided without a trailing slash in our call sites, so we can avoid
+  // checking `ends_with` on every join.
+  out.push('/');
   out.push_str(tail);
 }
 
