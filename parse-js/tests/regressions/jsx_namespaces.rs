@@ -58,6 +58,25 @@ fn jsx_hyphenated_uppercase_is_parsed_as_intrinsic_name() {
 }
 
 #[test]
+fn jsx_intrinsic_keyword_is_allowed_as_name() {
+  let parsed = parse_with_options("<intrinsic></intrinsic>;", tsx_opts()).unwrap();
+  let elem = match parsed.stx.body.first().unwrap().stx.as_ref() {
+    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::JsxElem(elem) => elem,
+      other => panic!("expected JSX element, got {:?}", other),
+    },
+    other => panic!("expected expression statement, got {:?}", other),
+  };
+  match &elem.stx.name {
+    Some(JsxElemName::Name(name)) => {
+      assert!(name.stx.namespace.is_none());
+      assert_eq!(name.stx.name, "intrinsic");
+    }
+    other => panic!("expected intrinsic name, got {:?}", other),
+  }
+}
+
+#[test]
 fn jsx_attribute_missing_value_is_syntax_error() {
   let err = parse_with_options("<div attr= />", tsx_opts()).unwrap_err();
   assert_eq!(
