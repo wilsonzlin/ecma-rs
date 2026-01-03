@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use tempfile::NamedTempFile;
+use tempfile::{tempdir, NamedTempFile};
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -22,6 +22,13 @@ fn normalized(path: &Path) -> String {
     .unwrap_or_else(|_| path.to_path_buf())
     .display()
     .to_string()
+}
+
+fn write_file(path: &Path, content: &str) {
+  if let Some(parent) = path.parent() {
+    fs::create_dir_all(parent).expect("create parent directories");
+  }
+  fs::write(path, content).expect("write fixture file");
 }
 
 #[test]
@@ -86,7 +93,16 @@ fn resolves_relative_modules_and_index_files() {
 
 #[test]
 fn node_modules_resolution_is_opt_in() {
-  let path = fixture("node_project/src/main.ts");
+  let tmp = tempdir().expect("temp dir");
+  let path = tmp.path().join("src/main.ts");
+  write_file(
+    &path,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/index.ts"),
+    "export const value: number = 21;\n",
+  );
 
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
@@ -103,6 +119,122 @@ fn node_modules_resolution_is_opt_in() {
     .args(["typecheck"])
     .arg(path.as_os_str())
     .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn resolves_package_json_types_entry() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/package.json"),
+    r#"{ "name": "pkg", "version": "1.0.0", "types": "./dist/types.d.ts" }"#,
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/dist/types.d.ts"),
+    "export const value: number;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn resolves_package_json_exports_types() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/package.json"),
+    r#"{ "name": "pkg", "version": "1.0.0", "exports": { ".": { "types": "./dist/types.d.ts" } } }"#,
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/dist/types.d.ts"),
+    "export const value: number;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn resolves_imports_specifiers_from_package_json() {
+  let tmp = tempdir().expect("temp dir");
+  write_file(
+    &tmp.path().join("package.json"),
+    r##"{ "name": "app", "imports": { "#answer": "./src/answer.ts" } }"##,
+  );
+  write_file(
+    &tmp.path().join("src/answer.ts"),
+    "export const value: number = 21;\n",
+  );
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"#answer\";\n\nexport const doubled = value * 2;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn tsconfig_paths_patterns_prefer_most_specific_match() {
+  let tmp = tempdir().expect("temp dir");
+  write_file(
+    &tmp.path().join("tsconfig.json"),
+    r#"{ "compilerOptions": { "baseUrl": ".", "paths": { "@lib/*": ["src/lib/*"], "@lib/special/*": ["src/special/*"] } }, "files": ["src/index.ts"] }"#,
+  );
+  write_file(
+    &tmp.path().join("src/index.ts"),
+    "import { value } from \"@lib/special/answer\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("src/special/answer.ts"),
+    "export const value: number = 21;\n",
+  );
+  // This file matches the less-specific mapping. If we pick it, type checking should fail.
+  write_file(
+    &tmp.path().join("src/lib/special/answer.ts"),
+    "export const value: string = \"oops\";\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tmp.path().join("tsconfig.json").as_os_str())
     .assert()
     .success()
     .stdout(is_empty());

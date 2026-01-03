@@ -2,21 +2,48 @@
 //!
 //! This intentionally mirrors the resolution behaviour advertised by the CLI:
 //! - relative specifiers resolve against the importing file
-//! - `<spec>.{ts,d.ts,tsx,js,jsx}` and `index.*` variants are considered
-//! - when `node_modules` is enabled, bare specifiers walk up parent directories
+//! - extension probing follows the TypeScript resolver ordering
+//! - directory specifiers consult `package.json` (`types`, `exports`, `main`) before `index.*`
+//! - when enabled, bare specifiers walk `node_modules` directories (including `@types/` fallback)
+//! - `#imports` specifiers consult the nearest `package.json` `imports` map
 
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use crate::resolve::path::canonicalize_path;
 
+const EXPORT_CONDITIONS: [&str; 4] = ["types", "import", "require", "default"];
+
 /// Default extension search order for module resolution.
-pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "d.ts", "tsx", "js", "jsx"];
+///
+/// This mirrors the ordering used by the harness resolver and TypeScript's Node-style lookup.
+pub const DEFAULT_EXTENSIONS: &[&str] = &[
+  "ts", "tsx", "d.ts", "mts", "d.mts", "cts", "d.cts", "js", "jsx", "mjs", "cjs",
+];
+
+const INDEX_FILES: [&str; 11] = [
+  "index.ts",
+  "index.tsx",
+  "index.d.ts",
+  "index.mts",
+  "index.d.mts",
+  "index.cts",
+  "index.d.cts",
+  "index.js",
+  "index.jsx",
+  "index.mjs",
+  "index.cjs",
+];
 
 /// Options controlling module resolution behaviour.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ResolveOptions {
   /// Whether to walk `node_modules/` when resolving bare specifiers.
   pub node_modules: bool,
+  /// Whether to resolve `#imports` specifiers using the nearest package.json.
+  pub package_imports: bool,
 }
 
 /// Filesystem abstraction for resolution to allow testing and non-disk hosts.
@@ -27,6 +54,10 @@ pub trait ResolveFs: Clone {
   fn is_dir(&self, path: &Path) -> bool;
   /// Canonicalise a path into an absolute, platform path.
   fn canonicalize(&self, path: &Path) -> Option<PathBuf>;
+  /// Read a UTF-8 file to a string.
+  fn read_to_string(&self, _path: &Path) -> Option<String> {
+    None
+  }
 }
 
 /// Real filesystem adapter used by the CLI.
@@ -47,6 +78,10 @@ impl ResolveFs for RealFs {
   fn canonicalize(&self, path: &Path) -> Option<PathBuf> {
     canonicalize_path(path).ok()
   }
+
+  fn read_to_string(&self, path: &Path) -> Option<String> {
+    std::fs::read_to_string(path).ok()
+  }
 }
 
 /// Deterministic Node/TS resolver.
@@ -54,6 +89,7 @@ impl ResolveFs for RealFs {
 pub struct NodeResolver<F = RealFs> {
   fs: F,
   options: ResolveOptions,
+  package_json_cache: Arc<Mutex<HashMap<PathBuf, Option<Arc<Value>>>>>,
 }
 
 impl NodeResolver<RealFs> {
@@ -62,6 +98,7 @@ impl NodeResolver<RealFs> {
     NodeResolver {
       fs: RealFs,
       options,
+      package_json_cache: Arc::new(Mutex::new(HashMap::new())),
     }
   }
 }
@@ -69,13 +106,21 @@ impl NodeResolver<RealFs> {
 impl<F: ResolveFs> NodeResolver<F> {
   /// Construct a resolver with a custom filesystem implementation.
   pub fn with_fs(fs: F, options: ResolveOptions) -> Self {
-    NodeResolver { fs, options }
+    NodeResolver {
+      fs,
+      options,
+      package_json_cache: Arc::new(Mutex::new(HashMap::new())),
+    }
   }
 
   /// Resolve a module specifier relative to `from`.
   pub fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
     if is_relative_or_absolute(specifier) {
       return self.resolve_relative(from, specifier);
+    }
+
+    if self.options.package_imports && specifier.starts_with('#') {
+      return self.resolve_imports_specifier(from, specifier);
     }
 
     if !self.options.node_modules {
@@ -88,50 +133,280 @@ impl<F: ResolveFs> NodeResolver<F> {
   fn resolve_relative(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
     let base_dir = from.parent().unwrap_or_else(|| Path::new(""));
     let joined = base_dir.join(specifier);
-    self.resolve_with_candidates(&joined)
+    self.resolve_as_file_or_directory(&joined, 0)
   }
 
   fn resolve_node_modules(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
+    let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
+    let subpath = package_rest.trim_start_matches('/');
+    let exports_subpath = (!subpath.is_empty()).then(|| format!("./{subpath}"));
+    let mut types_specifier: Option<String> = None;
+    let mut types_checked = false;
+
     let mut current = from.parent();
     while let Some(dir) = current {
-      let candidate = dir.join("node_modules").join(specifier);
-      if let Some(found) = self.resolve_with_candidates(&candidate) {
+      let package_dir = dir.join("node_modules").join(package_name);
+      if let Some(exports_subpath) = exports_subpath.as_deref() {
+        let package_json_path = package_dir.join("package.json");
+        if let Some(parsed) = self.package_json(&package_json_path) {
+          if let Some(exports) = parsed.get("exports") {
+            if let Some((target, star_match)) = select_exports_target(exports, exports_subpath) {
+              if let Some(found) =
+                self.resolve_json_target_to_file(&package_dir, target, star_match, 0)
+              {
+                return Some(found);
+              }
+            }
+          }
+        }
+
+        if let Some(found) = self.resolve_as_file_or_directory(&package_dir.join(subpath), 0) {
+          return Some(found);
+        }
+      } else if let Some(found) = self.resolve_as_file_or_directory(&package_dir, 0) {
         return Some(found);
       }
+
+      if !types_checked {
+        types_specifier = types_fallback_specifier(specifier);
+        types_checked = true;
+      }
+      if let Some(types_specifier) = types_specifier.as_deref() {
+        let types_dir = dir
+          .join("node_modules")
+          .join("@types")
+          .join(types_specifier);
+        if let Some(found) = self.resolve_as_file_or_directory(&types_dir, 0) {
+          return Some(found);
+        }
+      }
+
       current = dir.parent();
     }
 
     None
   }
 
-  fn resolve_with_candidates(&self, base: &Path) -> Option<PathBuf> {
-    let has_extension = has_known_extension(base);
-    let base_is_dir = self.fs.is_dir(base);
-    let mut candidates = Vec::new();
+  fn resolve_imports_specifier(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
+    let mut dir = from.parent();
+    while let Some(current) = dir {
+      let package_json = current.join("package.json");
+      if let Some(parsed) = self.package_json(&package_json) {
+        if let Some(imports) = parsed.get("imports").and_then(|v| v.as_object()) {
+          let (target, star_match) = if let Some(target) = imports.get(specifier) {
+            (target, None)
+          } else {
+            let (pattern_key, star_match) = best_exports_subpath_pattern(imports, specifier)?;
+            (imports.get(pattern_key)?, Some(star_match))
+          };
+          if let Some(found) = self.resolve_json_target_to_file(current, target, star_match, 0) {
+            return Some(found);
+          }
+        }
+      }
+      dir = current.parent();
+    }
 
-    if has_extension {
-      candidates.push(base.to_path_buf());
-    } else {
+    None
+  }
+
+  fn resolve_as_file_or_directory(&self, base_candidate: &Path, depth: usize) -> Option<PathBuf> {
+    if depth > 16 {
+      return None;
+    }
+
+    if let Some(found) = self.try_file(base_candidate) {
+      return Some(found);
+    }
+
+    let base_is_source_root = is_source_root(base_candidate);
+    let name = base_candidate
+      .file_name()
+      .and_then(|s| s.to_str())
+      .unwrap_or("");
+
+    if name.ends_with(".js") {
+      let stripped = name.strip_suffix(".js").unwrap_or(name);
+      for ext in ["ts", "tsx", "d.ts"] {
+        let candidate = base_candidate.with_file_name(format!("{stripped}.{ext}"));
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
+        }
+      }
+    } else if name.ends_with(".jsx") {
+      let stripped = name.strip_suffix(".jsx").unwrap_or(name);
+      for ext in ["tsx", "d.ts"] {
+        let candidate = base_candidate.with_file_name(format!("{stripped}.{ext}"));
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
+        }
+      }
+    } else if name.ends_with(".mjs") {
+      let stripped = name.strip_suffix(".mjs").unwrap_or(name);
+      for ext in ["mts", "d.mts"] {
+        let candidate = base_candidate.with_file_name(format!("{stripped}.{ext}"));
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
+        }
+      }
+    } else if name.ends_with(".cjs") {
+      let stripped = name.strip_suffix(".cjs").unwrap_or(name);
+      for ext in ["cts", "d.cts"] {
+        let candidate = base_candidate.with_file_name(format!("{stripped}.{ext}"));
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
+        }
+      }
+    } else if !base_is_source_root {
       for ext in DEFAULT_EXTENSIONS {
-        candidates.push(with_extension(base, ext));
+        let Some(candidate) = append_extension(base_candidate, ext) else {
+          continue;
+        };
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
+        }
       }
     }
 
-    if !has_extension || base_is_dir {
-      for ext in DEFAULT_EXTENSIONS {
-        candidates.push(base.join("index").with_extension(ext));
-      }
-    }
+    if !base_is_source_root {
+      let package_json_path = base_candidate.join("package.json");
+      if let Some(parsed) = self.package_json(&package_json_path) {
+        if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
+          if let Some(found) = self.resolve_package_entry(base_candidate, entry, depth + 1) {
+            return Some(found);
+          }
+        }
 
-    for candidate in candidates {
-      if self.fs.is_file(&candidate) {
-        if let Some(canonical) = self.fs.canonicalize(&candidate) {
-          return Some(canonical);
+        if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
+          if let Some(found) = self.resolve_package_entry(base_candidate, entry, depth + 1) {
+            return Some(found);
+          }
+        }
+
+        if let Some(exports) = parsed.get("exports") {
+          if let Some((target, star_match)) = select_exports_target(exports, ".") {
+            if let Some(found) =
+              self.resolve_json_target_to_file(base_candidate, target, star_match, depth)
+            {
+              return Some(found);
+            }
+          }
+        }
+
+        if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
+          if let Some(found) = self.resolve_package_entry(base_candidate, entry, depth + 1) {
+            return Some(found);
+          }
+        }
+      }
+
+      for index in INDEX_FILES {
+        let candidate = base_candidate.join(index);
+        if let Some(found) = self.try_file(&candidate) {
+          return Some(found);
         }
       }
     }
 
     None
+  }
+
+  fn resolve_package_entry(&self, base_dir: &Path, entry: &str, depth: usize) -> Option<PathBuf> {
+    if entry.is_empty() {
+      return None;
+    }
+
+    if Path::new(entry).is_absolute() {
+      return self.resolve_as_file_or_directory(Path::new(entry), depth);
+    }
+
+    let stripped = entry.strip_prefix("./").unwrap_or(entry);
+    if stripped.is_empty() {
+      return self.resolve_as_file_or_directory(base_dir, depth);
+    }
+
+    self.resolve_as_file_or_directory(&base_dir.join(stripped), depth)
+  }
+
+  fn resolve_json_target_to_file(
+    &self,
+    base_dir: &Path,
+    value: &Value,
+    star_match: Option<&str>,
+    depth: usize,
+  ) -> Option<PathBuf> {
+    if depth > 16 {
+      return None;
+    }
+
+    match value {
+      Value::String(entry) => match star_match {
+        Some(star) if entry.contains('*') => {
+          self.resolve_json_string_to_file(base_dir, &replace_star(entry, star), depth + 1)
+        }
+        _ => self.resolve_json_string_to_file(base_dir, entry, depth + 1),
+      },
+      Value::Array(items) => items
+        .iter()
+        .find_map(|item| self.resolve_json_target_to_file(base_dir, item, star_match, depth + 1)),
+      Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
+        map
+          .get(*cond)
+          .and_then(|next| self.resolve_json_target_to_file(base_dir, next, star_match, depth + 1))
+      }),
+      Value::Null => None,
+      _ => None,
+    }
+  }
+
+  fn resolve_json_string_to_file(
+    &self,
+    base_dir: &Path,
+    entry: &str,
+    depth: usize,
+  ) -> Option<PathBuf> {
+    if entry.is_empty() {
+      return None;
+    }
+
+    if Path::new(entry).is_absolute() {
+      return self.resolve_as_file_or_directory(Path::new(entry), depth);
+    }
+
+    let stripped = entry.strip_prefix("./").unwrap_or(entry);
+    if stripped.is_empty() {
+      return self.resolve_as_file_or_directory(base_dir, depth);
+    }
+
+    self.resolve_as_file_or_directory(&base_dir.join(stripped), depth)
+  }
+
+  fn try_file(&self, path: &Path) -> Option<PathBuf> {
+    self
+      .fs
+      .is_file(path)
+      .then(|| self.fs.canonicalize(path))
+      .flatten()
+  }
+
+  fn package_json(&self, path: &Path) -> Option<Arc<Value>> {
+    {
+      let cache = self.package_json_cache.lock().unwrap();
+      if let Some(cached) = cache.get(path) {
+        return cached.clone();
+      }
+    }
+
+    let parsed = if self.fs.is_file(path) {
+      let text = self.fs.read_to_string(path)?;
+      serde_json::from_str::<Value>(&text).ok().map(Arc::new)
+    } else {
+      None
+    };
+
+    let mut cache = self.package_json_cache.lock().unwrap();
+    cache.insert(path.to_path_buf(), parsed.clone());
+    parsed
   }
 }
 
@@ -139,26 +414,141 @@ fn is_relative_or_absolute(specifier: &str) -> bool {
   specifier.starts_with("./") || specifier.starts_with("../") || Path::new(specifier).is_absolute()
 }
 
-fn has_known_extension(path: &Path) -> bool {
-  let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-  name.ends_with(".d.ts")
-    || matches!(
-      path.extension().and_then(|e| e.to_str()),
-      Some("ts" | "tsx" | "js" | "jsx")
-    )
+fn append_extension(base: &Path, ext: &str) -> Option<PathBuf> {
+  use std::ffi::OsStr;
+  let file_name = base.file_name()?;
+  let mut name = file_name.to_os_string();
+  name.push(OsStr::new("."));
+  name.push(OsStr::new(ext));
+  let mut candidate = base.to_path_buf();
+  candidate.set_file_name(name);
+  Some(candidate)
 }
 
-fn with_extension(base: &Path, ext: &str) -> PathBuf {
-  if ext == "d.ts" {
-    let mut path = base.to_path_buf();
-    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if current_ext == "ts" || current_ext == "tsx" || current_ext == "js" || current_ext == "jsx" {
-      path.set_extension("d.ts");
-      return path;
+fn is_source_root(path: &Path) -> bool {
+  let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+  if name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts") {
+    return true;
+  }
+  matches!(
+    path.extension().and_then(|e| e.to_str()),
+    Some("ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "mts" | "cts")
+  )
+}
+
+fn replace_star(template: &str, star: &str) -> String {
+  let mut parts = template.split('*');
+  let mut out = String::new();
+  if let Some(first) = parts.next() {
+    out.push_str(first);
+    for part in parts {
+      out.push_str(star);
+      out.push_str(part);
     }
-    path.with_extension("d.ts")
+  }
+  out
+}
+
+fn select_exports_target<'a, 'b>(
+  exports: &'a Value,
+  subpath: &'b str,
+) -> Option<(&'a Value, Option<&'b str>)> {
+  match exports {
+    Value::Object(map) => {
+      let has_subpath_keys = map.keys().next().is_some_and(|k| k.starts_with('.'));
+      if has_subpath_keys {
+        if let Some(target) = map.get(subpath) {
+          return Some((target, None));
+        }
+        let (pattern_key, star_match) = best_exports_subpath_pattern(map, subpath)?;
+        Some((map.get(pattern_key)?, Some(star_match)))
+      } else {
+        (subpath == ".").then_some((exports, None))
+      }
+    }
+    _ => (subpath == ".").then_some((exports, None)),
+  }
+}
+
+fn best_exports_subpath_pattern<'a, 'b>(
+  map: &'a Map<String, Value>,
+  subpath: &'b str,
+) -> Option<(&'a str, &'b str)> {
+  let mut best_key: Option<&'a str> = None;
+  let mut best_star: Option<&'b str> = None;
+
+  for key in map.keys() {
+    let Some((prefix, suffix)) = key.split_once('*') else {
+      continue;
+    };
+    if suffix.contains('*') {
+      continue;
+    }
+    if !subpath.starts_with(prefix) || !subpath.ends_with(suffix) {
+      continue;
+    }
+    if subpath.len() < prefix.len() + suffix.len() {
+      continue;
+    }
+    let star = &subpath[prefix.len()..subpath.len() - suffix.len()];
+
+    let replace = match best_key {
+      None => true,
+      Some(existing) => {
+        key.len() > existing.len() || (key.len() == existing.len() && key.as_str() < existing)
+      }
+    };
+    if replace {
+      best_key = Some(key);
+      best_star = Some(star);
+    }
+  }
+
+  Some((best_key?, best_star?))
+}
+
+fn types_fallback_specifier(specifier: &str) -> Option<String> {
+  let (package, rest) = split_package_name(specifier)?;
+  if package.starts_with("@types/") {
+    return None;
+  }
+
+  if let Some(stripped) = package.strip_prefix('@') {
+    let (scope, name) = stripped.split_once('/')?;
+    let mut mapped = String::with_capacity(scope.len() + 2 + name.len() + rest.len());
+    mapped.push_str(scope);
+    mapped.push_str("__");
+    mapped.push_str(name);
+    mapped.push_str(rest);
+    Some(mapped)
   } else {
-    base.with_extension(ext)
+    Some(specifier.to_string())
+  }
+}
+
+fn split_package_name(specifier: &str) -> Option<(&str, &str)> {
+  if specifier.is_empty() {
+    return None;
+  }
+
+  if let Some(stripped) = specifier.strip_prefix('@') {
+    let Some((scope, rest)) = stripped.split_once('/') else {
+      return None;
+    };
+    let Some((name, _trailing)) = rest.split_once('/') else {
+      let package_len = 1 + scope.len() + 1 + rest.len();
+      return Some((&specifier[..package_len], ""));
+    };
+
+    let package_len = 1 + scope.len() + 1 + name.len();
+    Some((&specifier[..package_len], &specifier[package_len..]))
+  } else {
+    if let Some((package, _trailing)) = specifier.split_once('/') {
+      let package_len = package.len();
+      Some((&specifier[..package_len], &specifier[package_len..]))
+    } else {
+      Some((specifier, ""))
+    }
   }
 }
 
@@ -222,7 +612,13 @@ mod tests {
   #[test]
   fn climbs_node_modules_when_enabled() {
     let fs = FakeFs::new(&["/project/node_modules/pkg/index.ts"]);
-    let with_node = NodeResolver::with_fs(fs.clone(), ResolveOptions { node_modules: true });
+    let with_node = NodeResolver::with_fs(
+      fs.clone(),
+      ResolveOptions {
+        node_modules: true,
+        ..ResolveOptions::default()
+      },
+    );
     let resolved = with_node
       .resolve(Path::new("/project/src/main.ts"), "pkg")
       .expect("pkg should resolve from node_modules");

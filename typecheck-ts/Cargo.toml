@@ -10,7 +10,7 @@ default = ["bundled-libs", "serde"]
 bundled-libs = []
 serde = ["dep:serde", "diagnostics/serde", "hir-js/serde"]
 fuzzing = ["hir-js/fuzzing", "types-ts-interned/fuzzing"]
-resolve = []
+resolve = ["dep:serde_json"]
 
 [dependencies]
 diagnostics = { path = "../diagnostics" }
@@ -18,6 +18,7 @@ hir-js = { path = "../hir-js" }
 parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 semantic-js = { path = "../semantic-js" }
 serde = { version = "1.0", features = ["derive"], optional = true }
+serde_json = { version = "1.0", optional = true }
 thiserror = "1.0"
 tracing = "0.1"
 types-ts-interned = { path = "../types-ts-interned" }

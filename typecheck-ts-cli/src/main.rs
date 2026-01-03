@@ -13,6 +13,7 @@ use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName, ScriptTarget};
+use typecheck_ts::resolve::{canonicalize_path, NodeResolver, ResolveOptions};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 mod tsconfig;
@@ -112,15 +113,9 @@ struct TypecheckArgs {
   timeout_secs: Option<u64>,
 }
 
-#[derive(Clone, Copy)]
-enum ResolutionMode {
-  Simple,
-  Node,
-}
-
 #[derive(Clone)]
 struct ModuleResolver {
-  mode: ResolutionMode,
+  resolver: NodeResolver,
   tsconfig: Option<TsconfigResolver>,
 }
 
@@ -258,7 +253,6 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     },
     None => None,
   };
-
   let options_base = project
     .as_ref()
     .map(|cfg| cfg.compiler_options.clone())
@@ -270,20 +264,18 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       return ExitCode::FAILURE;
     }
   };
-
-  let resolution = if args.node_resolve {
-    ResolutionMode::Node
-  } else if matches!(
-    options
-      .module_resolution
-      .as_deref()
-      .map(|s| s.trim().to_ascii_lowercase())
-      .as_deref(),
-    Some("node" | "node10" | "node16" | "nodenext" | "bundler")
-  ) {
-    ResolutionMode::Node
-  } else {
-    ResolutionMode::Simple
+  let node_resolve = args.node_resolve
+    || matches!(
+      options
+        .module_resolution
+        .as_deref()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .as_deref(),
+      Some("node" | "node10" | "node16" | "nodenext" | "bundler")
+    );
+  let resolve_options = ResolveOptions {
+    node_modules: node_resolve,
+    package_imports: node_resolve,
   };
 
   let mut root_paths = Vec::new();
@@ -310,7 +302,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
 
   let tsconfig_resolver = project.as_ref().and_then(TsconfigResolver::from_project);
   let resolver = ModuleResolver {
-    mode: resolution,
+    resolver: NodeResolver::new(resolve_options),
     tsconfig: tsconfig_resolver,
   };
 
@@ -678,9 +670,8 @@ impl Host for DiskHost {
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     let base = self.path_for_key(from)?;
     let resolved = self.resolver.resolve(&base, specifier)?;
-    let canonical = canonicalize_path(&resolved).ok()?;
     let mut state = self.state.lock().unwrap();
-    Some(state.intern_path(canonical))
+    Some(state.intern_path(resolved))
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -860,11 +851,11 @@ fn snapshot_from_program(program: &Program) -> ProgramSourceSnapshot {
 impl ModuleResolver {
   fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
     if let Some(tsconfig) = self.tsconfig.as_ref() {
-      if let Some(resolved) = tsconfig.resolve(specifier) {
+      if let Some(resolved) = tsconfig.resolve(from, specifier, &self.resolver) {
         return Some(resolved);
       }
     }
-    self.mode.resolve(from, specifier)
+    self.resolver.resolve(from, specifier)
   }
 }
 
@@ -890,20 +881,25 @@ impl TsconfigResolver {
     Some(TsconfigResolver { base_url, paths })
   }
 
-  fn resolve(&self, specifier: &str) -> Option<PathBuf> {
+  fn resolve(&self, from: &Path, specifier: &str, resolver: &NodeResolver) -> Option<PathBuf> {
     if is_relative_or_absolute_specifier(specifier) {
       return None;
     }
 
-    if let Some(resolved) = self.resolve_via_paths(specifier) {
+    if let Some(resolved) = self.resolve_via_paths(from, specifier, resolver) {
       return Some(resolved);
     }
 
     let candidate = self.base_url.join(specifier);
-    resolve_with_candidates(&candidate)
+    resolver.resolve(from, candidate.to_string_lossy().as_ref())
   }
 
-  fn resolve_via_paths(&self, specifier: &str) -> Option<PathBuf> {
+  fn resolve_via_paths(
+    &self,
+    from: &Path,
+    specifier: &str,
+    resolver: &NodeResolver,
+  ) -> Option<PathBuf> {
     let mut best: Option<(&TsconfigPathMapping, String, (bool, usize, usize))> = None;
     for mapping in &self.paths {
       let Some(capture) = mapping.matches(specifier) else {
@@ -936,7 +932,7 @@ impl TsconfigResolver {
       } else {
         self.base_url.join(path)
       };
-      if let Some(resolved) = resolve_with_candidates(&candidate) {
+      if let Some(resolved) = resolver.resolve(from, candidate.to_string_lossy().as_ref()) {
         return Some(resolved);
       }
     }
@@ -955,110 +951,11 @@ impl TsconfigPathMapping {
   }
 }
 
-impl ResolutionMode {
-  fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
-    match self {
-      ResolutionMode::Simple => resolve_relative(from, specifier),
-      ResolutionMode::Node => resolve_node_like(from, specifier),
-    }
-  }
-}
-
 fn is_relative_or_absolute_specifier(specifier: &str) -> bool {
   specifier.starts_with("./")
     || specifier.starts_with("../")
     || Path::new(specifier).is_absolute()
     || specifier.starts_with('/')
-}
-
-fn resolve_relative(from: &Path, specifier: &str) -> Option<PathBuf> {
-  let base_dir = from.parent().unwrap_or_else(|| Path::new(""));
-  let joined = base_dir.join(specifier);
-  resolve_with_candidates(&joined)
-}
-
-fn resolve_node_like(from: &Path, specifier: &str) -> Option<PathBuf> {
-  if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/') {
-    return resolve_relative(from, specifier);
-  }
-
-  let mut current = Some(from.parent().unwrap_or_else(|| Path::new("")));
-  while let Some(dir) = current {
-    let candidate = dir.join("node_modules").join(specifier);
-    if let Some(found) = resolve_with_candidates(&candidate) {
-      return Some(found);
-    }
-    current = dir.parent();
-  }
-
-  None
-}
-
-fn resolve_with_candidates(base: &Path) -> Option<PathBuf> {
-  const EXTENSIONS: &[&str] = &["ts", "d.ts", "tsx", "js", "jsx"];
-  let has_extension = has_known_extension(base);
-  let check_candidate = |path: &Path| -> Option<PathBuf> {
-    if path.is_file() {
-      canonicalize_path(path).ok()
-    } else {
-      None
-    }
-  };
-
-  if has_extension {
-    if let Some(found) = check_candidate(base) {
-      return Some(found);
-    }
-  } else {
-    // Reuse a single `PathBuf` when probing extensions instead of allocating a fresh path per
-    // extension.
-    let base_buf = base.to_path_buf();
-    let mut candidate = base_buf.clone();
-    for ext in EXTENSIONS {
-      // `set_extension("d.ts")` produces a multi-dot extension. If we then mutate that same
-      // `PathBuf` to a single-segment extension (e.g. `"tsx"`), we'd end up with a path like
-      // `foo.d.tsx`. Reset to the base path on every iteration to preserve the exact candidates
-      // we used to generate with `base.with_extension(ext)`.
-      candidate.clone_from(&base_buf);
-      candidate.set_extension(ext);
-      if let Some(found) = check_candidate(&candidate) {
-        return Some(found);
-      }
-    }
-  }
-
-  if !has_extension || base.is_dir() {
-    // Resolve `index.*` fallbacks for directories.
-    let base_buf = base.join("index");
-    let mut candidate = base_buf.clone();
-    for ext in EXTENSIONS {
-      candidate.clone_from(&base_buf);
-      candidate.set_extension(ext);
-      if let Some(found) = check_candidate(&candidate) {
-        return Some(found);
-      }
-    }
-  }
-
-  None
-}
-
-fn has_known_extension(path: &Path) -> bool {
-  let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-  name.ends_with(".d.ts")
-    || matches!(
-      path.extension().and_then(|e| e.to_str()),
-      Some("ts" | "tsx" | "js" | "jsx")
-    )
-}
-
-fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
-  let canonical = if path.is_absolute() {
-    path.to_path_buf()
-  } else {
-    std::env::current_dir()?.join(path)
-  };
-  canonical.canonicalize()
 }
 
 fn file_kind_for(path: &Path) -> FileKind {

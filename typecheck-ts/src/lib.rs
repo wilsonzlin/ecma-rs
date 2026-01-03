@@ -332,3 +332,7 @@ pub mod queries;
 
 /// Utilities for selecting bundled `.d.ts` libraries and compiler options.
 pub mod lib_support;
+
+/// Node/TypeScript-style module resolution helpers.
+#[cfg(feature = "resolve")]
+pub mod resolve;
