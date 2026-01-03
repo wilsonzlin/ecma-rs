@@ -227,6 +227,9 @@ cargo run -p typecheck-ts-harness --release -- triage --input report.json --json
 
 # Limit the output to the top N groups/cases
 cargo run -p typecheck-ts-harness --release -- triage --input report.json --top 50
+
+# Show regressions/fixes vs a previous JSON report
+cargo run -p typecheck-ts-harness --release -- triage --input report.json --baseline previous.json
 ```
 
 ### Expectations manifests

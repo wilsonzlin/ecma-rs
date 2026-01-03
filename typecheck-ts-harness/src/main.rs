@@ -112,6 +112,10 @@ enum Commands {
     #[arg(long)]
     input: std::path::PathBuf,
 
+    /// Optional previous JSON report to diff against (regressions/fixes vs baseline)
+    #[arg(long)]
+    baseline: Option<std::path::PathBuf>,
+
     /// Emit a structured triage report JSON to stdout
     #[arg(long)]
     json: bool,
@@ -259,8 +263,13 @@ fn main() -> ExitCode {
         Err(err) => print_error(err),
       }
     }
-    Commands::Triage { input, json, top } => {
-      match triage::analyze_report_path(&input, top) {
+    Commands::Triage {
+      input,
+      baseline,
+      json,
+      top,
+    } => {
+      match triage::analyze_report_paths(&input, baseline.as_deref(), top) {
         Ok(report) => {
           let stderr = std::io::stderr();
           let mut stderr_handle = stderr.lock();

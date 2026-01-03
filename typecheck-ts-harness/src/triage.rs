@@ -53,6 +53,18 @@ pub struct SuggestedManifestEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BaselineDiff {
+  pub baseline_total: usize,
+  pub baseline_mismatches: usize,
+  pub new_cases: usize,
+  pub missing_cases: usize,
+  pub regressed: usize,
+  pub fixed: usize,
+  pub regressions: Vec<Regression>,
+  pub fixes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TriageReport {
   pub kind: ReportKind,
   pub top: usize,
@@ -66,6 +78,8 @@ pub struct TriageReport {
   pub top_prefixes: Vec<CountGroup>,
   pub regressions: Vec<Regression>,
   pub suggestions: Vec<SuggestedManifestEntry>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub baseline: Option<BaselineDiff>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,8 +205,24 @@ pub fn analyze_report_json_str(input: &str, top: usize) -> Result<TriageReport> 
 }
 
 pub fn analyze_report_path(path: &Path, top: usize) -> Result<TriageReport> {
-  let content = fs::read_to_string(path).with_context(|| format!("read report {}", path.display()))?;
-  analyze_report_json_str(&content, top)
+  analyze_report_paths(path, None, top)
+}
+
+pub fn analyze_report_paths(path: &Path, baseline: Option<&Path>, top: usize) -> Result<TriageReport> {
+  let content =
+    fs::read_to_string(path).with_context(|| format!("read report {}", path.display()))?;
+  let value: Value = serde_json::from_str(&content).context("parse JSON report")?;
+
+  let baseline_value = match baseline {
+    Some(path) => {
+      let content = fs::read_to_string(path)
+        .with_context(|| format!("read baseline report {}", path.display()))?;
+      Some(serde_json::from_str(&content).context("parse baseline JSON report")?)
+    }
+    None => None,
+  };
+
+  analyze_report_value_with_baseline(value, baseline_value, top)
 }
 
 pub fn print_human_summary(report: &TriageReport, out: &mut impl Write) -> io::Result<()> {
@@ -250,6 +280,35 @@ pub fn print_human_summary(report: &TriageReport, out: &mut impl Write) -> io::R
     }
   }
 
+  if let Some(baseline) = report.baseline.as_ref() {
+    writeln!(
+      out,
+      "baseline diff: baseline_total={} baseline_mismatches={} regressed={} fixed={} new_cases={} missing_cases={}",
+      baseline.baseline_total,
+      baseline.baseline_mismatches,
+      baseline.regressed,
+      baseline.fixed,
+      baseline.new_cases,
+      baseline.missing_cases
+    )?;
+    if !baseline.regressions.is_empty() {
+      writeln!(out, "baseline regressions (top {}):", baseline.regressions.len())?;
+      for case in &baseline.regressions {
+        if let Some(code) = &case.code {
+          writeln!(out, "  {}: {} ({})", case.id, case.outcome, code)?;
+        } else {
+          writeln!(out, "  {}: {}", case.id, case.outcome)?;
+        }
+      }
+    }
+    if !baseline.fixes.is_empty() {
+      writeln!(out, "baseline fixes (top {}):", baseline.fixes.len())?;
+      for id in &baseline.fixes {
+        writeln!(out, "  {id}")?;
+      }
+    }
+  }
+
   Ok(())
 }
 
@@ -266,17 +325,58 @@ fn write_top(out: &mut impl Write, title: &str, groups: &[CountGroup]) -> io::Re
 }
 
 fn analyze_report_value(value: Value, top: usize) -> Result<TriageReport> {
+  analyze_report_value_with_baseline(value, None, top)
+}
+
+fn analyze_report_value_with_baseline(
+  value: Value,
+  baseline: Option<Value>,
+  top: usize,
+) -> Result<TriageReport> {
   let kind = detect_kind(&value)?;
+  if let Some(baseline) = baseline.as_ref() {
+    let baseline_kind = detect_kind(baseline)?;
+    if baseline_kind != kind {
+      return Err(anyhow!(
+        "baseline report kind mismatch (input={kind:?}, baseline={baseline_kind:?})"
+      ));
+    }
+  }
+
   match kind {
     ReportKind::Conformance => {
       let input: ConformanceReportInput =
         serde_json::from_value(value).context("deserialize conformance report")?;
-      analyze_conformance(input, top)
+      let summaries = conformance_case_summaries(&input);
+      let baseline_diff = match baseline {
+        Some(value) => {
+          let baseline_input: ConformanceReportInput =
+            serde_json::from_value(value).context("deserialize baseline conformance report")?;
+          let baseline_summaries = conformance_case_summaries(&baseline_input);
+          Some(compute_baseline_diff(&summaries, &baseline_summaries, top))
+        }
+        None => None,
+      };
+      let mut report = analyze_conformance(input, top)?;
+      report.baseline = baseline_diff;
+      Ok(report)
     }
     ReportKind::Difftsc => {
       let input: DifftscReportInput =
         serde_json::from_value(value).context("deserialize difftsc report")?;
-      analyze_difftsc(input, top)
+      let summaries = difftsc_case_summaries(&input);
+      let baseline_diff = match baseline {
+        Some(value) => {
+          let baseline_input: DifftscReportInput =
+            serde_json::from_value(value).context("deserialize baseline difftsc report")?;
+          let baseline_summaries = difftsc_case_summaries(&baseline_input);
+          Some(compute_baseline_diff(&summaries, &baseline_summaries, top))
+        }
+        None => None,
+      };
+      let mut report = analyze_difftsc(input, top)?;
+      report.baseline = baseline_diff;
+      Ok(report)
     }
   }
 }
@@ -315,6 +415,125 @@ fn detect_kind(value: &Value) -> Result<ReportKind> {
   Err(anyhow!(
     "unable to determine report kind (expected conformance or difftsc JSON)"
   ))
+}
+
+#[derive(Debug, Clone)]
+struct CaseSummary {
+  mismatched: bool,
+  outcome: String,
+  code: Option<String>,
+  prefix: String,
+}
+
+fn conformance_case_summaries(input: &ConformanceReportInput) -> BTreeMap<String, CaseSummary> {
+  let mut summaries = BTreeMap::new();
+  for case in &input.results {
+    let mismatched = case.outcome != TestOutcome::Match;
+    let outcome = outcome_key(case.outcome).to_string();
+    let prefix = fixture_prefix(&case.id);
+    let code = mismatched.then(|| primary_code_from_detail_or_diags(&case.detail, &case.rust, &case.tsc)).flatten();
+    summaries.insert(
+      case.id.clone(),
+      CaseSummary {
+        mismatched,
+        outcome,
+        code,
+        prefix,
+      },
+    );
+  }
+  summaries
+}
+
+fn difftsc_case_summaries(input: &DifftscReportInput) -> BTreeMap<String, CaseSummary> {
+  let mut summaries = BTreeMap::new();
+  for case in &input.results {
+    let mismatched = case.status.is_mismatch();
+    let outcome = match case.status {
+      DifftscCaseStatus::Matched => "match".to_string(),
+      DifftscCaseStatus::Mismatch => "mismatch".to_string(),
+      other => other.as_key().to_string(),
+    };
+    let prefix = fixture_prefix(&case.name);
+    let code = if case.status == DifftscCaseStatus::Mismatch {
+      difftsc_case_outcomes_and_code(case).1
+    } else {
+      None
+    };
+    summaries.insert(
+      case.name.clone(),
+      CaseSummary {
+        mismatched,
+        outcome,
+        code,
+        prefix,
+      },
+    );
+  }
+  summaries
+}
+
+fn compute_baseline_diff(
+  current: &BTreeMap<String, CaseSummary>,
+  baseline: &BTreeMap<String, CaseSummary>,
+  top: usize,
+) -> BaselineDiff {
+  let baseline_total = baseline.len();
+  let baseline_mismatches = baseline.values().filter(|case| case.mismatched).count();
+
+  let new_cases = current.keys().filter(|id| !baseline.contains_key(*id)).count();
+  let missing_cases = baseline.keys().filter(|id| !current.contains_key(*id)).count();
+
+  let mut regressions = Vec::new();
+  let mut regressed = 0usize;
+  for (id, case) in current {
+    if !case.mismatched {
+      continue;
+    }
+    let baseline_mismatched = baseline
+      .get(id)
+      .map(|case| case.mismatched)
+      .unwrap_or(false);
+    if baseline_mismatched {
+      continue;
+    }
+    regressed += 1;
+    regressions.push(Regression {
+      id: id.clone(),
+      outcome: case.outcome.clone(),
+      code: case.code.clone(),
+      prefix: case.prefix.clone(),
+    });
+  }
+
+  let mut fixes = Vec::new();
+  let mut fixed = 0usize;
+  for (id, case) in baseline {
+    if !case.mismatched {
+      continue;
+    }
+    match current.get(id) {
+      Some(current_case) if !current_case.mismatched => {
+        fixed += 1;
+        fixes.push(id.clone());
+      }
+      _ => {}
+    }
+  }
+
+  regressions.sort_by(|a, b| a.id.cmp(&b.id));
+  fixes.sort();
+
+  BaselineDiff {
+    baseline_total,
+    baseline_mismatches,
+    new_cases,
+    missing_cases,
+    regressed,
+    fixed,
+    regressions: regressions.into_iter().take(top).collect(),
+    fixes: fixes.into_iter().take(top).collect(),
+  }
 }
 
 fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<TriageReport> {
@@ -381,6 +600,7 @@ fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<Tria
     top_prefixes: top_groups(prefix_counts, top),
     regressions: regressions_top,
     suggestions,
+    baseline: None,
   })
 }
 
@@ -451,6 +671,7 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
     top_prefixes: top_groups(prefix_counts, top),
     regressions: regressions_top,
     suggestions,
+    baseline: None,
   })
 }
 

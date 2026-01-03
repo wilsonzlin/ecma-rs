@@ -82,6 +82,64 @@ const CONFORMANCE_REPORT: &str = r#"
 }
 "#;
 
+const CONFORMANCE_BASELINE_REPORT: &str = r#"
+{
+  "compare_mode": "tsc",
+  "results": [
+    {
+      "id": "compiler/a.ts",
+      "outcome": "match",
+      "rust": { "status": "ok", "diagnostics": [] },
+      "tsc": { "status": "ok", "diagnostics": [] },
+      "expectation": { "expectation": "pass", "expected": true }
+    },
+    {
+      "id": "compiler/b.ts",
+      "outcome": "code_mismatch",
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          { "engine": "rust", "code": "TS9999", "file": "/b.ts", "start": 0, "end": 1 }
+        ]
+      },
+      "tsc": {
+        "status": "ok",
+        "diagnostics": [
+          { "engine": "tsc", "code": 2345, "file": "/b.ts", "start": 0, "end": 1 }
+        ]
+      },
+      "expectation": { "expectation": "xfail", "expected": true, "from_manifest": true }
+    },
+    {
+      "id": "checker/c.ts",
+      "outcome": "rust_extra_diagnostics",
+      "rust": {
+        "status": "ok",
+        "diagnostics": [
+          { "engine": "rust", "code": "TS1111", "file": "/c.ts", "start": 0, "end": 1 }
+        ]
+      },
+      "tsc": { "status": "ok", "diagnostics": [] },
+      "expectation": { "expectation": "pass", "expected": false }
+    },
+    {
+      "id": "checker/d.ts",
+      "outcome": "match",
+      "rust": { "status": "ok", "diagnostics": [] },
+      "tsc": { "status": "ok", "diagnostics": [] },
+      "expectation": { "expectation": "pass", "expected": true }
+    },
+    {
+      "id": "ok/e.ts",
+      "outcome": "match",
+      "rust": { "status": "ok", "diagnostics": [] },
+      "tsc": { "status": "ok", "diagnostics": [] },
+      "expectation": { "expectation": "pass", "expected": true }
+    }
+  ]
+}
+"#;
+
 const EXPECTED_CONFORMANCE_TRIAGE: &str = r#"{
   "kind": "conformance",
   "top": 5,
@@ -164,6 +222,114 @@ const EXPECTED_CONFORMANCE_TRIAGE: &str = r#"{
       "reason": "triage: rust_missing_diagnostics TS1111"
     }
   ]
+}
+"#;
+
+const EXPECTED_CONFORMANCE_TRIAGE_WITH_BASELINE: &str = r#"{
+  "kind": "conformance",
+  "top": 5,
+  "total": 5,
+  "mismatches": 4,
+  "unexpected_mismatches": 3,
+  "mismatches_without_code": 0,
+  "top_outcomes": [
+    {
+      "key": "rust_extra_diagnostics",
+      "count": 2
+    },
+    {
+      "key": "code_mismatch",
+      "count": 1
+    },
+    {
+      "key": "rust_missing_diagnostics",
+      "count": 1
+    }
+  ],
+  "top_codes": [
+    {
+      "key": "TS1111",
+      "count": 2
+    },
+    {
+      "key": "TS2345",
+      "count": 1
+    },
+    {
+      "key": "TS9999",
+      "count": 1
+    }
+  ],
+  "top_prefixes": [
+    {
+      "key": "checker",
+      "count": 2
+    },
+    {
+      "key": "compiler",
+      "count": 2
+    }
+  ],
+  "regressions": [
+    {
+      "id": "checker/c.ts",
+      "outcome": "rust_extra_diagnostics",
+      "code": "TS1111",
+      "prefix": "checker"
+    },
+    {
+      "id": "checker/d.ts",
+      "outcome": "rust_extra_diagnostics",
+      "code": "TS9999",
+      "prefix": "checker"
+    },
+    {
+      "id": "compiler/a.ts",
+      "outcome": "rust_missing_diagnostics",
+      "code": "TS1111",
+      "prefix": "compiler"
+    }
+  ],
+  "suggestions": [
+    {
+      "id": "checker/c.ts",
+      "status": "xfail",
+      "reason": "triage: rust_extra_diagnostics TS1111"
+    },
+    {
+      "id": "checker/d.ts",
+      "status": "xfail",
+      "reason": "triage: rust_extra_diagnostics TS9999"
+    },
+    {
+      "id": "compiler/a.ts",
+      "status": "xfail",
+      "reason": "triage: rust_missing_diagnostics TS1111"
+    }
+  ],
+  "baseline": {
+    "baseline_total": 5,
+    "baseline_mismatches": 2,
+    "new_cases": 0,
+    "missing_cases": 0,
+    "regressed": 2,
+    "fixed": 0,
+    "regressions": [
+      {
+        "id": "checker/d.ts",
+        "outcome": "rust_extra_diagnostics",
+        "code": "TS9999",
+        "prefix": "checker"
+      },
+      {
+        "id": "compiler/a.ts",
+        "outcome": "rust_missing_diagnostics",
+        "code": "TS1111",
+        "prefix": "compiler"
+      }
+    ],
+    "fixes": []
+  }
 }
 "#;
 
@@ -314,6 +480,37 @@ fn triage_conformance_json_output_is_stable() {
 }
 
 #[test]
+fn triage_conformance_baseline_diff_json_output_is_stable() {
+  let dir = tempdir().expect("tempdir");
+  let path = dir.path().join("report.json");
+  let baseline = dir.path().join("baseline.json");
+  fs::write(&path, CONFORMANCE_REPORT).expect("write report");
+  fs::write(&baseline, CONFORMANCE_BASELINE_REPORT).expect("write baseline");
+
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
+  cmd
+    .arg("triage")
+    .arg("--input")
+    .arg(&path)
+    .arg("--baseline")
+    .arg(&baseline)
+    .arg("--top")
+    .arg("5")
+    .arg("--json");
+
+  let assert = cmd.assert().success();
+  let output = assert.get_output();
+  assert!(
+    !output.stderr.is_empty(),
+    "expected human summary on stderr"
+  );
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert_eq!(stdout, EXPECTED_CONFORMANCE_TRIAGE_WITH_BASELINE);
+}
+
+#[test]
 fn triage_difftsc_json_output_is_stable() {
   let dir = tempdir().expect("tempdir");
   let path = dir.path().join("report.json");
@@ -339,4 +536,3 @@ fn triage_difftsc_json_output_is_stable() {
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert_eq!(stdout, EXPECTED_DIFFTSC_TRIAGE);
 }
-
