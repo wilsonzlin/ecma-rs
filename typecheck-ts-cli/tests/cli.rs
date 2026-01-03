@@ -216,11 +216,11 @@ fn timeout_secs_cancels_typecheck() {
 
 #[test]
 fn project_mode_discovers_files_and_resolves_paths() {
-  let tsconfig = fixture("project_mode/tsconfig.json");
-  let index = fixture("project_mode/src/index.ts");
-  let answer = fixture("project_mode/src/lib/answer.ts");
-  let unused = fixture("project_mode/src/unused.ts");
-  let ignored = fixture("project_mode/bower_components/ignored/index.ts");
+  let tsconfig = fixture("project_mode/basic/tsconfig.json");
+  let index = fixture("project_mode/basic/src/index.ts");
+  let answer = fixture("project_mode/basic/src/lib/answer.ts");
+  let unused = fixture("project_mode/basic/src/unused.ts");
+  let ignored = fixture("project_mode/basic/bower_components/ignored/index.ts");
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
@@ -282,8 +282,8 @@ fn project_mode_discovers_files_and_resolves_paths() {
 
 #[test]
 fn project_mode_exports_and_type_at_queries_work() {
-  let tsconfig = fixture("project_mode/tsconfig.json");
-  let index = fixture("project_mode/src/index.ts");
+  let tsconfig = fixture("project_mode/basic/tsconfig.json");
+  let index = fixture("project_mode/basic/src/index.ts");
   let normalized_index = normalized(&index);
   let content = fs::read_to_string(&index).expect("read index.ts");
   let offset = content
@@ -353,4 +353,231 @@ fn project_mode_exports_and_type_at_queries_work() {
     "expected doubled export to include a symbol: {doubled:?}"
   );
   assert_eq!(doubled.get("type").and_then(|v| v.as_str()), Some("number"));
+}
+
+#[test]
+fn project_mode_honors_include_exclude_patterns() {
+  let project_dir = fixture("project_mode/file_discovery");
+  let included_a = fixture("project_mode/file_discovery/src/included_a.ts");
+  let included_b = fixture("project_mode/file_discovery/src/included_b.ts");
+  let only = fixture("project_mode/file_discovery/src/only.ts");
+  let extra = fixture("project_mode/file_discovery/src/extra.ts");
+  let excluded = fixture("project_mode/file_discovery/src/excluded.ts");
+  let outside = fixture("project_mode/file_discovery/other/outside.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(project_dir.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let stdout = String::from_utf8(output).unwrap();
+  let json: Value = serde_json::from_str(&stdout).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(files.contains(&normalized(&included_a).as_str()));
+  assert!(files.contains(&normalized(&included_b).as_str()));
+  assert!(files.contains(&normalized(&only).as_str()));
+  assert!(files.contains(&normalized(&extra).as_str()));
+  assert!(
+    !files.contains(&normalized(&excluded).as_str()),
+    "expected excluded.ts to be excluded, got {files:?}"
+  );
+  assert!(
+    !files.contains(&normalized(&outside).as_str()),
+    "expected outside.ts to be excluded by include pattern, got {files:?}"
+  );
+}
+
+#[test]
+fn project_mode_honors_files_list_over_include() {
+  let tsconfig = fixture("project_mode/file_discovery/tsconfig.files.json");
+  let only = fixture("project_mode/file_discovery/src/only.ts");
+  let extra = fixture("project_mode/file_discovery/src/extra.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let stdout = String::from_utf8(output).unwrap();
+  let json: Value = serde_json::from_str(&stdout).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(files.contains(&normalized(&only).as_str()));
+  assert!(
+    !files.contains(&normalized(&extra).as_str()),
+    "expected extra.ts to be omitted when using files list, got {files:?}"
+  );
+}
+
+#[test]
+fn project_mode_merges_compiler_options_from_extends() {
+  let inherit = fixture("project_mode/extends_merge/tsconfig.inherit.json");
+  let override_config = fixture("project_mode/extends_merge/tsconfig.override.json");
+
+  let inherit_out = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(inherit.as_os_str())
+    .arg("--json")
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+  let inherit_json: Value =
+    serde_json::from_slice(&inherit_out).expect("valid JSON output for inherit config");
+  let inherit_diags = inherit_json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    inherit_diags
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC3000")),
+    "expected noImplicitAny error from strict base config, got {inherit_diags:?}"
+  );
+  assert!(
+    inherit_diags
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC0007")),
+    "expected strictNullChecks assignment error from strict base config, got {inherit_diags:?}"
+  );
+
+  let override_out = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(override_config.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+  let override_json: Value =
+    serde_json::from_slice(&override_out).expect("valid JSON output for override config");
+  let override_diags = override_json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    override_diags.is_empty(),
+    "expected overrides to suppress strict diagnostics, got {override_diags:?}"
+  );
+}
+
+#[test]
+fn project_mode_uses_module_resolution_from_tsconfig() {
+  let tsconfig = fixture("project_mode/module_resolution/tsconfig.json");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.is_empty(),
+    "expected moduleResolution Node16 to enable node_modules resolution, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn project_mode_resolves_types_and_type_roots() {
+  let tsconfig = fixture("project_mode/types/tsconfig.json");
+  let foo = fixture("project_mode/types/node_modules/@types/foo/index.d.ts");
+  let bar = fixture("project_mode/types/node_modules/@types/bar/index.d.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+  assert!(files.contains(&normalized(&foo).as_str()));
+  assert!(
+    !files.contains(&normalized(&bar).as_str()),
+    "expected 'types' list to exclude bar, got {files:?}"
+  );
+
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.iter().any(|d| {
+      d.get("code").and_then(|c| c.as_str()) == Some("TC0005")
+        && d.get("message")
+          .and_then(|m| m.as_str())
+          .is_some_and(|m| m.contains("BarGlobal"))
+    }),
+    "expected missing BarGlobal due to types filtering, got {diagnostics:?}"
+  );
+  assert!(
+    !diagnostics.iter().any(|d| {
+      d.get("message")
+        .and_then(|m| m.as_str())
+        .is_some_and(|m| m.contains("FooGlobal"))
+    }),
+    "did not expect FooGlobal errors, got {diagnostics:?}"
+  );
 }

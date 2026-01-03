@@ -14,6 +14,11 @@ pub struct ProjectConfig {
   pub base_url: Option<PathBuf>,
   pub paths: BTreeMap<String, Vec<String>>,
   pub root_files: Vec<PathBuf>,
+  /// Raw `compilerOptions.types` list (distinguishes between unset and empty).
+  pub types: Option<Vec<String>>,
+  /// Raw `compilerOptions.typeRoots` list, resolved to absolute paths.
+  pub type_roots: Option<Vec<PathBuf>>,
+  pub jsx_import_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -39,6 +44,18 @@ struct RawCompilerOptions {
   #[serde(default)]
   lib: Option<Vec<String>>,
   #[serde(default)]
+  types: Option<Vec<String>>,
+  #[serde(default)]
+  type_roots: Option<Vec<String>>,
+  #[serde(default)]
+  module_resolution: Option<String>,
+  #[serde(default)]
+  skip_lib_check: Option<bool>,
+  #[serde(default)]
+  strict: Option<bool>,
+  #[serde(default)]
+  no_implicit_any: Option<bool>,
+  #[serde(default)]
   strict_null_checks: Option<bool>,
   #[serde(default)]
   strict_function_types: Option<bool>,
@@ -52,6 +69,8 @@ struct RawCompilerOptions {
   no_default_lib: Option<bool>,
   #[serde(default)]
   jsx: Option<String>,
+  #[serde(default)]
+  jsx_import_source: Option<String>,
   #[serde(default)]
   base_url: Option<String>,
   #[serde(default)]
@@ -67,7 +86,7 @@ pub fn load_project_config(project: &Path) -> Result<ProjectConfig, String> {
   let mut visited = HashSet::new();
   let raw = load_raw_config(&tsconfig_path, &mut visited)?;
 
-  let mut compiler_options = compiler_options_from_raw(&raw.compiler_options)?;
+  let compiler_options = compiler_options_from_raw(&raw.compiler_options)?;
   let mut base_url = raw
     .compiler_options
     .base_url
@@ -80,10 +99,23 @@ pub fn load_project_config(project: &Path) -> Result<ProjectConfig, String> {
 
   let root_files = discover_root_files(&root_dir, &raw)?;
 
-  // Convenience: include DOM when explicitly listed via `lib`.
-  if compiler_options.libs.contains(&LibName::Dom) {
-    compiler_options.include_dom = true;
-  }
+  let types = raw
+    .compiler_options
+    .types
+    .as_ref()
+    .map(|types| normalize_string_list(types));
+  let type_roots = raw.compiler_options.type_roots.as_ref().map(|roots| {
+    normalize_string_list(roots)
+      .into_iter()
+      .map(|raw| resolve_path_relative_to(&root_dir, Path::new(&raw)))
+      .collect()
+  });
+  let jsx_import_source = raw
+    .compiler_options
+    .jsx_import_source
+    .as_deref()
+    .map(|s| s.trim().to_string())
+    .filter(|s| !s.is_empty());
 
   Ok(ProjectConfig {
     tsconfig_path,
@@ -92,6 +124,9 @@ pub fn load_project_config(project: &Path) -> Result<ProjectConfig, String> {
     base_url,
     paths,
     root_files,
+    types,
+    type_roots,
+    jsx_import_source,
   })
 }
 
@@ -203,6 +238,12 @@ fn merge_raw_compiler_options(
   RawCompilerOptions {
     target: overlay.target.or(base.target),
     lib: overlay.lib.or(base.lib),
+    types: overlay.types.or(base.types),
+    type_roots: overlay.type_roots.or(base.type_roots),
+    module_resolution: overlay.module_resolution.or(base.module_resolution),
+    skip_lib_check: overlay.skip_lib_check.or(base.skip_lib_check),
+    strict: overlay.strict.or(base.strict),
+    no_implicit_any: overlay.no_implicit_any.or(base.no_implicit_any),
     strict_null_checks: overlay.strict_null_checks.or(base.strict_null_checks),
     strict_function_types: overlay.strict_function_types.or(base.strict_function_types),
     exact_optional_property_types: overlay
@@ -214,6 +255,7 @@ fn merge_raw_compiler_options(
     no_lib: overlay.no_lib.or(base.no_lib),
     no_default_lib: overlay.no_default_lib.or(base.no_default_lib),
     jsx: overlay.jsx.or(base.jsx),
+    jsx_import_source: overlay.jsx_import_source.or(base.jsx_import_source),
     base_url: overlay.base_url.or(base.base_url),
     paths: overlay.paths.or(base.paths),
   }
@@ -247,6 +289,24 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
     options.libs.clear();
   }
 
+  if let Some(module_resolution) = raw.module_resolution.as_deref() {
+    let normalized = module_resolution.trim().to_ascii_lowercase();
+    if !normalized.is_empty() {
+      options.module_resolution = Some(normalized);
+    }
+  }
+  if let Some(value) = raw.skip_lib_check {
+    options.skip_lib_check = value;
+  }
+
+  if let Some(strict) = raw.strict {
+    options.strict_null_checks = strict;
+    options.no_implicit_any = strict;
+    options.strict_function_types = strict;
+  }
+  if let Some(value) = raw.no_implicit_any {
+    options.no_implicit_any = value;
+  }
   if let Some(value) = raw.strict_null_checks {
     options.strict_null_checks = value;
   }
@@ -260,11 +320,27 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
     options.no_unchecked_indexed_access = value;
   }
 
+  if let Some(types) = raw.types.as_ref() {
+    options.types = normalize_string_list(types);
+  }
+
   if let Some(raw) = raw.jsx.as_deref() {
     options.jsx = Some(parse_jsx_mode(raw)?);
   }
 
   Ok(options)
+}
+
+fn normalize_string_list(list: &[String]) -> Vec<String> {
+  let mut out: Vec<String> = list
+    .iter()
+    .map(|s| s.trim())
+    .filter(|s| !s.is_empty())
+    .map(|s| s.to_string())
+    .collect();
+  out.sort();
+  out.dedup();
+  out
 }
 
 fn parse_script_target(raw: &str) -> Option<ScriptTarget> {
@@ -404,7 +480,14 @@ fn normalize_glob_pattern(pattern: &str) -> Result<String, String> {
   if trimmed.is_empty() {
     return Ok(trimmed.to_string());
   }
-  Ok(expand_directory_pattern(trimmed))
+  let mut normalized = trimmed.replace('\\', "/");
+  while let Some(rest) = normalized.strip_prefix("./") {
+    normalized = rest.to_string();
+  }
+  if normalized.starts_with('/') {
+    normalized = normalized.trim_start_matches('/').to_string();
+  }
+  Ok(expand_directory_pattern(&normalized))
 }
 
 fn expand_directory_pattern(pattern: &str) -> String {

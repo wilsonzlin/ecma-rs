@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName, ScriptTarget};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 mod tsconfig;
@@ -143,6 +143,7 @@ struct DiskHost {
   state: Arc<Mutex<DiskState>>,
   resolver: ModuleResolver,
   compiler_options: CompilerOptions,
+  lib_files: Vec<LibFile>,
 }
 
 #[derive(Default, Clone)]
@@ -258,12 +259,6 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     None => None,
   };
 
-  let resolution = if args.node_resolve {
-    ResolutionMode::Node
-  } else {
-    ResolutionMode::Simple
-  };
-
   let options_base = project
     .as_ref()
     .map(|cfg| cfg.compiler_options.clone())
@@ -274,6 +269,21 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       eprintln!("{err}");
       return ExitCode::FAILURE;
     }
+  };
+
+  let resolution = if args.node_resolve {
+    ResolutionMode::Node
+  } else if matches!(
+    options
+      .module_resolution
+      .as_deref()
+      .map(|s| s.trim().to_ascii_lowercase())
+      .as_deref(),
+    Some("node" | "node10" | "node16" | "nodenext" | "bundler")
+  ) {
+    ResolutionMode::Node
+  } else {
+    ResolutionMode::Simple
   };
 
   let mut root_paths = Vec::new();
@@ -304,7 +314,18 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     tsconfig: tsconfig_resolver,
   };
 
-  let (host, roots) = match DiskHost::new(&root_paths, resolver, options) {
+  let extra_libs = match project.as_ref() {
+    Some(cfg) => match load_type_libs(cfg, &options) {
+      Ok(libs) => libs,
+      Err(err) => {
+        eprintln!("{err}");
+        return ExitCode::FAILURE;
+      }
+    },
+    None => Vec::new(),
+  };
+
+  let (host, roots) = match DiskHost::new(&root_paths, resolver, options, extra_libs) {
     Ok(res) => res,
     Err(err) => {
       eprintln!("{err}");
@@ -588,6 +609,7 @@ impl DiskHost {
     entries: &[PathBuf],
     resolver: ModuleResolver,
     compiler_options: CompilerOptions,
+    lib_files: Vec<LibFile>,
   ) -> Result<(Self, Vec<FileKey>), String> {
     let mut state = DiskState::default();
     let mut roots = Vec::new();
@@ -603,6 +625,7 @@ impl DiskHost {
         state: Arc::new(Mutex::new(state)),
         resolver,
         compiler_options,
+        lib_files,
       },
       roots,
     ))
@@ -664,10 +687,145 @@ impl Host for DiskHost {
     self.compiler_options.clone()
   }
 
+  fn lib_files(&self) -> Vec<LibFile> {
+    self.lib_files.clone()
+  }
+
   fn file_kind(&self, file: &FileKey) -> FileKind {
     let state = self.state.lock().unwrap();
     state.key_to_kind.get(file).copied().unwrap_or(FileKind::Ts)
   }
+}
+
+fn load_type_libs(
+  cfg: &tsconfig::ProjectConfig,
+  options: &CompilerOptions,
+) -> Result<Vec<LibFile>, String> {
+  let type_roots = match cfg.type_roots.as_ref() {
+    Some(roots) => roots.clone(),
+    None => default_type_roots(&cfg.root_dir),
+  };
+
+  let mut libs = Vec::new();
+  if type_roots.is_empty() {
+    return Ok(ensure_placeholder_libs(libs, options));
+  }
+
+  if let Some(types) = cfg.types.as_ref() {
+    for name in types {
+      let Some(dir) = resolve_type_package(&type_roots, name) else {
+        return Err(format!(
+          "failed to resolve type definition package '{name}' from {}",
+          cfg.root_dir.display()
+        ));
+      };
+      if let Some(lib) = lib_file_from_type_package(name, &dir)? {
+        libs.push(lib);
+      }
+    }
+  } else {
+    // No explicit `types` list: include all packages in the type roots.
+    let mut packages: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for root in &type_roots {
+      let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(_) => continue,
+      };
+      for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+          continue;
+        };
+        if !file_type.is_dir() {
+          continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        packages.entry(name).or_insert(path);
+      }
+    }
+
+    for (name, dir) in packages {
+      if let Some(lib) = lib_file_from_type_package(&name, &dir)? {
+        libs.push(lib);
+      }
+    }
+  }
+
+  Ok(ensure_placeholder_libs(libs, options))
+}
+
+fn ensure_placeholder_libs(mut libs: Vec<LibFile>, options: &CompilerOptions) -> Vec<LibFile> {
+  if !libs.is_empty() || !options.no_default_lib {
+    return libs;
+  }
+  // `typecheck-ts` emits an error diagnostic when zero libs are loaded. Mirror `tsc --noLib`
+  // by injecting a single empty `.d.ts` placeholder so the program can proceed without
+  // default libs.
+  libs.push(LibFile {
+    key: FileKey::new("lib:empty.d.ts"),
+    name: Arc::from("empty.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(""),
+  });
+  libs
+}
+
+fn default_type_roots(root_dir: &Path) -> Vec<PathBuf> {
+  let mut roots = Vec::new();
+  for ancestor in root_dir.ancestors() {
+    let candidate = ancestor.join("node_modules").join("@types");
+    if candidate.is_dir() {
+      roots.push(candidate);
+    }
+  }
+  roots
+}
+
+fn resolve_type_package(type_roots: &[PathBuf], package: &str) -> Option<PathBuf> {
+  for root in type_roots {
+    let dir = root.join(package);
+    if dir.is_dir() {
+      return Some(dir);
+    }
+  }
+  None
+}
+
+fn lib_file_from_type_package(package: &str, dir: &Path) -> Result<Option<LibFile>, String> {
+  let entry = match type_package_entry(dir) {
+    Some(path) => path,
+    None => return Ok(None),
+  };
+  let canonical = entry.canonicalize().unwrap_or(entry.clone());
+  let text = fs::read_to_string(&canonical)
+    .map_err(|err| format!("failed to read type definitions {}: {err}", canonical.display()))?;
+  Ok(Some(LibFile {
+    key: FileKey::new(canonical.display().to_string()),
+    name: Arc::from(format!("types:{package}")),
+    kind: FileKind::Dts,
+    text: Arc::from(text),
+  }))
+}
+
+fn type_package_entry(dir: &Path) -> Option<PathBuf> {
+  let pkg_json = dir.join("package.json");
+  if pkg_json.is_file() {
+    if let Ok(text) = fs::read_to_string(&pkg_json) {
+      if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+        let fields = ["types", "typings"];
+        for field in fields {
+          if let Some(path) = json.get(field).and_then(|v| v.as_str()) {
+            let candidate = dir.join(path);
+            if candidate.is_file() {
+              return Some(candidate);
+            }
+          }
+        }
+      }
+    }
+  }
+  let index = dir.join("index.d.ts");
+  index.is_file().then_some(index)
 }
 
 struct ProgramSourceSnapshot {

@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "Node16",
+  },
+  "include": ["src/main.ts"],
+}
+
