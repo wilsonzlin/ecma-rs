@@ -731,7 +731,24 @@ fn load_type_libs(
           continue;
         }
         let name = entry.file_name().to_string_lossy().to_string();
-        packages.entry(name).or_insert(path);
+        if name.starts_with('@') {
+          if let Ok(children) = fs::read_dir(&path) {
+            for child in children.filter_map(|e| e.ok()) {
+              let child_path = child.path();
+              let Ok(child_type) = child.file_type() else {
+                continue;
+              };
+              if !child_type.is_dir() {
+                continue;
+              }
+              let child_name = child.file_name().to_string_lossy().to_string();
+              let scoped = format!("{name}/{child_name}");
+              packages.entry(scoped).or_insert(child_path);
+            }
+          }
+        } else {
+          packages.entry(name).or_insert(path);
+        }
       }
     }
 

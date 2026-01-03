@@ -1,0 +1,7 @@
+{
+  "compilerOptions": {
+    "lib": ["WebWorker"],
+  },
+  "include": ["src/main.ts"],
+}
+

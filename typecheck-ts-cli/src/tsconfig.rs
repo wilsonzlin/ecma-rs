@@ -363,9 +363,14 @@ fn parse_script_target(raw: &str) -> Option<ScriptTarget> {
 
 fn parse_lib_name(raw: &str) -> Option<LibName> {
   let normalized = raw.trim().to_ascii_lowercase();
-  let base = normalized.split('.').next().unwrap_or(&normalized);
+  let normalized = normalized
+    .trim_start_matches("lib.")
+    .trim_end_matches(".d.ts")
+    .trim_end_matches(".ts");
+  let base = normalized.split('.').next().unwrap_or(normalized);
   match base {
-    "es5" => Some(LibName::Es5),
+    "dom" | "webworker" | "scripthost" => Some(LibName::Dom),
+    "es3" | "es5" => Some(LibName::Es5),
     "es2015" | "es6" => Some(LibName::Es2015),
     "es2016" => Some(LibName::Es2016),
     "es2017" => Some(LibName::Es2017),
@@ -375,7 +380,22 @@ fn parse_lib_name(raw: &str) -> Option<LibName> {
     "es2021" => Some(LibName::Es2021),
     "es2022" => Some(LibName::Es2022),
     "esnext" => Some(LibName::EsNext),
-    "dom" => Some(LibName::Dom),
+    other if other.starts_with("es20") => {
+      let Ok(year) = other.trim_start_matches("es").parse::<u32>() else {
+        return None;
+      };
+      match year {
+        2015 => Some(LibName::Es2015),
+        2016 => Some(LibName::Es2016),
+        2017 => Some(LibName::Es2017),
+        2018 => Some(LibName::Es2018),
+        2019 => Some(LibName::Es2019),
+        2020 => Some(LibName::Es2020),
+        2021 => Some(LibName::Es2021),
+        2022 => Some(LibName::Es2022),
+        _ => Some(LibName::EsNext),
+      }
+    }
     _ => None,
   }
 }
@@ -392,25 +412,28 @@ fn parse_jsx_mode(raw: &str) -> Result<JsxMode, String> {
 }
 
 fn discover_root_files(root_dir: &Path, raw: &RawTsConfig) -> Result<Vec<PathBuf>, String> {
-  if let Some(files) = raw.files.as_ref() {
-    let mut resolved = Vec::new();
-    for file in files {
+  let mut files = Vec::new();
+  if let Some(explicit) = raw.files.as_ref() {
+    for file in explicit {
       let path = resolve_path_relative_to(root_dir, Path::new(file));
-      resolved.push(
+      files.push(
         path
           .canonicalize()
           .map_err(|err| format!("failed to read project file {}: {err}", path.display()))?,
       );
     }
-    resolved.sort_by(|a, b| a.display().to_string().cmp(&b.display().to_string()));
-    resolved.dedup();
-    return Ok(resolved);
   }
 
-  let include = raw
-    .include
-    .clone()
-    .unwrap_or_else(|| vec!["**/*".to_string()]);
+  let include = match raw.include.clone() {
+    Some(patterns) => patterns,
+    None if raw.files.is_some() => Vec::new(),
+    None => vec!["**/*".to_string()],
+  };
+  if include.is_empty() {
+    files.sort_by(|a, b| a.display().to_string().cmp(&b.display().to_string()));
+    files.dedup();
+    return Ok(files);
+  }
 
   let exclude = match raw.exclude.clone() {
     Some(patterns) => patterns,
@@ -424,7 +447,6 @@ fn discover_root_files(root_dir: &Path, raw: &RawTsConfig) -> Result<Vec<PathBuf
   let include_set = build_globset(&include)?;
   let exclude_set = build_globset(&exclude)?;
 
-  let mut files = Vec::new();
   for entry in WalkDir::new(root_dir)
     .follow_links(false)
     .into_iter()
