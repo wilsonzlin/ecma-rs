@@ -51,7 +51,7 @@ impl Host for FixtureHost {
   fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .sources
-      .get(&file)
+      .get(file)
       .cloned()
       .ok_or_else(|| HostError::new(format!("missing file {:?}", file)))
   }

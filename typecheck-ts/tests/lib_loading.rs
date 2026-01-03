@@ -46,7 +46,7 @@ impl Host for TestHost {
   fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
-      .get(&file)
+      .get(file)
       .cloned()
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
