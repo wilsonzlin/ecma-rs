@@ -501,6 +501,7 @@ impl<'a> Parser<'a> {
           | TT::KeywordSymbolType
           | TT::KeywordObjectType
           | TT::KeywordUndefinedType
+          | TT::KeywordIntrinsic
           | TT::Identifier
           | TT::BraceOpen
           | TT::BracketOpen

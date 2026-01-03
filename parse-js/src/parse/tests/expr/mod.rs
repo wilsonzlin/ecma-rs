@@ -114,3 +114,26 @@ fn parses_angle_bracket_type_assertion_with_lowercase_qualified_type_in_ts() {
     ref other => panic!("expected type assertion, got {:?}", other),
   }
 }
+
+#[test]
+fn parses_angle_bracket_type_assertion_with_intrinsic_keyword_type_in_ts() {
+  let expr = parse_expr_with_options(
+    "<intrinsic>bar;",
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  );
+
+  match *expr.stx {
+    Expr::TypeAssertion(ref assertion) => {
+      let type_annotation = assertion
+        .stx
+        .type_annotation
+        .as_ref()
+        .expect("expected type annotation for assertion");
+      assert!(matches!(type_annotation.stx.as_ref(), TypeExpr::Intrinsic(_)));
+    }
+    ref other => panic!("expected type assertion expression, got {:?}", other),
+  }
+}
