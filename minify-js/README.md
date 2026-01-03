@@ -18,8 +18,10 @@ Comparison with esbuild, run on [common libraries](../bench).
 ## Features
 
 - Fast parsing via `parse-js` (JS/JSX/TS/TSX).
-- TypeScript/TSX inputs are accepted: type-only syntax is erased before
-  minification so the output is always JavaScript.
+- TypeScript/TSX inputs are accepted: type-only syntax is erased and TS-only
+  runtime constructs (e.g. `enum`, runtime `namespace`, `import =`, `export =`,
+  parameter properties) are lowered to JavaScript so the output is always valid
+  JS.
 - Builds lexical scopes and resolves identifiers via `semantic-js` (including
   hoisting/TDZ metadata and dynamic-scope hazard marking).
 - Deterministic identifier renaming (module exports preserved).
@@ -31,8 +33,6 @@ Comparison with esbuild, run on [common libraries](../bench).
 ## Limitations
 
 - Identifier renaming is disabled when code contains `with` statements or direct calls to the global `eval` function to avoid changing runtime name resolution semantics.
-- TypeScript constructs with runtime semantics (such as non-`declare` namespaces
-  or `enum`s) are currently rejected during type erasure.
 - Minification currently focuses on formatting + identifier renaming; advanced
   compression passes (constant folding, DCE, etc.) are still in progress.
 
