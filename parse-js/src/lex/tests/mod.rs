@@ -116,5 +116,7 @@ fn test_lex_import_statement() {
 fn ts_keywords_follow_dialect() {
   check("interface", [Identifier], Dialect::Js);
   check("type", [Identifier], Dialect::Jsx);
+  check("intrinsic", [Identifier], Dialect::Js);
   check("interface", [KeywordInterface], Dialect::Ts);
+  check("intrinsic", [KeywordIntrinsic], Dialect::Ts);
 }

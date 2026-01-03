@@ -1024,6 +1024,7 @@ fn is_ts_only_keyword(tt: TT) -> bool {
       | TT::KeywordDeclare
       | TT::KeywordImplements
       | TT::KeywordInfer
+      | TT::KeywordIntrinsic
       | TT::KeywordInterface
       | TT::KeywordIs
       | TT::KeywordKeyof
