@@ -1,0 +1,9 @@
+error[TEST_MULTI_FILE]: uses two files
+ --> b.js:1:7
+  |
+1 | const b = 2;
+  |       ^ uses two files
+ --> a.js:1:7
+  |
+1 | const a = 1;
+  |       - related symbol

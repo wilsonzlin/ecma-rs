@@ -1,9 +1,10 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::render::{render_diagnostic_with_options, RenderOptions, SourceProvider};
 use diagnostics::{Diagnostic, FileId, Severity};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -41,6 +42,14 @@ struct TypecheckArgs {
   /// Emit JSON diagnostics and query results.
   #[arg(long)]
   json: bool,
+
+  /// Force-enable ANSI colors in diagnostics output.
+  #[arg(long, action = ArgAction::SetTrue)]
+  color: bool,
+
+  /// Disable ANSI colors in diagnostics output.
+  #[arg(long, action = ArgAction::SetTrue)]
+  no_color: bool,
 
   /// Print inferred type at the given byte offset (path:offset).
   #[arg(long)]
@@ -367,9 +376,24 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       return ExitCode::FAILURE;
     }
   } else {
+    let color = if args.color {
+      true
+    } else if args.no_color {
+      false
+    } else {
+      std::io::stdout().is_terminal()
+    };
+    let render_options = RenderOptions {
+      context_lines: 1,
+      color,
+      ..RenderOptions::default()
+    };
     let snapshot = snapshot_from_program(&program);
     for diagnostic in &diagnostics {
-      println!("{}", render_diagnostic(&snapshot, diagnostic));
+      println!(
+        "{}",
+        render_diagnostic_with_options(&snapshot, diagnostic, render_options)
+      );
     }
 
     if let Some(type_at) = &type_at {

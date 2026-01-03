@@ -1,13 +1,20 @@
 use crate::Diagnostic;
 use crate::FileId;
 use crate::Label;
+use crate::Severity;
 use crate::TextRange;
 use std::cmp::max;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::fmt::Write;
 
-const TAB_WIDTH: usize = 2;
+const DEFAULT_TAB_WIDTH: usize = 2;
+
+const ANSI_RESET: &str = "\u{1b}[0m";
+const ANSI_BOLD_RED: &str = "\u{1b}[1;31m";
+const ANSI_BOLD_YELLOW: &str = "\u{1b}[1;33m";
+const ANSI_BOLD_BLUE: &str = "\u{1b}[1;34m";
+const ANSI_BOLD_CYAN: &str = "\u{1b}[1;36m";
 
 /// Source metadata used during rendering.
 pub struct SourceFile<'a> {
@@ -35,6 +42,8 @@ pub struct RenderOptions {
   pub max_lines_per_label: usize,
   pub context_lines: usize,
   pub render_secondary_files: bool,
+  pub color: bool,
+  pub tab_width: usize,
 }
 
 impl Default for RenderOptions {
@@ -43,6 +52,8 @@ impl Default for RenderOptions {
       max_lines_per_label: usize::MAX,
       context_lines: 0,
       render_secondary_files: true,
+      color: false,
+      tab_width: DEFAULT_TAB_WIDTH,
     }
   }
 }
@@ -93,12 +104,8 @@ pub fn render_diagnostic_with_options(
     }
   }
 
-  writeln!(
-    output,
-    "{}[{}]: {}",
-    diagnostic.severity, diagnostic.code, diagnostic.message
-  )
-  .unwrap();
+  write_severity(&mut output, diagnostic.severity, options.color);
+  writeln!(output, "[{}]: {}", diagnostic.code, diagnostic.message).unwrap();
 
   for file in &files {
     render_file_group(provider, &mut output, file, &options);
@@ -130,10 +137,10 @@ fn render_file_group(
       let cache = LineCache::new(text);
       let first_offset =
         clamp_offset_to_char_boundary(text, file.labels[0].span.range.start as usize);
-      let (line, col) = line_and_column(&cache, first_offset);
+      let (line, col) = line_and_column(&cache, first_offset, options.tab_width);
       writeln!(output, " --> {}:{}:{}", name, line, col).unwrap();
       let (lines_to_render, highlights) = plan_file_render(&cache, &file.labels, options);
-      render_lines(&cache, &lines_to_render, &highlights, output);
+      render_lines(&cache, &lines_to_render, &highlights, output, options);
     }
     None => {
       writeln!(output, " --> {}:?:?", name).unwrap();
@@ -156,6 +163,7 @@ fn render_lines<'a>(
   lines: &[usize],
   highlights: &HashMap<usize, Vec<LineHighlight<'a>>>,
   output: &mut String,
+  options: &RenderOptions,
 ) {
   if lines.is_empty() {
     writeln!(output, "  |").unwrap();
@@ -179,6 +187,7 @@ fn render_lines<'a>(
       highlights.get(&line_idx),
       gutter_width,
       output,
+      options,
     );
     prev_line = Some(line_idx);
   }
@@ -201,10 +210,11 @@ fn render_line<'a>(
   highlights: Option<&Vec<LineHighlight<'a>>>,
   gutter_width: usize,
   output: &mut String,
+  options: &RenderOptions,
 ) {
   let (line_start, line_end) = cache.line_bounds(line_idx);
   let raw_line = &cache.text[line_start..line_end];
-  let expanded_line = expand_tabs(raw_line);
+  let expanded_line = expand_tabs(raw_line, options.tab_width);
 
   writeln!(
     output,
@@ -216,16 +226,57 @@ fn render_line<'a>(
   .unwrap();
 
   if let Some(highlights) = highlights {
-    for highlight in highlights {
-      let mut underline_line = String::new();
-      underline_line.push_str(&format!("{:>width$} | ", "", width = gutter_width));
-      underline_line.push_str(&" ".repeat(highlight.start_col));
-      underline_line.push_str(
-        &std::iter::repeat(highlight.marker)
-          .take(highlight.len)
-          .collect::<String>(),
-      );
-      if let Some(message) = highlight.message {
+    render_highlight_rows(highlights, gutter_width, output, options);
+  }
+}
+
+fn render_highlight_rows<'a>(
+  highlights: &[LineHighlight<'a>],
+  gutter_width: usize,
+  output: &mut String,
+  options: &RenderOptions,
+) {
+  if highlights.is_empty() {
+    return;
+  }
+
+  let mut highlights = highlights.to_vec();
+  highlights.sort_by(|a, b| {
+    b.is_primary
+      .cmp(&a.is_primary)
+      .then(a.start_col.cmp(&b.start_col))
+      .then(a.len.cmp(&b.len))
+      .then(a.marker.cmp(&b.marker))
+      .then(a.message.unwrap_or("").cmp(b.message.unwrap_or("")))
+  });
+
+  let mut rows: Vec<Vec<LineHighlight<'a>>> = Vec::new();
+  'outer: for highlight in highlights {
+    for row in &mut rows {
+      if row.iter().all(|existing| !highlights_overlap(existing, &highlight)) {
+        row.push(highlight);
+        continue 'outer;
+      }
+    }
+    rows.push(vec![highlight]);
+  }
+
+  for mut row in rows {
+    row.sort_by(|a, b| a.start_col.cmp(&b.start_col).then(a.len.cmp(&b.len)));
+    let mut underline_line = String::new();
+    underline_line.push_str(&format!("{:>width$} | ", "", width = gutter_width));
+
+    let mut col = 0;
+    for highlight in &row {
+      if highlight.start_col > col {
+        underline_line.push_str(&" ".repeat(highlight.start_col - col));
+      }
+      push_marker_run(&mut underline_line, highlight, options);
+      col = highlight.start_col + highlight.len;
+    }
+
+    if row.len() == 1 {
+      if let Some(message) = row[0].message {
         if !message.is_empty() {
           underline_line.push(' ');
           underline_line.push_str(message);
@@ -233,8 +284,82 @@ fn render_line<'a>(
       }
       underline_line.push('\n');
       output.push_str(&underline_line);
+      continue;
+    }
+
+    underline_line.push('\n');
+    output.push_str(&underline_line);
+
+    for highlight in &row {
+      let Some(message) = highlight.message else {
+        continue;
+      };
+      if message.is_empty() {
+        continue;
+      }
+      let mut message_line = String::new();
+      message_line.push_str(&format!("{:>width$} | ", "", width = gutter_width));
+      message_line.push_str(&" ".repeat(highlight.start_col));
+      push_marker_connector(&mut message_line, highlight, options);
+      message_line.push(' ');
+      message_line.push_str(message);
+      message_line.push('\n');
+      output.push_str(&message_line);
     }
   }
+}
+
+fn push_marker_run(line: &mut String, highlight: &LineHighlight<'_>, options: &RenderOptions) {
+  let marker = std::iter::repeat(highlight.marker)
+    .take(highlight.len)
+    .collect::<String>();
+  if options.color {
+    line.push_str(marker_color_code(highlight));
+    line.push_str(&marker);
+    line.push_str(ANSI_RESET);
+  } else {
+    line.push_str(&marker);
+  }
+}
+
+fn push_marker_connector(line: &mut String, highlight: &LineHighlight<'_>, options: &RenderOptions) {
+  if options.color {
+    line.push_str(marker_color_code(highlight));
+    line.push('|');
+    line.push_str(ANSI_RESET);
+  } else {
+    line.push('|');
+  }
+}
+
+fn marker_color_code(highlight: &LineHighlight<'_>) -> &'static str {
+  if highlight.is_primary {
+    ANSI_BOLD_RED
+  } else {
+    ANSI_BOLD_BLUE
+  }
+}
+
+fn highlights_overlap(a: &LineHighlight<'_>, b: &LineHighlight<'_>) -> bool {
+  let a_end = a.start_col.saturating_add(a.len);
+  let b_end = b.start_col.saturating_add(b.len);
+  a.start_col < b_end && b.start_col < a_end
+}
+
+fn write_severity(output: &mut String, severity: Severity, color: bool) {
+  if !color {
+    write!(output, "{severity}").unwrap();
+    return;
+  }
+  let code = match severity {
+    Severity::Error => ANSI_BOLD_RED,
+    Severity::Warning => ANSI_BOLD_YELLOW,
+    Severity::Note => ANSI_BOLD_BLUE,
+    Severity::Help => ANSI_BOLD_CYAN,
+  };
+  output.push_str(code);
+  write!(output, "{severity}").unwrap();
+  output.push_str(ANSI_RESET);
 }
 
 fn plan_file_render<'a>(
@@ -285,13 +410,14 @@ fn plan_file_render<'a>(
       let clamped_end = effective_end.clamp(clamped_start, line_end);
       let local_start = clamped_start.saturating_sub(line_start);
       let local_end = clamped_end.saturating_sub(line_start);
-      let start_col = display_column(&cache.text[line_start..line_end], local_start);
-      let end_col = display_column(&cache.text[line_start..line_end], local_end);
+      let start_col = display_column(&cache.text[line_start..line_end], local_start, options.tab_width);
+      let end_col = display_column(&cache.text[line_start..line_end], local_end, options.tab_width);
       let underline_len = max(1, end_col.saturating_sub(start_col));
       highlights.entry(line_idx).or_default().push(LineHighlight {
         start_col,
         len: underline_len,
         marker: if label.is_primary { '^' } else { '-' },
+        is_primary: label.is_primary,
         message: if line_idx == first_visible {
           Some(label.message.as_str())
         } else {
@@ -344,11 +470,12 @@ fn visible_lines_for_span(start_line: usize, end_line: usize, max_lines: usize) 
   lines
 }
 
-fn expand_tabs(line: &str) -> String {
+fn expand_tabs(line: &str, tab_width: usize) -> String {
   let mut expanded = String::with_capacity(line.len());
+  let tab_width = tab_width.max(1);
   for ch in line.chars() {
     if ch == '\t' {
-      expanded.push_str(&" ".repeat(TAB_WIDTH));
+      expanded.push_str(&" ".repeat(tab_width));
     } else {
       expanded.push(ch);
     }
@@ -386,7 +513,8 @@ fn clamp_offset_to_char_boundary(text: &str, offset: usize) -> usize {
   offset
 }
 
-fn display_column(line_text: &str, offset_in_line: usize) -> usize {
+fn display_column(line_text: &str, offset_in_line: usize, tab_width: usize) -> usize {
+  let tab_width = tab_width.max(1);
   let mut col = 0;
   let mut idx = 0;
   let target = offset_in_line.min(line_text.len());
@@ -396,18 +524,19 @@ fn display_column(line_text: &str, offset_in_line: usize) -> usize {
     if idx + ch_len > target {
       break;
     }
-    col += if ch == '\t' { TAB_WIDTH } else { 1 };
+    col += if ch == '\t' { tab_width } else { 1 };
     idx += ch_len;
   }
   col
 }
 
-fn line_and_column(cache: &LineCache<'_>, offset: usize) -> (usize, usize) {
+fn line_and_column(cache: &LineCache<'_>, offset: usize, tab_width: usize) -> (usize, usize) {
   let line_idx = cache.line_index_at_offset(offset);
   let (line_start, line_end) = cache.line_bounds(line_idx);
   let col = display_column(
     &cache.text[line_start..line_end],
     offset.saturating_sub(line_start),
+    tab_width,
   );
   (line_idx + 1, col + 1)
 }
@@ -455,10 +584,11 @@ impl<'a> LineCache<'a> {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct LineHighlight<'a> {
   start_col: usize,
   len: usize,
   marker: char,
+  is_primary: bool,
   message: Option<&'a str>,
 }

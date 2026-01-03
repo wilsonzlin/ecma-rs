@@ -1,9 +1,10 @@
 use clap::Parser;
-use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::render::{render_diagnostic_with_options, RenderOptions, SourceProvider};
 use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
 use parse_js::{parse, parse_with_options_cancellable, ParseOptions};
 use std::io::stdin;
 use std::io::stdout;
+use std::io::IsTerminal;
 use std::io::Read;
 use std::process::exit;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,6 +17,14 @@ struct Cli {
   /// Cancel parsing if it takes longer than this many seconds.
   #[arg(long, value_name = "SECS")]
   timeout_secs: Option<u64>,
+
+  /// Force-enable ANSI colors in diagnostics output.
+  #[arg(long)]
+  color: bool,
+
+  /// Disable ANSI colors in diagnostics output.
+  #[arg(long)]
+  no_color: bool,
 }
 
 struct StdinSource {
@@ -32,13 +41,32 @@ impl SourceProvider for StdinSource {
   }
 }
 
-fn exit_with_diagnostic(source: &StdinSource, diagnostic: Diagnostic) -> ! {
-  eprintln!("{}", render_diagnostic(source, &diagnostic));
+fn exit_with_diagnostic(
+  source: &StdinSource,
+  diagnostic: Diagnostic,
+  options: RenderOptions,
+) -> ! {
+  eprintln!(
+    "{}",
+    render_diagnostic_with_options(source, &diagnostic, options)
+  );
   exit(1);
 }
 
 fn main() {
   let args = Cli::parse();
+  let color = if args.color {
+    true
+  } else if args.no_color {
+    false
+  } else {
+    std::io::stderr().is_terminal()
+  };
+  let render_options = RenderOptions {
+    context_lines: 1,
+    color,
+    ..RenderOptions::default()
+  };
   let file = FileId(0);
 
   let mut raw = Vec::new();
@@ -50,7 +78,7 @@ fn main() {
     let provider = StdinSource {
       text: String::new(),
     };
-    exit_with_diagnostic(&provider, diagnostic);
+    exit_with_diagnostic(&provider, diagnostic, render_options);
   }
 
   let source = match String::from_utf8(raw) {
@@ -63,7 +91,7 @@ fn main() {
       let provider = StdinSource {
         text: String::new(),
       };
-      exit_with_diagnostic(&provider, diagnostic);
+      exit_with_diagnostic(&provider, diagnostic, render_options);
     }
   };
 
@@ -101,7 +129,7 @@ fn main() {
             if err.typ == parse_js::error::SyntaxErrorType::Cancelled {
               diagnostic = diagnostic.with_note(format!("timed out after {secs} seconds"));
             }
-            exit_with_diagnostic(&provider, diagnostic);
+            exit_with_diagnostic(&provider, diagnostic, render_options);
           }
         };
 
@@ -115,7 +143,7 @@ fn main() {
       Ok(parsed) => parsed,
       Err(err) => {
         let diagnostic = err.to_diagnostic(file);
-        exit_with_diagnostic(&provider, diagnostic);
+        exit_with_diagnostic(&provider, diagnostic, render_options);
       }
     },
   };
@@ -125,6 +153,6 @@ fn main() {
       Some(Span::new(file, TextRange::new(0, 0))),
       format!("failed to write output: {err}"),
     );
-    exit_with_diagnostic(&provider, diagnostic);
+    exit_with_diagnostic(&provider, diagnostic, render_options);
   }
 }

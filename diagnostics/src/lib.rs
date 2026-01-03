@@ -741,8 +741,7 @@ mod tests {
     };
     let options = RenderOptions {
       max_lines_per_label: 2,
-      context_lines: 0,
-      render_secondary_files: true,
+      ..RenderOptions::default()
     };
     let diagnostic = Diagnostic::error(
       "TEST0007",
