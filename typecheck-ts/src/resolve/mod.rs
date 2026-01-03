@@ -8,8 +8,10 @@
 pub mod node;
 #[cfg(feature = "resolve")]
 pub mod path;
+#[cfg(feature = "resolve")]
+pub mod ts_node;
 
 #[cfg(feature = "resolve")]
-pub use node::{NodeResolver, RealFs, ResolveFs, ResolveOptions, DEFAULT_EXTENSIONS};
+pub use node::{NodeResolver, RealFs, ResolveFs, ResolveOptions, Resolver, DEFAULT_EXTENSIONS};
 #[cfg(feature = "resolve")]
 pub use path::{canonicalize_path, normalize_path, normalize_path_str};
