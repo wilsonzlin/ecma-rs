@@ -201,6 +201,34 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
     performs the marker scan, keeping the behavior consistent with `tsc`.)
   Baseline JSON omits `type_facts` when no exports or markers were collected.
 
+## Triage reports (`triage`)
+
+`triage` consumes an existing JSON report emitted by `conformance --json` or
+`difftsc --json` and produces a deterministic high-level summary:
+
+- most common mismatch outcomes (`extra`/`missing`/`span`/`code`, plus crashes/timeouts)
+- dominant diagnostic codes
+- dominant fixture path prefixes
+- uncovered regressions (useful with `--fail-on new`)
+- suggested manifest entries for high-volume known gaps
+
+The human summary is always written to stderr; pass `--json` to also emit a
+machine-readable triage report on stdout.
+
+```
+# Generate a conformance JSON report artifact
+cargo run -p typecheck-ts-harness --release -- conformance --json --allow-mismatches > report.json
+
+# Print the human triage summary (stderr)
+cargo run -p typecheck-ts-harness --release -- triage --input report.json
+
+# Emit structured triage JSON (stdout) while still printing the summary to stderr
+cargo run -p typecheck-ts-harness --release -- triage --input report.json --json > triage.json
+
+# Limit the output to the top N groups/cases
+cargo run -p typecheck-ts-harness --release -- triage --input report.json --top 50
+```
+
 ### Expectations manifests
 
 Both `conformance` and `difftsc` accept `--manifest <path>` describing expected

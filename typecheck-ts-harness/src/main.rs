@@ -10,6 +10,7 @@ use typecheck_ts_harness::difftsc::CommandStatus;
 use typecheck_ts_harness::difftsc::DifftscArgs;
 use typecheck_ts_harness::difftsc::{self};
 use typecheck_ts_harness::run_conformance;
+use typecheck_ts_harness::triage;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::FailOn;
@@ -103,6 +104,21 @@ enum Commands {
     /// Number of worker threads to use (defaults to CPU count)
     #[arg(long, default_value_t = num_cpus::get())]
     jobs: usize,
+  },
+
+  /// Summarize a conformance/difftsc JSON report into a triage report
+  Triage {
+    /// Path to a JSON report produced by `conformance --json` or `difftsc --json`
+    #[arg(long)]
+    input: std::path::PathBuf,
+
+    /// Emit a structured triage report JSON to stdout
+    #[arg(long)]
+    json: bool,
+
+    /// Number of top groups/cases to include
+    #[arg(long, default_value_t = triage::DEFAULT_TOP)]
+    top: usize,
   },
 }
 
@@ -239,6 +255,31 @@ fn main() -> ExitCode {
           } else {
             ExitCode::SUCCESS
           }
+        }
+        Err(err) => print_error(err),
+      }
+    }
+    Commands::Triage { input, json, top } => {
+      match triage::analyze_report_path(&input, top) {
+        Ok(report) => {
+          let stderr = std::io::stderr();
+          let mut stderr_handle = stderr.lock();
+          if let Err(err) = triage::print_human_summary(&report, &mut stderr_handle) {
+            return print_error(err);
+          }
+
+          if json {
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(err) = serde_json::to_writer_pretty(&mut handle, &report) {
+              return print_error(err);
+            }
+            if let Err(err) = writeln!(&mut handle) {
+              return print_error(err);
+            }
+          }
+
+          ExitCode::SUCCESS
         }
         Err(err) => print_error(err),
       }
