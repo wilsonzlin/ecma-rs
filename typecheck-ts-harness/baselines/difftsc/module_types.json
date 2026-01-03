@@ -15,5 +15,14 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "m.ts",
+        "name": "v",
+        "type": "{ x: number }"
+      }
+    ]
+  }
 }

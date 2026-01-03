@@ -21,7 +21,7 @@
       {
         "file": "narrowing_types.ts",
         "name": "pickValue",
-        "type": "(string | number) => number | string"
+        "type": "(number | string) => number | string"
       }
     ],
     "markers": [

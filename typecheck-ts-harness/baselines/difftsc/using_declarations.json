@@ -1,0 +1,72 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'AsyncDisposable'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Disposable'."
+    },
+    {
+      "code": 2852,
+      "file": "using_declarations.ts",
+      "start": 311,
+      "end": 316,
+      "category": "error",
+      "message": "'await using' statements are only allowed within async functions and at the top levels of modules."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "using_declarations.ts",
+        "name": "invalidAwaitUsing",
+        "type": "() => Resource"
+      },
+      {
+        "file": "using_declarations.ts",
+        "name": "useResource",
+        "type": "() => Resource"
+      },
+      {
+        "file": "using_declarations.ts",
+        "name": "value",
+        "type": "Resource"
+      }
+    ],
+    "markers": [
+      {
+        "file": "using_declarations.ts",
+        "offset": 155,
+        "line": 7,
+        "column": 16,
+        "type": "Resource"
+      }
+    ]
+  }
+}

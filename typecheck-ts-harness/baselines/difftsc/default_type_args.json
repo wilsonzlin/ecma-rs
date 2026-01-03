@@ -20,10 +20,14 @@
     "exports": [
       {
         "file": "default_type_args.ts",
+        "name": "h",
+        "type": "<T = string>() => T"
+      },
+      {
+        "file": "default_type_args.ts",
         "name": "v",
         "type": "string"
       }
-    ],
-    "markers": []
+    ]
   }
 }

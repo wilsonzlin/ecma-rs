@@ -21,7 +21,7 @@
       {
         "file": "generics.ts",
         "name": "genericValue",
-        "type": "{ a: number; b: string; }"
+        "type": "{ a: number; b: string }"
       }
     ],
     "markers": [
@@ -30,7 +30,7 @@
         "offset": 70,
         "line": 4,
         "column": 18,
-        "type": "{ a: number; b: string; }"
+        "type": "{ a: number; b: string }"
       }
     ]
   }

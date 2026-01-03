@@ -15,5 +15,52 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "code": 2395,
+      "file": "function_namespace_export.ts",
+      "start": 10,
+      "end": 13,
+      "category": "error",
+      "message": "Individual declarations in merged declaration 'foo' must be all exported or all local."
+    },
+    {
+      "code": 2434,
+      "file": "function_namespace_export.ts",
+      "start": 10,
+      "end": 13,
+      "category": "error",
+      "message": "A namespace declaration cannot be located prior to a class or function with which it is merged."
+    },
+    {
+      "code": 2395,
+      "file": "function_namespace_export.ts",
+      "start": 59,
+      "end": 62,
+      "category": "error",
+      "message": "Individual declarations in merged declaration 'foo' must be all exported or all local."
+    },
+    {
+      "code": 2339,
+      "file": "function_namespace_export.ts",
+      "start": 80,
+      "end": 83,
+      "category": "error",
+      "message": "Property 'bar' does not exist on type '() => any'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "function_namespace_export.ts",
+        "name": "foo",
+        "type": "() => any"
+      },
+      {
+        "file": "function_namespace_export.ts",
+        "name": "value",
+        "type": "any"
+      }
+    ]
+  }
 }

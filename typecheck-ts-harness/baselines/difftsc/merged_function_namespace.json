@@ -15,5 +15,24 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "merged_function_namespace.ts",
+        "name": "Lib",
+        "type": "typeof Lib"
+      },
+      {
+        "file": "merged_function_namespace.ts",
+        "name": "doubled",
+        "type": "number"
+      },
+      {
+        "file": "merged_function_namespace.ts",
+        "name": "label",
+        "type": "string"
+      }
+    ]
+  }
 }

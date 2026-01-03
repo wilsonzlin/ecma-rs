@@ -1,0 +1,51 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "variance_annotations.ts",
+      "start": 318,
+      "end": 327,
+      "category": "error",
+      "message": "Type 'Box<Dog>' is not assignable to type 'Box<Animal>'.\n  Property 'bark' is missing in type 'Animal' but required in type 'Dog'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "variance_annotations.ts",
+        "name": "animalBox",
+        "type": "Box<Animal>"
+      },
+      {
+        "file": "variance_annotations.ts",
+        "name": "dogBox",
+        "type": "Box<Dog>"
+      }
+    ],
+    "markers": [
+      {
+        "file": "variance_annotations.ts",
+        "offset": 163,
+        "line": 12,
+        "column": 16,
+        "type": "Box<Dog>"
+      }
+    ]
+  }
+}

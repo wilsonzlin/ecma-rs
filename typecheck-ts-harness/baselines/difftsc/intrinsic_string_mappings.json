@@ -1,0 +1,66 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "intrinsic_string_mappings.ts",
+      "start": 404,
+      "end": 412,
+      "category": "error",
+      "message": "Type '\"hello\"' is not assignable to type '\"HELLO\"'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "name": "capital",
+        "type": "\"Hello\""
+      },
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "name": "loud",
+        "type": "\"HELLO\""
+      },
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "name": "mismatch",
+        "type": "\"HELLO\""
+      },
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "name": "quiet",
+        "type": "\"hello\""
+      },
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "name": "uncapital",
+        "type": "\"hello\""
+      }
+    ],
+    "markers": [
+      {
+        "file": "intrinsic_string_mappings.ts",
+        "offset": 158,
+        "line": 5,
+        "column": 16,
+        "type": "\"HELLO\""
+      }
+    ]
+  }
+}

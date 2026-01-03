@@ -15,5 +15,31 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "code": 2434,
+      "file": "function_namespace_order.ts",
+      "start": 10,
+      "end": 13,
+      "category": "error",
+      "message": "A namespace declaration cannot be located prior to a class or function with which it is merged."
+    },
+    {
+      "code": 2339,
+      "file": "function_namespace_order.ts",
+      "start": 66,
+      "end": 69,
+      "category": "error",
+      "message": "Property 'bar' does not exist on type 'typeof foo'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "function_namespace_order.ts",
+        "name": "value",
+        "type": "any"
+      }
+    ]
+  }
 }

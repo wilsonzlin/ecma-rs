@@ -30,7 +30,21 @@
       "start": 59,
       "end": 62,
       "category": "error",
-      "message": "Argument of type '\"s\"' is not assignable to parameter of type 'number'."
+      "message": "Argument of type 'string' is not assignable to parameter of type 'number'."
     }
-  ]
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "a.ts",
+        "name": "f",
+        "type": "<T extends string>(T) => T"
+      },
+      {
+        "file": "b.ts",
+        "name": "g",
+        "type": "<T extends number>(T) => T"
+      }
+    ]
+  }
 }

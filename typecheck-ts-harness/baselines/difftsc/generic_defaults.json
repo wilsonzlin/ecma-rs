@@ -17,14 +17,20 @@
   },
   "diagnostics": [],
   "type_facts": {
-    "exports": [],
+    "exports": [
+      {
+        "file": "m.ts",
+        "name": "id",
+        "type": "<T extends string = \"x\">(T) => T"
+      }
+    ],
     "markers": [
       {
         "file": "a.ts",
         "offset": 36,
         "line": 2,
         "column": 9,
-        "type": "\"hi\""
+        "type": "any"
       }
     ]
   }

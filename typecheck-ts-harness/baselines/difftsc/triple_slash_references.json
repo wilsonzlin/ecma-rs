@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 6053,
+      "file": "triple_slash_references.ts",
+      "start": 63,
+      "end": 75,
+      "category": "error",
+      "message": "File '/missing.ts' not found."
+    },
+    {
+      "code": 2688,
+      "file": "triple_slash_references.ts",
+      "start": 102,
+      "end": 128,
+      "category": "error",
+      "message": "Cannot find type definition file for 'missing-triple-slash-types'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "triple_slash_references.ts",
+        "name": "disposable",
+        "type": "Disposable | null"
+      }
+    ],
+    "markers": [
+      {
+        "file": "triple_slash_references.ts",
+        "offset": 150,
+        "line": 4,
+        "column": 16,
+        "type": "Disposable | null"
+      }
+    ]
+  }
+}

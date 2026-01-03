@@ -15,7 +15,24 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 2454,
+      "file": "a.ts",
+      "start": 44,
+      "end": 45,
+      "category": "error",
+      "message": "Variable 'v' is used before being assigned."
+    },
+    {
+      "code": 2454,
+      "file": "a.ts",
+      "start": 47,
+      "end": 48,
+      "category": "error",
+      "message": "Variable 'v' is used before being assigned."
+    }
+  ],
   "type_facts": {
     "markers": [
       {
@@ -23,7 +40,7 @@
         "offset": 49,
         "line": 4,
         "column": 2,
-        "type": "number"
+        "type": "any"
       }
     ]
   }

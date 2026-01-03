@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "const_type_params.ts",
+      "start": 309,
+      "end": 310,
+      "category": "error",
+      "message": "Type '2' is not assignable to type '1'."
+    },
+    {
+      "code": 2322,
+      "file": "const_type_params.ts",
+      "start": 315,
+      "end": 316,
+      "category": "error",
+      "message": "Type '\"no\"' is not assignable to type '\"ok\"'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "const_type_params.ts",
+        "name": "bad",
+        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "inferred",
+        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "ok",
+        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+      }
+    ],
+    "markers": [
+      {
+        "file": "const_type_params.ts",
+        "offset": 76,
+        "line": 4,
+        "column": 16,
+        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+      }
+    ]
+  }
+}

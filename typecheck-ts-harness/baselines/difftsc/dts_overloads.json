@@ -17,21 +17,27 @@
   },
   "diagnostics": [],
   "type_facts": {
-    "exports": [],
+    "exports": [
+      {
+        "file": "lib.d.ts",
+        "name": "f",
+        "type": "{ (x: string): 1; (x: number): 2 }"
+      }
+    ],
     "markers": [
       {
         "file": "main.ts",
         "offset": 37,
         "line": 2,
         "column": 9,
-        "type": "1"
+        "type": "any"
       },
       {
         "file": "main.ts",
         "offset": 67,
         "line": 4,
         "column": 9,
-        "type": "2"
+        "type": "any"
       }
     ]
   }

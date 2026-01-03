@@ -4,14 +4,54 @@ status = "xfail"
 reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2345`"
 
 [[expectations]]
+id = "difftsc/const_type_params"
+status = "xfail"
+reason = "Rust checker does not yet support `const` type parameter inference (literal preservation), so inferred types and assignability diagnostics diverge."
+
+[[expectations]]
 id = "difftsc/contextual_callbacks"
 status = "xfail"
 reason = "Rust checker reports a spurious callback assignability error; contextual typing is incomplete"
 
 [[expectations]]
+id = "difftsc/default_type_args"
+status = "xfail"
+reason = "Rust checker renders synthesized type parameter names (`T0`) while tsc keeps source names (`T`)."
+
+[[expectations]]
+id = "difftsc/dts_overloads"
+status = "xfail"
+reason = "Rust checker does not yet model `.d.ts` overload sets the same way as tsc; export and marker type facts differ."
+
+[[expectations]]
+id = "difftsc/function_namespace_export"
+status = "xfail"
+reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."
+
+[[expectations]]
+id = "difftsc/function_namespace_order"
+status = "xfail"
+reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."
+
+[[expectations]]
 id = "difftsc/generic_constraints"
 status = "xfail"
 reason = "Rust checker reports `TC2000` (no overload matches) instead of `TS2345` for constraint violations"
+
+[[expectations]]
+id = "difftsc/generic_defaults"
+status = "xfail"
+reason = "Rust checker renders synthesized type parameter names (`T0`) and disagrees with tsc on marker type-at-location behavior."
+
+[[expectations]]
+id = "difftsc/import_equals_require"
+status = "xfail"
+reason = "Rust checker does not match tsc's `import = require()` restrictions/flow diagnostics."
+
+[[expectations]]
+id = "difftsc/intrinsic_string_mappings"
+status = "xfail"
+reason = "Rust checker does not yet support intrinsic string mapping types (`Uppercase`, etc.)."
 
 [[expectations]]
 id = "difftsc/merged_function_namespace"
@@ -24,9 +64,34 @@ status = "xfail"
 reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2322`"
 
 [[expectations]]
+id = "difftsc/namespace_reexport"
+status = "xfail"
+reason = "Rust checker does not yet report tsc's definite assignment (`TS2454`) diagnostics and marker typing differs."
+
+[[expectations]]
 id = "difftsc/this_param_call"
 status = "xfail"
 reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2322`"
+
+[[expectations]]
+id = "difftsc/this_param_dts"
+status = "xfail"
+reason = "Rust checker does not match tsc's `this` parameter typing behavior in `.d.ts`."
+
+[[expectations]]
+id = "difftsc/triple_slash_references"
+status = "xfail"
+reason = "Rust checker does not yet process triple-slash `<reference lib/path/types>` directives."
+
+[[expectations]]
+id = "difftsc/using_declarations"
+status = "xfail"
+reason = "Rust checker does not yet support `using`/`await using` resource management semantics."
+
+[[expectations]]
+id = "difftsc/variance_annotations"
+status = "xfail"
+reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
 
 [[expectations]]
 id = "difftsc/win_paths"
