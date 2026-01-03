@@ -1,0 +1,110 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "declaration": true,
+      "exactOptionalPropertyTypes": false,
+      "lib": [
+        "lib.es2020.d.ts"
+      ],
+      "module": 199,
+      "moduleResolution": 3,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noLib": true,
+      "noUncheckedIndexedAccess": true,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 7,
+      "types": [
+        "example"
+      ],
+      "useDefineForClassFields": false
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Array'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Boolean'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Function'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'IArguments'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Number'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Object'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'RegExp'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'String'."
+    },
+    {
+      "code": 5053,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Option 'lib' cannot be specified with option 'noLib'."
+    },
+    {
+      "code": 2304,
+      "file": "beta.ts",
+      "start": 24,
+      "end": 29,
+      "category": "error",
+      "message": "Cannot find name 'Alpha'."
+    }
+  ]
+}

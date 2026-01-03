@@ -247,9 +247,13 @@ function collectMarkerTypes(checker, markers, sourceFiles) {
     const sf = sourceFiles.get(absName);
     if (!sf) continue;
     const offsetUtf16 = utf8ByteOffsetToUtf16(sf.text, marker.offset);
+    // `findPrecedingToken` treats `offsetUtf16` as an exclusive bound (it returns
+    // the token *ending before* the position). For marker offsets that land on
+    // the start of an identifier (the common case for `^?`), this can yield the
+    // previous token (e.g. `=`), producing `any` type facts. Prefer the token at
+    // the position and fall back to `findPrecedingToken` only when needed.
     const node =
-      ts.findPrecedingToken(offsetUtf16, sf) ??
-      ts.getTokenAtPosition(sf, offsetUtf16);
+      ts.getTokenAtPosition(sf, offsetUtf16) ?? ts.findPrecedingToken(offsetUtf16, sf);
     if (!node) continue;
     const type = checker.getTypeAtLocation(node);
     const typeStr = renderType(checker, type, node);

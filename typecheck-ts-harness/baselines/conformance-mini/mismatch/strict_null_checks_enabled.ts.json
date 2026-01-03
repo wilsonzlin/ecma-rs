@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "strict_null_checks_enabled.ts",
+      "start": 5,
+      "end": 10,
+      "category": "error",
+      "message": "Type 'null' is not assignable to type 'string'."
+    }
+  ]
+}

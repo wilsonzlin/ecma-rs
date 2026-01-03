@@ -1,4 +1,14 @@
 [[expectations]]
+id = "match/options_passthrough.ts"
+status = "xfail"
+reason = "CompilerOptions.types not implemented yet"
+
+[[expectations]]
+id = "mismatch/strict_null_checks_enabled.ts"
+status = "xfail"
+reason = "strictNullChecks not implemented yet"
+
+[[expectations]]
 id = "mismatch/type_error.ts"
 status = "xfail"
 reason = "Rust checker spans do not yet align with tsc for this fixture"

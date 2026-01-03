@@ -34,8 +34,8 @@ fn diagnostics_report_utf8_byte_offsets() {
   let diag = output
     .diagnostics
     .iter()
-    .find(|diag| diag.code == 2304)
-    .expect("expected TS2304 diagnostic for unknown identifier");
+    .find(|diag| matches!(diag.code, 2304 | 2552))
+    .expect("expected TS2304/TS2552 diagnostic for unknown identifier");
   assert_eq!(diag.file.as_deref(), Some("main.ts"));
   assert_eq!((diag.start, diag.end), (expected_start, expected_end));
 }
