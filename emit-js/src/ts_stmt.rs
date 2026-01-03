@@ -1,4 +1,5 @@
 use crate::emitter::{with_node_context, EmitError, EmitErrorKind, EmitMode, EmitResult, Emitter};
+use crate::expr_js::{emit_expr, ExprCtx};
 use crate::ts_type::emit_type_parameters;
 use crate::{emit_interface_decl, emit_type_alias_decl, emit_type_expr, emit_type_members};
 use parse_js::ast::expr::Expr;
@@ -6,7 +7,6 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
-use parse_js::ast::type_expr::TypeExpr;
 
 pub fn emit_top_level(em: &mut Emitter, top: &TopLevel) -> EmitResult {
   let mut first = true;
@@ -413,45 +413,7 @@ fn emit_string_literal(em: &mut Emitter, value: &str) -> EmitResult {
 }
 
 fn emit_ts_expr(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
-  let mut emit_type = |out: &mut Emitter, ty: &Node<TypeExpr>| emit_type_expr(out, ty);
-  match crate::expr::emit_expr_with_options(em, expr, &mut emit_type, em.options()) {
-    Ok(()) => Ok(()),
-    Err(_) => emit_ts_expr_minimal(em, expr),
-  }
-}
-
-fn emit_ts_expr_minimal(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
-  match expr.stx.as_ref() {
-    Expr::Id(id) => em.write_identifier(&id.stx.name),
-    Expr::LitStr(lit) => emit_string_literal(em, &lit.stx.value)?,
-    Expr::LitNum(lit) => em.write_number(&format!("{}", lit.stx.value)),
-    Expr::LitBool(lit) => em.write_keyword(if lit.stx.value { "true" } else { "false" }),
-    Expr::LitNull(_) => em.write_keyword("null"),
-    Expr::LitBigInt(lit) => em.write_bigint_literal(&lit.stx.value),
-    Expr::This(_) => em.write_keyword("this"),
-    Expr::Member(member) => {
-      let member = member.stx.as_ref();
-      emit_ts_expr_minimal(em, &member.left)?;
-      if member.optional_chaining {
-        em.write_punct("?.");
-      } else {
-        em.write_punct(".");
-      }
-      em.write_identifier(&member.right);
-    }
-    Expr::ComputedMember(member) => {
-      let member = member.stx.as_ref();
-      emit_ts_expr_minimal(em, &member.object)?;
-      if member.optional_chaining {
-        em.write_punct("?.");
-      }
-      em.write_punct("[");
-      emit_ts_expr_minimal(em, &member.member)?;
-      em.write_punct("]");
-    }
-    _ => em.write_keyword("undefined"),
-  }
-  Ok(())
+  with_node_context(expr.loc, || emit_expr(em, expr, ExprCtx::Default))
 }
 
 fn space_if_canonical(em: &mut Emitter) {

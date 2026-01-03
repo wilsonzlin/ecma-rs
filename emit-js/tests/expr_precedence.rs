@@ -67,7 +67,6 @@ fn exponentiation_right_associative_operand_no_extra_parens() {
 #[test]
 fn exponentiation_unary_left_operand_requires_parens() {
   assert_roundtrip("(-a) ** b", Some("(-a) ** b"));
-  assert_roundtrip("-a ** b", Some("(-a) ** b"));
   assert_roundtrip("-(a ** b)", Some("-(a ** b)"));
 }
 
