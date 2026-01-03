@@ -788,8 +788,12 @@ fn lib_file_from_type_package(package: &str, dir: &Path) -> Result<Option<LibFil
     None => return Ok(None),
   };
   let canonical = entry.canonicalize().unwrap_or(entry.clone());
-  let text = fs::read_to_string(&canonical)
-    .map_err(|err| format!("failed to read type definitions {}: {err}", canonical.display()))?;
+  let text = fs::read_to_string(&canonical).map_err(|err| {
+    format!(
+      "failed to read type definitions {}: {err}",
+      canonical.display()
+    )
+  })?;
   Ok(Some(LibFile {
     key: FileKey::new(canonical.display().to_string()),
     name: Arc::from(format!("types:{package}")),
@@ -960,16 +964,24 @@ fn is_relative_or_absolute_specifier(specifier: &str) -> bool {
 
 fn file_kind_for(path: &Path) -> FileKind {
   let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-  if name.ends_with(".d.ts") {
+  let name = name.to_ascii_lowercase();
+  if name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts") {
     return FileKind::Dts;
   }
-  match path.extension().and_then(|e| e.to_str()) {
-    Some("ts") => FileKind::Ts,
-    Some("tsx") => FileKind::Tsx,
-    Some("js") => FileKind::Js,
-    Some("jsx") => FileKind::Jsx,
-    _ => FileKind::Ts,
+  if name.ends_with(".tsx") {
+    return FileKind::Tsx;
   }
+  if name.ends_with(".ts") || name.ends_with(".mts") || name.ends_with(".cts") {
+    return FileKind::Ts;
+  }
+  if name.ends_with(".jsx") {
+    return FileKind::Jsx;
+  }
+  if name.ends_with(".js") || name.ends_with(".mjs") || name.ends_with(".cjs") {
+    return FileKind::Js;
+  }
+
+  FileKind::Ts
 }
 
 fn parse_offset_arg(raw: &str) -> Result<(PathBuf, u32), String> {

@@ -125,6 +125,31 @@ fn node_modules_resolution_is_opt_in() {
 }
 
 #[test]
+fn mjs_files_are_parsed_as_js() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  // Type annotations are invalid in `.mjs` when treated as JavaScript.
+  write_file(
+    &tmp.path().join("node_modules/pkg/index.mjs"),
+    "export const value: number = 21;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .failure()
+    .stdout(contains("error["));
+}
+
+#[test]
 fn resolves_package_json_types_entry() {
   let tmp = tempdir().expect("temp dir");
   let entry = tmp.path().join("src/main.ts");
@@ -698,7 +723,8 @@ fn project_mode_resolves_types_and_type_roots() {
   assert!(
     diagnostics.iter().any(|d| {
       d.get("code").and_then(|c| c.as_str()) == Some("TC0005")
-        && d.get("message")
+        && d
+          .get("message")
           .and_then(|m| m.as_str())
           .is_some_and(|m| m.contains("BarGlobal"))
     }),
