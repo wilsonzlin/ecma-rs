@@ -204,6 +204,7 @@ impl<'a> TypeEmitter<'a> {
       TypeExpr::Object(_) => self.em.write_keyword("object"),
       TypeExpr::Null(_) => self.em.write_keyword("null"),
       TypeExpr::Undefined(_) => self.em.write_keyword("undefined"),
+      TypeExpr::Intrinsic(_) => self.em.write_keyword("intrinsic"),
 
       TypeExpr::TypeReference(reference) => self.emit_type_reference(reference)?,
       TypeExpr::LiteralType(lit) => self.emit_type_literal(lit)?,

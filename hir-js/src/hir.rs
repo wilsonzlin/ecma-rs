@@ -279,6 +279,7 @@ pub enum TypeExprKind {
   Object,
   Null,
   Undefined,
+  Intrinsic,
   This,
   Literal(TypeLiteral),
   TypeRef(TypeRef),

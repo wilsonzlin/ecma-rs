@@ -23,6 +23,7 @@ pub enum TypeExpr {
   Object(Node<TypeObject>),
   Null(Node<TypeNull>),
   Undefined(Node<TypeUndefined>),
+  Intrinsic(Node<TypeIntrinsic>),
 
   // Reference and complex types
   TypeReference(Node<TypeReference>),
@@ -104,6 +105,10 @@ pub struct TypeNull {}
 /// Primitive type: undefined
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeUndefined {}
+
+/// Special type: intrinsic
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct TypeIntrinsic {}
 
 /// Type reference: Foo, Foo<T>, A.B.C<T, U>
 #[derive(Debug, Drive, DriveMut, Serialize)]

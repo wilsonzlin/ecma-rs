@@ -202,6 +202,7 @@ impl<'a> TypeLowerer<'a> {
       TypeExpr::Object(_) => TypeExprKind::Object,
       TypeExpr::Null(_) => TypeExprKind::Null,
       TypeExpr::Undefined(_) => TypeExprKind::Undefined,
+      TypeExpr::Intrinsic(_) => TypeExprKind::Intrinsic,
       TypeExpr::ThisType(_) => TypeExprKind::This,
       TypeExpr::TypeReference(reference) => {
         let type_args = reference
@@ -1257,6 +1258,7 @@ impl<'a> TypeLowerer<'a> {
       TypeExprKind::Object => TypeSortKey::Primitive("object"),
       TypeExprKind::Null => TypeSortKey::Primitive("null"),
       TypeExprKind::Undefined => TypeSortKey::Primitive("undefined"),
+      TypeExprKind::Intrinsic => TypeSortKey::Primitive("intrinsic"),
       TypeExprKind::This => TypeSortKey::Primitive("this"),
       TypeExprKind::Literal(lit) => TypeSortKey::Literal(self.literal_sort_key(lit)),
       TypeExprKind::TypeRef(r) => TypeSortKey::TypeRef {
@@ -1658,6 +1660,7 @@ impl<'a> TypeLowerer<'a> {
       TypeExprKind::TemplateLiteral(_) => 30,
       TypeExprKind::TypePredicate(_) => 31,
       TypeExprKind::Import(_) => 32,
+      TypeExprKind::Intrinsic => 33,
     }
   }
 }

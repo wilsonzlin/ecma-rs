@@ -63,15 +63,22 @@ impl<'a> Parser<'a> {
     let asserts = self.consume_if(TT::KeywordAsserts).is_match();
 
     // Try to parse parameter name
-    if self.peek().typ == TT::Identifier || self.peek().typ == TT::KeywordThis {
-      let is_this = self.peek().typ == TT::KeywordThis;
+    let next_typ = self.peek().typ;
+    if next_typ == TT::KeywordThis
+      || crate::parse::expr::pat::is_valid_pattern_identifier(next_typ, ctx.rules)
+    {
+      let is_this = next_typ == TT::KeywordThis;
       let param_checkpoint = self.checkpoint();
       let param_loc = self.peek().loc; // Save location before consuming
       let parameter_name = if is_this {
         self.consume();
         "this".to_string()
       } else {
-        self.require_identifier()?
+        let t = self.consume();
+        debug_assert!(crate::parse::expr::pat::is_valid_pattern_identifier(
+          t.typ, ctx.rules
+        ));
+        self.string(t.loc)
       };
 
       let next = self.peek();
@@ -351,6 +358,12 @@ impl<'a> Parser<'a> {
         let inner = Node::new(loc, TypeUndefined {});
         Ok(Node::new(loc, TypeExpr::Undefined(inner)))
       }
+      TT::KeywordIntrinsic => {
+        let loc = self.peek().loc;
+        self.consume();
+        let inner = Node::new(loc, TypeIntrinsic {});
+        Ok(Node::new(loc, TypeExpr::Intrinsic(inner)))
+      }
       TT::LiteralNull => {
         let loc = self.peek().loc;
         self.consume();
@@ -622,6 +635,7 @@ impl<'a> Parser<'a> {
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
+      TT::KeywordIntrinsic |
       // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
       TT::KeywordUndefinedType |
       TT::KeywordSuper |  // TypeScript: Error recovery - allow 'super' as type identifier
@@ -663,6 +677,7 @@ impl<'a> Parser<'a> {
       | TT::KeywordSymbolType
       | TT::KeywordObjectType => true,
       TT::KeywordUndefinedType | TT::KeywordThis | TT::KeywordUnique => true,
+      TT::KeywordIntrinsic => true,
 
       // Opening brackets/braces for complex types
       TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen => true,

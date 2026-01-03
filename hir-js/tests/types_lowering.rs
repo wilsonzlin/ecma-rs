@@ -102,6 +102,41 @@ fn lowers_function_type_alias() {
 }
 
 #[test]
+fn lowers_intrinsic_keyword_type() {
+  let result = lower_from_source("type Uppercase<S extends string> = intrinsic;").expect("lower");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "Uppercase");
+  assert_eq!(type_params.len(), 1);
+
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
+  assert!(matches!(expr.kind, TypeExprKind::Intrinsic));
+}
+
+#[test]
+fn lowers_intrinsic_in_union_type() {
+  let result = lower_from_source("type X = intrinsic | string;").expect("lower");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "X");
+  assert!(type_params.is_empty());
+
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
+  match &expr.kind {
+    TypeExprKind::Union(members) => {
+      assert_eq!(members.len(), 2);
+      let mut has_intrinsic = false;
+      let mut has_string = false;
+      for member in members {
+        match arenas.type_exprs[member.0 as usize].kind {
+          TypeExprKind::Intrinsic => has_intrinsic = true,
+          TypeExprKind::String => has_string = true,
+          ref other => panic!("unexpected union member {other:?}"),
+        }
+      }
+      assert!(has_intrinsic && has_string);
+    }
+    other => panic!("expected union type, got {other:?}"),
+  }
+}
+
+#[test]
 fn lowers_conditional_and_infer_types() {
   let result = lower_from_source("type Cond<T> = T extends infer R ? R[] : never;").expect("lower");
   let (_, arenas, type_expr, type_params) = type_alias(&result, "Cond");

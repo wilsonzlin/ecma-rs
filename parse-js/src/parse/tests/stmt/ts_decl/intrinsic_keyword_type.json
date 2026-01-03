@@ -1,0 +1,20 @@
+{
+  "$t": "TypeAliasDecl",
+  "declare": false,
+  "export": false,
+  "name": "Uppercase",
+  "type_expr": {
+    "$t": "Intrinsic"
+  },
+  "type_parameters": [
+    {
+      "const_": false,
+      "constraint": {
+        "$t": "String"
+      },
+      "default": null,
+      "name": "S",
+      "variance": null
+    }
+  ]
+}

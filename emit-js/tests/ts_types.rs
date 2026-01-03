@@ -79,3 +79,11 @@ fn minified_output_omits_optional_spaces() {
     assert_eq!(printed, expected, "case `{}`", input);
   }
 }
+
+#[test]
+fn intrinsic_keyword_type_roundtrips() {
+  let parsed = parse_type_expr("intrinsic");
+  let printed = emit_type_expr_to_string(&parsed);
+  assert_eq!(printed, "intrinsic");
+  roundtrip_type_expr("intrinsic");
+}

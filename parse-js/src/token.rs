@@ -129,6 +129,7 @@ pub enum TT {
   KeywordDeclare,
   KeywordImplements,
   KeywordInfer,
+  KeywordIntrinsic,
   KeywordInterface,
   KeywordIs,
   KeywordKeyof,
@@ -205,6 +206,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordDeclare);
   set.insert(TT::KeywordImplements);
   set.insert(TT::KeywordInfer);
+  set.insert(TT::KeywordIntrinsic);
   set.insert(TT::KeywordInterface);
   set.insert(TT::KeywordIs);
   set.insert(TT::KeywordKeyof);

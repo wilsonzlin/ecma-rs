@@ -1,0 +1,18 @@
+{
+  "$t": "TypeAliasDecl",
+  "declare": false,
+  "export": false,
+  "name": "X",
+  "type_expr": {
+    "$t": "UnionType",
+    "types": [
+      {
+        "$t": "Intrinsic"
+      },
+      {
+        "$t": "String"
+      }
+    ]
+  },
+  "type_parameters": null
+}

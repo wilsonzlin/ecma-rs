@@ -196,6 +196,7 @@ impl TypeLowerer {
       TypeExpr::Boolean(_) => self.store.primitive_ids().boolean,
       TypeExpr::Null(_) => self.store.primitive_ids().null,
       TypeExpr::Undefined(_) => self.store.primitive_ids().undefined,
+      TypeExpr::Intrinsic(_) => self.store.primitive_ids().unknown,
       TypeExpr::BigInt(_) => self.store.primitive_ids().bigint,
       TypeExpr::Symbol(_) => self.store.primitive_ids().symbol,
       TypeExpr::UniqueSymbol(_) => self.store.primitive_ids().unique_symbol,

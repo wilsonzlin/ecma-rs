@@ -530,6 +530,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       TypeExprKind::Void => self.store.primitive_ids().void,
       TypeExprKind::Null => self.store.primitive_ids().null,
       TypeExprKind::Undefined => self.store.primitive_ids().undefined,
+      TypeExprKind::Intrinsic => self.store.primitive_ids().unknown,
       TypeExprKind::Object => {
         let shape = Shape::new();
         let shape_id = self.store.intern_shape(shape);
