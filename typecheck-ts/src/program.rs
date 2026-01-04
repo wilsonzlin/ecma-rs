@@ -2317,6 +2317,14 @@ impl Program {
 
   pub fn span_of_def_fallible(&self, def: DefId) -> Result<Option<Span>, FatalError> {
     self.with_analyzed_state(|state| {
+      if state.snapshot_loaded {
+        return Ok(
+          state
+            .def_data
+            .get(&def)
+            .map(|data| Span::new(data.file, data.span)),
+        );
+      }
       if let Some(span) = db::span_of_def(&state.typecheck_db, def) {
         return Ok(Some(span));
       }
@@ -2346,6 +2354,13 @@ impl Program {
     expr: ExprId,
   ) -> Result<Option<Span>, FatalError> {
     self.with_analyzed_state(|state| {
+      if state.snapshot_loaded {
+        let Some(meta) = state.body_map.get(&body).copied() else {
+          return Ok(None);
+        };
+        let res = state.check_body(body)?;
+        return Ok(res.expr_span(expr).map(|range| Span::new(meta.file, range)));
+      }
       if let Some(span) = db::span_of_expr(&state.typecheck_db, body, expr) {
         return Ok(Some(span));
       }

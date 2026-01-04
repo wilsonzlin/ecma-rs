@@ -233,6 +233,59 @@ fn snapshot_restoration_supports_symbol_queries_without_source_text() {
 }
 
 #[test]
+fn snapshot_restoration_span_queries_do_not_reparse() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let (body, expr) = program
+    .expr_at(entry_id, call_offset)
+    .expect("expr at call");
+  let total_def = program
+    .exports_of(entry_id)
+    .get("total")
+    .and_then(|entry| entry.def)
+    .expect("total def");
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let restored_entry = restored
+    .file_id(&key(FileId(0)))
+    .expect("restored entry id");
+  let (restored_body, restored_expr) = restored
+    .expr_at(restored_entry, call_offset)
+    .expect("restored expr at call");
+  assert_eq!(restored_body, body);
+  assert_eq!(restored_expr, expr);
+
+  let parses_before = parse_call_count();
+  assert!(restored.span_of_def(total_def).is_some());
+  assert!(restored
+    .span_of_expr(restored_body, restored_expr)
+    .is_some());
+  let parses_after = parse_call_count();
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "span queries should not trigger salsa parsing when restored from snapshot"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));
