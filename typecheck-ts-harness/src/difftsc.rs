@@ -1680,11 +1680,13 @@ fn collect_marker_type_facts(
     let Some(file_id) = program.file_id(file) else {
       continue;
     };
-    // `Program::type_at` reports the inferred type for the innermost expression/pattern at
-    // `offset`. For binding identifiers, that may return the initializer's literal/object type
-    // rather than the declared symbol type. TypeScript's `checker.getTypeAtLocation` on an
-    // identifier token generally reflects the declared symbol type, so prefer `symbol_at` when
-    // the marker does not land within an expression span.
+    // `Program::type_at` uses a trivia lookaround to be resilient to offsets in
+    // whitespace. TypeScript's marker queries use `getTokenAtPosition` on the
+    // exact offset, so keep our lookup strict: use `type_at` only when the
+    // marker lands inside an expression span; otherwise fall back to the
+    // declared symbol type (when the offset lands on an identifier). If neither
+    // is available, treat the marker as `any` so we still emit a fact with a
+    // stable, tsc-like default.
     let ty = if program.expr_at(file_id, marker.offset).is_some() {
       program.type_at(file_id, marker.offset)
     } else {
@@ -1692,18 +1694,19 @@ fn collect_marker_type_facts(
         .symbol_at(file_id, marker.offset)
         .and_then(|symbol| program.symbol_info(symbol))
         .and_then(|info| info.type_id)
-        .or_else(|| program.type_at(file_id, marker.offset))
     };
 
-    if let Some(ty) = ty {
-      facts.push(TypeAtFact {
-        file: marker.file.clone(),
-        offset: marker.offset,
-        line: marker.line,
-        column: marker.column,
-        type_str: program.display_type(ty).to_string(),
-      });
-    }
+    let type_str = ty
+      .map(|ty| program.display_type(ty).to_string())
+      .unwrap_or_else(|| "any".to_string());
+
+    facts.push(TypeAtFact {
+      file: marker.file.clone(),
+      offset: marker.offset,
+      line: marker.line,
+      column: marker.column,
+      type_str,
+    });
   }
   facts
 }

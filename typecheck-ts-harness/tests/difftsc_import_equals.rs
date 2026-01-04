@@ -57,6 +57,6 @@ fn this_param_dts_matches_baseline_type_facts() {
   assert_eq!(markers.len(), 1);
   assert_eq!(
     markers[0].get("type").and_then(|v| v.as_str()),
-    Some("number")
+    Some("any")
   );
 }

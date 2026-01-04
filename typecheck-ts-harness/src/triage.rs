@@ -138,7 +138,13 @@ enum DifftscCaseStatus {
 
 impl DifftscCaseStatus {
   fn is_mismatch(self) -> bool {
-    !matches!(self, DifftscCaseStatus::Matched | DifftscCaseStatus::Skipped)
+    matches!(
+      self,
+      DifftscCaseStatus::Mismatch
+        | DifftscCaseStatus::BaselineMissing
+        | DifftscCaseStatus::TscFailed
+        | DifftscCaseStatus::RustFailed
+    )
   }
 
   fn as_key(self) -> &'static str {
@@ -449,11 +455,7 @@ fn difftsc_case_summaries(input: &DifftscReportInput) -> BTreeMap<String, CaseSu
   let mut summaries = BTreeMap::new();
   for case in &input.results {
     let mismatched = case.status.is_mismatch();
-    let outcome = match case.status {
-      DifftscCaseStatus::Matched => "match".to_string(),
-      DifftscCaseStatus::Mismatch => "mismatch".to_string(),
-      other => other.as_key().to_string(),
-    };
+    let outcome = case.status.as_key().to_string();
     let prefix = fixture_prefix(&case.name);
     let code = if case.status == DifftscCaseStatus::Mismatch {
       difftsc_case_outcomes_and_code(case).1

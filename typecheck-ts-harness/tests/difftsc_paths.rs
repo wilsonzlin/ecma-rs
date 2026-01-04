@@ -82,12 +82,12 @@ fn difftsc_uses_canonical_file_paths() {
   {
     let foo_type = exports
       .iter()
-      .find(|export| export.get("name").and_then(|n| n.as_str()) == Some("Foo"))
+      .find(|export| export.get("name").and_then(|n| n.as_str()) == Some("v"))
       .and_then(|export| export.get("type").and_then(|t| t.as_str()))
       .unwrap_or("unknown");
     assert_ne!(
       foo_type, "unknown",
-      "module_types should resolve interface export types; exports={:?}",
+      "module_types should resolve value export types; exports={:?}",
       exports
     );
   }

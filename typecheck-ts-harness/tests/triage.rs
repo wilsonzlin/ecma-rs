@@ -452,6 +452,121 @@ const EXPECTED_DIFFTSC_TRIAGE: &str = r#"{
 }
 "#;
 
+const DIFFTSC_REPORT_FOR_BASELINE: &str = r#"
+{
+  "results": [
+    {
+      "name": "a",
+      "status": "mismatch",
+      "diff": {
+        "unexpected": [
+          { "engine": "rust", "code": "TS1111", "file": "/a.ts", "start": 0, "end": 1 }
+        ]
+      }
+    },
+    { "name": "b", "status": "matched" },
+    { "name": "c", "status": "baseline_missing", "notes": ["missing baseline"] }
+  ]
+}
+"#;
+
+const DIFFTSC_BASELINE_REPORT: &str = r#"
+{
+  "results": [
+    { "name": "a", "status": "matched" },
+    {
+      "name": "b",
+      "status": "mismatch",
+      "diff": {
+        "unexpected": [
+          { "engine": "rust", "code": "TS2222", "file": "/b.ts", "start": 0, "end": 1 }
+        ]
+      }
+    },
+    { "name": "c", "status": "baseline_missing", "notes": ["missing baseline"] }
+  ]
+}
+"#;
+
+const EXPECTED_DIFFTSC_TRIAGE_WITH_BASELINE: &str = r#"{
+  "kind": "difftsc",
+  "top": 10,
+  "total": 3,
+  "mismatches": 2,
+  "mismatches_without_code": 1,
+  "top_outcomes": [
+    {
+      "key": "baseline_missing",
+      "count": 1
+    },
+    {
+      "key": "rust_extra_diagnostics",
+      "count": 1
+    }
+  ],
+  "top_codes": [
+    {
+      "key": "TS1111",
+      "count": 1
+    }
+  ],
+  "top_prefixes": [
+    {
+      "key": "a",
+      "count": 1
+    },
+    {
+      "key": "c",
+      "count": 1
+    }
+  ],
+  "regressions": [
+    {
+      "id": "a",
+      "outcome": "mismatch",
+      "code": "TS1111",
+      "prefix": "a"
+    },
+    {
+      "id": "c",
+      "outcome": "baseline_missing",
+      "prefix": "c"
+    }
+  ],
+  "suggestions": [
+    {
+      "id": "c",
+      "status": "skip",
+      "reason": "triage: baseline_missing"
+    },
+    {
+      "id": "a",
+      "status": "xfail",
+      "reason": "triage: mismatch TS1111"
+    }
+  ],
+  "baseline": {
+    "baseline_total": 3,
+    "baseline_mismatches": 2,
+    "new_cases": 0,
+    "missing_cases": 0,
+    "regressed": 1,
+    "fixed": 1,
+    "regressions": [
+      {
+        "id": "a",
+        "outcome": "mismatch",
+        "code": "TS1111",
+        "prefix": "a"
+      }
+    ],
+    "fixes": [
+      "b"
+    ]
+  }
+}
+"#;
+
 #[test]
 fn triage_conformance_json_output_is_stable() {
   let dir = tempdir().expect("tempdir");
@@ -535,4 +650,35 @@ fn triage_difftsc_json_output_is_stable() {
   );
   let stdout = String::from_utf8_lossy(&output.stdout);
   assert_eq!(stdout, EXPECTED_DIFFTSC_TRIAGE);
+}
+
+#[test]
+fn triage_difftsc_baseline_diff_json_output_is_stable() {
+  let dir = tempdir().expect("tempdir");
+  let path = dir.path().join("report.json");
+  let baseline = dir.path().join("baseline.json");
+  fs::write(&path, DIFFTSC_REPORT_FOR_BASELINE).expect("write report");
+  fs::write(&baseline, DIFFTSC_BASELINE_REPORT).expect("write baseline");
+
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
+  cmd
+    .arg("triage")
+    .arg("--input")
+    .arg(&path)
+    .arg("--baseline")
+    .arg(&baseline)
+    .arg("--top")
+    .arg("10")
+    .arg("--json");
+
+  let assert = cmd.assert().success();
+  let output = assert.get_output();
+  assert!(
+    !output.stderr.is_empty(),
+    "expected human summary on stderr"
+  );
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert_eq!(stdout, EXPECTED_DIFFTSC_TRIAGE_WITH_BASELINE);
 }
