@@ -308,3 +308,76 @@ fn derived_constructor_parameter_properties_follow_super_call() {
   );
 }
 
+#[test]
+fn lowers_namespaces_merged_with_classes_inside_runtime_namespaces() {
+  // Disable renaming so we can assert on the exact merged binding name.
+  let src = r#"
+    eval("x");
+    export namespace N {
+      class C {}
+      export namespace C { export const x = 1; }
+    }
+    console.log(N.C.x);
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  let body = find_iife_body_by_outer_name(&parsed, "N").expect("expected N namespace IIFE");
+  let class_name = body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::ClassDecl(decl) => decl
+        .stx
+        .name
+        .as_ref()
+        .map(|name| name.stx.name.clone()),
+      _ => None,
+    })
+    .expect("expected class declaration inside the N namespace body");
+  let mut saw_var_for_class = false;
+  let mut saw_parent_assignment = false;
+  for stmt in body {
+    match stmt.stx.as_ref() {
+      Stmt::VarDecl(decl) => {
+        for declarator in &decl.stx.declarators {
+          if matches!(
+            declarator.pattern.stx.pat.stx.as_ref(),
+            Pat::Id(id) if id.stx.name == class_name
+          ) {
+            saw_var_for_class = true;
+          }
+        }
+      }
+      Stmt::Expr(expr_stmt) => {
+        let Expr::Binary(bin) = expr_stmt.stx.expr.stx.as_ref() else {
+          continue;
+        };
+        if bin.stx.operator != OperatorName::Assignment {
+          continue;
+        }
+        let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
+          continue;
+        };
+        if !matches!(member.stx.object.stx.as_ref(), Expr::Id(_)) {
+          continue;
+        }
+        if !matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "C") {
+          continue;
+        }
+        if !matches!(bin.stx.right.stx.as_ref(), Expr::Id(id) if id.stx.name == class_name) {
+          continue;
+        }
+        saw_parent_assignment = true;
+      }
+      _ => {}
+    }
+  }
+
+  assert!(
+    !saw_var_for_class,
+    "namespace merging should not introduce a `var` binding that collides with the merged class. output: {code}"
+  );
+  assert!(
+    saw_parent_assignment,
+    "expected an assignment of the merged class onto the parent namespace object. output: {code}"
+  );
+}

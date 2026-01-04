@@ -30,10 +30,26 @@ const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 struct StripContext {
   file: FileId,
   top_level_mode: TopLevelMode,
-  top_level_value_bindings: HashSet<String>,
+  value_bindings_stack: Vec<HashSet<String>>,
   top_level_module_exports: HashSet<String>,
   emitted_export_var: HashSet<String>,
   diagnostics: Vec<Diagnostic>,
+}
+
+impl StripContext {
+  fn current_value_bindings(&self) -> &HashSet<String> {
+    self
+      .value_bindings_stack
+      .last()
+      .expect("value binding stack must never be empty")
+  }
+
+  fn current_value_bindings_mut(&mut self) -> &mut HashSet<String> {
+    self
+      .value_bindings_stack
+      .last_mut()
+      .expect("value binding stack must never be empty")
+  }
 }
 
 fn new_node<T: Drive + DriveMut>(loc: Loc, assoc: NodeAssocData, stx: T) -> Node<T> {
@@ -101,7 +117,7 @@ pub fn erase_types(
   let mut ctx = StripContext {
     file,
     top_level_mode,
-    top_level_value_bindings,
+    value_bindings_stack: vec![top_level_value_bindings],
     top_level_module_exports,
     emitted_export_var: HashSet::new(),
     diagnostics: Vec::new(),
@@ -1693,6 +1709,7 @@ fn strip_enum_decl(
   }
 
   let enum_name = decl.stx.name.clone();
+  let has_value_binding = ctx.current_value_bindings().contains(&enum_name);
   let member_names: HashSet<String> = decl
     .stx
     .members
@@ -1707,17 +1724,26 @@ fn strip_enum_decl(
     && ctx.emitted_export_var.insert(enum_name.clone());
 
   let mut out = Vec::new();
-  let has_top_level_value_binding =
-    parent_namespace.is_none() && is_top_level && ctx.top_level_value_bindings.contains(&enum_name);
-  if should_export_binding && has_top_level_value_binding {
+  if should_export_binding && has_value_binding {
     out.push(export_binding_stmt(loc, enum_name.clone()));
   }
-  let should_export_var = should_export_binding && !has_top_level_value_binding;
-  let needs_var_decl = parent_namespace.is_some()
-    || !is_top_level
-    || should_export_var
-    || !has_top_level_value_binding;
-  if needs_var_decl {
+  let should_export_var = should_export_binding && !has_value_binding;
+
+  // When exporting enums to runtime namespaces (`parent_namespace`), a pre-existing value binding
+  // should be attached to the namespace object before the enum IIFE runs, otherwise we would
+  // overwrite the binding with a fresh object.
+  if let Some(namespace_param) = parent_namespace {
+    if has_value_binding {
+      out.push(ts_lower::member_assignment_stmt(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(enum_name.clone()),
+        ts_lower::id(loc, enum_name.clone()),
+      ));
+    }
+  }
+
+  if !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
       enum_name.clone(),
@@ -1725,9 +1751,7 @@ fn strip_enum_decl(
       should_export_var,
       VarDeclMode::Var,
     ));
-    if parent_namespace.is_none() && is_top_level {
-      ctx.top_level_value_bindings.insert(enum_name.clone());
-    }
+    ctx.current_value_bindings_mut().insert(enum_name.clone());
   }
 
   let enum_alias = format!("__minify_ts_enum_{enum_name}");
@@ -1984,21 +2008,31 @@ fn strip_namespace_body(
   namespace_param: &str,
 ) -> Vec<Node<Stmt>> {
   match body {
-    NamespaceBody::Block(stmts) => stmts
-      .into_iter()
-      .flat_map(|stmt| strip_namespace_body_stmt(ctx, stmt, namespace_param))
-      .collect(),
+    NamespaceBody::Block(stmts) => {
+      ctx
+        .value_bindings_stack
+        .push(collect_top_level_value_bindings(&stmts));
+      let out = stmts
+        .into_iter()
+        .flat_map(|stmt| strip_namespace_body_stmt(ctx, stmt, namespace_param))
+        .collect();
+      ctx.value_bindings_stack.pop();
+      out
+    }
     NamespaceBody::Namespace(inner) => {
       let inner = *inner;
       let inner_loc = inner.loc;
-      strip_namespace_decl(
+      ctx.value_bindings_stack.push(HashSet::new());
+      let out = strip_namespace_decl(
         ctx,
         inner,
         inner_loc,
         NodeAssocData::default(),
         false,
         Some(namespace_param),
-      )
+      );
+      ctx.value_bindings_stack.pop();
+      out
     }
   }
 }
@@ -2016,6 +2050,7 @@ fn strip_namespace_decl(
   }
 
   let namespace_name = decl.stx.name.clone();
+  let has_value_binding = ctx.current_value_bindings().contains(&namespace_name);
   let mut out = Vec::new();
 
   let should_export_binding = parent_namespace.is_none()
@@ -2025,18 +2060,23 @@ fn strip_namespace_decl(
     && !ctx.top_level_module_exports.contains(&namespace_name)
     && ctx.emitted_export_var.insert(namespace_name.clone());
 
-  let has_top_level_value_binding = parent_namespace.is_none()
-    && is_top_level
-    && ctx.top_level_value_bindings.contains(&namespace_name);
-  if should_export_binding && has_top_level_value_binding {
+  if should_export_binding && has_value_binding {
     out.push(export_binding_stmt(loc, namespace_name.clone()));
   }
-  let should_export_var = should_export_binding && !has_top_level_value_binding;
-  let needs_var_decl = parent_namespace.is_some()
-    || !is_top_level
-    || should_export_var
-    || !has_top_level_value_binding;
-  if needs_var_decl {
+  let should_export_var = should_export_binding && !has_value_binding;
+
+  if let Some(namespace_param) = parent_namespace {
+    if has_value_binding {
+      out.push(ts_lower::member_assignment_stmt(
+        loc,
+        ts_lower::id(loc, namespace_param),
+        ts_lower::MemberKey::Name(namespace_name.clone()),
+        ts_lower::id(loc, namespace_name.clone()),
+      ));
+    }
+  }
+
+  if !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
       namespace_name.clone(),
@@ -2044,9 +2084,7 @@ fn strip_namespace_decl(
       should_export_var,
       VarDeclMode::Var,
     ));
-    if parent_namespace.is_none() && is_top_level {
-      ctx.top_level_value_bindings.insert(namespace_name.clone());
-    }
+    ctx.current_value_bindings_mut().insert(namespace_name.clone());
   }
 
   let body = strip_namespace_body(ctx, decl.stx.body, &namespace_name);
@@ -2162,7 +2200,11 @@ fn strip_func(ctx: &mut StripContext, func: &mut Func) -> bool {
   match func.body.take() {
     Some(FuncBody::Block(body)) => {
       let mut block = body;
+      ctx
+        .value_bindings_stack
+        .push(collect_top_level_value_bindings(&block));
       strip_stmts(ctx, &mut block, false);
+      ctx.value_bindings_stack.pop();
       func.body = Some(FuncBody::Block(block));
       true
     }
