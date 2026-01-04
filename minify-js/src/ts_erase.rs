@@ -30,6 +30,7 @@ const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+type ExportListStmtNode = Node<ExportListStmt>;
 type EnumDeclNode = Node<EnumDecl>;
 type NamespaceDeclNode = Node<NamespaceDecl>;
 type ModuleDeclNode = Node<ModuleDecl>;
@@ -69,6 +70,7 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
     IdExprNode(enter),
     IdPatNode(enter),
     ClassOrFuncNameNode(enter),
+    ExportListStmtNode(enter),
     EnumDeclNode(enter),
     NamespaceDeclNode(enter),
     ModuleDeclNode(enter),
@@ -93,6 +95,23 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
 
     fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
       self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_export_list_stmt_node(&mut self, node: &mut ExportListStmtNode) {
+      if node.stx.type_only || node.stx.from.is_some() {
+        return;
+      }
+      let ExportNames::Specific(entries) = &node.stx.names else {
+        return;
+      };
+      for entry in entries {
+        if entry.stx.type_only {
+          continue;
+        }
+        if let ModuleExportImportName::Ident(local) = &entry.stx.exportable {
+          self.names.insert(local.clone());
+        }
+      }
     }
 
     fn enter_enum_decl_node(&mut self, node: &mut EnumDeclNode) {
