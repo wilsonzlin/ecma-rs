@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 mod common;
 
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, ModuleKind};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn export_assignment_creates_export_equals_entry() {
   let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
   host.add_lib(common::core_globals_lib());

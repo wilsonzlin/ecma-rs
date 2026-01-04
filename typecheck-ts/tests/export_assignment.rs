@@ -1,8 +1,11 @@
+use typecheck_ts::lib_support::{CompilerOptions, ModuleKind};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn export_assignment_interops_with_import_equals_require() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   let dep = FileKey::new("dep.ts");
   host.insert(
     dep.clone(),
@@ -50,7 +53,9 @@ y.x satisfies number;
 
 #[test]
 fn export_assignment_accepts_qualified_name_rhs() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   let dep = FileKey::new("dep.ts");
   host.insert(
     dep.clone(),
@@ -108,5 +113,9 @@ export const x = 2;
   assert!(
     diagnostics.iter().any(|d| d.code.as_str() == "TS2309"),
     "expected TS2309 for mixed export assignment, got {diagnostics:?}"
+  );
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "TS1203"),
+    "expected TS1203 for mixed export assignment, got {diagnostics:?}"
   );
 }

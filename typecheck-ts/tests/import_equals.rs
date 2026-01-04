@@ -62,7 +62,9 @@ fn import_equals_require_aliases_module_namespace() {
 
 #[test]
 fn import_equals_require_aliases_ambient_module_namespace() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   host.add_lib(LibFile {
     key: FileKey::new("ambient.d.ts"),
     name: Arc::from("ambient.d.ts"),
@@ -92,7 +94,9 @@ fn import_equals_require_aliases_ambient_module_namespace() {
 
 #[test]
 fn import_equals_require_interops_with_ambient_export_assignment() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   host.add_lib(LibFile {
     key: FileKey::new("ambient.d.ts"),
     name: Arc::from("ambient.d.ts"),
@@ -132,7 +136,9 @@ export const x: 1 = foo;
 
 #[test]
 fn import_equals_require_allows_namespace_members_through_ambient_export_assignment() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   host.add_lib(LibFile {
     key: FileKey::new("ambient.d.ts"),
     name: Arc::from("ambient.d.ts"),
@@ -181,7 +187,9 @@ export const z = y.x;
 
 #[test]
 fn ambient_module_exports_resolve_through_import_equals_require_type_members() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   host.add_lib(LibFile {
     key: FileKey::new("ambient.d.ts"),
     name: Arc::from("ambient.d.ts"),

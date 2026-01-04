@@ -8,7 +8,7 @@ use typecheck_ts::db::{
   program_diagnostics as db_program_diagnostics, reset_parse_query_count,
   unresolved_module_diagnostics, TypecheckDb,
 };
-use typecheck_ts::lib_support::FileKind;
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, ModuleKind};
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};
 use types_ts_interned::TypeStore;
@@ -63,6 +63,7 @@ fn reports_diagnostic_with_span_for_invalid_syntax() {
 
 struct MissingImportHost {
   text: Arc<str>,
+  options: CompilerOptions,
 }
 
 impl Host for MissingImportHost {
@@ -72,6 +73,10 @@ impl Host for MissingImportHost {
 
   fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
     None
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    self.options.clone()
   }
 }
 
@@ -124,6 +129,7 @@ fn unresolved_import_points_at_specifier() {
   let source = r#"import { Foo } from "./missing";"#;
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
+    options: CompilerOptions::default(),
   };
 
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -139,6 +145,7 @@ fn unresolved_import_type_points_at_specifier() {
   let source = r#"type T = import("./missing").Thing;"#;
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
+    options: CompilerOptions::default(),
   };
 
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -157,6 +164,7 @@ fn unresolved_typeof_import_points_at_specifier() {
   let source = r#"type T = typeof import("./missing").value;"#;
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
+    options: CompilerOptions::default(),
   };
 
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -405,9 +413,12 @@ fn db_unresolved_export_all_and_import_equals_point_at_specifier() {
 #[test]
 fn program_unresolved_export_all_and_import_equals_point_at_specifier() {
   let source = r#"import foo = require("./missing-import-equals");
-export * from "./missing-export-all";"#;
+ export * from "./missing-export-all";"#;
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
+    options,
   };
 
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);

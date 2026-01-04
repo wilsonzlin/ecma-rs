@@ -283,7 +283,7 @@ pub const IMPORT_ASSIGNMENT_IN_ESM: Code = Code::new(
 
 /// TS1203: Export assignment cannot be used when targeting ECMAScript modules.
 ///
-/// - Primary span: the full `export = ...` statement.
+/// - Primary span: the full `export = <expr>` statement.
 /// - Labels: primary only.
 /// - Notes: none.
 pub const EXPORT_ASSIGNMENT_IN_ESM: Code = Code::new(

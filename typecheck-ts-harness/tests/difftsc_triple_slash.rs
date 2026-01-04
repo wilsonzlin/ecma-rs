@@ -74,6 +74,9 @@ fn difftsc_selected_cases_match_baselines() {
   );
 
   for name in [
+    "export_assignment_mixed_exports",
+    "export_assignment_qualified",
+    "export_assignment_require",
     "import_equals_require",
     "module_types",
     "multi",

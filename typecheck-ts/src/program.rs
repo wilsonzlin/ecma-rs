@@ -8513,7 +8513,7 @@ impl ProgramState {
 
   fn check_import_assignment_requires(&mut self) {
     // Match tsc's TS1202 behaviour: `import x = require("...")` is rejected when
-    // emitting ECMAScript modules.
+    // targeting ECMAScript module outputs.
     //
     // Note: `tsc` only allows `import = require()` in ESM output modes for the
     // Node16/NodeNext emit strategies, and only when importing from a
@@ -8547,6 +8547,12 @@ impl ProgramState {
     let mut records = self.import_assignment_requires.clone();
     records.sort_by_key(|record| (record.file.0, record.span.start, record.span.end));
     for record in records {
+      // TypeScript permits `import = require()` declarations in `.d.ts` files
+      // regardless of emit target. Since these files never produce JS output,
+      // the restriction only applies to emit-capable sources.
+      if self.file_kinds.get(&record.file) == Some(&FileKind::Dts) {
+        continue;
+      }
       if allow_commonjs_interop {
         let has_export_assignment = match record.target {
           ImportTarget::File(target_file) => semantics
@@ -8590,18 +8596,23 @@ impl ProgramState {
       return;
     }
 
-    let mut files: Vec<_> = self.asts.keys().copied().collect();
+    let mut files: Vec<FileId> = self.hir_lowered.keys().copied().collect();
     files.sort_by_key(|file| file.0);
     for file in files {
-      let Some(ast) = self.asts.get(&file) else {
+      // TypeScript permits `export =` declarations in `.d.ts` files regardless
+      // of emit target. Since these files never produce JS output, the
+      // restriction only applies to emit-capable sources.
+      if self.file_kinds.get(&file) == Some(&FileKind::Dts) {
+        continue;
+      }
+      let Some(lowered) = self.hir_lowered.get(&file) else {
         continue;
       };
-      for stmt in ast.stx.body.iter() {
-        if matches!(stmt.stx.as_ref(), Stmt::ExportAssignmentDecl(_)) {
-          let span = loc_to_span(file, stmt.loc).range;
+      for export in lowered.hir.exports.iter() {
+        if matches!(export.kind, hir_js::ExportKind::Assignment(_)) {
           self.diagnostics.push(codes::EXPORT_ASSIGNMENT_IN_ESM.error(
             "Export assignment cannot be used when targeting ECMAScript modules.",
-            Span::new(file, span),
+            Span::new(file, export.span),
           ));
         }
       }
