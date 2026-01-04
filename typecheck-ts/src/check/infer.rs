@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use super::overload::expected_arg_type_at;
 use super::instantiate::Substituter;
 use types_ts_interned::{
   PropKey, Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
@@ -40,8 +41,10 @@ pub fn infer_type_arguments_for_call(
 
   let mut ctx = InferenceContext::new(Arc::clone(store), decls);
 
-  for (param, arg) in sig.params.iter().zip(args.iter()) {
-    ctx.constrain(param.ty, *arg, Variance::Covariant);
+  for (idx, arg) in args.iter().enumerate() {
+    if let Some(param_ty) = expected_arg_type_at(store.as_ref(), sig, idx) {
+      ctx.constrain(param_ty, *arg, Variance::Covariant);
+    }
   }
 
   if let Some(ret) = contextual_return {

@@ -263,7 +263,7 @@ impl<'a> TypeDisplay<'a> {
           } else {
             write!(f, "; ")?;
           }
-          self.fmt_signature(&sig, f)?;
+          self.fmt_call_signature(&sig, f)?;
         }
         for sig in shape.construct_signatures.iter() {
           let sig = self.store.signature(*sig);
@@ -274,7 +274,7 @@ impl<'a> TypeDisplay<'a> {
             write!(f, "; ")?;
           }
           write!(f, "new ")?;
-          self.fmt_signature(&sig, f)?;
+          self.fmt_call_signature(&sig, f)?;
         }
         if !first {
           write!(f, " ")?;
@@ -282,15 +282,26 @@ impl<'a> TypeDisplay<'a> {
         write!(f, "}}")
       }
       TypeKind::Callable { overloads } => {
-        let mut iter = overloads.iter().peekable();
-        while let Some(sig_id) = iter.next() {
-          let sig = self.store.signature(*sig_id);
-          self.fmt_signature(&sig, f)?;
-          if iter.peek().is_some() {
-            write!(f, " & ")?;
-          }
+        if overloads.len() == 1 {
+          let sig = self.store.signature(overloads[0]);
+          return self.fmt_signature(&sig, f);
         }
-        Ok(())
+        write!(f, "{{")?;
+        let mut first = true;
+        for sig_id in overloads.iter() {
+          let sig = self.store.signature(*sig_id);
+          if first {
+            write!(f, " ")?;
+            first = false;
+          } else {
+            write!(f, "; ")?;
+          }
+          self.fmt_call_signature(&sig, f)?;
+        }
+        if !first {
+          write!(f, " ")?;
+        }
+        write!(f, "}}")
       }
       TypeKind::Ref { def, args } => {
         if let Some(resolver) = &self.ref_resolver {
@@ -454,7 +465,6 @@ impl<'a> TypeDisplay<'a> {
     let mut needs_comma = false;
 
     if let Some(this_param) = sig.this_param {
-      write!(f, "this: ")?;
       self.fmt_type(this_param, f)?;
       needs_comma = true;
     }
@@ -467,17 +477,71 @@ impl<'a> TypeDisplay<'a> {
       if param.rest {
         write!(f, "...")?;
       }
-      if let Some(name) = param.name {
-        self.fmt_name(name, f)?;
-        if param.optional {
-          write!(f, "?")?;
-        }
-        write!(f, ": ")?;
-      }
       self.fmt_type(param.ty, f)?;
+      if param.optional {
+        write!(f, "?")?;
+      }
       needs_comma = true;
     }
     write!(f, ") => ")?;
+    self.fmt_type(sig.ret, f)
+  }
+
+  fn fmt_call_signature(
+    &self,
+    sig: &crate::signature::Signature,
+    f: &mut fmt::Formatter<'_>,
+  ) -> fmt::Result {
+    if !sig.type_params.is_empty() {
+      write!(f, "<")?;
+      let mut iter = sig.type_params.iter().peekable();
+      while let Some(param) = iter.next() {
+        write!(f, "T{}", param.id.0)?;
+        if let Some(constraint) = param.constraint {
+          write!(f, " extends ")?;
+          self.fmt_type(constraint, f)?;
+        }
+        if let Some(default) = param.default {
+          write!(f, " = ")?;
+          self.fmt_type(default, f)?;
+        }
+        if iter.peek().is_some() {
+          write!(f, ", ")?;
+        }
+      }
+      write!(f, ">")?;
+    }
+
+    write!(f, "(")?;
+    let mut needs_comma = false;
+
+    if let Some(this_param) = sig.this_param {
+      write!(f, "this: ")?;
+      self.fmt_type(this_param, f)?;
+      needs_comma = true;
+    }
+
+    for (idx, param) in sig.params.iter().enumerate() {
+      if needs_comma {
+        write!(f, ", ")?;
+      }
+      if param.rest {
+        write!(f, "...")?;
+      }
+      if let Some(name) = param.name {
+        self.fmt_name(name, f)?;
+      } else {
+        write!(f, "arg{idx}")?;
+      }
+      if param.optional {
+        write!(f, "?")?;
+      }
+      write!(f, ": ")?;
+      self.fmt_type(param.ty, f)?;
+      needs_comma = true;
+    }
+
+    write!(f, "): ")?;
     self.fmt_type(sig.ret, f)
   }
 }

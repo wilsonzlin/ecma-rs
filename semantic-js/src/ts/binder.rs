@@ -591,6 +591,10 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     ambient_modules: &[AmbientModule],
     deps: &mut Vec<FileId>,
   ) {
+    let implicit_export = implicit_export
+      && !exports
+        .iter()
+        .any(|export| matches!(export, Export::ExportAssignment { .. }));
     let mut has_exports = false;
     let mut first_export_span: Option<Span> = None;
     let mut has_export_assignment = false;

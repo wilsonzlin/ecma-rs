@@ -4978,9 +4978,7 @@ impl ProgramState {
           continue;
         };
         if let tti::TypeKind::Callable { overloads: sigs } = store.type_kind(ty) {
-          let mut sigs: Vec<_> = sigs.iter().copied().collect();
-          sigs.sort();
-          for sig in sigs.into_iter() {
+          for sig in sigs.iter().copied() {
             if seen_sigs.insert(sig) {
               overloads.push(sig);
             }
@@ -6528,6 +6526,7 @@ impl ProgramState {
         _ => None,
       };
       let is_this = idx == 0 && matches!(name.as_deref(), Some("this"));
+      let name_id = name.as_ref().map(|name| store.intern_name(name.clone()));
       let annotation = param
         .stx
         .type_annotation
@@ -6547,7 +6546,7 @@ impl ProgramState {
         continue;
       }
       params.push(tti::Param {
-        name: None,
+        name: name_id,
         ty,
         optional: param.stx.optional,
         rest: param.stx.rest,
@@ -6641,8 +6640,8 @@ impl ProgramState {
     let shape = store.shape(store.object(object).shape);
     let mut merged = overloads.to_vec();
     merged.extend(shape.call_signatures.iter().copied());
-    merged.sort();
-    merged.dedup();
+    let mut seen = HashSet::new();
+    merged.retain(|sig| seen.insert(*sig));
     let callable = store.intern_type(tti::TypeKind::Callable { overloads: merged });
     let has_extras = !shape.properties.is_empty()
       || !shape.construct_signatures.is_empty()
@@ -6661,10 +6660,11 @@ impl ProgramState {
   ) -> tti::TypeId {
     match (store.type_kind(existing), store.type_kind(incoming)) {
       (tti::TypeKind::Callable { overloads: a }, tti::TypeKind::Callable { overloads: b }) => {
-        let mut merged = a;
+        let mut merged = Vec::with_capacity(a.len() + b.len());
+        merged.extend(a);
         merged.extend(b.into_iter());
-        merged.sort();
-        merged.dedup();
+        let mut seen_ids = HashSet::new();
+        merged.retain(|sig| seen_ids.insert(*sig));
         let mut unique = Vec::new();
         let mut seen: HashMap<
           (
@@ -6692,7 +6692,7 @@ impl ProgramState {
             let mut replace = false;
             if prev_unknown && !ret_unknown {
               replace = true;
-            } else if prev_named && !has_names && prev_unknown == ret_unknown {
+            } else if !prev_named && has_names && prev_unknown == ret_unknown {
               replace = true;
             }
             if replace {
@@ -6706,8 +6706,6 @@ impl ProgramState {
             unique.push(id);
           }
         }
-        unique.sort();
-        unique.dedup();
         store.intern_type(tti::TypeKind::Callable { overloads: unique })
       }
       (tti::TypeKind::Callable { overloads }, tti::TypeKind::Object(obj)) => {

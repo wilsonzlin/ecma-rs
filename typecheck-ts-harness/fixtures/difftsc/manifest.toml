@@ -14,11 +14,6 @@ status = "xfail"
 reason = "Rust checker spans differ from tsc for constraint violations and exported generic type parameter names (`T0`) differ from tsc (`T`)."
 
 [[expectations]]
-id = "difftsc/dts_overloads"
-status = "xfail"
-reason = "Rust checker does not yet model `.d.ts` overload sets the same way as tsc; export and marker type facts differ."
-
-[[expectations]]
 id = "difftsc/function_namespace_export"
 status = "xfail"
 reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."

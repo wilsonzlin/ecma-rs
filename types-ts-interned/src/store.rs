@@ -10,6 +10,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
@@ -147,6 +148,11 @@ pub struct TypeStoreSnapshot {
 }
 
 impl TypeStore {
+  fn stable_dedup_signatures(signatures: &mut Vec<SignatureId>) {
+    let mut seen = HashSet::new();
+    signatures.retain(|sig| seen.insert(*sig));
+  }
+
   fn new_dashmap<K: Eq + Hash, V>(domain: u64) -> DashMap<K, V, RandomState> {
     DashMap::with_hasher(stable_state(domain))
   }
@@ -547,14 +553,8 @@ impl TypeStore {
       declared_on_conflict = false;
     }
     shape.properties = merged_properties;
-    shape
-      .call_signatures
-      .sort_by(|a, b| self.signature_cmp(*a, *b));
-    shape.call_signatures.dedup();
-    shape
-      .construct_signatures
-      .sort_by(|a, b| self.signature_cmp(*a, *b));
-    shape.construct_signatures.dedup();
+    Self::stable_dedup_signatures(&mut shape.call_signatures);
+    Self::stable_dedup_signatures(&mut shape.construct_signatures);
     shape.indexers.sort_by(|a, b| {
       self
         .type_cmp(a.key_type, b.key_type)
@@ -680,8 +680,7 @@ impl TypeStore {
       },
       TypeKind::KeyOf(inner) => TypeKind::KeyOf(self.canon(inner)),
       TypeKind::Callable { mut overloads } => {
-        overloads.sort_by(|a, b| self.signature_cmp(*a, *b));
-        overloads.dedup();
+        Self::stable_dedup_signatures(&mut overloads);
         TypeKind::Callable { overloads }
       }
       other => other,

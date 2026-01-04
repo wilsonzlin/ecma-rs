@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, Span};
 use types_ts_interned::{
-  Param, RelateCtx, RelateTypeExpander, Signature, SignatureId, TupleElem, TypeDisplay, TypeId,
-  TypeKind, TypeParamId, TypeStore,
+  Param, ReasonNode, RelateCtx, RelateTypeExpander, Signature, SignatureId, TupleElem, TypeDisplay,
+  TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 use super::infer::infer_type_arguments_for_call;
@@ -416,7 +416,7 @@ fn resolve_overload_set(
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
 
   if applicable.is_empty() {
-    let diag = build_no_match_diagnostic(store.as_ref(), span, &outcomes);
+    let diag = build_no_match_diagnostic(store.as_ref(), relate, span, &outcomes);
     let mut fallback = outcomes.clone();
     fallback.sort_by_key(|candidate| fallback_rank_key(candidate, false));
     let (ret, contextual_signature) = fallback
@@ -1158,6 +1158,7 @@ fn count_unknown(
 
 fn build_no_match_diagnostic(
   store: &TypeStore,
+  relate: &RelateCtx<'_>,
   span: Span,
   outcomes: &[CandidateOutcome],
 ) -> Diagnostic {
@@ -1181,7 +1182,7 @@ fn build_no_match_diagnostic(
       index = idx + 1,
       width = width,
       sig = format_signature(store, &sig),
-      reason = describe_rejection(store, reason),
+      reason = describe_rejection(store, relate, reason),
     ));
   }
 
@@ -1220,7 +1221,24 @@ fn build_ambiguous_diagnostic(
   diag
 }
 
-fn describe_rejection(store: &TypeStore, reason: &CandidateRejection) -> String {
+fn first_reason_note(node: &ReasonNode) -> Option<String> {
+  if node.outcome {
+    return None;
+  }
+  if let Some(note) = &node.note {
+    if note != "cached" {
+      return Some(note.clone());
+    }
+  }
+  for child in node.children.iter() {
+    if let Some(note) = first_reason_note(child) {
+      return Some(note);
+    }
+  }
+  None
+}
+
+fn describe_rejection(store: &TypeStore, relate: &RelateCtx<'_>, reason: &CandidateRejection) -> String {
   match reason {
     CandidateRejection::Arity { min, max, actual } => match max {
       Some(max) if min == max => format!("expected {min} arguments but got {actual}"),
@@ -1231,12 +1249,21 @@ fn describe_rejection(store: &TypeStore, reason: &CandidateRejection) -> String 
       .first()
       .cloned()
       .unwrap_or_else(|| "type argument inference failed".to_string()),
-    CandidateRejection::ArgumentType { index, arg, param } => format!(
-      "argument {} of type {} is not assignable to parameter of type {}",
-      index + 1,
-      TypeDisplay::new(store, *arg),
-      TypeDisplay::new(store, *param)
-    ),
+    CandidateRejection::ArgumentType { index, arg, param } => {
+      let mut msg = format!(
+        "argument {} of type {} is not assignable to parameter of type {}",
+        index + 1,
+        TypeDisplay::new(store, *arg),
+        TypeDisplay::new(store, *param)
+      );
+      let explanation = relate.explain_assignable(*arg, *param);
+      if let Some(reason) = explanation.reason.as_ref() {
+        if let Some(note) = first_reason_note(reason) {
+          msg.push_str(&format!(" ({note})"));
+        }
+      }
+      msg
+    }
     CandidateRejection::ThisType { expected, actual } => match actual {
       Some(actual) => format!(
         "`this` of type {} is not assignable to expected type {}",
