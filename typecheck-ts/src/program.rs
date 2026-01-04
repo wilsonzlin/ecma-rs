@@ -8172,41 +8172,76 @@ impl ProgramState {
       for stmt in hir_body.stmts.iter() {
         if let hir_js::StmtKind::Var(decl) = &stmt.kind {
           for declarator in decl.declarators.iter() {
-            let pat_span = hir_body.pats.get(declarator.pat.0 as usize).map(|p| p.span);
-            let def_id = pat_span
-              .and_then(|span| defs_by_span.get(&(span, "var")).copied())
-              .or_else(|| {
-                hir_body
-                  .pats
-                  .get(declarator.pat.0 as usize)
-                  .and_then(|pat| match &pat.kind {
-                    hir_js::PatKind::Ident(name_id) => lowered
-                      .names
-                      .resolve(*name_id)
-                      .and_then(|name| defs_by_name.get(&(name.to_string(), "var")).copied()),
-                    _ => None,
-                  })
-              });
-            if let Some(def_id) = def_id {
-              if let Some(def) = self.def_data.get_mut(&def_id) {
-                if let DefKind::Var(var) = &mut def.kind {
-                  var.mode = match decl.kind {
-                    hir_js::VarDeclKind::Var => VarDeclMode::Var,
-                    hir_js::VarDeclKind::Let => VarDeclMode::Let,
-                    hir_js::VarDeclKind::Const => VarDeclMode::Const,
-                    hir_js::VarDeclKind::Using => VarDeclMode::Using,
-                    hir_js::VarDeclKind::AwaitUsing => VarDeclMode::AwaitUsing,
+            // Update every bound identifier in the declarator (including destructuring patterns)
+            // with the initializer expression/body. This keeps `var_initializer` fast and avoids
+            // relying on the salsa HIR scan for common destructuring cases.
+            let mut stack = vec![declarator.pat];
+            let mut updated: HashSet<DefId> = HashSet::new();
+            while let Some(pat_id) = stack.pop() {
+              let Some(pat) = hir_body.pats.get(pat_id.0 as usize) else {
+                continue;
+              };
+              match &pat.kind {
+                hir_js::PatKind::Ident(name_id) => {
+                  let name = lowered.names.resolve(*name_id).map(|n| n.to_string());
+                  let def_id = defs_by_span.get(&(pat.span, "var")).copied().or_else(|| {
+                    name
+                      .as_ref()
+                      .and_then(|name| defs_by_name.get(&(name.clone(), "var")).copied())
+                  });
+                  let Some(def_id) = def_id else {
+                    continue;
                   };
-                  if let Some(init) = declarator.init {
-                    let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
-                    if var.body.0 == u32::MAX || prefer {
-                      var.body = *hir_body_id;
-                    }
-                    if var.init.is_none() || prefer {
-                      var.init = Some(init);
+                  if !updated.insert(def_id) {
+                    continue;
+                  }
+                  if let Some(def) = self.def_data.get_mut(&def_id) {
+                    if let DefKind::Var(var) = &mut def.kind {
+                      var.mode = match decl.kind {
+                        hir_js::VarDeclKind::Var => VarDeclMode::Var,
+                        hir_js::VarDeclKind::Let => VarDeclMode::Let,
+                        hir_js::VarDeclKind::Const => VarDeclMode::Const,
+                        hir_js::VarDeclKind::Using => VarDeclMode::Using,
+                        hir_js::VarDeclKind::AwaitUsing => VarDeclMode::AwaitUsing,
+                      };
+                      if let Some(init) = declarator.init {
+                        let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
+                        if var.body.0 == u32::MAX || prefer {
+                          var.body = *hir_body_id;
+                        }
+                        if var.init.is_none() || prefer {
+                          var.init = Some(init);
+                        }
+                      }
                     }
                   }
                 }
+                hir_js::PatKind::Array(arr) => {
+                  for elem in arr.elements.iter() {
+                    let Some(elem) = elem.as_ref() else {
+                      continue;
+                    };
+                    stack.push(elem.pat);
+                  }
+                  if let Some(rest) = arr.rest {
+                    stack.push(rest);
+                  }
+                }
+                hir_js::PatKind::Object(obj) => {
+                  for prop in obj.props.iter() {
+                    stack.push(prop.value);
+                  }
+                  if let Some(rest) = obj.rest {
+                    stack.push(rest);
+                  }
+                }
+                hir_js::PatKind::Rest(inner) => {
+                  stack.push(**inner);
+                }
+                hir_js::PatKind::Assign { target, .. } => {
+                  stack.push(*target);
+                }
+                hir_js::PatKind::AssignTarget(_) => {}
               }
             }
           }
@@ -12942,11 +12977,36 @@ impl ProgramState {
               VarDeclMode::Using => HirVarDeclKind::Using,
               VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
             };
+            let pat = if self.snapshot_loaded {
+              self
+                .body_results
+                .get(&var.body)
+                .and_then(|result| {
+                  result
+                    .pat_spans
+                    .iter()
+                    .position(|span| *span == def_data.span)
+                })
+                .map(|idx| PatId(idx as u32))
+            } else {
+              self.body_map.get(&var.body).and_then(|meta| {
+                let hir_id = meta.hir?;
+                self
+                  .hir_lowered
+                  .get(&meta.file)
+                  .and_then(|lowered| lowered.body(hir_id))
+                  .and_then(|body| {
+                    body.pats.iter().enumerate().find_map(|(idx, pat)| {
+                      (pat.span == def_data.span).then_some(PatId(idx as u32))
+                    })
+                  })
+              })
+            };
             return Some(VarInit {
               body: var.body,
               expr,
               decl_kind,
-              pat: None,
+              pat,
               span: Some(def_data.span),
             });
           }

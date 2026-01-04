@@ -520,6 +520,59 @@ fn snapshot_restoration_var_initializer_does_not_reparse() {
 }
 
 #[test]
+fn snapshot_restoration_var_initializer_for_destructured_export_is_available() {
+  let mut host = MemoryHost::default();
+  let source = "export const obj = { a: 1, b: \"x\" }; export const { a } = obj;";
+  host.insert(FileId(0), source);
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file = program.file_id(&key(FileId(0))).expect("file id");
+  let a_def = program
+    .exports_of(file)
+    .get("a")
+    .and_then(|entry| entry.def)
+    .expect("a export def");
+  let init = program.var_initializer(a_def).expect("initializer for a");
+  assert!(
+    init.pat.is_some(),
+    "destructured initializer should record the bound pattern id"
+  );
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+  let restored_file = restored.file_id(&key(FileId(0))).expect("restored file id");
+  let restored_def = restored
+    .exports_of(restored_file)
+    .get("a")
+    .and_then(|entry| entry.def)
+    .expect("restored a def");
+  assert_eq!(restored_def, a_def);
+
+  let parses_before = parse_call_count();
+  let restored_init = restored
+    .var_initializer(a_def)
+    .expect("restored initializer");
+  let parses_after = parse_call_count();
+  assert_eq!(restored_init.body, init.body);
+  assert_eq!(restored_init.expr, init.expr);
+  assert_eq!(restored_init.decl_kind, init.decl_kind);
+  assert_eq!(restored_init.pat, init.pat);
+  assert_eq!(restored_init.span, init.span);
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "restored destructured var initializer should not trigger salsa parsing"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));
