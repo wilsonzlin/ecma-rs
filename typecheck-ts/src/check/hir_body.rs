@@ -1578,17 +1578,16 @@ impl<'a> Checker<'a> {
           None => self.check_expr(init),
         };
         if let Some(annotation) = annotation {
-          let is_ident_pat = self
+          // Mirror `check_var_decl`: anchor assignment diagnostics on the binding
+          // name/pattern to match tsc and dedupe with the top-level var check.
+          let range_override = self
             .index
             .pats
             .get(&pat_span)
             .copied()
-            .is_some_and(|pat| matches!(unsafe { &*pat }.stx.as_ref(), AstPat::Id(_)));
-          // Mirror `check_var_decl`: prefer anchoring the diagnostic on the initializer
-          // expression for simple identifiers, but keep the pattern span for
-          // destructuring bindings.
-          let range_override = if is_ident_pat { None } else { Some(pat_span) };
-          self.check_assignable(init, init_ty, annotation, range_override);
+            .map(|pat| self.binding_name_range(unsafe { &*pat }))
+            .unwrap_or(pat_span);
+          self.check_assignable(init, init_ty, annotation, Some(range_override));
         }
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
@@ -2109,15 +2108,15 @@ impl<'a> Checker<'a> {
       }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-          let pat_range = loc_to_range(self.file, declarator.pattern.stx.pat.loc);
-          // For simple identifier bindings, `tsc` anchors assignability diagnostics on the
-          // initializer expression. For binding patterns, use the pattern span to
-          // avoid pointing at an arbitrary sub-expression when destructuring fails.
-          let range_override = match declarator.pattern.stx.pat.stx.as_ref() {
-            AstPat::Id(_) => None,
-            _ => Some(pat_range),
-          };
-          self.check_assignable(init, init_ty, ann, range_override);
+          // TypeScript anchors assignment diagnostics for variable initializers
+          // on the binding name/pattern (e.g. `const x: T = ...` points at `x`,
+          // `const [x]: T = ...` points at `[x]`).
+          self.check_assignable(
+            init,
+            init_ty,
+            ann,
+            Some(self.binding_name_range(&declarator.pattern.stx.pat)),
+          );
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);

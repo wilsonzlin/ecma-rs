@@ -1,3 +1,4 @@
+use diagnostics::TextRange;
 use std::sync::Arc;
 
 use typecheck_ts::{codes, FileKey, MemoryHost, Program};
@@ -25,35 +26,24 @@ let bad_null: {} = null;
   assert_eq!(mismatches.len(), 2, "diagnostics: {diagnostics:?}");
 
   let file_id = program.file_id(&file).expect("file id for a.ts");
-  // TypeScript anchors `TS2322`-style assignability diagnostics on the
-  // initializer expression.
-  let bad_object_offset = u32::try_from(
-    source
-      .find("bad_object: object = 1")
-      .expect("bad object assignment"),
-  )
-  .expect("offset fits in u32")
-    + "bad_object: object = ".len() as u32;
-  let bad_null_offset =
-    u32::try_from(source.find("bad_null: {} = null").expect("bad null assignment"))
-      .expect("offset fits in u32")
-      + "bad_null: {} = ".len() as u32;
+  // TypeScript anchors `TS2322`-style assignability diagnostics on the binding
+  // name within the variable declaration.
+  let bad_object_start = u32::try_from(source.find("bad_object").expect("bad object binding"))
+    .expect("offset fits in u32");
+  let bad_object_end = bad_object_start + "bad_object".len() as u32;
+  let bad_null_start =
+    u32::try_from(source.find("bad_null").expect("bad null binding")).expect("offset fits in u32");
+  let bad_null_end = bad_null_start + "bad_null".len() as u32;
 
   assert!(
-    mismatches.iter().any(|diag| {
-      diag.primary.file == file_id
-        && diag.primary.range.start <= bad_object_offset
-        && diag.primary.range.end >= bad_object_offset + 1
-    }),
-    "expected mismatch span to cover `bad_object`; got {mismatches:?}",
+    mismatches.iter().any(|diag| diag.primary.file == file_id
+      && diag.primary.range == TextRange::new(bad_object_start, bad_object_end)),
+    "expected mismatch span on `bad_object`; got {mismatches:?}",
   );
   assert!(
-    mismatches.iter().any(|diag| {
-      diag.primary.file == file_id
-        && diag.primary.range.start <= bad_null_offset
-        && diag.primary.range.end >= bad_null_offset + 1
-    }),
-    "expected mismatch span to cover `bad_null`; got {mismatches:?}",
+    mismatches.iter().any(|diag| diag.primary.file == file_id
+      && diag.primary.range == TextRange::new(bad_null_start, bad_null_end)),
+    "expected mismatch span on `bad_null`; got {mismatches:?}",
   );
 }
 
