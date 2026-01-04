@@ -23,6 +23,8 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_DELETE_CALLEE: &'static str = "__optimize_js_delete";
   const INTERNAL_NEW_CALLEE: &'static str = "__optimize_js_new";
   const INTERNAL_REGEX_CALLEE: &'static str = "__optimize_js_regex";
+  const INTERNAL_ARRAY_CALLEE: &'static str = "__optimize_js_array";
+  const INTERNAL_ARRAY_HOLE: &'static str = "__optimize_js_array_hole";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -921,6 +923,35 @@ impl<'p> HirSourceToInst<'p> {
         consequent,
         alternate,
       } => self.compile_cond_expr(*test, *consequent, *alternate),
+      ExprKind::Array(array) => {
+        let mut args = Vec::new();
+        let mut spreads = Vec::new();
+        for element in array.elements.iter() {
+          match element {
+            hir_js::ArrayElement::Expr(expr) => {
+              args.push(self.compile_expr(*expr)?);
+            }
+            hir_js::ArrayElement::Spread(expr) => {
+              let arg = self.compile_expr(*expr)?;
+              let idx = args.len();
+              args.push(arg);
+              spreads.push(idx + 2);
+            }
+            hir_js::ArrayElement::Empty => {
+              args.push(Arg::Builtin(Self::INTERNAL_ARRAY_HOLE.to_string()));
+            }
+          }
+        }
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_ARRAY_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          args,
+          spreads,
+        ));
+        Ok(Arg::Var(tmp))
+      }
       ExprKind::Ident(name) => self.compile_id_expr(expr_id, *name),
       ExprKind::Literal(lit) => self.literal_arg(span, lit),
       ExprKind::This => Ok(Arg::Builtin("this".to_string())),

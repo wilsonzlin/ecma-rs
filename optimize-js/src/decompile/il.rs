@@ -5,7 +5,8 @@ use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
 use num_bigint::BigInt;
 use parse_js::ast::expr::lit::{
-  LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitRegexExpr, LitStrExpr,
+  LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitRegexExpr,
+  LitStrExpr,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
@@ -401,6 +402,8 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_DELETE_CALLEE: &str = "__optimize_js_delete";
   const INTERNAL_NEW_CALLEE: &str = "__optimize_js_new";
   const INTERNAL_REGEX_CALLEE: &str = "__optimize_js_regex";
+  const INTERNAL_ARRAY_CALLEE: &str = "__optimize_js_array";
+  const INTERNAL_ARRAY_HOLE: &str = "__optimize_js_array_hole";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -430,6 +433,27 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
         None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
       };
     }
+  }
+
+  if matches!(callee_arg, Arg::Builtin(path) if path == INTERNAL_ARRAY_CALLEE)
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+  {
+    let mut elements = Vec::with_capacity(args.len());
+    for (idx, arg) in args.iter().enumerate() {
+      let is_spread = spreads.contains(&(idx + 2));
+      if is_spread {
+        elements.push(LitArrElem::Rest(lower_arg(var_namer, fn_emitter, arg)));
+      } else if matches!(arg, Arg::Builtin(path) if path == INTERNAL_ARRAY_HOLE) {
+        elements.push(LitArrElem::Empty);
+      } else {
+        elements.push(LitArrElem::Single(lower_arg(var_namer, fn_emitter, arg)));
+      }
+    }
+    let expr = node(Expr::LitArr(node(LitArrExpr { elements })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
   }
 
   if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 1 {
