@@ -30,7 +30,11 @@ use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::BlockStmt;
 use parse_js::ast::stmt::CatchBlock;
 use parse_js::ast::stmt::ForBody;
+use parse_js::ast::stmt::ForInStmt;
 use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stmt::ForOfStmt;
+use parse_js::ast::stmt::ForTripleStmt;
+use parse_js::ast::stmt::ForTripleStmtInit;
 use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::SwitchBranch;
@@ -48,8 +52,11 @@ type FuncDeclNode = Node<FuncDecl>;
 type FuncExprNode = Node<FuncExpr>;
 type FuncNode = Node<Func>;
 type ForBodyNode = Node<ForBody>;
+type ForInStmtNode = Node<ForInStmt>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
+type ForOfStmtNode = Node<ForOfStmt>;
+type ForTripleStmtNode = Node<ForTripleStmt>;
 type PatDeclNode = Node<PatDecl>;
 type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
@@ -125,7 +132,10 @@ fn collect_pat_names(file: FileId, pat: &Pat, out: &mut BTreeSet<NameId>) {
   ClassDeclNode(enter, exit),
   ClassExprNode(enter, exit),
   ForBodyNode(enter, exit),
+  ForInStmtNode(enter, exit),
   ForInOfLhs(enter, exit),
+  ForOfStmtNode(enter, exit),
+  ForTripleStmtNode(enter, exit),
   FuncNode(enter, exit),
   SwitchStmtNode(enter, exit),
   VarDeclNode(enter)
@@ -190,6 +200,14 @@ impl ClosureLexicalCollector {
     self.depth = self.depth.saturating_sub(1);
   }
 
+  fn enter_for_in_stmt_node(&mut self, _node: &ForInStmtNode) {
+    self.depth += 1;
+  }
+
+  fn exit_for_in_stmt_node(&mut self, _node: &ForInStmtNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
   fn enter_for_in_of_lhs(&mut self, node: &ForInOfLhs) {
     if self.depth > 0 {
       return;
@@ -205,6 +223,22 @@ impl ClosureLexicalCollector {
   }
 
   fn exit_for_in_of_lhs(&mut self, _node: &ForInOfLhs) {}
+
+  fn enter_for_of_stmt_node(&mut self, _node: &ForOfStmtNode) {
+    self.depth += 1;
+  }
+
+  fn exit_for_of_stmt_node(&mut self, _node: &ForOfStmtNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_for_triple_stmt_node(&mut self, _node: &ForTripleStmtNode) {
+    self.depth += 1;
+  }
+
+  fn exit_for_triple_stmt_node(&mut self, _node: &ForTripleStmtNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
 
   fn enter_func_node(&mut self, _node: &FuncNode) {
     self.depth += 1;
@@ -648,6 +682,12 @@ struct DeclContext {
   catch_param: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ForInOfContext {
+  loop_scope: Option<ScopeId>,
+  body_span: TextRange,
+}
+
 #[derive(VisitorMut)]
 #[visitor(
   BlockStmtNode,
@@ -655,7 +695,10 @@ struct DeclContext {
   ClassDeclNode,
   ClassExprNode,
   ForBodyNode,
+  ForInStmtNode(enter, exit),
   ForInOfLhs,
+  ForOfStmtNode(enter, exit),
+  ForTripleStmtNode(enter, exit),
   FuncDeclNode(enter),
   FuncExprNode,
   FuncNode,
@@ -675,6 +718,10 @@ struct DeclareVisitor {
   top_level_mode: TopLevelMode,
   closure_lexical_names_stack: Vec<BTreeSet<NameId>>,
   switch_scope_stack: Vec<(ScopeId, bool)>,
+  for_in_of_stack: Vec<ForInOfContext>,
+  for_in_of_lhs_scope_stack: Vec<Option<ScopeId>>,
+  for_body_loop_scope_stack: Vec<Option<ScopeId>>,
+  for_triple_scope_stack: Vec<bool>,
 }
 
 impl DeclareVisitor {
@@ -689,6 +736,10 @@ impl DeclareVisitor {
       top_level_mode: mode,
       closure_lexical_names_stack: Vec::new(),
       switch_scope_stack: Vec::new(),
+      for_in_of_stack: Vec::new(),
+      for_in_of_lhs_scope_stack: Vec::new(),
+      for_body_loop_scope_stack: Vec::new(),
+      for_triple_scope_stack: Vec::new(),
     }
   }
 
@@ -915,12 +966,99 @@ impl DeclareVisitor {
     self.pop_scope();
   }
 
+  fn enter_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
+    let loop_scope = match &node.stx.lhs {
+      ForInOfLhs::Decl((mode, _))
+        if matches!(
+          mode,
+          VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+        ) =>
+      {
+        Some(
+          self
+            .builder
+            .new_scope(self.current_scope(), ScopeKind::Block, range_of(node)),
+        )
+      }
+      _ => None,
+    };
+    self.for_in_of_stack.push(ForInOfContext {
+      loop_scope,
+      body_span: range_of(&node.stx.body),
+    });
+  }
+
+  fn exit_for_in_stmt_node(&mut self, _node: &mut ForInStmtNode) {
+    self.for_in_of_stack.pop();
+  }
+
+  fn enter_for_of_stmt_node(&mut self, node: &mut ForOfStmtNode) {
+    let loop_scope = match &node.stx.lhs {
+      ForInOfLhs::Decl((mode, _))
+        if matches!(
+          mode,
+          VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+        ) =>
+      {
+        Some(
+          self
+            .builder
+            .new_scope(self.current_scope(), ScopeKind::Block, range_of(node)),
+        )
+      }
+      _ => None,
+    };
+    self.for_in_of_stack.push(ForInOfContext {
+      loop_scope,
+      body_span: range_of(&node.stx.body),
+    });
+  }
+
+  fn exit_for_of_stmt_node(&mut self, _node: &mut ForOfStmtNode) {
+    self.for_in_of_stack.pop();
+  }
+
+  fn enter_for_triple_stmt_node(&mut self, node: &mut ForTripleStmtNode) {
+    let has_lexical_init = match &node.stx.init {
+      ForTripleStmtInit::Decl(decl) => matches!(
+        decl.stx.mode,
+        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+      ),
+      _ => false,
+    };
+    self.for_triple_scope_stack.push(has_lexical_init);
+    if has_lexical_init {
+      self.push_scope(ScopeKind::Block, range_of(node));
+    }
+  }
+
+  fn exit_for_triple_stmt_node(&mut self, _node: &mut ForTripleStmtNode) {
+    if self.for_triple_scope_stack.pop().unwrap_or(false) {
+      self.pop_scope();
+    }
+  }
+
   fn enter_for_body_node(&mut self, node: &mut ForBodyNode) {
+    let mut loop_scope_pushed = None;
+    if let Some(ctx) = self.for_in_of_stack.last() {
+      let span = range_of(node);
+      if span == ctx.body_span {
+        if let Some(loop_scope) = ctx.loop_scope {
+          self.scope_stack.push(loop_scope);
+          loop_scope_pushed = Some(loop_scope);
+        }
+      }
+    }
+    self.for_body_loop_scope_stack.push(loop_scope_pushed);
     self.push_scope(ScopeKind::Block, range_of(node));
   }
 
   fn exit_for_body_node(&mut self, _node: &mut ForBodyNode) {
     self.pop_scope();
+    if let Some(loop_scope) = self.for_body_loop_scope_stack.pop().flatten() {
+      let popped = self.scope_stack.pop();
+      debug_assert_eq!(popped, Some(loop_scope));
+    }
   }
 
   fn enter_switch_stmt_node(&mut self, node: &mut SwitchStmtNode) {
@@ -953,6 +1091,12 @@ impl DeclareVisitor {
   }
 
   fn enter_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {
+    let loop_scope = self.for_in_of_stack.last().and_then(|ctx| ctx.loop_scope);
+    if let Some(scope) = loop_scope {
+      self.scope_stack.push(scope);
+    }
+    self.for_in_of_lhs_scope_stack.push(loop_scope);
+
     if let ForInOfLhs::Decl((mode, _)) = node {
       let target = match mode {
         VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
@@ -980,6 +1124,11 @@ impl DeclareVisitor {
   fn exit_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {
     if matches!(node, ForInOfLhs::Decl(_)) {
       self.pop_decl_target();
+    }
+
+    if let Some(scope) = self.for_in_of_lhs_scope_stack.pop().flatten() {
+      let popped = self.scope_stack.pop();
+      debug_assert_eq!(popped, Some(scope));
     }
   }
 
@@ -1298,8 +1447,17 @@ mod tests {
     let root_scope = semantics.scope(root);
     let x = semantics.name_id("x").unwrap();
     let z = semantics.name_id("z").unwrap();
-    assert!(root_scope.symbols.contains_key(&x));
     assert!(root_scope.symbols.contains_key(&z));
+    assert!(!root_scope.symbols.contains_key(&x));
+
+    let x_scopes: Vec<_> = semantics
+      .scopes
+      .iter()
+      .filter(|(_, scope)| scope.symbols.contains_key(&x))
+      .map(|(id, _)| *id)
+      .collect();
+    assert_eq!(x_scopes.len(), 1);
+    assert_ne!(x_scopes[0], root);
   }
 
   #[test]

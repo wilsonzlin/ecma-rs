@@ -9,7 +9,10 @@ use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
-use parse_js::ast::stmt::{BlockStmt, CatchBlock, ForBody, ForInOfLhs, SwitchBranch, SwitchStmt};
+use parse_js::ast::stmt::{
+  BlockStmt, CatchBlock, ForBody, ForInOfLhs, ForInStmt, ForOfStmt, ForTripleStmt, SwitchBranch,
+  SwitchStmt,
+};
 use parse_js::ast::stx::TopLevel;
 use std::collections::{HashMap, HashSet};
 
@@ -61,6 +64,9 @@ type VarDeclNode = Node<VarDecl>;
 type VarDeclaratorNode = VarDeclarator;
 type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
+type ForInStmtNode = Node<ForInStmt>;
+type ForOfStmtNode = Node<ForOfStmt>;
+type ForTripleStmtNode = Node<ForTripleStmt>;
 
 struct TdzFrame {
   scope: ScopeId,
@@ -84,6 +90,12 @@ impl TdzFrame {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ForInOfResolveContext {
+  loop_scope: Option<ScopeId>,
+  lhs_active: bool,
+}
+
 #[derive(VisitorMut)]
 #[visitor(
   ArrPatElemNode(enter, exit),
@@ -95,7 +107,10 @@ impl TdzFrame {
   ClassOrObjKey(enter, exit),
   ClassOrObjVal(enter, exit),
   ForBodyNode(enter, exit),
+  ForInStmtNode(enter, exit),
   ForInOfLhs(enter, exit),
+  ForOfStmtNode(enter, exit),
+  ForTripleStmtNode(enter, exit),
   FuncExprNode(enter, exit),
   FuncBodyNode(enter),
   FuncNode(enter, exit),
@@ -127,6 +142,8 @@ struct ResolveVisitor<'a> {
   func_scope_stack: Vec<ScopeId>,
   closure_cache: HashMap<ScopeId, ScopeId>,
   switch_scope_stack: Vec<(Option<ScopeId>, bool)>,
+  for_in_of_stack: Vec<ForInOfResolveContext>,
+  for_triple_scope_stack: Vec<Option<ScopeId>>,
 }
 
 impl ResolveVisitor<'_> {
@@ -152,6 +169,8 @@ impl ResolveVisitor<'_> {
       func_scope_stack: Vec::new(),
       closure_cache: HashMap::new(),
       switch_scope_stack: Vec::new(),
+      for_in_of_stack: Vec::new(),
+      for_triple_scope_stack: Vec::new(),
     }
   }
 
@@ -449,7 +468,37 @@ impl ResolveVisitor<'_> {
     self.pop_scope_from_assoc(&node.assoc);
   }
 
+  fn enter_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
+    let Some(outer) = scope_id(&node.assoc) else {
+      self
+        .for_in_of_stack
+        .push(ForInOfResolveContext { loop_scope: None, lhs_active: false });
+      return;
+    };
+
+    let loop_scope = scope_id(&node.stx.body.assoc)
+      .and_then(|body_scope| self.sem.scope(body_scope).parent)
+      .filter(|parent| *parent != outer);
+
+    self.for_in_of_stack.push(ForInOfResolveContext {
+      loop_scope,
+      lhs_active: false,
+    });
+  }
+
+  fn exit_for_in_stmt_node(&mut self, _node: &mut ForInStmtNode) {
+    self.for_in_of_stack.pop();
+  }
+
   fn enter_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {
+    if let Some(ctx) = self.for_in_of_stack.last_mut() {
+      if let Some(loop_scope) = ctx.loop_scope {
+        self.scope_stack.push(loop_scope);
+        self.tdz_stack.push(TdzFrame::new(loop_scope, self.sem));
+        ctx.lhs_active = true;
+      }
+    }
+
     let active = match node {
       ForInOfLhs::Decl((mode, _)) => matches!(
         mode,
@@ -462,6 +511,54 @@ impl ResolveVisitor<'_> {
 
   fn exit_for_in_of_lhs(&mut self, _node: &mut ForInOfLhs) {
     self.pop_pending();
+    if let Some(ctx) = self.for_in_of_stack.last_mut() {
+      if ctx.lhs_active {
+        ctx.lhs_active = false;
+        self.scope_stack.pop();
+        self.tdz_stack.pop();
+      }
+    }
+  }
+
+  fn enter_for_of_stmt_node(&mut self, node: &mut ForOfStmtNode) {
+    let Some(outer) = scope_id(&node.assoc) else {
+      self
+        .for_in_of_stack
+        .push(ForInOfResolveContext { loop_scope: None, lhs_active: false });
+      return;
+    };
+
+    let loop_scope = scope_id(&node.stx.body.assoc)
+      .and_then(|body_scope| self.sem.scope(body_scope).parent)
+      .filter(|parent| *parent != outer);
+
+    self.for_in_of_stack.push(ForInOfResolveContext {
+      loop_scope,
+      lhs_active: false,
+    });
+  }
+
+  fn exit_for_of_stmt_node(&mut self, _node: &mut ForOfStmtNode) {
+    self.for_in_of_stack.pop();
+  }
+
+  fn enter_for_triple_stmt_node(&mut self, node: &mut ForTripleStmtNode) {
+    let current = self.scope_stack.last().copied();
+    let scope = scope_id(&node.assoc).filter(|scope| Some(*scope) != current);
+    self.for_triple_scope_stack.push(scope);
+    if let Some(scope) = scope {
+      self.scope_stack.push(scope);
+      self.tdz_stack.push(TdzFrame::new(scope, self.sem));
+    }
+  }
+
+  fn exit_for_triple_stmt_node(&mut self, _node: &mut ForTripleStmtNode) {
+    let Some(scope) = self.for_triple_scope_stack.pop().flatten() else {
+      return;
+    };
+    let popped = self.scope_stack.pop();
+    self.tdz_stack.pop();
+    debug_assert_eq!(popped, Some(scope));
   }
 
   fn enter_switch_stmt_node(&mut self, node: &mut SwitchStmtNode) {

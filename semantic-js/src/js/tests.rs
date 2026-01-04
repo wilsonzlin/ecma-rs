@@ -655,6 +655,158 @@ fn switch_discriminant_does_not_resolve_to_case_lexicals() {
 }
 
 #[test]
+fn for_of_lexicals_are_not_visible_outside_loop() {
+  let mut ast = parse("for (let a of [1]) {} a;").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(74));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  assert_eq!(collect.id_exprs, vec![("a".to_string(), None)]);
+}
+
+#[test]
+fn for_of_rhs_prefers_outer_binding() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::loc::Loc;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter))]
+  struct ACollector {
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl ACollector {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "a" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "let a = 0; for (let a of [a]) { a; } a;";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(75));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let outer = sem
+    .resolve_name_in_scope(sem.top_scope(), "a")
+    .expect("expected outer binding");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  let decls: Vec<_> = collect
+    .id_pats
+    .iter()
+    .filter(|(name, _, is_decl)| name == "a" && *is_decl)
+    .filter_map(|(_, resolved, _)| *resolved)
+    .collect();
+  assert_eq!(decls.len(), 2);
+  let loop_binding = decls
+    .iter()
+    .copied()
+    .find(|sym| *sym != outer)
+    .expect("expected loop binding");
+
+  let mut uses = ACollector::default();
+  ast.drive_mut(&mut uses);
+  uses.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(uses.uses.len(), 3);
+  assert_eq!(uses.uses[0].1, Some(outer)); // rhs `[a]`
+  assert_eq!(uses.uses[1].1, Some(loop_binding)); // body `a;`
+  assert_eq!(uses.uses[2].1, Some(outer)); // after loop `a;`
+}
+
+#[test]
+fn for_of_body_can_shadow_loop_binding() {
+  let source = "for (let a of [1]) { let a = 2; a; }";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(76));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+
+  let decls: Vec<_> = collect
+    .id_pats
+    .iter()
+    .filter(|(name, _, is_decl)| name == "a" && *is_decl)
+    .filter_map(|(_, resolved, _)| *resolved)
+    .collect();
+  assert_eq!(decls.len(), 2);
+
+  let scope0 = sem.symbol(decls[0]).decl_scope;
+  let scope1 = sem.symbol(decls[1]).decl_scope;
+  let inner = if sem.scope(scope0).parent == Some(scope1) {
+    decls[0]
+  } else if sem.scope(scope1).parent == Some(scope0) {
+    decls[1]
+  } else {
+    panic!("expected loop binding scope to be parent of body binding scope");
+  };
+
+  let a_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "a")
+    .and_then(|(_, sym)| *sym)
+    .expect("expected `a` use to resolve");
+  assert_eq!(a_use, inner);
+}
+
+#[test]
+fn for_triple_let_shadows_outer_without_conflict() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::loc::Loc;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter))]
+  struct ICollector {
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl ICollector {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "i" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "let i = 0; for (let i = 0; i < 1; i++) { } i;";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(77));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let outer = sem
+    .resolve_name_in_scope(sem.top_scope(), "i")
+    .expect("expected outer binding");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  let decls: Vec<_> = collect
+    .id_pats
+    .iter()
+    .filter(|(name, _, is_decl)| name == "i" && *is_decl)
+    .filter_map(|(_, resolved, _)| *resolved)
+    .collect();
+  assert_eq!(decls.len(), 2);
+  let loop_binding = decls
+    .iter()
+    .copied()
+    .find(|sym| *sym != outer)
+    .expect("expected loop binding");
+
+  let mut uses = ICollector::default();
+  ast.drive_mut(&mut uses);
+  uses.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(uses.uses.len(), 3);
+  assert_eq!(uses.uses[0].1, Some(loop_binding)); // condition `i < 1`
+  assert_eq!(uses.uses[1].1, Some(loop_binding)); // update `i++`
+  assert_eq!(uses.uses[2].1, Some(outer)); // after loop `i;`
+}
+
+#[test]
 fn hoisted_var_uses_are_not_in_tdz() {
   let mut ast = parse("console.log(x); var x = 1;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
