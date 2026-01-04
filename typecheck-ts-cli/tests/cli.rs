@@ -149,6 +149,61 @@ fn resolves_mjs_modules_without_internal_error() {
 }
 
 #[test]
+fn node_resolve_prefers_node_modules_over_cwd_for_package_subpaths() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg/index.js\";\n\nexport const doubled = value * 2;\n",
+  );
+  // File that would be incorrectly resolved if the resolver treated non-relative
+  // package subpaths as paths relative to the process CWD.
+  write_file(
+    &tmp.path().join("pkg/index.js"),
+    "export const value = 21;\n",
+  );
+  // The correct resolution target is the node_modules package.
+  write_file(
+    &tmp.path().join("node_modules/pkg/index.d.ts"),
+    "export const value: number;\n",
+  );
+  let expected = tmp.path().join("node_modules/pkg/index.d.ts");
+  let wrong = tmp.path().join("pkg/index.js");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .current_dir(tmp.path())
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(
+    files.contains(&normalized(&expected).as_str()),
+    "expected resolution to prefer node_modules package, got {files:?}"
+  );
+  assert!(
+    !files.contains(&normalized(&wrong).as_str()),
+    "did not expect resolver to use cwd-relative file, got {files:?}"
+  );
+}
+
+#[test]
 fn resolves_package_json_types_entry() {
   let tmp = tempdir().expect("temp dir");
   let entry = tmp.path().join("src/main.ts");

@@ -154,8 +154,7 @@ impl<F: ResolveFs> Resolver<F> {
       return self.resolve_imports_specifier(from, specifier);
     }
 
-    if is_source_root(specifier)
-      || specifier.starts_with('/')
+    if specifier.starts_with('/')
       || specifier.starts_with('\\')
       || starts_with_drive_letter(specifier)
     {
