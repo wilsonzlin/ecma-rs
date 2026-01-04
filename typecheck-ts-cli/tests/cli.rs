@@ -150,25 +150,32 @@ fn resolves_mjs_modules_without_internal_error() {
 
 #[test]
 fn node_resolve_prefers_node_modules_over_cwd_for_package_subpaths() {
+  let package_name = "typecheck-ts-cli-subpath-pkg";
   let tmp = tempdir().expect("temp dir");
   let entry = tmp.path().join("src/main.ts");
   write_file(
     &entry,
-    "import { value } from \"pkg/index.js\";\n\nexport const doubled = value * 2;\n",
+    &format!(
+      "import {{ value }} from \"{package_name}/index.js\";\n\nexport const doubled = value * 2;\n"
+    ),
   );
   // File that would be incorrectly resolved if the resolver treated non-relative
   // package subpaths as paths relative to the process CWD.
   write_file(
-    &tmp.path().join("pkg/index.js"),
+    &tmp.path().join(format!("{package_name}/index.js")),
     "export const value = 21;\n",
   );
   // The correct resolution target is the node_modules package.
   write_file(
-    &tmp.path().join("node_modules/pkg/index.d.ts"),
+    &tmp
+      .path()
+      .join(format!("node_modules/{package_name}/index.d.ts")),
     "export const value: number;\n",
   );
-  let expected = tmp.path().join("node_modules/pkg/index.d.ts");
-  let wrong = tmp.path().join("pkg/index.js");
+  let expected = tmp
+    .path()
+    .join(format!("node_modules/{package_name}/index.d.ts"));
+  let wrong = tmp.path().join(format!("{package_name}/index.js"));
 
   let output = Command::cargo_bin("typecheck-ts-cli")
     .unwrap()
