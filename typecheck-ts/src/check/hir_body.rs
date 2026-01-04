@@ -1976,8 +1976,11 @@ impl<'a> Checker<'a> {
       callee_ty
     };
 
-    let candidate_sigs = callable_signatures(self.store.as_ref(), callee_base);
+    let all_candidate_sigs = callable_signatures(self.store.as_ref(), callee_base);
+    let mut candidate_sigs = all_candidate_sigs.clone();
     let has_spread = call.stx.arguments.iter().any(|arg| arg.stx.spread);
+
+    let mut callee_for_resolution = callee_base;
 
     let (mut arg_types, mut const_arg_types) = if has_spread {
       let arg_types = call
@@ -2001,7 +2004,7 @@ impl<'a> Checker<'a> {
         .collect();
       (arg_types, const_arg_types)
     } else {
-      let sigs_by_arity: Vec<_> = candidate_sigs
+      let sigs_by_arity: Vec<_> = all_candidate_sigs
         .iter()
         .copied()
         .filter(|sig_id| {
@@ -2009,13 +2012,38 @@ impl<'a> Checker<'a> {
           signature_allows_arg_count(self.store.as_ref(), &sig, call.stx.arguments.len())
         })
         .collect();
+
+      let sigs_without_excess_props: Vec<_> = sigs_by_arity
+        .iter()
+        .copied()
+        .filter(|sig_id| {
+          let sig = self.store.signature(*sig_id);
+          call.stx.arguments.iter().enumerate().all(|(idx, arg)| {
+            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) else {
+              return false;
+            };
+            !self.has_contextual_excess_properties(&arg.stx.value, param_ty)
+          })
+        })
+        .collect();
+
+      if !sigs_without_excess_props.is_empty() {
+        candidate_sigs = sigs_without_excess_props.clone();
+        callee_for_resolution = self.store.intern_type(TypeKind::Callable {
+          overloads: sigs_without_excess_props.clone(),
+        });
+      }
+
+      let base_for_context = if !sigs_without_excess_props.is_empty() {
+        candidate_sigs.clone()
+      } else if sigs_by_arity.is_empty() {
+        all_candidate_sigs.clone()
+      } else {
+        sigs_by_arity
+      };
+
       let sigs_for_context = {
-        let base = if sigs_by_arity.is_empty() {
-          candidate_sigs.clone()
-        } else {
-          sigs_by_arity
-        };
-        let specialized: Vec<_> = base
+        let specialized: Vec<_> = base_for_context
           .iter()
           .copied()
           .filter(|sig_id| {
@@ -2024,7 +2052,7 @@ impl<'a> Checker<'a> {
           })
           .collect();
         if specialized.is_empty() {
-          base
+          base_for_context
         } else {
           specialized
         }
@@ -2075,7 +2103,7 @@ impl<'a> Checker<'a> {
         &self.store,
         &self.relate,
         &self.instantiation_cache,
-        callee_base,
+        callee_for_resolution,
         &arg_types,
         Some(&const_arg_types),
         this_arg,
@@ -2118,7 +2146,7 @@ impl<'a> Checker<'a> {
             &self.store,
             &self.relate,
             &self.instantiation_cache,
-            callee_base,
+            callee_for_resolution,
             &arg_types,
             Some(&const_arg_types),
             this_arg,
@@ -5217,6 +5245,109 @@ impl<'a> Checker<'a> {
     !self.type_accepts_props(target, &props)
   }
 
+  fn has_contextual_excess_properties(&mut self, expr: &Node<AstExpr>, expected: TypeId) -> bool {
+    fn inner(
+      checker: &mut Checker<'_>,
+      expr: &Node<AstExpr>,
+      expected: TypeId,
+      depth: usize,
+    ) -> bool {
+      if depth > 32 {
+        return false;
+      }
+      let prim = checker.store.primitive_ids();
+      let expected = checker.store.canon(expected);
+      if expected == prim.unknown {
+        return false;
+      }
+      match expr.stx.as_ref() {
+        AstExpr::LitObj(obj) => {
+          if checker.has_excess_properties(obj, expected) {
+            return true;
+          }
+          for member in obj.stx.members.iter() {
+            let (name, value) = match &member.stx.typ {
+              ObjMemberType::Valued {
+                key: ClassOrObjKey::Direct(key),
+                val: ClassOrObjVal::Prop(Some(expr)),
+              } => (Some(key.stx.key.as_str()), Some(expr)),
+              _ => (None, None),
+            };
+            let (Some(name), Some(value)) = (name, value) else {
+              continue;
+            };
+            let expected_prop = checker.member_type(expected, name);
+            if expected_prop == prim.unknown {
+              continue;
+            }
+            if inner(checker, value, expected_prop, depth + 1) {
+              return true;
+            }
+          }
+          false
+        }
+        AstExpr::LitArr(arr) => {
+          use parse_js::ast::expr::lit::LitArrElem;
+
+          if arr
+            .stx
+            .elements
+            .iter()
+            .any(|e| !matches!(e, LitArrElem::Single(_)))
+          {
+            return false;
+          }
+
+          let elems: Vec<_> = arr
+            .stx
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+              LitArrElem::Single(v) => Some(v),
+              _ => None,
+            })
+            .collect();
+          let arity = elems.len();
+          let Some(context) = checker.array_literal_context(expected, arity) else {
+            return false;
+          };
+
+          match context {
+            ArrayLiteralContext::Tuple(expected_elems) => {
+              for (idx, expr) in elems.into_iter().enumerate() {
+                let expected_elem = expected_elems
+                  .get(idx)
+                  .map(|e| e.ty)
+                  .unwrap_or(prim.unknown);
+                if expected_elem == prim.unknown {
+                  continue;
+                }
+                if inner(checker, expr, expected_elem, depth + 1) {
+                  return true;
+                }
+              }
+            }
+            ArrayLiteralContext::Array(expected_elem) => {
+              if expected_elem == prim.unknown {
+                return false;
+              }
+              for expr in elems.into_iter() {
+                if inner(checker, expr, expected_elem, depth + 1) {
+                  return true;
+                }
+              }
+            }
+          }
+
+          false
+        }
+        _ => false,
+      }
+    }
+
+    inner(self, expr, expected, 0)
+  }
+
   fn type_accepts_props(&self, target: TypeId, props: &HashSet<String>) -> bool {
     let target = self.expand_ref(target);
     let expanded = self.expand_for_props(target);
@@ -7858,7 +7989,12 @@ impl<'a> FlowBodyChecker<'a> {
       _ => other_ty,
     };
 
-    fn insert_fact(store: &TypeStore, target: &mut HashMap<FlowKey, TypeId>, key: FlowKey, ty: TypeId) {
+    fn insert_fact(
+      store: &TypeStore,
+      target: &mut HashMap<FlowKey, TypeId>,
+      key: FlowKey,
+      ty: TypeId,
+    ) {
       target
         .entry(key)
         .and_modify(|existing| *existing = store.intersection(vec![*existing, ty]))
