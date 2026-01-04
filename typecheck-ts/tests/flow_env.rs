@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind as LibFileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -8,6 +10,7 @@ fn flow_env_prefers_local_shadowing_globals() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
 
   let lib_key = FileKey::new("lib.d.ts");
   host.add_lib(LibFile {

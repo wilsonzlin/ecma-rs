@@ -5487,6 +5487,7 @@ impl ProgramState {
       self.semantics = Some(Arc::clone(&ts_semantics.semantics));
       self.push_semantic_diagnostics(ts_semantics.diagnostics.as_ref().clone());
       self.check_import_assignment_requires();
+      self.check_required_global_types();
     }
     self.check_cancelled()?;
     self.resolve_reexports();
@@ -5496,6 +5497,40 @@ impl ProgramState {
     self.rebuild_body_owners();
     self.analyzed = true;
     Ok(())
+  }
+
+  fn check_required_global_types(&mut self) {
+    if !self.compiler_options.no_default_lib {
+      return;
+    }
+    let Some(semantics) = self.semantics.as_ref().map(Arc::clone) else {
+      return;
+    };
+    const REQUIRED: [&str; 8] = [
+      "Array",
+      "Boolean",
+      "Function",
+      "IArguments",
+      "Number",
+      "Object",
+      "RegExp",
+      "String",
+    ];
+    let symbols = semantics.symbols();
+    for name in REQUIRED {
+      let has_type = semantics
+        .global_symbols()
+        .get(name)
+        .and_then(|group| group.symbol_for(sem_ts::Namespace::TYPE, symbols))
+        .is_some();
+      if has_type {
+        continue;
+      }
+      self.push_program_diagnostic(codes::CANNOT_FIND_GLOBAL_TYPE.error(
+        format!("Cannot find global type '{name}'."),
+        Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+      ));
+    }
   }
 
   fn rebuild_module_namespace_defs(&mut self) {

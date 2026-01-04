@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName};
 use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
@@ -185,6 +187,7 @@ fn host_provided_libs_are_loaded() {
     text: Arc::from("declare const Provided: number;"),
   };
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_lib(lib)
     .with_file(FileKey::new("entry.ts"), "const x = Provided;");
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -206,6 +209,7 @@ fn declare_global_libs_merge_into_globals() {
     text: Arc::from("export {};\ndeclare global { const FromLib: string; }"),
   };
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_lib(lib)
     .with_file(FileKey::new("entry.ts"), "const value = FromLib;");
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -227,6 +231,7 @@ fn declare_module_libs_do_not_crash() {
     text: Arc::from(r#"declare module "ambient" { interface Foo { bar: string; } }"#),
   };
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_lib(lib)
     .with_file(FileKey::new("entry.ts"), "/* noop */");
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
@@ -252,6 +257,7 @@ fn ambient_module_types_are_bound() {
   let entry = FileKey::new("entry.ts");
   let source = "import type { Foo } from \"ambient\";\ntype Uses = Foo;";
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_lib(lib)
     .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry.clone()]);
@@ -316,6 +322,7 @@ fn module_resolution_can_target_lib_file_keys() {
   let source = r#"import type { Foo } from "custom_mod"; type Uses = Foo;"#;
 
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_lib(LibFile {
       key: lib_key.clone(),
       name: Arc::from("custom_mod.d.ts"),
@@ -546,6 +553,7 @@ fn type_imports_in_lib_files_queue_dependencies() {
   options.no_default_lib = true;
 
   let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_file(entry.clone(), "export const value = 1;")
     .with_file(dep.clone(), "export type Thing = number;")
     .with_lib(LibFile {

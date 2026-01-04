@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{lower_call_count, reset_lower_call_count, FileKey, MemoryHost, Program};
 
 #[test]
 fn lower_query_uses_cache_across_program_checks() {
   // Keep this test lightweight by disabling the bundled lib set and supplying a
-  // single minimal `.d.ts` lib so the program does not emit `NO_LIBS_LOADED`.
+  // minimal `.d.ts` lib so the program does not emit `NO_LIBS_LOADED`.
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
 
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
     key: FileKey::new("lib:custom.d.ts"),
     name: Arc::from("custom.d.ts"),

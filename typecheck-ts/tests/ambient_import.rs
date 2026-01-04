@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary};
 
@@ -74,10 +76,10 @@ fn imports_from_ambient_modules_without_host_resolution() {
     text: Arc::from(r#"declare module "ambient" { export const x: string; }"#),
   };
 
-  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
-    entry.clone(),
-    r#"import { x } from "ambient"; const y = x;"#,
-  );
+  let host = AmbientHost::new(options)
+    .with_lib(common::core_globals_lib())
+    .with_lib(ambient_lib)
+    .with_file(entry.clone(), r#"import { x } from "ambient"; const y = x;"#);
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
@@ -112,10 +114,10 @@ fn ambient_module_type_imports_resolve_types() {
     text: Arc::from(r#"declare module "ambient" { export interface Foo { a: string } }"#),
   };
 
-  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
-    entry.clone(),
-    r#"import type { Foo } from "ambient"; type Uses = Foo;"#,
-  );
+  let host = AmbientHost::new(options)
+    .with_lib(common::core_globals_lib())
+    .with_lib(ambient_lib)
+    .with_file(entry.clone(), r#"import type { Foo } from "ambient"; type Uses = Foo;"#);
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
@@ -167,10 +169,13 @@ declare module "ambient" {
     ),
   };
 
-  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
-    entry.clone(),
-    r#"import type { Foo } from "ambient"; const value: Foo = { fromAmbient: "ok" };"#,
-  );
+  let host = AmbientHost::new(options)
+    .with_lib(common::core_globals_lib())
+    .with_lib(ambient_lib)
+    .with_file(
+      entry.clone(),
+      r#"import type { Foo } from "ambient"; const value: Foo = { fromAmbient: "ok" };"#,
+    );
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
@@ -229,14 +234,17 @@ fn ambient_module_types_drive_object_checks() {
     text: Arc::from(r#"declare module "ambient" { export interface Foo { a: string } }"#),
   };
 
-  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
-    entry.clone(),
-    r#"
-import type { Foo } from "ambient";
-const ok: Foo = { a: "ok" };
-const bad: Foo = { a: 123 };
-"#,
-  );
+  let host = AmbientHost::new(options)
+    .with_lib(common::core_globals_lib())
+    .with_lib(ambient_lib)
+    .with_file(
+      entry.clone(),
+      r#"
+ import type { Foo } from "ambient";
+ const ok: Foo = { a: "ok" };
+ const bad: Foo = { a: 123 };
+ "#,
+    );
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();

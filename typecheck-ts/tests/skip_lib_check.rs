@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
@@ -15,6 +17,7 @@ fn skip_lib_check_suppresses_dts_type_diagnostics() {
     options.no_default_lib = true;
     options.skip_lib_check = skip_lib_check;
     let mut host = MemoryHost::with_options(options);
+    host.add_lib(common::core_globals_lib());
     host.add_lib(LibFile {
       key: lib_key.clone(),
       name: Arc::from("broken.d.ts"),

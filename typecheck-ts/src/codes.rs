@@ -202,6 +202,24 @@ pub const MISSING_GLOBAL_PROPERTY: Code = Code::new(
   &[],
 );
 
+/// TS2318: Cannot find global type.
+///
+/// TypeScript reports this diagnostic when the default library set is disabled
+/// (for example via `/// <reference no-default-lib="true" />` or `--noLib`) and
+/// the program does not provide the core global type declarations required by
+/// the checker (e.g. `Array`, `String`).
+///
+/// - Primary span: placeholder span (tsc reports `file: null` with `0..0` range).
+/// - Labels: primary only.
+/// - Notes: none.
+pub const CANNOT_FIND_GLOBAL_TYPE: Code = Code::new(
+  "TS2318",
+  "cannot find global type",
+  "placeholder span when core global types are missing",
+  &["primary: placeholder span"],
+  &[],
+);
+
 /// TS2454: Variable is used before it has been assigned.
 ///
 /// - Primary span: the identifier token being read.

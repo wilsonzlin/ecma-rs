@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
@@ -14,15 +16,20 @@ struct MemoryHost {
 impl MemoryHost {
   fn new(options: CompilerOptions) -> Self {
     let mut files = HashMap::new();
+    let core_lib = common::core_globals_lib();
+    files.insert(core_lib.key.clone(), Arc::clone(&core_lib.text));
     let lib_key = FileKey::new("test-lib.d.ts");
     let lib_text: Arc<str> = Arc::from("declare const __typecheck_ts_test: any;\n".to_string());
     files.insert(lib_key.clone(), Arc::clone(&lib_text));
-    let libs = vec![LibFile {
-      key: lib_key,
-      name: Arc::from("test-lib.d.ts"),
-      kind: FileKind::Dts,
-      text: lib_text,
-    }];
+    let libs = vec![
+      core_lib,
+      LibFile {
+        key: lib_key,
+        name: Arc::from("test-lib.d.ts"),
+        kind: FileKind::Dts,
+        text: lib_text,
+      },
+    ];
     Self {
       files,
       libs,

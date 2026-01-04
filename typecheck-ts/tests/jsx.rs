@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, JsxMode, LibFile};
 use typecheck_ts::{FileKey, Host, HostError, Program, TypeKindSummary};
@@ -29,10 +31,14 @@ struct TestHost {
 
 impl TestHost {
   fn new(options: CompilerOptions) -> Self {
+    let mut libs = Vec::new();
+    if options.no_default_lib {
+      libs.push(common::core_globals_lib());
+    }
     TestHost {
       files: HashMap::new(),
       options,
-      libs: Vec::new(),
+      libs,
       edges: HashMap::new(),
     }
   }

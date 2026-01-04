@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, ModuleKind};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -380,6 +382,7 @@ fn ambient_modules_in_dts_do_not_make_globals_module_scoped() {
   options.no_default_lib = true;
 
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
     key: FileKey::new("globals.d.ts"),
     name: Arc::from("globals.d.ts"),

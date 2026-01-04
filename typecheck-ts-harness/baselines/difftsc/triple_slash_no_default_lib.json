@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Array'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Boolean'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Function'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'IArguments'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Number'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'Object'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'RegExp'."
+    },
+    {
+      "code": 2318,
+      "file": null,
+      "start": 0,
+      "end": 0,
+      "category": "error",
+      "message": "Cannot find global type 'String'."
+    }
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "triple_slash_no_default_lib.ts",
+        "name": "x",
+        "type": "1"
+      }
+    ]
+  }
+}

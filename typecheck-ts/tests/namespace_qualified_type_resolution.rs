@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -8,6 +10,7 @@ fn resolves_jsx_namespace_members_in_type_positions() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
     key: FileKey::new("jsx.d.ts"),
     name: Arc::from("jsx.d.ts"),
@@ -36,6 +39,7 @@ fn resolves_nested_namespace_members_in_type_positions() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
     key: FileKey::new("namespaces.d.ts"),
     name: Arc::from("namespaces.d.ts"),

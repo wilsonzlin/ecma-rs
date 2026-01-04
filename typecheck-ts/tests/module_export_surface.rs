@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -8,6 +10,7 @@ fn export_assignment_creates_export_equals_entry() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
     key: FileKey::new("lib.d.ts"),
     name: Arc::from("lib.d.ts"),
@@ -48,6 +51,7 @@ fn export_as_namespace_injects_global_binding() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
 
   host.add_lib(LibFile {
     key: FileKey::new("umd.d.ts"),
@@ -94,6 +98,7 @@ fn export_assignment_allows_export_as_namespace() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
 
   host.add_lib(LibFile {
     key: FileKey::new("umd_export_assignment.d.ts"),
@@ -128,6 +133,7 @@ fn export_assignment_allows_export_as_namespace_for_declared_const() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
 
   host.add_lib(LibFile {
     key: FileKey::new("umd_export_assignment_const.d.ts"),
