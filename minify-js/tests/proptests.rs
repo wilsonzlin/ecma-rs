@@ -152,7 +152,18 @@ proptest! {
       &case.source,
       &mut first,
     );
-    prop_assert!(result.is_ok(), "minify returned diagnostics: {:?}", result.err());
+    if let Err(diagnostics) = result {
+      if diagnostics.iter().all(|diag| diag.code.as_str().starts_with("BIND")) {
+        // Skip semantically-invalid inputs; the minifier now surfaces binder
+        // diagnostics instead of silently proceeding.
+        prop_assume!(false);
+      }
+      prop_assert!(
+        false,
+        "minify returned unexpected diagnostics: {:?}",
+        diagnostics
+      );
+    }
     let first_output = String::from_utf8(first).expect("minifier output must be UTF-8");
 
     let mut second = Vec::new();
@@ -161,7 +172,11 @@ proptest! {
       &case.source,
       &mut second,
     );
-    prop_assert!(second_result.is_ok(), "second minify returned diagnostics: {:?}", second_result.err());
+    prop_assert!(
+      second_result.is_ok(),
+      "second minify returned diagnostics: {:?}",
+      second_result.err()
+    );
     let second_output = String::from_utf8(second).expect("minifier output must be UTF-8");
 
     prop_assert_eq!(first_output.as_str(), second_output.as_str());
@@ -188,7 +203,16 @@ proptest! {
       &case.source,
       &mut output,
     );
-    prop_assert!(result.is_ok(), "minify returned diagnostics: {:?}", result.err());
+    if let Err(diagnostics) = result {
+      if diagnostics.iter().all(|diag| diag.code.as_str().starts_with("BIND")) {
+        prop_assume!(false);
+      }
+      prop_assert!(
+        false,
+        "minify returned unexpected diagnostics: {:?}",
+        diagnostics
+      );
+    }
     let code = String::from_utf8(output).expect("minifier output must be UTF-8");
     let parsed = parse_with_options(
       &code,

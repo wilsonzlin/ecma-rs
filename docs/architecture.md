@@ -70,7 +70,7 @@ other crates use this for structured errors and spans.
 - JS mode (`js` module):
   - `bind_js` (or `declare` + `resolve`) walks a mutable AST, attaches `ScopeId`,
     `DeclaredSymbol`, and `ResolvedSymbol` to `NodeAssocData`, and returns a
-    deterministic `JsSemantics` snapshot.
+    deterministic `JsSemantics` snapshot plus binding diagnostics.
   - Replaces the legacy `symbol-js` semantics for optimizers/minifiers; iteration helpers
     such as `ScopeData::iter_symbols_sorted` enforce stable ordering.
 - TS mode (`ts` module):

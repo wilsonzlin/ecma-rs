@@ -2,6 +2,7 @@ use crate::assoc::js::{declared_symbol, resolved_symbol, resolved_symbol_info, R
 use crate::js::{bind_js, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
+use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
@@ -113,7 +114,8 @@ fn snapshot(sem: &JsSemantics) -> Vec<u8> {
 #[test]
 fn shadowing_prefers_inner_bindings() {
   let mut ast = parse("let a = 1; { let a = 2; a; } a;").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+  assert!(diagnostics.is_empty());
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -136,7 +138,8 @@ fn shadowing_prefers_inner_bindings() {
 #[test]
 fn function_expression_name_is_local() {
   let mut ast = parse("const x = function foo() { return foo; }; foo;").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(1));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(1));
+  assert!(diagnostics.is_empty());
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -150,7 +153,8 @@ fn function_expression_name_is_local() {
 #[test]
 fn destructuring_assignment_resolves_existing_symbol() {
   let mut ast = parse("let a; ({a} = obj);").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(2));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(2));
+  assert!(diagnostics.is_empty());
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -177,7 +181,8 @@ fn hoists_var_and_function_declarations() {
     "function wrap() { use_before; { var use_before = 1; } fn_call(); function fn_call() {} }",
   )
   .unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(3));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(3));
+  assert!(diagnostics.is_empty());
 
   let mut collect = CollectWithInfo::default();
   ast.drive_mut(&mut collect);
@@ -211,7 +216,9 @@ fn hoists_var_and_function_declarations() {
 #[test]
 fn marks_lexical_uses_in_tdz() {
   let mut ast = parse("let outer = 0; { outer; let outer = 1; outer; }").unwrap();
-  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(4));
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(4));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
 
   let mut collect = CollectWithInfo::default();
   ast.drive_mut(&mut collect);
@@ -251,7 +258,9 @@ fn top_level_tdz_and_hoisting_are_tracked() {
   "#,
   )
   .unwrap();
-  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(30));
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(30));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
 
   let top_scope = sem.top_scope();
   let hoisted_names: Vec<_> = sem
@@ -279,7 +288,8 @@ fn top_level_tdz_and_hoisting_are_tracked() {
 #[test]
 fn hoisted_var_uses_are_not_in_tdz() {
   let mut ast = parse("console.log(x); var x = 1;").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
+  assert!(diagnostics.is_empty());
 
   let mut collect = CollectWithInfo::default();
   ast.drive_mut(&mut collect);
@@ -419,4 +429,52 @@ fn marks_dynamic_scopes_for_with_and_eval() {
     .copied()
     .unwrap();
   assert!(!sem.scope(shadowed_eval_scope).is_dynamic);
+}
+
+fn slice_range<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
+  let range = diagnostic.primary.range;
+  &source[range.start as usize..range.end as usize]
+}
+
+#[test]
+fn reports_lexical_redeclaration_errors() {
+  let source = "let a = 1; let a = 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(40));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0001");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn reports_lexical_var_conflicts() {
+  let source = "var a = 1; let a = 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(41));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn reports_lexical_parameter_conflicts() {
+  let source = "function f(a) { let a = 1; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(42));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn reports_tdz_errors_and_sorts_deterministically() {
+  let source = "a; let a = 1; let a = 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(43));
+  assert_eq!(diagnostics.len(), 2);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(diagnostics[1].code.as_str(), "BIND0001");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+  assert_eq!(slice_range(source, &diagnostics[1]), "a");
+  assert!(diagnostics[0].primary.range.start < diagnostics[1].primary.range.start);
 }

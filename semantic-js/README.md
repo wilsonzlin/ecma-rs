@@ -71,15 +71,11 @@ on `symbol-js`'s map ordering, and downstream crates have been migrated to it.
 
 ## Known gaps
 
-- JS mode does not emit diagnostics. It records hoisting and TDZ metadata (see
-  [`js::ScopeData::hoisted_bindings`], [`js::ScopeData::tdz_bindings`], and
-  `ResolvedSymbol::in_tdz`) and marks dynamic-scope hazards (`with` and direct,
-  global `eval`) via [`js::ScopeData::is_dynamic`] /
-  [`js::ScopeData::has_direct_eval`], but it does not currently:
-  - report TDZ or re-declaration errors,
-  - model runtime `with`/`eval` name resolution beyond hazard flags, or
-  - bind top-level globals in `TopLevelMode::Global` (top-level declarations are
-    intentionally skipped so hosts can map globals separately).
+- JS mode emits basic deterministic diagnostics for common binding errors such as
+  lexical redeclarations and TDZ violations via `BIND####` codes. It still:
+  - models runtime `with`/`eval` name resolution only via hazard flags, and
+  - skips binding top-level globals in `TopLevelMode::Global` (top-level
+    declarations are intentionally skipped so hosts can map globals separately).
 - TS mode does not bind inside statement bodies, nor does it track locals or
   statement-level scopes. It focuses on module-level declaration merging and
   import/export maps:

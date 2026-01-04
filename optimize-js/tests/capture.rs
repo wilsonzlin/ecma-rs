@@ -32,7 +32,7 @@ fn compile_with_symbols(
   mode: TopLevelMode,
 ) -> (Program, VarAnalysis, HashMap<SymbolId, String>) {
   let mut node = parse(source).expect("parse source");
-  let (symbols, _) = JsSymbols::bind(&mut node, mode, FileId(0));
+  let (symbols, _diagnostics) = JsSymbols::bind(&mut node, mode, FileId(0));
   let names = collect_symbol_names(&symbols);
   let analysis = VarAnalysis::analyze(&mut node, &symbols);
   let program = compile_source(source, mode, false);

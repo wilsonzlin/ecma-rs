@@ -13,7 +13,7 @@
 //! - [`resolve()`] uses the attached [`ScopeId`]s to resolve identifier
 //!   expressions and patterns to their nearest enclosing declaration and stores
 //!   a [`crate::assoc::js::ResolvedSymbol`] next to the node.
-//! - [`bind_js`] simply runs both passes.
+//! - [`bind_js`] runs both passes and returns any binding diagnostics.
 //!
 //! ## Scope kinds
 //!
@@ -59,6 +59,7 @@
 //! [`ScopeData::iter_symbols_sorted`] or [`JsSemantics::scope_symbols`] to
 //! traverse symbols deterministically.
 use diagnostics::FileId;
+use diagnostics::Diagnostic;
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use std::collections::BTreeMap;
@@ -300,10 +301,12 @@ pub fn bind_js(
   top_level: &mut Node<TopLevel>,
   mode: TopLevelMode,
   file: FileId,
-) -> (JsSemantics, JsResolution) {
-  let sem = declare(top_level, mode, file);
-  let res = resolve(top_level, &sem);
-  (sem, res)
+) -> (JsSemantics, Vec<Diagnostic>) {
+  let (sem, mut diagnostics) = declare::declare_with_diagnostics(top_level, mode, file);
+  let (_res, mut resolve_diagnostics) = resolve::resolve_with_diagnostics(top_level, &sem, file);
+  diagnostics.append(&mut resolve_diagnostics);
+  diagnostics::sort_diagnostics(&mut diagnostics);
+  (sem, diagnostics)
 }
 
 #[cfg(test)]

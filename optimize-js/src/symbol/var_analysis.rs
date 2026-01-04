@@ -150,7 +150,7 @@ mod tests {
 
   fn parse_and_visit_with_mode(source: &str, mode: TopLevelMode) -> (VarAnalysis, JsSymbols) {
     let mut parsed = parse(source).unwrap();
-    let (symbols, _) = JsSymbols::bind(&mut parsed, mode, FileId(0));
+    let (symbols, _diagnostics) = JsSymbols::bind(&mut parsed, mode, FileId(0));
     let analysis = VarAnalysis::analyze(&mut parsed, &symbols);
     (analysis, symbols)
   }

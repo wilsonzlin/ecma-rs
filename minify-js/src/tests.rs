@@ -85,9 +85,9 @@ fn assert_outputs_parse_to_same_ast(
 fn test_shadow_safety() {
   let result = minified(
     TopLevelMode::Global,
-    "let x=1;(()=>{let y=x;let x=2;return y})();",
+    "let x=1;(()=>{let x=2;let y=x;return y})();",
   );
-  assert_eq!(result, "let x=1;(()=>{let a=b;let b=2;return a;})();");
+  assert_eq!(result, "let x=1;(()=>{let b=2;let a=b;return a;})();");
 }
 
 #[test]
@@ -386,6 +386,19 @@ fn returns_diagnostics_on_parse_error() {
   assert!(diagnostic.code.as_str().starts_with("PS"));
   assert_eq!(diagnostic.primary.file, FileId(0));
   assert_eq!(diagnostic.severity, Severity::Error);
+}
+
+#[test]
+fn returns_diagnostics_on_binding_error() {
+  let mut output = Vec::new();
+  let source = "x; let x = 1;";
+  let diagnostics = minify(TopLevelMode::Module, source, &mut output).unwrap_err();
+  assert!(!diagnostics.is_empty());
+  assert!(
+    diagnostics.iter().any(|diag| diag.code.as_str().starts_with("BIND")),
+    "expected binder diagnostics, got {diagnostics:?}"
+  );
+  assert!(output.is_empty());
 }
 
 #[test]

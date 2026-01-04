@@ -10,7 +10,7 @@ use super::TopLevelMode;
 use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut, VisitorMut};
-use diagnostics::{FileId, TextRange};
+use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::CallExpr;
@@ -77,12 +77,33 @@ fn range_of<T: Drive + DriveMut>(node: &Node<T>) -> TextRange {
   TextRange::new(node.loc.0 as u32, node.loc.1 as u32)
 }
 
+fn ident_range(loc: parse_js::loc::Loc, name: &str) -> TextRange {
+  let start = loc.start_u32();
+  let end = start.saturating_add(name.len() as u32);
+  TextRange::new(start, end)
+}
+
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode, file: FileId) -> JsSemantics {
+  let (sem, _) = declare_with_diagnostics(top_level, mode, file);
+  sem
+}
+
+pub(crate) fn declare_with_diagnostics(
+  top_level: &mut Node<TopLevel>,
+  mode: TopLevelMode,
+  file: FileId,
+) -> (JsSemantics, Vec<Diagnostic>) {
   let mut visitor = DeclareVisitor::new(mode, file, range_of(top_level));
   top_level.drive_mut(&mut visitor);
-  let mut sem = visitor.finish();
+  let (mut sem, diagnostics) = visitor.finish();
   mark_dynamic_scopes(top_level, &mut sem);
-  sem
+  (sem, diagnostics)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DeclSpanInfo {
+  first_var: Option<TextRange>,
+  first_lexical: Option<TextRange>,
 }
 
 struct SemanticsBuilder {
@@ -92,6 +113,8 @@ struct SemanticsBuilder {
   scopes: BTreeMap<ScopeId, ScopeData>,
   symbols: BTreeMap<SymbolId, SymbolData>,
   top_scope: ScopeId,
+  decl_spans: BTreeMap<SymbolId, DeclSpanInfo>,
+  diagnostics: Vec<Diagnostic>,
 }
 
 impl SemanticsBuilder {
@@ -122,6 +145,8 @@ impl SemanticsBuilder {
       scopes,
       symbols: BTreeMap::new(),
       top_scope,
+      decl_spans: BTreeMap::new(),
+      diagnostics: Vec::new(),
     }
   }
 
@@ -174,18 +199,72 @@ impl SemanticsBuilder {
     }
   }
 
-  fn declare_in_scope(&mut self, scope: ScopeId, name: &str, flags: SymbolFlags) -> SymbolId {
+  fn declare_in_scope_with_span(
+    &mut self,
+    scope: ScopeId,
+    name: &str,
+    flags: SymbolFlags,
+    lexical: bool,
+    span: Option<TextRange>,
+  ) -> SymbolId {
     let name_id = self.intern_name(name);
     let existing = self
       .scopes
       .get(&scope)
       .and_then(|s| s.symbols.get(&name_id))
       .copied();
+
+    let id = existing.unwrap_or_else(|| symbol_id_for(self.file, scope, name_id));
+
+    if let Some(span) = span {
+      let info = self.decl_spans.entry(id).or_default();
+      let is_lexical = lexical;
+      if is_lexical {
+        if let Some(prev) = info.first_lexical {
+          let mut diagnostic = Diagnostic::error(
+            "BIND0001",
+            format!("Identifier `{name}` has already been declared"),
+            Span::new(self.file, span),
+          );
+          diagnostic.push_label(Label::secondary(
+            Span::new(self.file, prev),
+            "previous declaration here",
+          ));
+          self.diagnostics.push(diagnostic);
+        } else if let Some(prev) = info.first_var {
+          let mut diagnostic = Diagnostic::error(
+            "BIND0002",
+            format!("Conflicting lexical and var declarations for `{name}`"),
+            Span::new(self.file, span),
+          );
+          diagnostic.push_label(Label::secondary(
+            Span::new(self.file, prev),
+            "previous declaration here",
+          ));
+          self.diagnostics.push(diagnostic);
+        }
+        info.first_lexical.get_or_insert(span);
+      } else if info.first_var.is_none() {
+        if let Some(prev) = info.first_lexical {
+          let mut diagnostic = Diagnostic::error(
+            "BIND0002",
+            format!("Conflicting lexical and var declarations for `{name}`"),
+            Span::new(self.file, span),
+          );
+          diagnostic.push_label(Label::secondary(
+            Span::new(self.file, prev),
+            "previous declaration here",
+          ));
+          self.diagnostics.push(diagnostic);
+        }
+        info.first_var = Some(span);
+      }
+    }
+
     if let Some(existing) = existing {
       self.update_flags(existing, flags);
       return existing;
     }
-    let id = symbol_id_for(self.file, scope, name_id);
     if let Some(scope_data) = self.scopes.get_mut(&scope) {
       scope_data.symbols.insert(name_id, id);
     }
@@ -220,14 +299,17 @@ impl SemanticsBuilder {
     }
   }
 
-  fn finish(self) -> JsSemantics {
-    JsSemantics {
-      names: self.names,
-      name_lookup: self.name_lookup,
-      scopes: self.scopes,
-      symbols: self.symbols,
-      top_scope: self.top_scope,
-    }
+  fn finish(self) -> (JsSemantics, Vec<Diagnostic>) {
+    (
+      JsSemantics {
+        names: self.names,
+        name_lookup: self.name_lookup,
+        scopes: self.scopes,
+        symbols: self.symbols,
+        top_scope: self.top_scope,
+      },
+      self.diagnostics,
+    )
   }
 }
 
@@ -241,6 +323,7 @@ enum DeclTarget {
 struct DeclContext {
   target: DeclTarget,
   flags: SymbolFlags,
+  lexical: bool,
 }
 
 #[derive(VisitorMut)]
@@ -279,7 +362,7 @@ impl DeclareVisitor {
     }
   }
 
-  fn finish(self) -> JsSemantics {
+  fn finish(self) -> (JsSemantics, Vec<Diagnostic>) {
     self.builder.finish()
   }
 
@@ -301,11 +384,13 @@ impl DeclareVisitor {
     self.decl_target_stack.push(DeclContext {
       target,
       flags: SymbolFlags::default(),
+      lexical: false,
     });
   }
 
-  fn push_decl_context(&mut self, target: DeclTarget, flags: SymbolFlags) {
-    self.decl_target_stack.push(DeclContext { target, flags });
+  fn push_decl_context(&mut self, target: DeclTarget, flags: SymbolFlags, lexical: bool) {
+    self.decl_target_stack
+      .push(DeclContext { target, flags, lexical });
   }
 
   fn pop_decl_target(&mut self) {
@@ -333,26 +418,42 @@ impl DeclareVisitor {
       .find(|id| self.builder.scope_kind(*id).is_closure())
   }
 
-  fn declare_with_target(&mut self, name: &str, ctx: DeclContext) -> Option<(SymbolId, ScopeId)> {
+  fn declare_with_target(
+    &mut self,
+    name: &str,
+    ctx: DeclContext,
+    span: TextRange,
+  ) -> Option<(SymbolId, ScopeId)> {
     let (symbol, scope) = match ctx.target {
       DeclTarget::IfNotGlobal => {
         let scope = self.current_scope();
         if self.builder.scope_kind(scope) == ScopeKind::Global {
           None
         } else {
-          Some((self.builder.declare_in_scope(scope, name, ctx.flags), scope))
+          Some((
+            self
+              .builder
+              .declare_in_scope_with_span(scope, name, ctx.flags, ctx.lexical, Some(span)),
+            scope,
+          ))
         }
       }
       DeclTarget::NearestClosure => {
         let scope = self.nearest_closure()?;
-        Some((self.builder.declare_in_scope(scope, name, ctx.flags), scope))
+        Some((
+          self
+            .builder
+            .declare_in_scope_with_span(scope, name, ctx.flags, ctx.lexical, Some(span)),
+          scope,
+        ))
       }
     }?;
     Some((symbol, scope))
   }
 
   fn declare_class_or_func_name(&mut self, node: &mut Node<ClassOrFuncName>, ctx: DeclContext) {
-    if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
+    let span = ident_range(node.loc, &node.stx.name);
+    if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx, span) {
       node.assoc.set(DeclaredSymbol(symbol));
     }
   }
@@ -388,6 +489,7 @@ impl DeclareVisitor {
         DeclContext {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::lexical_tdz(),
+          lexical: true,
         },
       );
     }
@@ -406,6 +508,7 @@ impl DeclareVisitor {
         DeclContext {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::default(),
+          lexical: false,
         },
       );
     }
@@ -437,7 +540,7 @@ impl DeclareVisitor {
           SymbolFlags::lexical_tdz()
         }
       };
-      self.push_decl_context(target, flags);
+      self.push_decl_context(target, flags, flags.tdz);
     }
   }
 
@@ -454,6 +557,7 @@ impl DeclareVisitor {
         DeclContext {
           target: DeclTarget::NearestClosure,
           flags: SymbolFlags::hoisted(),
+          lexical: false,
         },
       );
     }
@@ -467,6 +571,7 @@ impl DeclareVisitor {
         DeclContext {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::hoisted(),
+          lexical: false,
         },
       );
     }
@@ -494,7 +599,8 @@ impl DeclareVisitor {
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     if self.in_pattern_decl() {
       if let Some(ctx) = self.decl_target_stack.last().copied() {
-        if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
+        let span = ident_range(node.loc, &node.stx.name);
+        if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx, span) {
           node.assoc.set(DeclaredSymbol(symbol));
         }
       }
@@ -502,7 +608,8 @@ impl DeclareVisitor {
   }
 
   fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
-    self.push_decl_context(DeclTarget::IfNotGlobal, SymbolFlags::lexical_tdz());
+    // Import bindings are lexical but initialized before module evaluation (no TDZ).
+    self.push_decl_context(DeclTarget::IfNotGlobal, SymbolFlags::default(), true);
   }
 
   fn exit_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
@@ -530,7 +637,7 @@ impl DeclareVisitor {
         SymbolFlags::lexical_tdz()
       }
     };
-    self.push_decl_context(target, flags);
+    self.push_decl_context(target, flags, flags.tdz);
   }
 
   fn exit_var_decl_node(&mut self, _node: &mut VarDeclNode) {

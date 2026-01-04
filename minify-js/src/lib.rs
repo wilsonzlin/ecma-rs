@@ -209,10 +209,33 @@ pub fn minify_with_options(
 
   erase_types(file, options.top_level_mode, source, &mut top_level_node)?;
 
-  #[cfg(feature = "emit-minify")]
-  opt::optimize(file, options.top_level_mode, &mut top_level_node);
+  let sem = {
+    #[cfg(feature = "emit-minify")]
+    {
+      // Collect binding diagnostics before running AST-rewriting optimizations so
+      // errors point at the original source.
+      let (_sem, diagnostics) = bind_js(&mut top_level_node, options.top_level_mode, file);
+      if !diagnostics.is_empty() {
+        return Err(diagnostics);
+      }
 
-  let (sem, _) = bind_js(&mut top_level_node, options.top_level_mode, file);
+      opt::optimize(file, options.top_level_mode, &mut top_level_node);
+      let (sem, diagnostics) = bind_js(&mut top_level_node, options.top_level_mode, file);
+      if !diagnostics.is_empty() {
+        return Err(diagnostics);
+      }
+      sem
+    }
+    #[cfg(not(feature = "emit-minify"))]
+    {
+      let (sem, diagnostics) = bind_js(&mut top_level_node, options.top_level_mode, file);
+      if !diagnostics.is_empty() {
+        return Err(diagnostics);
+      }
+      sem
+    }
+  };
+
   let usage = collect_usages(&mut top_level_node, &sem, options.top_level_mode);
   let renames = assign_names(&sem, &usage);
   #[cfg(feature = "emit-minify")]

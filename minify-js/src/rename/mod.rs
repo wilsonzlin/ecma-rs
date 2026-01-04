@@ -701,7 +701,8 @@ mod tests {
       },
     )
     .expect("parse");
-    let (sem, _) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+    let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
+    assert!(diagnostics.is_empty());
     let usage = collect_usages(&mut ast, &sem, TopLevelMode::Module);
     let renames = assign_names(&sem, &usage);
 

@@ -80,7 +80,8 @@
 //! )
 //! .unwrap();
 //!
-//! let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, diagnostics::FileId(0));
+//! let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, diagnostics::FileId(0));
+//! assert!(diagnostics.is_empty());
 //!
 //! let mut collect = Collect::default();
 //! ast.drive_mut(&mut collect);

@@ -1,6 +1,7 @@
 use super::{JsSemantics, ScopeId, SymbolId};
 use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
+use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::Func;
@@ -18,12 +19,28 @@ pub struct JsResolution {
 }
 
 pub fn resolve(top_level: &mut Node<TopLevel>, sem: &JsSemantics) -> JsResolution {
-  let mut visitor = ResolveVisitor::new(sem);
+  let mut visitor = ResolveVisitor::new(sem, None);
   top_level.drive_mut(&mut visitor);
   JsResolution {
     resolved: visitor.resolved,
     unresolved: visitor.unresolved,
   }
+}
+
+pub(crate) fn resolve_with_diagnostics(
+  top_level: &mut Node<TopLevel>,
+  sem: &JsSemantics,
+  file: FileId,
+) -> (JsResolution, Vec<Diagnostic>) {
+  let mut visitor = ResolveVisitor::new(sem, Some(file));
+  top_level.drive_mut(&mut visitor);
+  (
+    JsResolution {
+      resolved: visitor.resolved,
+      unresolved: visitor.unresolved,
+    },
+    visitor.diagnostics,
+  )
 }
 
 type BlockStmtNode = Node<BlockStmt>;
@@ -79,6 +96,8 @@ struct ResolveVisitor<'a> {
   sem: &'a JsSemantics,
   resolved: usize,
   unresolved: usize,
+  file: Option<FileId>,
+  diagnostics: Vec<Diagnostic>,
   scope_stack: Vec<ScopeId>,
   tdz_stack: Vec<TdzFrame>,
   var_decl_mode_stack: Vec<VarDeclMode>,
@@ -87,12 +106,14 @@ struct ResolveVisitor<'a> {
 }
 
 impl ResolveVisitor<'_> {
-  fn new(sem: &JsSemantics) -> ResolveVisitor<'_> {
+  fn new(sem: &JsSemantics, file: Option<FileId>) -> ResolveVisitor<'_> {
     let top_scope = sem.top_scope();
     ResolveVisitor {
       sem,
       resolved: 0,
       unresolved: 0,
+      file,
+      diagnostics: Vec::new(),
       scope_stack: vec![top_scope],
       tdz_stack: vec![TdzFrame::new(top_scope, sem)],
       var_decl_mode_stack: Vec::new(),
@@ -180,11 +201,20 @@ impl ResolveVisitor<'_> {
     }
   }
 
-  fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str) {
+  fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str, range: TextRange) {
     if let Some(scope) = scope_id(assoc) {
       let symbol = self.sem.resolve_name_in_scope(scope, name);
       let in_tdz = symbol.map_or(false, |sym| self.symbol_in_tdz(sym));
+      let should_report_tdz = self.file.is_some() && in_tdz && symbol.is_some();
       self.mark(assoc, symbol, in_tdz);
+      if should_report_tdz {
+        let file = self.file.expect("file id present when reporting diagnostics");
+        self.diagnostics.push(Diagnostic::error(
+          "BIND0003",
+          format!("Cannot access `{name}` before initialization"),
+          Span::new(file, range),
+        ));
+      }
     } else {
       self.mark(assoc, None, false);
     }
@@ -280,7 +310,13 @@ impl ResolveVisitor<'_> {
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
-    self.resolve_use(&mut node.assoc, &node.stx.name);
+    let start = node.loc.start_u32();
+    let end = start.saturating_add(node.stx.name.len() as u32);
+    self.resolve_use(
+      &mut node.assoc,
+      &node.stx.name,
+      TextRange::new(start, end),
+    );
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
@@ -291,7 +327,13 @@ impl ResolveVisitor<'_> {
         self.record_pending(declared);
       }
     } else {
-      self.resolve_use(&mut node.assoc, &node.stx.name);
+      let start = node.loc.start_u32();
+      let end = start.saturating_add(node.stx.name.len() as u32);
+      self.resolve_use(
+        &mut node.assoc,
+        &node.stx.name,
+        TextRange::new(start, end),
+      );
     }
   }
 

@@ -3,7 +3,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stx::TopLevel;
 use semantic_js::assoc::js as assoc;
-use semantic_js::js::{bind_js, JsResolution, JsSemantics, ScopeData, TopLevelMode};
+use semantic_js::js::{bind_js, JsSemantics, ScopeData, TopLevelMode};
 use serde::Serialize;
 use std::cmp::Ordering;
 
@@ -67,9 +67,9 @@ impl JsSymbols {
     top_level: &mut Node<TopLevel>,
     mode: TopLevelMode,
     file: FileId,
-  ) -> (Self, JsResolution) {
-    let (semantics, resolution) = bind_js(top_level, mode, file);
-    (Self { semantics }, resolution)
+  ) -> (Self, Vec<diagnostics::Diagnostic>) {
+    let (semantics, diagnostics) = bind_js(top_level, mode, file);
+    (Self { semantics }, diagnostics)
   }
 
   pub fn top_scope(&self) -> ScopeId {

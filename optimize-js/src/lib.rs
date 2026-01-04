@@ -570,7 +570,10 @@ pub fn compile_source_ast(
 ) -> OptimizeResult<Program> {
   let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   let lower = lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
-  let (semantics, _) = JsSymbols::bind(&mut top_level_node, mode, SOURCE_FILE);
+  let (semantics, diagnostics) = JsSymbols::bind(&mut top_level_node, mode, SOURCE_FILE);
+  if !diagnostics.is_empty() {
+    return Err(diagnostics);
+  }
   let VarAnalysis {
     foreign,
     use_before_decl,
@@ -726,7 +729,10 @@ impl Program {
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
-    let (semantics, _) = JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
+    let (semantics, diagnostics) = JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
+    if !diagnostics.is_empty() {
+      return Err(diagnostics);
+    }
     let VarAnalysis {
       foreign,
       use_before_decl,
@@ -902,7 +908,7 @@ mod tests {
       .expect_err("expected use-before-decl error");
     assert_eq!(err.len(), 1);
     let diagnostic = &err[0];
-    assert_eq!(diagnostic.code, "OPT0001");
+    assert_eq!(diagnostic.code, "BIND0003");
     let range = diagnostic.primary.range;
     assert!(range.start < range.end);
     assert_eq!(&source[range.start as usize..range.end as usize], "a");
