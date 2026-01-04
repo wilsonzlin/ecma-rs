@@ -1,4 +1,4 @@
-use crate::ids::{DefId, NameId, TypeId};
+use crate::ids::{DefId, NameId, TypeId, TypeParamId};
 use crate::kind::MappedModifier;
 use crate::kind::TemplateLiteralType;
 use crate::kind::TypeKind;
@@ -122,6 +122,18 @@ impl<'a> TypeDisplay<'a> {
     write!(f, "`")
   }
 
+  fn fmt_type_param_id(&self, id: TypeParamId, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    // TypeScript uses stable, user-friendly type parameter names in error
+    // messages and type stringification. Internally we represent type
+    // parameters by a numeric id, so mirror the common TS convention where the
+    // first type parameter is just `T` (instead of `T0`).
+    if id.0 == 0 {
+      write!(f, "T")
+    } else {
+      write!(f, "T{}", id.0)
+    }
+  }
+
   fn fmt_mapped_modifier(
     &self,
     modifier: MappedModifier,
@@ -159,7 +171,8 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::BigIntLiteral(ref val) => write!(f, "{}n", val),
       TypeKind::This => write!(f, "this"),
       TypeKind::Infer { param, constraint } => {
-        write!(f, "infer T{}", param.0)?;
+        write!(f, "infer ")?;
+        self.fmt_type_param_id(param, f)?;
         if let Some(constraint) = constraint {
           write!(f, " extends ")?;
           self.fmt_with_prec(constraint, Precedence::Primary, f)?;
@@ -284,7 +297,7 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Callable { overloads } => {
         if overloads.len() == 1 {
           let sig = self.store.signature(overloads[0]);
-          return self.fmt_signature(&sig, f);
+          return self.fmt_call_signature(&sig, f);
         }
         write!(f, "{{")?;
         let mut first = true;
@@ -335,7 +348,7 @@ impl<'a> TypeDisplay<'a> {
         }
         Ok(())
       }
-      TypeKind::TypeParam(id) => write!(f, "T{}", id.0),
+      TypeKind::TypeParam(id) => self.fmt_type_param_id(id, f),
       TypeKind::Predicate {
         asserted, asserts, ..
       } => {
@@ -437,56 +450,6 @@ impl<'a> TypeDisplay<'a> {
     self.store.type_cmp(a, b)
   }
 
-  fn fmt_signature(
-    &self,
-    sig: &crate::signature::Signature,
-    f: &mut fmt::Formatter<'_>,
-  ) -> fmt::Result {
-    if !sig.type_params.is_empty() {
-      write!(f, "<")?;
-      let mut iter = sig.type_params.iter().peekable();
-      while let Some(param) = iter.next() {
-        write!(f, "T{}", param.id.0)?;
-        if let Some(constraint) = param.constraint {
-          write!(f, " extends ")?;
-          self.fmt_type(constraint, f)?;
-        }
-        if let Some(default) = param.default {
-          write!(f, " = ")?;
-          self.fmt_type(default, f)?;
-        }
-        if iter.peek().is_some() {
-          write!(f, ", ")?;
-        }
-      }
-      write!(f, ">")?;
-    }
-    write!(f, "(")?;
-    let mut needs_comma = false;
-
-    if let Some(this_param) = sig.this_param {
-      self.fmt_type(this_param, f)?;
-      needs_comma = true;
-    }
-
-    let mut iter = sig.params.iter().peekable();
-    while let Some(param) = iter.next() {
-      if needs_comma {
-        write!(f, ", ")?;
-      }
-      if param.rest {
-        write!(f, "...")?;
-      }
-      self.fmt_type(param.ty, f)?;
-      if param.optional {
-        write!(f, "?")?;
-      }
-      needs_comma = true;
-    }
-    write!(f, ") => ")?;
-    self.fmt_type(sig.ret, f)
-  }
-
   fn fmt_call_signature(
     &self,
     sig: &crate::signature::Signature,
@@ -496,7 +459,7 @@ impl<'a> TypeDisplay<'a> {
       write!(f, "<")?;
       let mut iter = sig.type_params.iter().peekable();
       while let Some(param) = iter.next() {
-        write!(f, "T{}", param.id.0)?;
+        self.fmt_type_param_id(param.id, f)?;
         if let Some(constraint) = param.constraint {
           write!(f, " extends ")?;
           self.fmt_type(constraint, f)?;
@@ -541,7 +504,7 @@ impl<'a> TypeDisplay<'a> {
       needs_comma = true;
     }
 
-    write!(f, "): ")?;
+    write!(f, ") => ")?;
     self.fmt_type(sig.ret, f)
   }
 }
