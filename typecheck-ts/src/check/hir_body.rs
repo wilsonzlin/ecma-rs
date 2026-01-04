@@ -449,6 +449,47 @@ impl AstIndex {
       }
       AstExpr::Func(func) => self.index_function(&func.stx.func, file, cancelled),
       AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file, cancelled),
+      AstExpr::JsxElem(elem) => {
+        fn index_jsx_elem(
+          index: &mut AstIndex,
+          elem: &Node<JsxElem>,
+          file: FileId,
+          cancelled: Option<&Arc<AtomicBool>>,
+        ) {
+          for attr in elem.stx.attributes.iter() {
+            match attr {
+              JsxAttr::Named { value, .. } => {
+                if let Some(val) = value {
+                  match val {
+                    JsxAttrVal::Expression(container) => {
+                      index.index_expr(&container.stx.value, file, cancelled)
+                    }
+                    JsxAttrVal::Text(_) => {}
+                    JsxAttrVal::Element(child) => index_jsx_elem(index, child, file, cancelled),
+                  }
+                }
+              }
+              JsxAttr::Spread { value } => index.index_expr(&value.stx.value, file, cancelled),
+            }
+          }
+
+          for child in elem.stx.children.iter() {
+            match child {
+              JsxElemChild::Element(child) => index_jsx_elem(index, child, file, cancelled),
+              JsxElemChild::Expr(container) => {
+                index.index_expr(&container.stx.value, file, cancelled)
+              }
+              JsxElemChild::Text(_) => {}
+            }
+          }
+        }
+
+        index_jsx_elem(self, elem, file, cancelled);
+      }
+      AstExpr::JsxExprContainer(container) => {
+        self.index_expr(&container.stx.value, file, cancelled)
+      }
+      AstExpr::JsxSpreadAttr(attr) => self.index_expr(&attr.stx.value, file, cancelled),
       AstExpr::Id(..)
       | AstExpr::LitNull(..)
       | AstExpr::LitStr(..)
@@ -467,11 +508,8 @@ impl AstIndex {
       | AstExpr::Import(..)
       | AstExpr::ImportMeta(..)
       | AstExpr::TaggedTemplate(..)
-      | AstExpr::JsxElem(..)
-      | AstExpr::JsxExprContainer(..)
       | AstExpr::JsxMember(..)
       | AstExpr::JsxName(..)
-      | AstExpr::JsxSpreadAttr(..)
       | AstExpr::JsxText(..)
       | AstExpr::LitRegex(..)
       | AstExpr::NewTarget(..) => {}
