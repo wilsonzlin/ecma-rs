@@ -9,7 +9,8 @@ use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::lib_support::ScriptTarget;
 use typecheck_ts::{
-  parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, Program, TypeKindSummary,
+  parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, MemoryHost, Program,
+  TypeKindSummary,
 };
 use types_ts_interned::{TypeKind, TypeStore};
 
@@ -145,8 +146,9 @@ interface Dog {
 
 export const ok: Dog = { kind: "animal", bark() {} };
 "#;
-  let host = NoLibHost { text: source };
+  let mut host = MemoryHost::default();
   let key = FileKey::new("entry.ts");
+  host.insert(key.clone(), source);
   let program = Program::new(host, vec![key]);
   let diagnostics = program.check();
   assert!(

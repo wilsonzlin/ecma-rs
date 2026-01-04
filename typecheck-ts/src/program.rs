@@ -6771,7 +6771,7 @@ impl ProgramState {
         continue;
       }
       params.push(tti::Param {
-        name: None,
+        name: name.as_deref().map(|name| store.intern_name(name)),
         ty,
         optional: param.stx.optional,
         rest: param.stx.rest,

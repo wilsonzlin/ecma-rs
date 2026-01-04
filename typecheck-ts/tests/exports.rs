@@ -865,11 +865,19 @@ fn type_exports_propagate_through_reexports() {
   let mut host = MemoryHost::default();
   let key_types = fk(20);
   let key_entry = fk(21);
+  let key_consumer = fk(22);
   host.insert(key_types.clone(), "export type Foo = { a: string };");
   host.insert(key_entry.clone(), "export type { Foo } from \"./types\";");
+  host.insert(
+    key_consumer.clone(),
+    "import type { Foo } from \"./entry\";\n\
+     declare const x: Foo;\n\
+     x.a satisfies string;\n",
+  );
   host.link(key_entry.clone(), "./types", key_types.clone());
+  host.link(key_consumer.clone(), "./entry", key_entry.clone());
 
-  let program = Program::new(host, vec![key_entry.clone()]);
+  let program = Program::new(host, vec![key_consumer.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -882,10 +890,9 @@ fn type_exports_propagate_through_reexports() {
   assert!(foo.def.is_none(), "re-export should not point to local def");
   let foo_ty = foo.type_id.expect("type for Foo");
   let rendered = program.display_type(foo_ty).to_string();
-  // Either the alias name is preserved or the object structure is shown
-  assert!(
-    rendered == "Foo" || rendered.contains("a: string"),
-    "expected Foo alias or object type with a: string, got {rendered}"
+  assert_eq!(
+    rendered, "any",
+    "expected type-only export to have `any` value type, got {rendered}"
   );
 }
 
@@ -957,8 +964,8 @@ fn type_exports_support_string_literal_names() {
   let export_ty = export.type_id.expect("type for export a-b");
   let rendered = program.display_type(export_ty).to_string();
   assert!(
-    rendered == "Foo" || rendered == "number",
-    "unexpected type export for a-b: {rendered}"
+    rendered == "any",
+    "expected type-only export to have `any` value type, got {rendered}"
   );
 
   let file_entry = program.file_id(&key_entry).expect("entry id");
