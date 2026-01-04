@@ -945,6 +945,16 @@ fn with_statement_keeps_undefined_in_nested_functions() {
 }
 
 #[test]
+fn with_statement_keeps_nullish_checks_in_nested_functions() {
+  let src = "with({undefined:1}){(function(x){return x===null||x===undefined;})()}";
+  let result = minified(TopLevelMode::Global, src);
+  assert!(
+    result.contains("===undefined") && result.contains("||"),
+    "expected nullish-or checks to remain strict inside nested functions in with bodies\nsrc:\n{src}\noutput:\n{result}"
+  );
+}
+
+#[test]
 fn test_direct_eval_disables_renaming() {
   let src = "function f(){let x;eval(\"x\");}";
   let result = minified(TopLevelMode::Global, src);
