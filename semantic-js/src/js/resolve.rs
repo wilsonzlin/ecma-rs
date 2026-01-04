@@ -3,7 +3,7 @@ use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::class_or_object::ClassMember;
-use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::{ArrPatElem, IdPat, ObjPatProp};
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -46,6 +46,7 @@ pub(crate) fn resolve_with_diagnostics(
 
 type BlockStmtNode = Node<BlockStmt>;
 type CatchBlockNode = Node<CatchBlock>;
+type ArrPatElemNode = ArrPatElem;
 type ClassMemberNode = Node<ClassMember>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
@@ -55,6 +56,7 @@ type FuncNode = Node<Func>;
 type FuncBodyNode = FuncBody;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
+type ObjPatPropNode = Node<ObjPatProp>;
 type VarDeclNode = Node<VarDecl>;
 type VarDeclaratorNode = VarDeclarator;
 
@@ -82,6 +84,7 @@ impl TdzFrame {
 
 #[derive(VisitorMut)]
 #[visitor(
+  ArrPatElemNode(enter, exit),
   BlockStmtNode(enter, exit),
   CatchBlockNode(enter, exit),
   ClassDeclNode(enter, exit),
@@ -94,6 +97,7 @@ impl TdzFrame {
   FuncNode(enter, exit),
   IdExprNode(enter),
   IdPatNode(enter),
+  ObjPatPropNode(enter, exit),
   VarDeclNode(enter, exit),
   VarDeclaratorNode(enter, exit)
 )]
@@ -271,6 +275,15 @@ impl ResolveVisitor<'_> {
     self.pop_scope_from_assoc(&node.assoc);
   }
 
+  fn enter_arr_pat_elem_node(&mut self, _node: &mut ArrPatElemNode) {
+    let active = self.pending_active.last().copied().unwrap_or(false);
+    self.push_pending(active);
+  }
+
+  fn exit_arr_pat_elem_node(&mut self, _node: &mut ArrPatElemNode) {
+    self.pop_pending();
+  }
+
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.push_scope_from_assoc(&node.assoc);
   }
@@ -418,6 +431,15 @@ impl ResolveVisitor<'_> {
         TextRange::new(start, end),
       );
     }
+  }
+
+  fn enter_obj_pat_prop_node(&mut self, _node: &mut ObjPatPropNode) {
+    let active = self.pending_active.last().copied().unwrap_or(false);
+    self.push_pending(active);
+  }
+
+  fn exit_obj_pat_prop_node(&mut self, _node: &mut ObjPatPropNode) {
+    self.pop_pending();
   }
 
   fn enter_var_decl_node(&mut self, node: &mut VarDeclNode) {

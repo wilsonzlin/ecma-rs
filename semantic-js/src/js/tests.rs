@@ -566,3 +566,67 @@ fn parameter_default_initializer_prefers_outer_binding() {
   assert_eq!(b_use.symbol, Some(outer_b));
   assert!(!b_use.in_tdz);
 }
+
+#[test]
+fn destructuring_default_initializer_can_reference_prior_binding() {
+  let source = "let {a, b = a} = obj;";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(50));
+  assert!(
+    diagnostics.is_empty(),
+    "expected destructuring defaults to allow referencing earlier bindings, got {diagnostics:?}"
+  );
+
+  let a_symbol = sem
+    .resolve_name_in_scope(sem.top_scope(), "a")
+    .expect("binding a");
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+
+  let a_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "a")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("a use in default initializer");
+  assert_eq!(a_use.symbol, Some(a_symbol));
+  assert!(!a_use.in_tdz);
+}
+
+#[test]
+fn destructuring_default_initializer_prior_binding_array_pattern() {
+  let source = "let [a, b = a] = arr;";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(51));
+  assert!(
+    diagnostics.is_empty(),
+    "expected array destructuring defaults to allow referencing earlier bindings, got {diagnostics:?}"
+  );
+
+  let a_symbol = sem
+    .resolve_name_in_scope(sem.top_scope(), "a")
+    .expect("binding a");
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+
+  let a_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "a")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("a use in default initializer");
+  assert_eq!(a_use.symbol, Some(a_symbol));
+  assert!(!a_use.in_tdz);
+}
+
+#[test]
+fn destructuring_default_initializer_later_binding_is_in_tdz() {
+  let source = "let {a = b, b} = obj;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(52));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "b");
+}
