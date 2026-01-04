@@ -396,6 +396,7 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
 ) -> Option<Node<Stmt>> {
   const INTERNAL_IN_CALLEE: &str = "__optimize_js_in";
   const INTERNAL_INSTANCEOF_CALLEE: &str = "__optimize_js_instanceof";
+  const INTERNAL_DELETE_CALLEE: &str = "__optimize_js_delete";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -404,6 +405,18 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
 
   if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 2 {
     if let Arg::Builtin(path) = callee_arg {
+      if path == INTERNAL_DELETE_CALLEE {
+        let member = lower_get_prop(var_namer, fn_emitter, &args[0], &args[1]);
+        let expr = node(Expr::Unary(node(UnaryExpr {
+          operator: OperatorName::Delete,
+          argument: member,
+        })));
+        return match tgt {
+          Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+          None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+        };
+      }
+
       let op = if path == INTERNAL_IN_CALLEE {
         Some(OperatorName::In)
       } else if path == INTERNAL_INSTANCEOF_CALLEE {

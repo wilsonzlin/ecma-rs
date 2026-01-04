@@ -19,6 +19,7 @@ pub struct CompiledMemberExpr {
 impl<'p> HirSourceToInst<'p> {
   const INTERNAL_IN_CALLEE: &'static str = "__optimize_js_in";
   const INTERNAL_INSTANCEOF_CALLEE: &'static str = "__optimize_js_instanceof";
+  const INTERNAL_DELETE_CALLEE: &'static str = "__optimize_js_delete";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -751,6 +752,31 @@ impl<'p> HirSourceToInst<'p> {
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Void, arg));
         Ok(Arg::Var(tmp))
+      }
+      UnaryOp::Delete => {
+        let arg_expr = &self.body.exprs[argument.0 as usize];
+        match &arg_expr.kind {
+          ExprKind::Member(member) => {
+            if member.optional {
+              return Err(unsupported_syntax(
+                span,
+                "optional chaining in delete operand",
+              ));
+            }
+            let object_arg = self.compile_expr(member.object)?;
+            let prop_arg = key_arg(self, &member.property)?;
+            let tmp = self.c_temp.bump();
+            self.out.push(Inst::call(
+              tmp,
+              Arg::Builtin(Self::INTERNAL_DELETE_CALLEE.to_string()),
+              Arg::Const(Const::Undefined),
+              vec![object_arg, prop_arg],
+              Vec::new(),
+            ));
+            Ok(Arg::Var(tmp))
+          }
+          _ => Err(unsupported_syntax(span, "unsupported delete operand")),
+        }
       }
       _ => Err(unsupported_syntax(
         span,
