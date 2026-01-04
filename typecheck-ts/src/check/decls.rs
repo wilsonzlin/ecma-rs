@@ -1034,7 +1034,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.collect_variance_usage(index, OUT | IN, usage, visited);
       }
       TypeKind::KeyOf(inner) => self.collect_variance_usage(inner, OUT | IN, usage, visited),
-      TypeKind::Intrinsic { ty, .. } => self.collect_variance_usage(ty, position, usage, visited),
       TypeKind::EmptyObject
       | TypeKind::Any
       | TypeKind::Unknown
