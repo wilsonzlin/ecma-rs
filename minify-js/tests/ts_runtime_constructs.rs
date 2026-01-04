@@ -531,3 +531,90 @@ fn exported_runtime_namespaces_merged_with_functions_preserve_self_export_when_e
     "expected the alias export `N2` to be preserved"
   );
 }
+
+#[test]
+fn lowers_computed_numeric_enum_members_and_preserves_auto_increments() {
+  // Disable renaming so we can assert on the exact enum/func names.
+  let src = r#"
+    eval("x");
+    export enum E {
+      A = side(),
+      B,
+      C = side2(),
+      D,
+    }
+    function side() { return 10; }
+    function side2() { return 20; }
+  "#;
+  let (_code, parsed) = minify_ts_module(src);
+
+  let body = find_iife_body_by_outer_name(&parsed, "E").expect("expected E enum IIFE");
+  assert_eq!(body.len(), 4, "expected one statement per enum member");
+
+  fn enum_member_value_expr<'a>(stmt: &'a Node<Stmt>) -> &'a Node<Expr> {
+    let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+      panic!("expected expression statement, got {stmt:?}");
+    };
+    let Expr::Binary(outer_assign) = expr_stmt.stx.expr.stx.as_ref() else {
+      panic!("expected assignment expression, got {stmt:?}");
+    };
+    assert_eq!(outer_assign.stx.operator, OperatorName::Assignment);
+    let Expr::ComputedMember(member) = outer_assign.stx.left.stx.as_ref() else {
+      panic!("expected computed member assignment, got {stmt:?}");
+    };
+    let Expr::Binary(name_assign) = member.stx.member.stx.as_ref() else {
+      panic!("expected inner assignment in reverse mapping, got {stmt:?}");
+    };
+    assert_eq!(name_assign.stx.operator, OperatorName::Assignment);
+    &name_assign.stx.right
+  }
+
+  // Computed enum member initializers should be preserved.
+  assert!(
+    matches!(enum_member_value_expr(&body[0]).stx.as_ref(), Expr::Call(_)),
+    "expected computed initializer for A to remain a call expression"
+  );
+  assert!(
+    matches!(enum_member_value_expr(&body[2]).stx.as_ref(), Expr::Call(_)),
+    "expected computed initializer for C to remain a call expression"
+  );
+
+  // Auto-incremented members should be based on the previous member at runtime.
+  let b_value = enum_member_value_expr(&body[1]);
+  let Expr::Binary(b_add) = b_value.stx.as_ref() else {
+    panic!("expected B initializer to be an addition expression, got {b_value:?}");
+  };
+  assert_eq!(b_add.stx.operator, OperatorName::Addition);
+  assert!(
+    matches!(
+      b_add.stx.left.stx.as_ref(),
+      Expr::ComputedMember(member)
+        if matches!(member.stx.object.stx.as_ref(), Expr::Id(_))
+          && matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "A")
+    ),
+    "expected B to be initialized from E[\"A\"] + 1, got {b_value:?}"
+  );
+  assert!(
+    matches!(b_add.stx.right.stx.as_ref(), Expr::LitNum(num) if num.stx.value.0 == 1.0),
+    "expected B initializer to add 1, got {b_value:?}"
+  );
+
+  let d_value = enum_member_value_expr(&body[3]);
+  let Expr::Binary(d_add) = d_value.stx.as_ref() else {
+    panic!("expected D initializer to be an addition expression, got {d_value:?}");
+  };
+  assert_eq!(d_add.stx.operator, OperatorName::Addition);
+  assert!(
+    matches!(
+      d_add.stx.left.stx.as_ref(),
+      Expr::ComputedMember(member)
+        if matches!(member.stx.object.stx.as_ref(), Expr::Id(_))
+          && matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "C")
+    ),
+    "expected D to be initialized from E[\"C\"] + 1, got {d_value:?}"
+  );
+  assert!(
+    matches!(d_add.stx.right.stx.as_ref(), Expr::LitNum(num) if num.stx.value.0 == 1.0),
+    "expected D initializer to add 1, got {d_value:?}"
+  );
+}
