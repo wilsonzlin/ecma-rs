@@ -1811,13 +1811,15 @@ impl<'a> Checker<'a> {
       AstExpr::Member(mem) => {
         let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.left);
-        let base_obj_ty = if mem.stx.optional_chaining {
+        let chain_optional =
+          mem.stx.optional_chaining || self.is_optional_chain_expr(&mem.stx.left);
+        let base_obj_ty = if chain_optional {
           let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
           non_nullish
         } else {
           obj_ty
         };
-        let prop_ty = if mem.stx.optional_chaining && base_obj_ty == prim.never {
+        let prop_ty = if chain_optional && base_obj_ty == prim.never {
           prim.undefined
         } else {
           self.member_type(base_obj_ty, &mem.stx.right)
@@ -1842,7 +1844,7 @@ impl<'a> Checker<'a> {
             }
           }
         }
-        if mem.stx.optional_chaining {
+        if chain_optional {
           self.store.union(vec![prop_ty, prim.undefined])
         } else {
           prop_ty
@@ -1851,7 +1853,9 @@ impl<'a> Checker<'a> {
       AstExpr::ComputedMember(mem) => {
         let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.object);
-        let base_obj_ty = if mem.stx.optional_chaining {
+        let chain_optional =
+          mem.stx.optional_chaining || self.is_optional_chain_expr(&mem.stx.object);
+        let base_obj_ty = if chain_optional {
           let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
           non_nullish
         } else {
@@ -1870,7 +1874,7 @@ impl<'a> Checker<'a> {
           },
         };
 
-        let mut ty = if mem.stx.optional_chaining && base_obj_ty == prim.never {
+        let mut ty = if chain_optional && base_obj_ty == prim.never {
           prim.undefined
         } else if let Some(key) = literal_key {
           self.member_type(base_obj_ty, &key)
@@ -1880,7 +1884,7 @@ impl<'a> Checker<'a> {
         if self.relate.options.no_unchecked_indexed_access {
           ty = self.store.union(vec![ty, prim.undefined]);
         }
-        if mem.stx.optional_chaining {
+        if chain_optional {
           ty = self.store.union(vec![ty, prim.undefined]);
         }
         ty
@@ -1943,6 +1947,24 @@ impl<'a> Checker<'a> {
     ty
   }
 
+  fn is_optional_chain_expr(&self, expr: &Node<AstExpr>) -> bool {
+    match expr.stx.as_ref() {
+      AstExpr::Member(mem) => {
+        mem.stx.optional_chaining || self.is_optional_chain_expr(&mem.stx.left)
+      }
+      AstExpr::ComputedMember(mem) => {
+        mem.stx.optional_chaining || self.is_optional_chain_expr(&mem.stx.object)
+      }
+      AstExpr::Call(call) => {
+        call.stx.optional_chaining || self.is_optional_chain_expr(&call.stx.callee)
+      }
+      AstExpr::TypeAssertion(assert) => self.is_optional_chain_expr(&assert.stx.expression),
+      AstExpr::NonNullAssertion(assert) => self.is_optional_chain_expr(&assert.stx.expression),
+      AstExpr::SatisfiesExpr(expr) => self.is_optional_chain_expr(&expr.stx.expression),
+      _ => false,
+    }
+  }
+
   fn recorded_expr_type(&self, loc: Loc) -> Option<TypeId> {
     let range = loc_to_range(self.file, loc);
     self
@@ -1960,15 +1982,7 @@ impl<'a> Checker<'a> {
     let prim = self.store.primitive_ids();
     let callee_ty = self.check_expr(&call.stx.callee);
 
-    let call_optional = call.stx.optional_chaining
-      || matches!(
-        call.stx.callee.stx.as_ref(),
-        AstExpr::Member(mem) if mem.stx.optional_chaining
-      )
-      || matches!(
-        call.stx.callee.stx.as_ref(),
-        AstExpr::ComputedMember(mem) if mem.stx.optional_chaining
-      );
+    let call_optional = call.stx.optional_chaining || self.is_optional_chain_expr(&call.stx.callee);
 
     let callee_base = if call_optional {
       narrow_non_nullish(callee_ty, &self.store).0

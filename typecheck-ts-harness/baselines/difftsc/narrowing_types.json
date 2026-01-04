@@ -94,6 +94,55 @@
         "line": 60,
         "column": 10,
         "type": "null | undefined"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1225,
+        "line": 64,
+        "column": 10,
+        "type": "number | undefined"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1317,
+        "line": 68,
+        "column": 12,
+        "type": "number | undefined"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1389,
+        "line": 72,
+        "column": 9,
+        "type": "number | undefined"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1510,
+        "line": 77,
+        "column": 7,
+        "type": "{ a: { b: number } }"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1525,
+        "line": 79,
+        "column": 5,
+        "type": "null | { a: { b: number } }"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1680,
+        "line": 87,
+        "column": 7,
+        "type": "{ a: { b: () => number } }"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1721,
+        "line": 90,
+        "column": 7,
+        "type": "null | { a: { b: () => number } }"
       }
     ]
   }

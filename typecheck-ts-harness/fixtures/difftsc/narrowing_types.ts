@@ -61,6 +61,37 @@ function nullishCoalescingNarrowsRhs(x: string | null | undefined) {
   x ?? x/*^?*/;
 }
 
+function optionalChainMemberType(x: { a: { b: number } } | null) {
+  x?.a.b/*^?*/;
+}
+
+function optionalChainCallType(x: { a: { b: () => number } } | null) {
+  x?.a.b()/*^?*/;
+}
+
+function optionalCallType(x: (() => number) | null) {
+  x?.()/*^?*/;
+}
+
+function optionalChainEqualityNarrows(x: { a: { b: number } } | null, y: number) {
+  if (x?.a.b === y) {
+    x/*^?*/;
+  }
+  x/*^?*/;
+}
+
+function optionalChainInequalityUndefinedNarrows(
+  x: { a: { b: () => number } } | null,
+  y: number,
+) {
+  if (x?.a.b() !== undefined) {
+    x/*^?*/;
+  }
+  if (x?.a.b() !== y) {
+    x/*^?*/;
+  }
+}
+
 type Tagged =
   | { kind: "a"; a: number }
   | { kind: "b"; b: number };

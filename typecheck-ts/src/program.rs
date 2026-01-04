@@ -1129,31 +1129,40 @@ impl Program {
           }
         }
       }
-      if let Some((optional, base_ty, key)) = member_fallback {
-        if let Some(store) = state.interned_store.as_ref() {
-          let caches = state.checker_caches.for_body();
-          let expander = RefExpander::new(
-            Arc::clone(store),
-            &state.interned_def_types,
-            &state.interned_type_params,
-            &state.interned_intrinsics,
-            &state.interned_class_instances,
-            caches.eval.clone(),
-          );
-          let mut prop_ty = lookup_interned_property_type(store, Some(&expander), base_ty, &key);
-          if prop_ty.is_none() {
-            if let tti::TypeKind::Ref { def, .. } = store.type_kind(base_ty) {
-              if let Some(mapped) = state.interned_def_types.get(&DefId(def.0)).copied() {
-                prop_ty = lookup_interned_property_type(store, None, mapped, &key);
+      let member_fallback_allowed = state
+        .interned_store
+        .as_ref()
+        .map(|store| {
+          store.contains_type_id(ty) && matches!(store.type_kind(ty), tti::TypeKind::Unknown)
+        })
+        .unwrap_or(ty == unknown);
+      if member_fallback_allowed {
+        if let Some((optional, base_ty, key)) = member_fallback {
+          if let Some(store) = state.interned_store.as_ref() {
+            let caches = state.checker_caches.for_body();
+            let expander = RefExpander::new(
+              Arc::clone(store),
+              &state.interned_def_types,
+              &state.interned_type_params,
+              &state.interned_intrinsics,
+              &state.interned_class_instances,
+              caches.eval.clone(),
+            );
+            let mut prop_ty = lookup_interned_property_type(store, Some(&expander), base_ty, &key);
+            if prop_ty.is_none() {
+              if let tti::TypeKind::Ref { def, .. } = store.type_kind(base_ty) {
+                if let Some(mapped) = state.interned_def_types.get(&DefId(def.0)).copied() {
+                  prop_ty = lookup_interned_property_type(store, None, mapped, &key);
+                }
               }
             }
-          }
-          if let Some(prop_ty) = prop_ty {
-            ty = if optional {
-              store.union(vec![prop_ty, store.primitive_ids().undefined])
-            } else {
-              prop_ty
-            };
+            if let Some(prop_ty) = prop_ty {
+              ty = if optional {
+                store.union(vec![prop_ty, store.primitive_ids().undefined])
+              } else {
+                prop_ty
+              };
+            }
           }
         }
       }
