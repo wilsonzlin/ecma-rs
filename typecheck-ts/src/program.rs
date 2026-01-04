@@ -3701,8 +3701,17 @@ impl ProgramTypeResolver {
 
   fn pick_decl(&self, symbol: sem_ts::SymbolId, ns: sem_ts::Namespace) -> Option<DefId> {
     let symbols = self.semantics.symbols();
-    let mut best: Option<(u8, usize, DefId)> = None;
-    for (idx, decl_id) in self.semantics.symbol_decls(symbol, ns).iter().enumerate() {
+    // Prefer a deterministic "canonical" declaration when a symbol has multiple
+    // merged declarations (common in the upstream `lib.*.d.ts` set, e.g.
+    // `interface Promise<T> {}` is augmented in several files).
+    //
+    // We intentionally do *not* use the semantic decl ordering as a tie-breaker
+    // because it may depend on hash-map iteration order. Picking the lowest
+    // `DefId` stabilizes resolution across callers and ensures that references
+    // to merged globals (Promise, SymbolConstructor, ...) share the same
+    // referenced definition identity.
+    let mut best: Option<(u8, DefId)> = None;
+    for decl_id in self.semantics.symbol_decls(symbol, ns).iter() {
       let decl = symbols.decl(*decl_id);
       let def = decl.def_id;
       let Some(kind) = self.def_kinds.get(&def) else {
@@ -3713,15 +3722,13 @@ impl ProgramTypeResolver {
       }
       let pri = self.def_priority(def, ns);
       best = match best {
-        Some((best_pri, best_idx, best_def))
-          if best_pri < pri || (best_pri == pri && best_idx <= idx) =>
-        {
-          Some((best_pri, best_idx, best_def))
+        Some((best_pri, best_def)) if (best_pri, best_def.0) <= (pri, def.0) => {
+          Some((best_pri, best_def))
         }
-        _ => Some((pri, idx, def)),
+        _ => Some((pri, def)),
       };
     }
-    best.map(|(_, _, def)| def)
+    best.map(|(_, def)| def)
   }
 
   fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
@@ -5072,6 +5079,69 @@ impl ProgramState {
         }
       }
     }
+
+    // TypeScript's global declarations merge across `.d.ts` files. The semantic
+    // binder already performs this merge when populating `global_symbols`, but
+    // the checker-side canonical map is keyed by `(file, parent, name, ns)`.
+    //
+    // When we vendor the full upstream `lib.*.d.ts` set, important interfaces
+    // like `Promise` and `SymbolConstructor` are declared/augmented across many
+    // files. Map every top-level global declaration that participates in a
+    // merged global symbol group to a single canonical `DefId` so that
+    // `ensure_interned_types` can merge their shapes.
+    if let Some(sem) = self.semantics.as_deref() {
+      let symbols = sem.symbols();
+      for (_global_name, group) in sem.global_symbols().iter() {
+        for ns in [
+          sem_ts::Namespace::VALUE,
+          sem_ts::Namespace::TYPE,
+          sem_ts::Namespace::NAMESPACE,
+        ] {
+          let Some(symbol) = group.symbol_for(ns, symbols) else {
+            continue;
+          };
+          let decls = sem.symbol_decls(symbol, ns);
+          if decls.is_empty() {
+            continue;
+          }
+
+          // Only consider top-level declarations here; nested `declare global`
+          // blocks currently use distinct parents and are handled elsewhere.
+          let mut best: Option<(u8, DefId)> = None;
+          let mut top_level_decls = Vec::new();
+          for decl in decls.iter().copied() {
+            let decl_data = symbols.decl(decl);
+            let def = decl_data.def_id;
+            let parent = parent_by_def.get(&def).copied().flatten();
+            if parent.is_some() {
+              continue;
+            }
+            top_level_decls.push(decl_data);
+            let pri = self.def_priority(def, ns);
+            best = best
+              .map(|(best_pri, best_id)| {
+                if pri < best_pri || (pri == best_pri && def < best_id) {
+                  (pri, def)
+                } else {
+                  (best_pri, best_id)
+                }
+              })
+              .or(Some((pri, def)));
+          }
+
+          let Some((_, canonical)) = best else {
+            continue;
+          };
+
+          for decl_data in top_level_decls {
+            let key = (decl_data.file, None, decl_data.name.clone(), ns);
+            if let Some(slot) = def_by_name.get_mut(&key) {
+              *slot = canonical;
+            }
+          }
+        }
+      }
+    }
     Ok(def_by_name)
   }
 
@@ -5574,21 +5644,16 @@ impl ProgramState {
         }
         match reference.kind {
           TripleSlashReferenceKind::Lib => {
-            let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
+            if let Some(lib_file) =
+              crate::lib_support::lib_env::bundled_lib_file_by_option_name(value)
+            {
+              self.process_libs(std::slice::from_ref(&lib_file), host, &mut queue)?;
+            } else {
               self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
                 format!("cannot find lib definition file for \"{value}\""),
                 Span::new(file, reference.value_range),
               ));
-              continue;
-            };
-            let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) else {
-              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
-                format!("cannot find lib definition file for \"{value}\""),
-                Span::new(file, reference.value_range),
-              ));
-              continue;
-            };
-            self.process_libs(std::slice::from_ref(&lib_file), host, &mut queue)?;
+            }
           }
           TripleSlashReferenceKind::Path => {
             let normalized = normalize_reference_path_specifier(value);
@@ -6668,6 +6733,39 @@ impl ProgramState {
       def_types.insert(namespace_def, ty);
     }
 
+    // `canonical_defs` may map merged global interface declarations (e.g.
+    // `SymbolConstructor`, `Promise`) across multiple `.d.ts` files onto a
+    // single canonical `DefId`. During the initial lowering pass above we store
+    // the merged type only under that canonical key.
+    //
+    // Later, interface-merging passes iterate the original interface definition
+    // IDs from semantic symbol groups. If those defs are missing entries in
+    // `interned_def_types`, they fall back to converting legacy types for
+    // display, which is lossy (notably dropping `unique symbol`).
+    //
+    // Copy the canonical types (and their parameter lists) back onto the
+    // original interface defs so the merge steps stay lossless.
+    for def_map in hir_def_maps.values() {
+      for (hir_def, mapped) in def_map.iter() {
+        if hir_def == mapped {
+          continue;
+        }
+        if !self
+          .def_data
+          .get(hir_def)
+          .is_some_and(|data| matches!(data.kind, DefKind::Interface(_)))
+        {
+          continue;
+        }
+        if let Some(ty) = def_types.get(mapped).copied() {
+          def_types.insert(*hir_def, ty);
+        }
+        if let Some(params) = type_params.get(mapped).cloned() {
+          type_params.insert(*hir_def, params);
+        }
+      }
+    }
+
     // Module/global augmentation in `.d.ts` ecosystems relies heavily on
     // declaration merging across files. `semantic-js` already merges
     // declarations into shared symbols, but we also need to merge the computed
@@ -7355,14 +7453,9 @@ impl ProgramState {
         }
         match reference.kind {
           TripleSlashReferenceKind::Lib => {
-            let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
-              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
-                format!("cannot find lib definition file for \"{value}\""),
-                Span::new(file_id, reference.value_range),
-              ));
-              continue;
-            };
-            if let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) {
+            if let Some(lib_file) =
+              crate::lib_support::lib_env::bundled_lib_file_by_option_name(value)
+            {
               let lib_id = self.intern_file_key(lib_file.key.clone(), FileOrigin::Lib);
               if !self.lib_texts.contains_key(&lib_id) {
                 pending.push_back(lib_file);

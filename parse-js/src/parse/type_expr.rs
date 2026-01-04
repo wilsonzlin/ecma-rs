@@ -195,7 +195,9 @@ impl<'a> Parser<'a> {
       return Ok(check_type);
     }
 
-    let extends_type = self.type_array_or_postfix(ctx)?;
+    // The `extends` clause can contain unions/intersections (e.g. `T extends null | undefined ? ...`)
+    // so parse it as a full type expression rather than a postfix-only type.
+    let extends_type = self.type_union_or_intersection(ctx)?;
     self.require(TT::Question)?;
     let true_type = self.type_expr(ctx)?;
     self.require(TT::Colon)?;
@@ -1651,7 +1653,7 @@ impl<'a> Parser<'a> {
         });
       }
 
-      let name = if p.peek().typ == TT::Identifier {
+      let name = if p.peek().typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&p.peek().typ) {
         let checkpoint = p.checkpoint();
         let n = p.consume_as_string();
         // Check if followed by colon, question, or equals (for error recovery)

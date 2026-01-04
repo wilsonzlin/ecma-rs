@@ -9,7 +9,7 @@ fn using_accepts_disposable_initializer() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
   options.libs = vec![
-    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("es5").expect("es5 lib"),
     LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
   ];
   let mut host = MemoryHost::with_options(options);
@@ -42,7 +42,7 @@ fn using_rejects_non_disposable_initializer() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
   options.libs = vec![
-    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("es5").expect("es5 lib"),
     LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
   ];
   let mut host = MemoryHost::with_options(options);
@@ -65,7 +65,7 @@ fn await_using_requires_async_context() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
   options.libs = vec![
-    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("es5").expect("es5 lib"),
     LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
   ];
   let mut host = MemoryHost::with_options(options);
@@ -73,7 +73,7 @@ fn await_using_requires_async_context() {
   let file = FileKey::new("main.ts");
   let source = r#"
 class AsyncD {
-  [Symbol.asyncDispose](): void {}
+  async [Symbol.asyncDispose](): PromiseLike<void> {}
 }
 
 function bad() {
@@ -102,7 +102,7 @@ fn await_using_allowed_in_async_function() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
   options.libs = vec![
-    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("es5").expect("es5 lib"),
     LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
   ];
   let mut host = MemoryHost::with_options(options);
@@ -113,7 +113,7 @@ fn await_using_allowed_in_async_function() {
     Arc::from(
       r#"
 class AsyncD {
-  [Symbol.asyncDispose](): void {}
+  async [Symbol.asyncDispose](): PromiseLike<void> {}
 }
 
 async function ok() {

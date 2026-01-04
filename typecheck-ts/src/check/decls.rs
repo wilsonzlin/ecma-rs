@@ -30,6 +30,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
+  next_type_param: u32,
   def_map: Option<&'a HashMap<DefId, DefId>>,
   def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
   host: Option<&'a dyn Host>,
@@ -66,6 +67,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       diagnostics,
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
+      next_type_param: 0,
       current_arenas: None,
       def_map,
       def_by_name,
@@ -90,6 +92,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   ) -> (TypeId, Vec<TypeParamDecl>) {
     self.type_params.clear();
     self.type_param_names.clear();
+    self.next_type_param = 0;
     self.current_arenas = self.arenas.get(&owner);
     let Some(_) = self.current_arenas else {
       return (self.store.primitive_ids().unknown, Vec::new());
@@ -132,7 +135,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
 
         let ty = match types.len() {
-          0 => self.store.primitive_ids().any,
+          // Empty interfaces still contribute an object-like type. Returning
+          // `any` here makes declaration merging lossy: many upstream lib
+          // augmentations only contain computed properties (e.g.
+          // `[Symbol.toStringTag]`), which we currently skip lowering. Treat
+          // those as empty object types so later merges with the "real" shape
+          // (e.g. `Promise.then`) remain intact.
+          0 => {
+            let shape_id = self.store.intern_shape(Shape::new());
+            let obj = self.store.intern_object(ObjectType { shape: shape_id });
+            self.store.intern_type(TypeKind::Object(obj))
+          }
           1 => types[0],
           _ => self.store.intersection(types),
         };
@@ -812,7 +825,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     if let Some(existing) = self.type_params.get(&id) {
       return *existing;
     }
-    let new_id = TypeParamId(self.type_params.len() as u32);
+    let new_id = TypeParamId(self.next_type_param);
+    self.next_type_param = self.next_type_param.wrapping_add(1);
     self.type_params.insert(id, new_id);
     if let Some(param) = self.arenas().type_params.get(id.0 as usize) {
       self.type_param_names.insert(param.name, new_id);
@@ -1550,6 +1564,28 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         file, name, ns
       );
     }
+
+    // When semantic information is available, resolve type names using the TYPE
+    // namespace only. This avoids incorrectly binding `Promise`/`Symbol`-style
+    // references (used in many lib declaration signatures) to value-space
+    // `declare var` bindings in the same file.
+    if ns == Namespace::TYPE {
+      if let Some(sem) = self.semantics {
+        if let Some(symbol) = sem.resolve_in_module(file, name, Namespace::TYPE) {
+          if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::TYPE) {
+            return Some(def);
+          }
+        }
+        if let Some(group) = sem.global_symbols().get(name) {
+          if let Some(symbol) = group.symbol_for(Namespace::TYPE, sem.symbols()) {
+            if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::TYPE) {
+              return Some(def);
+            }
+          }
+        }
+      }
+    }
+
     if file == self.file {
       if let Some(local) = self.local_defs.get(name).copied() {
         if trace {
@@ -1592,17 +1628,21 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       return Some(def);
     }
 
-    // Fallback to any known definition with the same name across files. This
-    // allows unqualified references to resolve to ambient/global declarations
-    // provided by libraries even when they originate from a different file.
-    let mut candidates: Vec<_> = self
-      .defs
-      .iter()
-      .filter_map(|((_, def_name), def)| (def_name == name).then_some(*def))
-      .collect();
-    candidates.sort_by_key(|d| d.0);
-    if let Some(def) = candidates.first() {
-      return Some(*def);
+    // When semantic information is unavailable (e.g. unit tests without module
+    // graphs), fall back to any known definition with the same name across
+    // files. When semantics are available we rely on namespace-aware resolution
+    // below so that names like `Promise` resolve to the type-space interface
+    // instead of the value-space constructor.
+    if self.semantics.is_none() {
+      let mut candidates: Vec<_> = self
+        .defs
+        .iter()
+        .filter_map(|((_, def_name), def)| (def_name == name).then_some(*def))
+        .collect();
+      candidates.sort_by_key(|d| d.0);
+      if let Some(def) = candidates.first() {
+        return Some(*def);
+      }
     }
 
     if let Some(sem) = self.semantics {

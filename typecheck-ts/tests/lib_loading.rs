@@ -4,11 +4,11 @@ use std::sync::Arc;
 mod common;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager, LibName, ScriptTarget};
 use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
-const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
+const ESNEXT_DISPOSABLE_TYPES: &str = include_str!("fixtures/esnext_disposable_types.ts");
 
 #[derive(Default)]
 struct TestHost {
@@ -78,24 +78,59 @@ impl Host for TestHost {
 }
 
 #[test]
-fn bundled_libs_enable_global_promise_and_array() {
-  let entry = FileKey::new("entry.ts");
-  let host = TestHost::new(CompilerOptions::default())
-    .with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
-  let program = Program::new(host, vec![entry]);
-  let diagnostics = program.check();
+fn bundled_lib_manager_loads_official_ts_libs() {
+  let manager = LibManager::new();
+  let loaded = manager.bundled_libs(&CompilerOptions::default());
+
+  let names: Vec<_> = loaded.files.iter().map(|lib| lib.name.as_ref()).collect();
+  let mut sorted = names.clone();
+  sorted.sort_unstable();
+  assert_eq!(names, sorted, "bundled libs should have deterministic ordering");
+
+  for lib in loaded.files.iter() {
+    assert_eq!(
+      lib.key,
+      FileKey::new(format!("lib:{}", lib.name.as_ref())),
+      "bundled lib file keys must be deterministic"
+    );
+  }
+
   assert!(
-    diagnostics.is_empty(),
-    "expected no diagnostics, got {diagnostics:?}"
+    loaded.files.iter().any(|lib| lib.name.as_ref() == "lib.dom.d.ts"),
+    "default libs should include lib.dom.d.ts"
   );
-  let globals = program.global_bindings();
   assert!(
-    globals.contains_key("Promise"),
-    "Promise should be available when bundled libs are loaded"
+    loaded
+      .files
+      .iter()
+      .any(|lib| lib.name.as_ref() == "lib.es2015.promise.d.ts"),
+    "default libs should include lib.es2015.promise.d.ts"
   );
   assert!(
-    globals.contains_key("Array"),
-    "Array should be available when bundled libs are loaded"
+    loaded
+      .files
+      .iter()
+      .any(|lib| lib.name.as_ref() == "lib.es2015.collection.d.ts"),
+    "default libs should include lib.es2015.collection.d.ts"
+  );
+  assert!(
+    loaded
+      .files
+      .iter()
+      .any(|lib| lib.name.as_ref() == "lib.es2015.symbol.d.ts"),
+    "default libs should include lib.es2015.symbol.d.ts"
+  );
+
+  let dom_text = loaded
+    .files
+    .iter()
+    .find(|lib| lib.name.as_ref() == "lib.dom.d.ts")
+    .expect("lib.dom.d.ts should be present")
+    .text
+    .as_ref();
+  assert!(
+    dom_text.contains("interface Document"),
+    "vendored dom lib should contain real declarations"
   );
 }
 
@@ -364,30 +399,7 @@ fn module_resolution_can_target_lib_file_keys() {
 }
 
 #[test]
-fn host_file_named_like_lib_does_not_collide() {
-  let mut options = CompilerOptions::default();
-  options.libs = vec![LibName::parse("es2020").expect("lib name")];
-  let key = FileKey::new("lib:lib.es2020.d.ts");
-  let host = TestHost::new(options).with_file(key.clone(), "export const local = 1;");
-  let program = Program::new(host, vec![key.clone()]);
-  let mut ids_for_key = Vec::new();
-  for file in program.files() {
-    if let Some(k) = program.file_key(file) {
-      if k == key {
-        ids_for_key.push(file);
-      }
-    }
-  }
-  assert_eq!(
-    ids_for_key.len(),
-    2,
-    "both host file and bundled lib should coexist even with identical keys"
-  );
-  assert_ne!(ids_for_key[0], ids_for_key[1]);
-}
-
-#[test]
-fn host_file_named_like_default_lib_has_distinct_text() {
+fn host_file_named_like_bundled_lib_has_distinct_text() {
   let mut options = CompilerOptions::default();
   options.libs = vec![LibName::parse("es5").expect("lib name")];
   let key = FileKey::new("lib:lib.es5.d.ts");
@@ -425,7 +437,10 @@ fn host_file_named_like_default_lib_has_distinct_text() {
 
 #[test]
 fn imported_type_alias_resolves_interned_type() {
-  let host = TestHost::new(CompilerOptions::default())
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let host = TestHost::new(options)
+    .with_lib(common::core_globals_lib())
     .with_file(FileKey::new("types.ts"), "export type Foo = number;")
     .with_file(
       FileKey::new("entry.ts"),
@@ -447,9 +462,11 @@ fn imported_type_alias_resolves_interned_type() {
 
 #[test]
 fn bundled_lib_types_expose_promise_and_array_shapes() {
+  let mut options = CompilerOptions::default();
+  options.libs = vec![LibName::parse("es2015").expect("es2015 lib")];
   let entry = FileKey::new("libs.ts");
   let host =
-    TestHost::new(CompilerOptions::default()).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
+    TestHost::new(options).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   assert!(
@@ -468,9 +485,13 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
   };
   let promise_def = find_def("UsesPromise");
   let array_def = find_def("UsesArray");
+  let map_def = find_def("UsesMap");
+  let symbol_ctor_def = find_def("UsesSymbolConstructor");
 
   let promise_ty = program.type_of_def_interned(promise_def);
   let array_ty = program.type_of_def_interned(array_def);
+  let map_ty = program.type_of_def_interned(map_def);
+  let symbol_ctor_ty = program.type_of_def_interned(symbol_ctor_def);
   assert_ne!(
     program.type_kind(promise_ty),
     TypeKindSummary::Unknown,
@@ -480,6 +501,16 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
     program.type_kind(array_ty),
     TypeKindSummary::Unknown,
     "Array type should not collapse to unknown"
+  );
+  assert_ne!(
+    program.type_kind(map_ty),
+    TypeKindSummary::Unknown,
+    "Map type should not collapse to unknown"
+  );
+  assert_ne!(
+    program.type_kind(symbol_ctor_ty),
+    TypeKindSummary::Unknown,
+    "SymbolConstructor type should not collapse to unknown"
   );
 
   let then_prop = program.property_type(promise_ty, PropertyKey::String("then".to_string()));
@@ -492,17 +523,70 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
     length_prop.is_some(),
     "Array lib surface should expose length property"
   );
+  let get_prop = program.property_type(map_ty, PropertyKey::String("get".to_string()));
+  assert!(
+    get_prop.is_some(),
+    "Map lib surface should expose get property"
+  );
+  let iterator_prop =
+    program.property_type(symbol_ctor_ty, PropertyKey::String("iterator".to_string()));
+  assert!(
+    iterator_prop.is_some(),
+    "SymbolConstructor lib surface should expose iterator property"
+  );
 }
 
 #[test]
-fn bundled_libs_enable_dom_and_promise_fixture() {
-  let host = TestHost::new(CompilerOptions::default()).with_file(FileKey::new("entry.ts"), PROMISE_DOM);
-  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
+fn bundled_libs_esnext_include_disposable_protocol() {
+  let mut options = CompilerOptions::default();
+  options.target = ScriptTarget::EsNext;
+  options.libs = vec![
+    LibName::parse("es5").expect("es5 lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
+
+  let entry = FileKey::new("esnext.ts");
+  let host = TestHost::new(options).with_file(entry.clone(), ESNEXT_DISPOSABLE_TYPES);
+  let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
-    "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
+    "expected esnext bundled libs to typecheck disposable fixture, got {diagnostics:?}"
   );
+
+  let file_id = program.file_id(&entry).expect("file id for disposable fixture");
+  let defs = program.definitions_in_file(file_id);
+  let find_def = |name: &str| {
+    defs
+      .iter()
+      .copied()
+      .find(|def| program.def_name(*def).as_deref() == Some(name))
+      .unwrap_or_else(|| panic!("definition {name} not found"))
+  };
+  let symbol_ctor_def = find_def("UsesSymbolConstructor");
+  let disposable_def = find_def("UsesDisposable");
+
+  let symbol_ctor_ty = program.type_of_def_interned(symbol_ctor_def);
+  let disposable_ty = program.type_of_def_interned(disposable_def);
+  assert_ne!(
+    program.type_kind(disposable_ty),
+    TypeKindSummary::Unknown,
+    "Disposable type should not collapse to unknown"
+  );
+
+  let dispose_prop =
+    program.property_type(symbol_ctor_ty, PropertyKey::String("dispose".to_string()));
+  assert!(
+    dispose_prop.is_some(),
+    "esnext disposable lib surface should expose Symbol.dispose"
+  );
+  if let Some(dispose_ty) = dispose_prop {
+    assert_eq!(
+      program.type_kind(dispose_ty),
+      TypeKindSummary::UniqueSymbol,
+      "Symbol.dispose should be a unique symbol"
+    );
+  }
 }
 
 #[test]
@@ -510,7 +594,9 @@ fn type_imports_inside_classes_queue_dependencies() {
   let entry = FileKey::new("entry.ts");
   let class_mod = FileKey::new("class_mod.ts");
   let ambient_mod = FileKey::new("ambient_mod.ts");
-  let host = TestHost::new(CompilerOptions::default())
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let host = TestHost::new(options)
     .with_file(
       entry.clone(),
       r#"

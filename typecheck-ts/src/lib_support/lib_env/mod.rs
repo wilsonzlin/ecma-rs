@@ -80,7 +80,20 @@ fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
 pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
   #[cfg(feature = "bundled-libs")]
   {
-    bundled::lib_file(name)
+    Some(bundled::lib_file(name))
+  }
+
+  #[cfg(not(feature = "bundled-libs"))]
+  {
+    let _ = name;
+    None
+  }
+}
+
+pub fn bundled_lib_file_by_option_name(name: &str) -> Option<LibFile> {
+  #[cfg(feature = "bundled-libs")]
+  {
+    bundled::lib_file_by_option_name(name)
   }
 
   #[cfg(not(feature = "bundled-libs"))]
@@ -92,41 +105,128 @@ pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
 
 #[cfg(feature = "bundled-libs")]
 mod bundled {
+  use std::collections::{BTreeSet, VecDeque};
   use std::sync::Arc;
 
-  use include_dir::{include_dir, Dir};
-
-  use super::super::FileKind;
-  use super::super::LibFile;
-  use super::super::LibName;
-  use super::super::LibSet;
+  use super::super::{FileKind, LibFile, LibName, LibSet};
   use crate::FileKey;
 
-  static LIB_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/fixtures/libs");
-
-  pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
-    lib_set
-      .libs()
-      .iter()
-      .cloned()
-      .filter_map(lib_file)
-      .collect()
+  pub(super) fn lib_file(name: LibName) -> LibFile {
+    lib_file_by_option_name(name.as_str())
+      .unwrap_or_else(|| panic!("missing bundled TypeScript lib '{}'", name.as_str()))
   }
 
-  pub(super) fn lib_file(name: LibName) -> Option<LibFile> {
-    let filename = name.file_name();
-    let text = text_for(filename.as_str())?;
-    let key = FileKey::new(format!("lib:{filename}"));
-    Some(LibFile {
-      key,
+  pub(super) fn lib_file_by_option_name(option_name: &str) -> Option<LibFile> {
+    let option_name = option_name.trim();
+    if option_name.is_empty() {
+      return None;
+    }
+    let filename = format!("lib.{}.d.ts", option_name.to_ascii_lowercase());
+    lib_file_by_filename(&filename)
+  }
+
+  fn lib_file_by_filename(filename: &str) -> Option<LibFile> {
+    bundled_lib_text(filename).map(|text| LibFile {
+      key: FileKey::new(format!("lib:{filename}")),
       name: Arc::from(filename),
       kind: FileKind::Dts,
       text: Arc::from(text),
     })
   }
 
-  fn text_for(filename: &str) -> Option<&'static str> {
-    LIB_DIR.get_file(filename).and_then(|file| file.contents_utf8())
+  pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
+    let mut required: BTreeSet<String> = BTreeSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    for name in lib_set.libs() {
+      let file = name.file_name();
+      if required.insert(file.clone()) {
+        queue.push_back(file);
+      }
+    }
+
+    while let Some(file) = queue.pop_front() {
+      let text = bundled_lib_text_or_panic(&file);
+      for dep in referenced_libs(text).into_iter() {
+        if required.insert(dep.clone()) {
+          queue.push_back(dep);
+        }
+      }
+    }
+
+    required
+      .into_iter()
+      .map(|filename| {
+        lib_file_by_filename(&filename)
+          .unwrap_or_else(|| panic!("missing bundled TypeScript lib '{filename}'"))
+      })
+      .collect()
+  }
+
+  mod generated {
+    include!(concat!(env!("OUT_DIR"), "/typescript_libs_generated.rs"));
+  }
+
+  // Ensure the build-script generated `TYPESCRIPT_VERSION` constant is treated as used
+  // so it does not trigger `dead_code` warnings in downstream builds.
+  const _: &str = generated::TYPESCRIPT_VERSION;
+
+  fn bundled_lib_text(filename: &str) -> Option<&'static str> {
+    match generated::LIBS.binary_search_by(|(name, _)| name.cmp(&filename)) {
+      Ok(idx) => Some(generated::LIBS[idx].1),
+      Err(_) => None,
+    }
+  }
+
+  fn bundled_lib_text_or_panic(filename: &str) -> &'static str {
+    bundled_lib_text(filename).unwrap_or_else(|| panic!("missing bundled TypeScript lib '{filename}'"))
+  }
+
+  fn referenced_libs(text: &str) -> Vec<String> {
+    fn attr_value<'a>(line: &'a str, needle: &str) -> Option<&'a str> {
+      let mut offset = 0;
+      while let Some(found) = line[offset..].find(needle) {
+        let start = offset + found;
+        // Avoid matching `no-default-lib="true"` as `lib="true"` by requiring
+        // the attribute name be preceded by whitespace.
+        if start == 0 || line.as_bytes()[start - 1].is_ascii_whitespace() {
+          let value_start = start + needle.len();
+          let rest = &line[value_start..];
+          let end = rest.find('"')?;
+          return Some(&rest[..end]);
+        }
+        offset = start + needle.len();
+      }
+      None
+    }
+
+    let mut out = Vec::new();
+    let mut in_directives = false;
+    for line in text.lines() {
+      let line = line.trim();
+      if line.is_empty() {
+        continue;
+      }
+      if !line.starts_with("///") {
+        if in_directives {
+          break;
+        }
+        continue;
+      }
+      in_directives = true;
+
+      if let Some(lib_name) = attr_value(line, "lib=\"") {
+        out.push(format!("lib.{lib_name}.d.ts"));
+      }
+
+      if let Some(path) = attr_value(line, "path=\"") {
+        let filename = path.rsplit('/').next().unwrap_or(path);
+        if filename.starts_with("lib.") && filename.ends_with(".d.ts") {
+          out.push(filename.to_string());
+        }
+      }
+    }
+    out
   }
 }
 

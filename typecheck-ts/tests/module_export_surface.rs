@@ -10,6 +10,7 @@ fn export_assignment_creates_export_equals_entry() {
   let mut options = CompilerOptions::default();
   options.module = Some(ModuleKind::CommonJs);
   options.no_default_lib = true;
+  options.module = Some(ModuleKind::CommonJs);
   let mut host = MemoryHost::with_options(options);
   host.add_lib(common::core_globals_lib());
   host.add_lib(LibFile {
@@ -98,6 +99,7 @@ fn export_as_namespace_injects_global_binding() {
 fn export_assignment_allows_export_as_namespace() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
+  options.module = Some(ModuleKind::CommonJs);
   let mut host = MemoryHost::with_options(options);
   host.add_lib(common::core_globals_lib());
 
@@ -133,6 +135,7 @@ fn export_assignment_allows_export_as_namespace() {
 fn export_assignment_allows_export_as_namespace_for_declared_const() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
+  options.module = Some(ModuleKind::CommonJs);
   let mut host = MemoryHost::with_options(options);
   host.add_lib(common::core_globals_lib());
 

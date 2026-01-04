@@ -794,11 +794,25 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     // branch.
     let mut bound = Vec::new();
     let mut visited = AHashSet::new();
-    if self.has_free_type_param(check_eval, &mut bound, &mut visited, 0)
+    let indeterminate = self.has_free_type_param(check_eval, &mut bound, &mut visited, 0)
       || self.has_free_type_param(extends_eval, &mut bound, &mut visited, 0)
       || self.conditional_is_indeterminate_operand(check_eval, subst, depth + 1)
-      || self.conditional_is_indeterminate_operand(extends_eval, subst, depth + 1)
-    {
+      || self.conditional_is_indeterminate_operand(extends_eval, subst, depth + 1);
+    if indeterminate {
+      // Some conditional types include `infer` placeholders in the `extends`
+      // operand (e.g. `Awaited<T>`, `ReturnType<T>`). We cannot generally reduce
+      // these without performing inference, but we *can* still pick the false
+      // branch when the `check` type is provably incompatible with a concrete
+      // (non-`infer`) part of the `extends` type.
+      //
+      // This is important for upstream lib declarations like
+      // `Promise.resolve<T>(value: T): Promise<Awaited<T>>`, where
+      // `Awaited<"ok">` should reduce to `"ok"` even though `Awaited` is written
+      // in terms of `infer`.
+      if self.conditional_definitely_not_assignable(check_eval, extends_eval, depth + 1) {
+        return self.evaluate_with_subst(false_ty, subst, depth + 1);
+      }
+
       let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
       let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
       return self.store.intern_type(TypeKind::Conditional {
@@ -827,6 +841,63 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
     let branch = if assignable { true_ty } else { false_ty };
     self.evaluate_with_subst(branch, subst, depth + 1)
+  }
+
+  /// Conservative fast path for conditional-type reduction in the presence of
+  /// indeterminate operands (notably `infer` placeholders).
+  ///
+  /// Returns `true` only when `check` is *definitely* not assignable to
+  /// `extends`, so that selecting the false branch is sound without performing
+  /// inference.
+  fn conditional_definitely_not_assignable(
+    &self,
+    check: TypeId,
+    extends: TypeId,
+    depth: usize,
+  ) -> bool {
+    if depth >= self.depth_limit {
+      return false;
+    }
+
+    let check_kind = self.store.type_kind(check);
+    if !self.kind_definitely_non_object_like(&check_kind) {
+      return false;
+    }
+
+    self.type_requires_object_like(extends, depth + 1)
+  }
+
+  fn kind_definitely_non_object_like(&self, kind: &TypeKind) -> bool {
+    matches!(
+      kind,
+      TypeKind::Unknown
+        | TypeKind::Void
+        | TypeKind::Null
+        | TypeKind::Undefined
+        | TypeKind::Boolean
+        | TypeKind::BooleanLiteral(_)
+        | TypeKind::Number
+        | TypeKind::NumberLiteral(_)
+        | TypeKind::String
+        | TypeKind::StringLiteral(_)
+        | TypeKind::BigInt
+        | TypeKind::BigIntLiteral(_)
+        | TypeKind::Symbol
+        | TypeKind::UniqueSymbol
+    )
+  }
+
+  fn type_requires_object_like(&self, ty: TypeId, depth: usize) -> bool {
+    if depth >= self.depth_limit {
+      return false;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Object(_) => true,
+      TypeKind::Intersection(members) => members
+        .into_iter()
+        .any(|member| self.type_requires_object_like(member, depth + 1)),
+      _ => false,
+    }
   }
 
   fn conditional_is_indeterminate_operand(

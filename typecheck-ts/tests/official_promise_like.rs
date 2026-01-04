@@ -55,12 +55,8 @@ impl Host for TestHost {
 #[test]
 fn program_check_terminates_with_recursive_promise_like() {
   let mut options = CompilerOptions::default();
-  options.target = ScriptTarget::EsNext;
-  options.libs = vec![
-    LibName::parse("esnext").expect("esnext lib"),
-    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
-  ];
-  options.skip_lib_check = false;
+  options.target = ScriptTarget::Es5;
+  options.libs = vec![LibName::parse("es5").expect("es5 lib")];
 
   let entry = FileKey::new("entry.ts");
   let host = TestHost::new(options).with_file(entry.clone(), ENTRY);

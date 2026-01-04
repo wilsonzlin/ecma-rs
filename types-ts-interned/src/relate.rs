@@ -70,15 +70,17 @@ pub struct ReasonNode {
 
 const MAX_REASON_DEPTH: usize = 12;
 const MAX_REASON_NODES: usize = 256;
-// Defensive recursion cap for the relation engine itself.
+// Defensive recursion caps for the relation engine itself.
 //
 // `RelateCtx` uses recursion for structural type comparisons, and while cycles
 // are handled via `in_progress`, deeply-nested or adversarial graphs (common in
-// proptests) can still build call stacks large enough to overflow.
+// proptests and real lib types like `Awaited`/`Promise`) can still build call
+// stacks large enough to overflow.
 //
-// Mirror the existing step-limit behaviour: when this cap is exceeded we
-// assume success and stop descending to preserve termination and determinism.
+// Mirror TypeScript's behaviour: apply conservative, deterministic cutoffs and
+// assume success when exceeded to preserve termination.
 const MAX_RELATION_DEPTH: usize = 64;
+const MAX_RELATION_IN_PROGRESS: usize = 128;
 const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
 const MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
 const MAX_TEMPLATE_MATCH_STATES: usize = 1024;
@@ -470,6 +472,7 @@ impl<'a> RelateCtx<'a> {
     if self.step_limit != Self::DEFAULT_STEP_LIMIT {
       let current_steps = self.steps.get();
       if current_steps >= self.step_limit {
+        let record = record && self.take_reason_slot();
         return RelationResult {
           result: true,
           reason: self.join_reasons(
@@ -483,6 +486,17 @@ impl<'a> RelateCtx<'a> {
         };
       }
       self.steps.set(current_steps + 1);
+    }
+
+    if self.in_progress.borrow().len() >= MAX_RELATION_IN_PROGRESS {
+      // Stop recursion before we overflow the stack. This mirrors TypeScript's
+      // behavior of assuming structural compatibility when the relation engine
+      // hits its internal recursion limits.
+      let record = record && self.take_reason_slot();
+      return RelationResult {
+        result: true,
+        reason: self.join_reasons(record, key, Vec::new(), true, Some("max recursion".into()), depth),
+      };
     }
 
     self.in_progress.borrow_mut().insert(key);
