@@ -60,33 +60,6 @@ pub struct Facts {
   pub assertions: HashMap<FlowKey, TypeId>,
 }
 
-impl Facts {
-  /// Merge another set of facts into this one, joining types with union.
-  pub fn merge(&mut self, other: Facts, store: &TypeStore) {
-    for (k, v) in other.truthy {
-      self
-        .truthy
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
-        .or_insert(v);
-    }
-    for (k, v) in other.falsy {
-      self
-        .falsy
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
-        .or_insert(v);
-    }
-    for (k, v) in other.assertions {
-      self
-        .assertions
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
-        .or_insert(v);
-    }
-  }
-}
-
 /// Compose facts for `A && B`.
 pub fn and_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
   let Facts {
@@ -552,23 +525,6 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
   }
 }
 
-/// Narrow by a discriminant property check (e.g. `x.kind === "foo"` or `x.kind === 1`).
-pub fn narrow_by_discriminant(
-  ty: TypeId,
-  prop: &str,
-  value: &LiteralValue,
-  store: &TypeStore,
-  expander: Option<&dyn RelateTypeExpander>,
-) -> (TypeId, TypeId) {
-  narrow_by_discriminant_path(
-    ty,
-    &[PathSegment::String(prop.to_string())],
-    value,
-    store,
-    expander,
-  )
-}
-
 /// Narrow by a discriminant property along a path (e.g. `x.meta.kind === "foo"`).
 pub fn narrow_by_discriminant_path(
   ty: TypeId,
@@ -989,34 +945,6 @@ fn collect_instance_types(
   }
 }
 
-/// Narrow by an asserted type from a predicate.
-pub fn narrow_by_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (y, n) = narrow_by_asserted(member, asserted, store);
-        if y != primitives.never {
-          yes.push(y);
-        }
-        if n != primitives.never {
-          no.push(n);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    _ => {
-      if matches_asserted(ty, asserted, store) {
-        (ty, primitives.never)
-      } else {
-        (primitives.never, ty)
-      }
-    }
-  }
-}
-
 /// Narrow a type by retaining members assignable to the target while keeping a
 /// conservative remainder for the falsy branch.
 pub fn narrow_by_assignability(
@@ -1050,58 +978,5 @@ pub fn narrow_by_assignability(
         (primitives.never, ty)
       }
     }
-  }
-}
-
-fn matches_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> bool {
-  if ty == asserted {
-    return true;
-  }
-  match store.type_kind(asserted) {
-    TypeKind::Union(members) => members.iter().any(|m| matches_asserted(ty, *m, store)),
-    TypeKind::String => matches!(
-      store.type_kind(ty),
-      TypeKind::String | TypeKind::StringLiteral(_)
-    ),
-    TypeKind::Number => matches!(
-      store.type_kind(ty),
-      TypeKind::Number | TypeKind::NumberLiteral(_)
-    ),
-    TypeKind::Boolean => matches!(
-      store.type_kind(ty),
-      TypeKind::Boolean | TypeKind::BooleanLiteral(_)
-    ),
-    TypeKind::Null => matches!(store.type_kind(ty), TypeKind::Null),
-    TypeKind::Undefined => matches!(store.type_kind(ty), TypeKind::Undefined),
-    TypeKind::Object(_) => matches!(store.type_kind(ty), TypeKind::Object(_)),
-    TypeKind::Ref { .. } => matches!(store.type_kind(ty), TypeKind::Ref { .. }),
-    _ => false,
-  }
-}
-
-/// Split a type into non-nullish and nullish parts.
-pub fn split_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut present = Vec::new();
-      let mut nullish = Vec::new();
-      for member in members {
-        match store.type_kind(member) {
-          TypeKind::Null | TypeKind::Undefined => nullish.push(member),
-          _ => present.push(member),
-        }
-      }
-      (
-        store.union(present),
-        if nullish.is_empty() {
-          primitives.never
-        } else {
-          store.union(nullish)
-        },
-      )
-    }
-    TypeKind::Null | TypeKind::Undefined => (primitives.never, ty),
-    _ => (ty, primitives.never),
   }
 }
