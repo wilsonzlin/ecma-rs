@@ -2,7 +2,7 @@ use super::{JsSemantics, ScopeId, SymbolId};
 use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
-use parse_js::ast::class_or_object::ClassMember;
+use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal};
 use parse_js::ast::expr::pat::{ArrPatElem, IdPat, ObjPatProp};
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::{Func, FuncBody};
@@ -88,8 +88,10 @@ impl TdzFrame {
   BlockStmtNode(enter, exit),
   CatchBlockNode(enter, exit),
   ClassDeclNode(enter, exit),
+  ClassMemberNode(enter, exit),
   ClassExprNode(enter, exit),
-  ClassMemberNode(enter),
+  ClassOrObjKey(enter, exit),
+  ClassOrObjVal(enter, exit),
   ForBodyNode(enter, exit),
   ForInOfLhs(enter, exit),
   FuncExprNode(enter, exit),
@@ -109,6 +111,10 @@ struct ResolveVisitor<'a> {
   diagnostics: Vec<Diagnostic>,
   scope_stack: Vec<ScopeId>,
   tdz_stack: Vec<TdzFrame>,
+  class_member_depth: usize,
+  class_or_obj_key_depth: usize,
+  tdz_overrides: Vec<SymbolId>,
+  val_override_stack: Vec<Option<SymbolId>>,
   var_decl_mode_stack: Vec<VarDeclMode>,
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
@@ -128,6 +134,10 @@ impl ResolveVisitor<'_> {
       diagnostics: Vec::new(),
       scope_stack: vec![top_scope],
       tdz_stack: vec![TdzFrame::new(top_scope, sem)],
+      class_member_depth: 0,
+      class_or_obj_key_depth: 0,
+      tdz_overrides: Vec::new(),
+      val_override_stack: Vec::new(),
       var_decl_mode_stack: Vec::new(),
       pending_active: Vec::new(),
       pending_symbols: Vec::new(),
@@ -156,6 +166,9 @@ impl ResolveVisitor<'_> {
   }
 
   fn symbol_in_tdz(&self, symbol: SymbolId) -> bool {
+    if self.tdz_overrides.iter().any(|sym| *sym == symbol) {
+      return false;
+    }
     let decl_scope = self.sem.symbol(symbol).decl_scope;
     self
       .tdz_stack
@@ -343,14 +356,44 @@ impl ResolveVisitor<'_> {
   }
 
   fn enter_class_member_node(&mut self, _node: &mut ClassMemberNode) {
-    let symbol = self
-      .class_name_stack
-      .last_mut()
-      .and_then(|entry| entry.take());
-    if let Some(symbol) = symbol {
-      // Class bindings are in TDZ during the `extends` clause, but initialized
-      // before evaluating class body elements such as static fields/blocks.
-      self.mark_initialized(symbol);
+    self.class_member_depth += 1;
+  }
+
+  fn exit_class_member_node(&mut self, _node: &mut ClassMemberNode) {
+    self.class_member_depth = self.class_member_depth.saturating_sub(1);
+  }
+
+  fn enter_class_or_obj_key(&mut self, _node: &mut ClassOrObjKey) {
+    self.class_or_obj_key_depth += 1;
+  }
+
+  fn exit_class_or_obj_key(&mut self, _node: &mut ClassOrObjKey) {
+    self.class_or_obj_key_depth = self.class_or_obj_key_depth.saturating_sub(1);
+  }
+
+  fn enter_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
+    let class_symbol = self.class_name_stack.last().copied().flatten();
+    let should_override = class_symbol.is_some()
+      && self.class_member_depth > 0
+      && self.class_or_obj_key_depth == 0;
+    let pushed = if should_override {
+      let sym = class_symbol.expect("class symbol must exist when overriding");
+      self.tdz_overrides.push(sym);
+      Some(sym)
+    } else {
+      None
+    };
+    self.val_override_stack.push(pushed);
+  }
+
+  fn exit_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
+    let pushed = self
+      .val_override_stack
+      .pop()
+      .expect("val override stack should match traversal");
+    if let Some(sym) = pushed {
+      let popped = self.tdz_overrides.pop();
+      debug_assert_eq!(popped, Some(sym));
     }
   }
 

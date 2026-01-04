@@ -286,6 +286,33 @@ fn top_level_tdz_and_hoisting_are_tracked() {
 }
 
 #[test]
+fn class_name_is_visible_inside_static_block() {
+  let mut ast = parse("class Foo{static{Foo.x++}}").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(50));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+}
+
+#[test]
+fn class_name_in_extends_is_in_tdz() {
+  let source = "class Foo extends Foo{}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(51));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "Foo");
+}
+
+#[test]
+fn class_name_in_computed_key_is_in_tdz() {
+  let source = "class Foo{['x'](){}[Foo](){}}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(52));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "Foo");
+}
+
+#[test]
 fn hoisted_var_uses_are_not_in_tdz() {
   let mut ast = parse("console.log(x); var x = 1;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
