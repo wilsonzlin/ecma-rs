@@ -601,7 +601,11 @@ fn finalize_block(
   module_kind: ModuleKind,
 ) -> LoweredBlock {
   let mut exported = block.exported;
-  if matches!(module_kind, ModuleKind::Module) {
+  let has_export_assignment = block
+    .exports
+    .iter()
+    .any(|export| matches!(export, Export::ExportAssignment { .. }));
+  if matches!(module_kind, ModuleKind::Module) && !has_export_assignment {
     for def_id in &block.local_defs {
       if exported.contains_key(def_id) {
         continue;

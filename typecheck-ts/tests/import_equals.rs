@@ -280,6 +280,43 @@ fn export_import_equals_require_is_exported() {
 }
 
 #[test]
+fn export_import_equals_require_from_ambient_module_is_exported() {
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
+  host.add_lib(LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(r#"declare module "dep" { export const value: number; }"#),
+  });
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"export import Foo = require("dep"); export const x = Foo.value;"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  assert!(
+    exports.contains_key("Foo"),
+    "export Foo missing: {exports:?}"
+  );
+
+  let x = exports.get("x").expect("export x");
+  let x_ty = x
+    .type_id
+    .or_else(|| x.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported x");
+  assert_eq!(program.display_type(x_ty).to_string(), "number");
+}
+
+#[test]
 fn import_equals_entity_name_does_not_make_file_a_module() {
   let mut host = MemoryHost::new();
   let a = FileKey::new("a.ts");
