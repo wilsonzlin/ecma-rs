@@ -59,16 +59,6 @@ status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
 
 [[expectations]]
-id = "difftsc/using_invalid"
-status = "xfail"
-reason = "Rust checker uses internal `TC2012` for invalid `using` initializers; tsc reports a `TS*` diagnostic"
-
-[[expectations]]
-id = "difftsc/await_using_invalid"
-status = "xfail"
-reason = "Rust checker uses internal `TC2012` for invalid `await using` initializers; tsc reports a `TS*` diagnostic"
-
-[[expectations]]
 id = "difftsc/add_event_listener"
 status = "xfail"
 reason = "Type-only export facts differ: tsc reports `any` for exported interfaces while Rust returns the interface shape."

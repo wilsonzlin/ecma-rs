@@ -215,7 +215,17 @@ function collectExportTypes(checker, sourceFile) {
   if (!moduleSymbol) {
     return [];
   }
-  const exports = checker.getExportsOfModule(moduleSymbol) || [];
+  const exports = [...(checker.getExportsOfModule(moduleSymbol) || [])];
+  // `getExportsOfModule` omits the synthetic `export=` symbol created for
+  // `export = <expr>` assignments. Surface it explicitly so difftsc can record
+  // the exported value type for CommonJS-style modules.
+  const exportEq =
+    moduleSymbol.exports && typeof moduleSymbol.exports.get === "function"
+      ? moduleSymbol.exports.get("export=")
+      : null;
+  if (exportEq && !exports.some((sym) => sym.getName() === "export=")) {
+    exports.push(exportEq);
+  }
   const facts = [];
   for (const sym of exports) {
     const target =

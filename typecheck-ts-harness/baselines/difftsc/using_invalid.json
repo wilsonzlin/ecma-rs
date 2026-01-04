@@ -15,6 +15,14 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "code": 2850,
+      "file": "using_invalid.ts",
+      "start": 30,
+      "end": 33,
+      "category": "error",
+      "message": "The initializer of a 'using' declaration must be either an object with a '[Symbol.dispose]()' method, or be 'null' or 'undefined'."
+    }
+  ]
 }
-

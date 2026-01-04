@@ -15,6 +15,14 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "code": 2851,
+      "file": "await_using_invalid.ts",
+      "start": 62,
+      "end": 65,
+      "category": "error",
+      "message": "The initializer of an 'await using' declaration must be either an object with a '[Symbol.asyncDispose]()' or '[Symbol.dispose]()' method, or be 'null' or 'undefined'."
+    }
+  ]
 }
-
