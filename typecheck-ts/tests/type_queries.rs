@@ -668,7 +668,7 @@ fn recursive_type_alias_expands_through_refs() {
   host.insert(
     entry,
     r#"
-type Node = { value: number; next?: Node };
+type LocalNode = { value: number; next?: LocalNode };
 "#,
   );
   let program = Program::new(host, vec![TestHost::key_for(entry)]);
@@ -676,8 +676,8 @@ type Node = { value: number; next?: Node };
   let node_def = program
     .definitions_in_file(file_id)
     .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("Node"))
-    .expect("Node definition present");
+    .find(|d| program.def_name(*d).as_deref() == Some("LocalNode"))
+    .expect("LocalNode definition present");
   let node_ty = program.type_of_def(node_def);
   let next_ty = program
     .property_type(node_ty, PropertyKey::String("next".into()))
