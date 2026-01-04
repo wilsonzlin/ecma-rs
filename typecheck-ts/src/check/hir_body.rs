@@ -1275,6 +1275,12 @@ impl<'a> Checker<'a> {
         {
           continue;
         }
+        let end = field
+          .key_range
+          .start
+          .saturating_add(field.name.len() as u32)
+          .min(field.key_range.end);
+        let range = TextRange::new(field.key_range.start, end);
         self
           .diagnostics
           .push(codes::PROPERTY_WILL_OVERWRITE_BASE_PROPERTY.error(
@@ -1282,17 +1288,7 @@ impl<'a> Checker<'a> {
               "Property '{}' will overwrite the base property in '{}'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration.",
               field.name, base_name
             ),
-            Span::new(
-              self.file,
-              TextRange::new(
-                field.key_range.start,
-                field
-                  .key_range
-                  .start
-                  .saturating_add(field.name.len() as u32)
-                  .min(field.key_range.end),
-              ),
-            ),
+            Span::new(self.file, range),
           ));
       }
     }
@@ -2081,7 +2077,10 @@ impl<'a> Checker<'a> {
       {
         self.diagnostics.push(codes::USING_BINDING_PATTERN.error(
           "'using' declarations may not have binding patterns.",
-          Span::new(self.file, loc_to_range(self.file, declarator.pattern.stx.pat.loc)),
+          Span::new(
+            self.file,
+            loc_to_range(self.file, declarator.pattern.stx.pat.loc),
+          ),
         ));
       }
 
@@ -3301,16 +3300,16 @@ impl<'a> Checker<'a> {
             }
             _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
           };
-            self.check_assignable_with_code(
-              arg_expr,
-              arg_ty,
-              param_ty,
-              None,
-              &codes::ARGUMENT_TYPE_MISMATCH,
-            );
-          }
+          self.check_assignable_with_code(
+            arg_expr,
+            arg_ty,
+            param_ty,
+            None,
+            &codes::ARGUMENT_TYPE_MISMATCH,
+          );
         }
       }
+    }
     let contextual_sig = resolution
       .signature
       .or(resolution.contextual_signature)
@@ -6631,10 +6630,7 @@ impl<'a> Checker<'a> {
           let range = key_loc
             .map(|loc| loc_to_range(self.file, loc))
             .unwrap_or(base_range);
-          let range = TextRange::new(
-            range.start,
-            range.start.saturating_add(prop.len() as u32),
-          );
+          let range = TextRange::new(range.start, range.start.saturating_add(prop.len() as u32));
           self.diagnostics.push(codes::TYPE_MISMATCH.error(
             "type mismatch",
             Span {

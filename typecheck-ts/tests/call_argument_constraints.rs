@@ -26,9 +26,7 @@ fn call_argument_constraint_errors_on_argument_span() {
     "expected ARGUMENT_TYPE_MISMATCH diagnostic, got {diagnostics:?}"
   );
 
-  let start = source
-    .find('1')
-    .expect("numeric literal present in source") as u32;
+  let start = source.find('1').expect("numeric literal present in source") as u32;
   let end = start + 1;
   assert_eq!(diag.primary.file, file_id);
   assert_eq!(diag.primary.range, TextRange::new(start, end));
