@@ -955,3 +955,59 @@ fn lowers_top_level_namespaces_named_using_to_parseable_js() {
   "#;
   let (_code, _parsed) = minify_ts_module(src);
 }
+
+#[test]
+fn lowers_top_level_exported_namespaces_with_invalid_binding_identifiers_to_parseable_js() {
+  // Disable renaming so we can assert on the exact synthesized binding name.
+  let src = r#"
+    eval("x");
+    export namespace static {
+      export const x = 1;
+    }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_exported_name(&parsed, "static"),
+    "expected namespace lowering to export `static` via an export list entry"
+  );
+  assert!(
+    code.contains("__minify_ts_namespace_static"),
+    "expected TS erasure to synthesize a safe local binding for `namespace static`: {code}"
+  );
+  assert!(
+    !code.contains("var static"),
+    "lowering should not introduce a `var static` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(static"),
+    "lowering should not introduce a `function(static)` parameter (invalid strict mode JS): {code}"
+  );
+}
+
+#[test]
+fn lowers_top_level_exported_enums_with_invalid_binding_identifiers_to_parseable_js() {
+  // Disable renaming so we can assert on the exact synthesized binding name.
+  let src = r#"
+    eval("x");
+    export enum static { A = 1, B }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_exported_name(&parsed, "static"),
+    "expected enum lowering to export `static` via an export list entry"
+  );
+  assert!(
+    code.contains("__minify_ts_enum_obj_static"),
+    "expected TS erasure to synthesize a safe local binding for `enum static`: {code}"
+  );
+  assert!(
+    !code.contains("var static"),
+    "lowering should not introduce a `var static` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(static"),
+    "lowering should not introduce a `function(static)` parameter (invalid strict mode JS): {code}"
+  );
+}

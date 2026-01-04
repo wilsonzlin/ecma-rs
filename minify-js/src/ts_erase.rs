@@ -324,6 +324,29 @@ fn export_binding_stmt(loc: Loc, name: String) -> Node<Stmt> {
   )
 }
 
+fn export_binding_as_stmt(loc: Loc, local: String, exported: String) -> Node<Stmt> {
+  let export_name = Node::new(
+    loc,
+    ExportName {
+      type_only: false,
+      exportable: ModuleExportImportName::Ident(local),
+      alias: Node::new(loc, IdPat { name: exported }),
+    },
+  );
+  Node::new(
+    loc,
+    Stmt::ExportList(Node::new(
+      loc,
+      ExportListStmt {
+        type_only: false,
+        names: ExportNames::Specific(vec![export_name]),
+        from: None,
+        attributes: None,
+      },
+    )),
+  )
+}
+
 fn strip_stmt_required(
   ctx: &mut StripContext,
   mut stmt: Node<Stmt>,
@@ -1962,20 +1985,29 @@ fn strip_enum_decl(
   let enum_name = decl.stx.name.clone();
   let name_is_binding_identifier = is_valid_binding_identifier(&enum_name, ctx.top_level_mode);
   if parent_namespace.is_none() && !name_is_binding_identifier {
-    unsupported_ts(
-      ctx,
-      loc,
-      format!("runtime enum name `{enum_name}` is not a valid JavaScript identifier"),
-    );
-    return vec![];
+    let allow_top_level_export = is_top_level
+      && decl.stx.export
+      && matches!(ctx.top_level_mode, TopLevelMode::Module);
+    if !allow_top_level_export {
+      unsupported_ts(
+        ctx,
+        loc,
+        format!("runtime enum name `{enum_name}` is not a valid JavaScript identifier"),
+      );
+      return vec![];
+    }
   }
   let enum_param_ident = if name_is_binding_identifier {
     enum_name.clone()
   } else {
     format!("__minify_ts_enum_obj_{enum_name}")
   };
-  let has_value_binding =
-    name_is_binding_identifier && ctx.current_value_bindings().contains(&enum_name);
+  let binding_ident = if name_is_binding_identifier {
+    enum_name.clone()
+  } else {
+    enum_param_ident.clone()
+  };
+  let has_value_binding = ctx.current_value_bindings().contains(&binding_ident);
   let member_names: HashSet<String> = decl
     .stx
     .members
@@ -1990,10 +2022,20 @@ fn strip_enum_decl(
     && ctx.emitted_export_var.insert(enum_name.clone());
 
   let mut out = Vec::new();
-  if should_export_binding && has_value_binding {
-    out.push(export_binding_stmt(loc, enum_name.clone()));
+  if should_export_binding {
+    if name_is_binding_identifier {
+      if has_value_binding {
+        out.push(export_binding_stmt(loc, enum_name.clone()));
+      }
+    } else {
+      out.push(export_binding_as_stmt(
+        loc,
+        binding_ident.clone(),
+        enum_name.clone(),
+      ));
+    }
   }
-  let should_export_var = should_export_binding && !has_value_binding;
+  let should_export_var = should_export_binding && name_is_binding_identifier && !has_value_binding;
 
   // When exporting enums to runtime namespaces (`parent_namespace`), a pre-existing value binding
   // should be attached to the namespace object before the enum IIFE runs, otherwise we would
@@ -2004,20 +2046,20 @@ fn strip_enum_decl(
         loc,
         ts_lower::id(loc, namespace_param),
         ts_lower::MemberKey::Name(enum_name.clone()),
-        ts_lower::id(loc, enum_name.clone()),
+        ts_lower::id(loc, binding_ident.clone()),
       ));
     }
   }
 
-  if name_is_binding_identifier && !has_value_binding {
+  if (name_is_binding_identifier || parent_namespace.is_none()) && !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
-      enum_name.clone(),
+      binding_ident.clone(),
       None,
       should_export_var,
       VarDeclMode::Var,
     ));
-    ctx.current_value_bindings_mut().insert(enum_name.clone());
+    ctx.current_value_bindings_mut().insert(binding_ident.clone());
   }
 
   let enum_alias = format!("__minify_ts_enum_{enum_name}");
@@ -2360,12 +2402,17 @@ fn strip_namespace_decl(
   let namespace_name = decl.stx.name.clone();
   let name_is_binding_identifier = is_valid_binding_identifier(&namespace_name, ctx.top_level_mode);
   if parent_namespace.is_none() && !name_is_binding_identifier {
-    unsupported_ts(
-      ctx,
-      loc,
-      format!("runtime namespace name `{namespace_name}` is not a valid JavaScript identifier"),
-    );
-    return vec![];
+    let allow_top_level_export = is_top_level
+      && decl.stx.export
+      && matches!(ctx.top_level_mode, TopLevelMode::Module);
+    if !allow_top_level_export {
+      unsupported_ts(
+        ctx,
+        loc,
+        format!("runtime namespace name `{namespace_name}` is not a valid JavaScript identifier"),
+      );
+      return vec![];
+    }
   }
   let mut namespace_param_ident = if name_is_binding_identifier {
     namespace_name.clone()
@@ -2387,8 +2434,12 @@ fn strip_namespace_decl(
       }
     }
   }
-  let has_value_binding =
-    name_is_binding_identifier && ctx.current_value_bindings().contains(&namespace_name);
+  let binding_ident = if name_is_binding_identifier {
+    namespace_name.clone()
+  } else {
+    namespace_param_ident.clone()
+  };
+  let has_value_binding = ctx.current_value_bindings().contains(&binding_ident);
   let mut out = Vec::new();
 
   let should_export_binding = parent_namespace.is_none()
@@ -2398,10 +2449,20 @@ fn strip_namespace_decl(
     && !ctx.top_level_module_exports.contains(&namespace_name)
     && ctx.emitted_export_var.insert(namespace_name.clone());
 
-  if should_export_binding && has_value_binding {
-    out.push(export_binding_stmt(loc, namespace_name.clone()));
+  if should_export_binding {
+    if name_is_binding_identifier {
+      if has_value_binding {
+        out.push(export_binding_stmt(loc, namespace_name.clone()));
+      }
+    } else {
+      out.push(export_binding_as_stmt(
+        loc,
+        binding_ident.clone(),
+        namespace_name.clone(),
+      ));
+    }
   }
-  let should_export_var = should_export_binding && !has_value_binding;
+  let should_export_var = should_export_binding && name_is_binding_identifier && !has_value_binding;
 
   if let Some(namespace_param) = parent_namespace {
     if has_value_binding {
@@ -2409,22 +2470,22 @@ fn strip_namespace_decl(
         loc,
         ts_lower::id(loc, namespace_param),
         ts_lower::MemberKey::Name(namespace_name.clone()),
-        ts_lower::id(loc, namespace_name.clone()),
+        ts_lower::id(loc, binding_ident.clone()),
       ));
     }
   }
 
-  if name_is_binding_identifier && !has_value_binding {
+  if (name_is_binding_identifier || parent_namespace.is_none()) && !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
-      namespace_name.clone(),
+      binding_ident.clone(),
       None,
       should_export_var,
       VarDeclMode::Var,
     ));
     ctx
       .current_value_bindings_mut()
-      .insert(namespace_name.clone());
+      .insert(binding_ident.clone());
   }
 
   let mut body = strip_namespace_body(ctx, decl.stx.body, &namespace_param_ident);
