@@ -1901,7 +1901,26 @@ impl Program {
             if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
               state.cache_stats.merge(&caches.stats());
             }
-            if evaluated != ty && is_simple_display_type(&store, evaluated) {
+            // Preserve user-defined alias names when they only expand to a
+            // primitive keyword type. Those names often carry meaning (e.g.
+            // they encode intent or come from a `typeof import()` query),
+            // whereas printing `number`/`string` would lose that context.
+            let expands_to_keyword = matches!(
+              store.type_kind(evaluated),
+              tti::TypeKind::Any
+                | tti::TypeKind::Unknown
+                | tti::TypeKind::Never
+                | tti::TypeKind::Void
+                | tti::TypeKind::Null
+                | tti::TypeKind::Undefined
+                | tti::TypeKind::Boolean
+                | tti::TypeKind::Number
+                | tti::TypeKind::String
+                | tti::TypeKind::BigInt
+                | tti::TypeKind::Symbol
+                | tti::TypeKind::UniqueSymbol
+            );
+            if evaluated != ty && !expands_to_keyword && is_simple_display_type(&store, evaluated) {
               evaluated
             } else {
               ty
@@ -6673,7 +6692,6 @@ impl ProgramState {
         _ => None,
       };
       let is_this = idx == 0 && matches!(name.as_deref(), Some("this"));
-      let name_id = name.as_ref().map(|name| store.intern_name(name.clone()));
       let annotation = param
         .stx
         .type_annotation
@@ -6693,7 +6711,7 @@ impl ProgramState {
         continue;
       }
       params.push(tti::Param {
-        name: name_id,
+        name: None,
         ty,
         optional: param.stx.optional,
         rest: param.stx.rest,
@@ -12766,7 +12784,8 @@ impl ProgramState {
               // bindings within destructuring patterns).
               let matches = decl_span == target
                 || (target.start <= decl_span.start && target.end >= decl_span.end)
-                || (target.start == decl_span.start && target.end <= decl_span.end);
+                || (target.start == decl_span.start && target.end <= decl_span.end)
+                || (target.start <= pat_span.start && target.end >= pat_span.end);
               if matches {
                 if matching_decl.is_some() {
                   matching_decl = None;

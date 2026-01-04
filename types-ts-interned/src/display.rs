@@ -494,7 +494,7 @@ impl<'a> TypeDisplay<'a> {
       self.fmt_type(this_param, f)?;
       needs_comma = true;
     }
-    for (idx, param) in sig.params.iter().enumerate() {
+    for param in sig.params.iter() {
       if needs_comma {
         write!(f, ", ")?;
       }
@@ -503,14 +503,20 @@ impl<'a> TypeDisplay<'a> {
       }
       if let Some(name) = param.name {
         self.fmt_name(name, f)?;
+        if param.optional {
+          write!(f, "?")?;
+        }
+        write!(f, ": ")?;
+        self.fmt_type(param.ty, f)?;
       } else {
-        write!(f, "arg{idx}")?;
+        // Parameter names do not affect type identity. When they are omitted
+        // (e.g. canonicalized away while interning), prefer printing just the
+        // parameter type so the output is stable and concise.
+        self.fmt_type(param.ty, f)?;
+        if param.optional {
+          write!(f, "?")?;
+        }
       }
-      if param.optional {
-        write!(f, "?")?;
-      }
-      write!(f, ": ")?;
-      self.fmt_type(param.ty, f)?;
       needs_comma = true;
     }
     write!(f, ") => ")?;
@@ -551,7 +557,7 @@ impl<'a> TypeDisplay<'a> {
       needs_comma = true;
     }
 
-    for (idx, param) in sig.params.iter().enumerate() {
+    for param in sig.params.iter() {
       if needs_comma {
         write!(f, ", ")?;
       }
@@ -560,14 +566,17 @@ impl<'a> TypeDisplay<'a> {
       }
       if let Some(name) = param.name {
         self.fmt_name(name, f)?;
+        if param.optional {
+          write!(f, "?")?;
+        }
+        write!(f, ": ")?;
+        self.fmt_type(param.ty, f)?;
       } else {
-        write!(f, "arg{idx}")?;
+        self.fmt_type(param.ty, f)?;
+        if param.optional {
+          write!(f, "?")?;
+        }
       }
-      if param.optional {
-        write!(f, "?")?;
-      }
-      write!(f, ": ")?;
-      self.fmt_type(param.ty, f)?;
       needs_comma = true;
     }
 
