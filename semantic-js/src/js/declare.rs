@@ -9,15 +9,17 @@ use super::SymbolId;
 use super::TopLevelMode;
 use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
-use derive_visitor::{Drive, DriveMut, VisitorMut};
+use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::func::Func;
+use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::ClassDecl;
@@ -33,7 +35,7 @@ use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 type BlockStmtNode = Node<BlockStmt>;
 type CallExprNode = Node<CallExpr>;
@@ -83,6 +85,161 @@ fn ident_range(loc: parse_js::loc::Loc, name: &str) -> TextRange {
   TextRange::new(start, end)
 }
 
+fn collect_pat_decl_names(file: FileId, pat_decl: &PatDecl, out: &mut BTreeSet<NameId>) {
+  collect_pat_names(file, pat_decl.pat.stx.as_ref(), out);
+}
+
+fn collect_pat_names(file: FileId, pat: &Pat, out: &mut BTreeSet<NameId>) {
+  match pat {
+    Pat::Id(id) => {
+      out.insert(name_id_for(file, &id.stx.name));
+    }
+    Pat::Arr(arr) => {
+      for elem in arr.stx.elements.iter().flatten() {
+        collect_pat_names(file, elem.target.stx.as_ref(), out);
+      }
+      if let Some(rest) = arr.stx.rest.as_ref() {
+        collect_pat_names(file, rest.stx.as_ref(), out);
+      }
+    }
+    Pat::Obj(obj) => {
+      for prop in obj.stx.properties.iter() {
+        collect_pat_names(file, prop.stx.target.stx.as_ref(), out);
+      }
+      if let Some(rest) = obj.stx.rest.as_ref() {
+        collect_pat_names(file, rest.stx.as_ref(), out);
+      }
+    }
+    Pat::AssignTarget(_) => {}
+  }
+}
+
+#[derive(Visitor)]
+#[visitor(
+  BlockStmtNode(enter, exit),
+  CatchBlockNode(enter, exit),
+  ClassDeclNode(enter, exit),
+  ClassExprNode(enter, exit),
+  ForBodyNode(enter, exit),
+  ForInOfLhs(enter, exit),
+  FuncNode(enter, exit),
+  VarDeclNode(enter)
+)]
+struct ClosureLexicalCollector {
+  file: FileId,
+  depth: usize,
+  names: BTreeSet<NameId>,
+}
+
+impl ClosureLexicalCollector {
+  fn new(file: FileId) -> Self {
+    Self {
+      file,
+      depth: 0,
+      names: BTreeSet::new(),
+    }
+  }
+
+  fn enter_block_stmt_node(&mut self, _node: &BlockStmtNode) {
+    self.depth += 1;
+  }
+
+  fn exit_block_stmt_node(&mut self, _node: &BlockStmtNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_catch_block_node(&mut self, _node: &CatchBlockNode) {
+    self.depth += 1;
+  }
+
+  fn exit_catch_block_node(&mut self, _node: &CatchBlockNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_class_decl_node(&mut self, node: &ClassDeclNode) {
+    if self.depth == 0 {
+      if let Some(name) = node.stx.name.as_ref() {
+        self.names.insert(name_id_for(self.file, &name.stx.name));
+      }
+    }
+    self.depth += 1;
+  }
+
+  fn exit_class_decl_node(&mut self, _node: &ClassDeclNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_class_expr_node(&mut self, _node: &ClassExprNode) {
+    self.depth += 1;
+  }
+
+  fn exit_class_expr_node(&mut self, _node: &ClassExprNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_for_body_node(&mut self, _node: &ForBodyNode) {
+    self.depth += 1;
+  }
+
+  fn exit_for_body_node(&mut self, _node: &ForBodyNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_for_in_of_lhs(&mut self, node: &ForInOfLhs) {
+    if self.depth > 0 {
+      return;
+    }
+    if let ForInOfLhs::Decl((mode, pat)) = node {
+      if matches!(
+        mode,
+        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+      ) {
+        collect_pat_decl_names(self.file, pat.stx.as_ref(), &mut self.names);
+      }
+    }
+  }
+
+  fn exit_for_in_of_lhs(&mut self, _node: &ForInOfLhs) {}
+
+  fn enter_func_node(&mut self, _node: &FuncNode) {
+    self.depth += 1;
+  }
+
+  fn exit_func_node(&mut self, _node: &FuncNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_var_decl_node(&mut self, node: &VarDeclNode) {
+    if self.depth > 0 {
+      return;
+    }
+    if !matches!(
+      node.stx.mode,
+      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+    ) {
+      return;
+    }
+    for decl in node.stx.declarators.iter() {
+      collect_pat_decl_names(self.file, decl.pattern.stx.as_ref(), &mut self.names);
+    }
+  }
+}
+
+fn closure_lexical_names(file: FileId, func: &Func) -> BTreeSet<NameId> {
+  let mut visitor = ClosureLexicalCollector::new(file);
+
+  let Some(body) = func.body.as_ref() else {
+    return visitor.names;
+  };
+  let FuncBody::Block(stmts) = body else {
+    return visitor.names;
+  };
+  for stmt in stmts.iter() {
+    stmt.drive(&mut visitor);
+  }
+  visitor.names
+}
+
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode, file: FileId) -> JsSemantics {
   let (sem, _) = declare_with_diagnostics(top_level, mode, file);
   sem
@@ -116,6 +273,8 @@ struct SemanticsBuilder {
   decl_spans: BTreeMap<SymbolId, DeclSpanInfo>,
   block_var_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
   block_lexical_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
+  block_func_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
+  catch_param_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
   diagnostics: Vec<Diagnostic>,
 }
 
@@ -150,6 +309,8 @@ impl SemanticsBuilder {
       decl_spans: BTreeMap::new(),
       block_var_decl_spans: BTreeMap::new(),
       block_lexical_decl_spans: BTreeMap::new(),
+      block_func_decl_spans: BTreeMap::new(),
+      catch_param_decl_spans: BTreeMap::new(),
       diagnostics: Vec::new(),
     }
   }
@@ -209,6 +370,19 @@ impl SemanticsBuilder {
       ));
       self.diagnostics.push(diagnostic);
     }
+
+    if let Some(prev_func) = self.block_func_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting block function and var declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_func),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
   }
 
   fn record_block_lexical_decl(
@@ -236,6 +410,71 @@ impl SemanticsBuilder {
       ));
       self.diagnostics.push(diagnostic);
     }
+
+    if let Some(prev_func) = self.block_func_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting block function and lexical declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_func),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
+  }
+
+  fn record_block_func_decl(&mut self, scope: ScopeId, name: NameId, raw_name: &str, span: TextRange) {
+    let key = (scope, name);
+    if self.block_func_decl_spans.contains_key(&key) {
+      return;
+    }
+    self.block_func_decl_spans.insert(key, span);
+
+    if let Some(prev_var) = self.block_var_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting block function and var declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_var),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
+
+    if let Some(prev_lexical) = self.block_lexical_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting block function and lexical declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_lexical),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
+
+    if let Some(prev_catch_param) = self.catch_param_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0001",
+        format!("Identifier `{raw_name}` has already been declared"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_catch_param),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
+  }
+
+  fn record_catch_param_decl(&mut self, scope: ScopeId, name: NameId, span: TextRange) {
+    let key = (scope, name);
+    self.catch_param_decl_spans.entry(key).or_insert(span);
   }
 
   fn mark_tdz_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
@@ -379,6 +618,9 @@ struct DeclContext {
   target: DeclTarget,
   flags: SymbolFlags,
   lexical: bool,
+  block_lexical: bool,
+  block_var: bool,
+  catch_param: bool,
 }
 
 #[derive(VisitorMut)]
@@ -404,6 +646,7 @@ struct DeclareVisitor {
   decl_target_stack: Vec<DeclContext>,
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
+  closure_lexical_names_stack: Vec<BTreeSet<NameId>>,
 }
 
 impl DeclareVisitor {
@@ -416,6 +659,7 @@ impl DeclareVisitor {
       decl_target_stack: Vec::new(),
       in_pattern_decl: vec![false],
       top_level_mode: mode,
+      closure_lexical_names_stack: Vec::new(),
     }
   }
 
@@ -442,12 +686,29 @@ impl DeclareVisitor {
       target,
       flags: SymbolFlags::default(),
       lexical: false,
+      block_lexical: false,
+      block_var: false,
+      catch_param: false,
     });
   }
 
-  fn push_decl_context(&mut self, target: DeclTarget, flags: SymbolFlags, lexical: bool) {
-    self.decl_target_stack
-      .push(DeclContext { target, flags, lexical });
+  fn push_decl_context(
+    &mut self,
+    target: DeclTarget,
+    flags: SymbolFlags,
+    lexical: bool,
+    block_lexical: bool,
+    block_var: bool,
+    catch_param: bool,
+  ) {
+    self.decl_target_stack.push(DeclContext {
+      target,
+      flags,
+      lexical,
+      block_lexical,
+      block_var,
+      catch_param,
+    });
   }
 
   fn pop_decl_target(&mut self) {
@@ -483,11 +744,15 @@ impl DeclareVisitor {
   ) -> Option<(SymbolId, ScopeId)> {
     let name_id = self.builder.intern_name(name);
 
+    if ctx.catch_param && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
+      self.builder.record_catch_param_decl(self.current_scope(), name_id, span);
+    }
+
     // Static semantics: `var`-scoped declarations inside a block participate in
     // the block's `VarDeclaredNames`, so they cannot conflict with any lexical
     // declarations (`let`/`const`/`class`/block functions in modules) declared in
     // that same block.
-    if ctx.target == DeclTarget::NearestClosure && !ctx.lexical {
+    if ctx.block_var {
       for scope_id in self.scope_stack.iter().rev().copied() {
         let kind = self.builder.scope_kind(scope_id);
         if kind == ScopeKind::Block {
@@ -501,10 +766,8 @@ impl DeclareVisitor {
       }
     }
 
-    if ctx.lexical && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
-      self
-        .builder
-        .record_block_lexical_decl(self.current_scope(), name_id, name, span);
+    if ctx.block_lexical && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
+      self.builder.record_block_lexical_decl(self.current_scope(), name_id, name, span);
     }
 
     let (symbol, scope) = match ctx.target {
@@ -557,7 +820,15 @@ impl DeclareVisitor {
 
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.push_scope(ScopeKind::Block, range_of(node));
-    self.push_decl_target(DeclTarget::IfNotGlobal);
+    // Catch parameters are lexical but initialized immediately (no TDZ).
+    self.push_decl_context(
+      DeclTarget::IfNotGlobal,
+      SymbolFlags::default(),
+      true,
+      false,
+      false,
+      true,
+    );
   }
 
   fn exit_catch_block_node(&mut self, _node: &mut CatchBlockNode) {
@@ -573,6 +844,9 @@ impl DeclareVisitor {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::lexical_tdz(),
           lexical: true,
+          block_lexical: true,
+          block_var: false,
+          catch_param: false,
         },
       );
     }
@@ -592,6 +866,9 @@ impl DeclareVisitor {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::lexical_tdz(),
           lexical: true,
+          block_lexical: true,
+          block_var: false,
+          catch_param: false,
         },
       );
     }
@@ -623,7 +900,14 @@ impl DeclareVisitor {
           SymbolFlags::lexical_tdz()
         }
       };
-      self.push_decl_context(target, flags, flags.tdz);
+      self.push_decl_context(
+        target,
+        flags,
+        flags.tdz,
+        flags.tdz,
+        matches!(mode, VarDeclMode::Var),
+        false,
+      );
     }
   }
 
@@ -636,19 +920,84 @@ impl DeclareVisitor {
   fn enter_func_decl_node(&mut self, node: &mut FuncDeclNode) {
     if let Some(name) = &mut node.stx.name {
       let scope_kind = self.builder.scope_kind(self.current_scope());
-      let is_module_function_decl = self.top_level_mode == TopLevelMode::Module
-        && matches!(scope_kind, ScopeKind::Module | ScopeKind::Block);
-      let target = if is_module_function_decl && scope_kind == ScopeKind::Block {
-        DeclTarget::IfNotGlobal
-      } else {
-        DeclTarget::NearestClosure
-      };
+      let span = ident_range(name.loc, &name.stx.name);
+      let name_id = name_id_for(self.builder.file, &name.stx.name);
+
+      if self.top_level_mode == TopLevelMode::Module {
+        let is_module_function_decl = matches!(scope_kind, ScopeKind::Module | ScopeKind::Block);
+        let target = if is_module_function_decl && scope_kind == ScopeKind::Block {
+          DeclTarget::IfNotGlobal
+        } else {
+          DeclTarget::NearestClosure
+        };
+        self.declare_class_or_func_name(
+          name,
+          DeclContext {
+            target,
+            flags: SymbolFlags::hoisted(),
+            lexical: is_module_function_decl,
+            block_lexical: is_module_function_decl && scope_kind == ScopeKind::Block,
+            block_var: false,
+            catch_param: false,
+          },
+        );
+        return;
+      }
+
+      // Non-module script: block-level functions are still `var` scoped but they
+      // participate in block-level early errors (e.g. they conflict with
+      // `var`/`let`/`const` declarations in the same block).
+      if scope_kind == ScopeKind::Block {
+        self
+          .builder
+          .record_block_func_decl(self.current_scope(), name_id, &name.stx.name, span);
+
+        let Some(closure) = self.nearest_closure() else {
+          return;
+        };
+
+        let suppress_hoist = self
+          .closure_lexical_names_stack
+          .last()
+          .map_or(false, |names| names.contains(&name_id))
+          || self
+            .builder
+            .scopes
+            .get(&closure)
+            .and_then(|s| s.symbols.get(&name_id))
+            .and_then(|sym| self.builder.symbols.get(sym))
+            .map(|sym| !sym.flags.hoisted)
+            .unwrap_or(false);
+
+        let target = if suppress_hoist {
+          DeclTarget::IfNotGlobal
+        } else {
+          DeclTarget::NearestClosure
+        };
+
+        self.declare_class_or_func_name(
+          name,
+          DeclContext {
+            target,
+            flags: SymbolFlags::hoisted(),
+            lexical: false,
+            block_lexical: false,
+            block_var: false,
+            catch_param: false,
+          },
+        );
+        return;
+      }
+
       self.declare_class_or_func_name(
         name,
         DeclContext {
-          target,
+          target: DeclTarget::NearestClosure,
           flags: SymbolFlags::hoisted(),
-          lexical: is_module_function_decl,
+          lexical: false,
+          block_lexical: false,
+          block_var: false,
+          catch_param: false,
         },
       );
     }
@@ -663,6 +1012,9 @@ impl DeclareVisitor {
           target: DeclTarget::IfNotGlobal,
           flags: SymbolFlags::hoisted(),
           lexical: false,
+          block_lexical: false,
+          block_var: false,
+          catch_param: false,
         },
       );
     }
@@ -673,6 +1025,13 @@ impl DeclareVisitor {
   }
 
   fn enter_func_node(&mut self, node: &mut FuncNode) {
+    let lexicals = if self.top_level_mode == TopLevelMode::Global {
+      closure_lexical_names(self.builder.file, node.stx.as_ref())
+    } else {
+      BTreeSet::new()
+    };
+    self.closure_lexical_names_stack.push(lexicals);
+
     let kind = if node.stx.arrow {
       ScopeKind::ArrowFunction
     } else {
@@ -685,6 +1044,7 @@ impl DeclareVisitor {
   fn exit_func_node(&mut self, _node: &mut FuncNode) {
     self.pop_scope();
     self.pop_decl_target();
+    self.closure_lexical_names_stack.pop();
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
@@ -700,7 +1060,14 @@ impl DeclareVisitor {
 
   fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
     // Import bindings are lexical but initialized before module evaluation (no TDZ).
-    self.push_decl_context(DeclTarget::IfNotGlobal, SymbolFlags::default(), true);
+    self.push_decl_context(
+      DeclTarget::IfNotGlobal,
+      SymbolFlags::default(),
+      true,
+      false,
+      false,
+      false,
+    );
   }
 
   fn exit_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
@@ -728,7 +1095,14 @@ impl DeclareVisitor {
         SymbolFlags::lexical_tdz()
       }
     };
-    self.push_decl_context(target, flags, flags.tdz);
+    self.push_decl_context(
+      target,
+      flags,
+      flags.tdz,
+      flags.tdz,
+      matches!(node.stx.mode, VarDeclMode::Var),
+      false,
+    );
   }
 
   fn exit_var_decl_node(&mut self, _node: &mut VarDeclNode) {
