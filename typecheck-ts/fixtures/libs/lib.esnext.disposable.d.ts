@@ -3,14 +3,14 @@
 // This intentionally contains only the surface needed to type-check `using` /
 // `await using` declarations.
 
+// Note: this matches the recursive `PromiseLike` shape from the official
+// TypeScript libs so that bundled lib checking exercises recursive structural
+// types (and ensures `AsyncDisposable` is well-typed).
 interface PromiseLike<T> {
-  // Note: this is intentionally minimal. The real `lib.es5.d.ts` defines a
-  // recursive `PromiseLike` that our checker is not yet robust enough to fully
-  // evaluate without hitting recursion limits.
-  then(
-    onfulfilled?: ((value: T) => any) | undefined | null,
-    onrejected?: ((reason: any) => any) | undefined | null,
-  ): any;
+  then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null,
+  ): PromiseLike<TResult1 | TResult2>;
 }
 
 interface SymbolConstructor {

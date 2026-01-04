@@ -30,6 +30,76 @@ fn evaluator(store: Arc<TypeStore>, expander: &MockExpander) -> TypeEvaluator<'_
 }
 
 #[test]
+fn recursive_promise_like_evaluation_terminates() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  // A minimal PromiseLike-ish definition that is *recursive with changing type
+  // arguments* (`PromiseLike<T>` contains `PromiseLike<PromiseLike<T>>`).
+  //
+  // This exercises the evaluator's recursion guards (depth limit + in-progress
+  // tracking) without requiring the full lib surface.
+  let promise_like_def = DefId(0);
+  let t_param = TypeParamId(0);
+  let t_ty = store.intern_type(TypeKind::TypeParam(t_param));
+  let promise_like_t = store.intern_type(TypeKind::Ref {
+    def: promise_like_def,
+    args: vec![t_ty],
+  });
+  let promise_like_promise_like_t = store.intern_type(TypeKind::Ref {
+    def: promise_like_def,
+    args: vec![promise_like_t],
+  });
+
+  let then_sig = store.intern_signature(Signature::new(Vec::new(), promise_like_promise_like_t));
+  let then_callable = store.intern_type(TypeKind::Callable {
+    overloads: vec![then_sig],
+  });
+
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(store.intern_name("then")),
+      data: PropData {
+        ty: then_callable,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: true,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj = store.intern_object(ObjectType { shape: shape_id });
+  let promise_like_body = store.intern_type(TypeKind::Object(obj));
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    promise_like_def,
+    ExpandedType {
+      params: vec![t_param],
+      ty: promise_like_body,
+    },
+  );
+
+  let promise_like_string = store.intern_type(TypeKind::Ref {
+    def: promise_like_def,
+    args: vec![primitives.string],
+  });
+
+  let mut eval = evaluator(store.clone(), &expander).with_depth_limit(32);
+  let result = eval.evaluate(promise_like_string);
+  assert!(
+    matches!(store.type_kind(result), TypeKind::Object(_)),
+    "expected expansion to yield an object type, got {:?}",
+    store.type_kind(result)
+  );
+}
+
+#[test]
 fn conditional_distributes_over_union_with_substitution() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

@@ -53,6 +53,7 @@ pub(crate) fn instantiate_expanded<E: TypeExpander>(
   store: &Arc<TypeStore>,
   expander: &E,
   caches: &EvaluatorCaches,
+  root_def: DefId,
   expanded: &ExpandedType,
   args: &[TypeId],
 ) -> TypeId {
@@ -60,7 +61,37 @@ pub(crate) fn instantiate_expanded<E: TypeExpander>(
     expanded.ty
   } else {
     let bindings = expanded.params.iter().copied().zip(args.iter().copied());
-    let mut evaluator = TypeEvaluator::with_caches(Arc::clone(store), expander, caches.clone());
+
+    // Instantiating a referenced definition for assignability checks should
+    // avoid expanding recursive self references. The official TypeScript libs
+    // define types like `PromiseLike<T>` where members mention
+    // `PromiseLike<TResult>`; fully expanding those nested refs while
+    // instantiating causes unbounded recursion (args change, so simple
+    // cycle-detection by `(def, args)` cannot trigger).
+    //
+    // We keep expansion of *other* refs (to preserve existing behavior), but
+    // intentionally leave refs to the root definition unexpanded so that
+    // recursion remains lazy and guarded by the evaluator/relation engines.
+    struct SkipSelfExpander<'a, E: TypeExpander> {
+      inner: &'a E,
+      root_def: DefId,
+    }
+
+    impl<'a, E: TypeExpander> TypeExpander for SkipSelfExpander<'a, E> {
+      fn expand(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<ExpandedType> {
+        if def == self.root_def {
+          None
+        } else {
+          self.inner.expand(store, def, args)
+        }
+      }
+    }
+
+    let adapter = SkipSelfExpander {
+      inner: expander,
+      root_def,
+    };
+    let mut evaluator = TypeEvaluator::with_caches(Arc::clone(store), &adapter, caches.clone());
     evaluator.evaluate_with_bindings(expanded.ty, bindings)
   }
 }
@@ -160,7 +191,8 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
         args: key.args,
       }));
     }
-    let instantiated = instantiate_expanded(&self.store, self, &self.caches, &expanded, &key.args);
+    let instantiated =
+      instantiate_expanded(&self.store, self, &self.caches, def, &expanded, &key.args);
     self.guard.end(&key);
     self.caches.insert_ref(def, &key.args, instantiated);
     Some(instantiated)

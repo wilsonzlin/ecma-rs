@@ -122,7 +122,8 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
         args: key.args,
       }));
     }
-    let instantiated = instantiate_expanded(&self.store, self, &self.caches, &expanded, &key.args);
+    let instantiated =
+      instantiate_expanded(&self.store, self, &self.caches, def, &expanded, &key.args);
     self.guard.end(&key);
     self.caches.insert_ref(def, &key.args, instantiated);
     Some(instantiated)
