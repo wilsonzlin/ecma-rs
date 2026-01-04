@@ -422,6 +422,14 @@ impl<'p> HirSourceToInst<'p> {
         self.out.push(Inst::goto(target));
         Ok(())
       }
+      StmtKind::Throw(value) => {
+        let _ = self.compile_expr(*value)?;
+        let target = self
+          .return_label
+          .ok_or_else(|| unsupported_syntax_range(stmt.span, "throw statement outside function"))?;
+        self.out.push(Inst::goto(target));
+        Ok(())
+      }
       StmtKind::Expr(expr) => {
         self.compile_expr(*expr)?;
         Ok(())
