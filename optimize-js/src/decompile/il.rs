@@ -415,6 +415,7 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_OBJECT_SPREAD_MARKER: &str = "__optimize_js_object_spread";
   const INTERNAL_TEMPLATE_CALLEE: &str = "__optimize_js_template";
   const INTERNAL_TAGGED_TEMPLATE_CALLEE: &str = "__optimize_js_tagged_template";
+  const INTERNAL_AWAIT_CALLEE: &str = "__optimize_js_await";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -601,6 +602,21 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
       .get(1)
       .map(|arg| lower_arg(var_namer, fn_emitter, arg));
     let expr = node(Expr::Import(node(ImportExpr { module, attributes })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
+  }
+
+  if spreads.is_empty()
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+    && matches!(callee_arg, Arg::Builtin(path) if path == INTERNAL_AWAIT_CALLEE)
+    && args.len() == 1
+  {
+    let expr = node(Expr::Unary(node(UnaryExpr {
+      operator: OperatorName::Await,
+      argument: lower_arg(var_namer, fn_emitter, &args[0]),
+    })));
     return match tgt {
       Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
       None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),

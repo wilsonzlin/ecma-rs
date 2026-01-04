@@ -31,6 +31,7 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_OBJECT_SPREAD_MARKER: &'static str = "__optimize_js_object_spread";
   const INTERNAL_TEMPLATE_CALLEE: &'static str = "__optimize_js_template";
   const INTERNAL_TAGGED_TEMPLATE_CALLEE: &'static str = "__optimize_js_tagged_template";
+  const INTERNAL_AWAIT_CALLEE: &'static str = "__optimize_js_await";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -1071,6 +1072,18 @@ impl<'p> HirSourceToInst<'p> {
           Arg::Builtin("import".to_string()),
           Arg::Const(Const::Undefined),
           args,
+          Vec::new(),
+        ));
+        Ok(Arg::Var(tmp))
+      }
+      ExprKind::Await { expr } => {
+        let arg = self.compile_expr(*expr)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_AWAIT_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          vec![arg],
           Vec::new(),
         ));
         Ok(Arg::Var(tmp))
