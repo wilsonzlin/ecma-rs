@@ -93,26 +93,50 @@ fn map_export(
   symbol_id: sem_ts::SymbolId,
   ns: sem_ts::Namespace,
 ) -> Result<ExportEntry, crate::FatalError> {
-  if let Some(sem_file) = sem_file {
-    if let Some(sem_ts::AliasTarget::ExportAssignment { path, .. }) =
-      semantics.symbol_alias_target(symbol_id, ns)
-    {
-      let file_id = FileId(sem_file.0);
-      if let Some(def) = state.resolve_import_alias_target(file_id, path) {
-        let type_id = match state.export_type_for_def(def)? {
-          Some(ty) => Some(ty),
-          None => Some(state.type_of_def(def)?),
-        };
-        let symbol = state
-          .def_data
-          .get(&def)
-          .map(|data| data.symbol)
-          .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
-        return Ok(ExportEntry {
-          symbol,
-          def: Some(def),
-          type_id,
-        });
+  if let Some(sem_ts::AliasTarget::ExportAssignment { path, .. }) =
+    semantics.symbol_alias_target(symbol_id, ns)
+  {
+    match sem_file {
+      Some(sem_file) => {
+        let file_id = FileId(sem_file.0);
+        if let Some(def) = state.resolve_import_alias_target(file_id, path) {
+          let type_id = match state.export_type_for_def(def)? {
+            Some(ty) => Some(ty),
+            None => Some(state.type_of_def(def)?),
+          };
+          let symbol = state
+            .def_data
+            .get(&def)
+            .map(|data| data.symbol)
+            .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+          return Ok(ExportEntry {
+            symbol,
+            def: Some(def),
+            type_id,
+          });
+        }
+      }
+      None => {
+        if let sem_ts::SymbolOwner::AmbientModule(specifier) =
+          &semantics.symbols().symbol(symbol_id).owner
+        {
+          if let Some(def) = state.resolve_ambient_import_alias_target(specifier, path) {
+            let type_id = match state.export_type_for_def(def)? {
+              Some(ty) => Some(ty),
+              None => Some(state.type_of_def(def)?),
+            };
+            let symbol = state
+              .def_data
+              .get(&def)
+              .map(|data| data.symbol)
+              .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+            return Ok(ExportEntry {
+              symbol,
+              def: Some(def),
+              type_id,
+            });
+          }
+        }
       }
     }
   }

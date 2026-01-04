@@ -2690,6 +2690,7 @@ fn collect_stmt<'a>(
 ) {
   let span = ctx.to_range(stmt.loc);
   let parent = ctx.current_parent();
+  let record_module_item = module_item && is_item;
   match &*stmt.stx {
     AstStmt::FunctionDecl(func) => {
       let (name_id, name_text) = name_from_optional(&func.stx.name, names);
@@ -2709,7 +2710,7 @@ fn collect_stmt<'a>(
       desc.is_exported = func.stx.export;
       desc.is_default_export = func.stx.export_default;
       if desc.is_exported || desc.is_default_export {
-        if module_item {
+        if record_module_item {
           module_items.push(ModuleItem {
             span,
             kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2719,7 +2720,7 @@ fn collect_stmt<'a>(
               kind: ExportedDeclKind::Func(func),
             }),
           });
-        } else if desc.is_default_export {
+        } else if !module_item && desc.is_default_export {
           ctx.warn_non_module_export(
             span,
             "export default is only allowed at the module top level",
@@ -2767,7 +2768,7 @@ fn collect_stmt<'a>(
       desc.is_exported = class_decl.stx.export;
       desc.is_default_export = class_decl.stx.export_default;
       if desc.is_exported || desc.is_default_export {
-        if module_item {
+        if record_module_item {
           module_items.push(ModuleItem {
             span,
             kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2777,7 +2778,7 @@ fn collect_stmt<'a>(
               kind: ExportedDeclKind::Class(class_decl),
             }),
           });
-        } else if desc.is_default_export {
+        } else if !module_item && desc.is_default_export {
           ctx.warn_non_module_export(
             span,
             "export default is only allowed at the module top level",
@@ -2833,7 +2834,7 @@ fn collect_stmt<'a>(
         ctx,
       );
       if var_decl.stx.export {
-        if module_item {
+        if record_module_item {
           module_items.push(ModuleItem {
             span,
             kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2860,7 +2861,7 @@ fn collect_stmt<'a>(
         ctx,
       );
       if ns.stx.export {
-        if module_item {
+        if record_module_item {
           module_items.push(ModuleItem {
             span,
             kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2895,7 +2896,7 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::Module);
       descriptors.push(desc);
       if module.stx.export {
-        if module_item {
+        if record_module_item {
           module_items.push(ModuleItem {
             span,
             kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2910,13 +2911,14 @@ fn collect_stmt<'a>(
       if let Some(body) = &module.stx.body {
         let body_start = descriptors.len();
         ctx.with_parent(Some(module_raw), |ctx| {
+          let body_module_item = matches!(module.stx.name, ModuleName::String(_));
           for st in body.iter() {
             collect_stmt(
               st,
               descriptors,
               module_items,
               names,
-              false,
+              body_module_item,
               false,
               decl_ambient,
               in_global,
@@ -2967,7 +2969,7 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::Interface(intf));
       desc.is_exported = intf.stx.export;
       descriptors.push(desc);
-      if intf.stx.export && module_item {
+      if intf.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2997,7 +2999,7 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::TypeAlias(ta));
       desc.is_exported = ta.stx.export;
       descriptors.push(desc);
-      if ta.stx.export && module_item {
+      if ta.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -3057,7 +3059,7 @@ fn collect_stmt<'a>(
         }
       }
       descriptors.push(desc);
-      if en.stx.export && module_item {
+      if en.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -3070,7 +3072,7 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::Import(stmt_import) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::Import(stmt_import),
@@ -3129,12 +3131,12 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ExportList(export) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportList(export),
         });
-      } else {
+      } else if !module_item {
         ctx.warn_non_module_export(
           span,
           "export statements are only allowed at the module top level",
@@ -3165,12 +3167,12 @@ fn collect_stmt<'a>(
         in_global,
         ctx,
       );
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportDefaultExpr(expr),
         });
-      } else {
+      } else if !module_item {
         ctx.warn_non_module_export(
           span,
           "export default is only allowed at the module top level",
@@ -3192,7 +3194,7 @@ fn collect_stmt<'a>(
       desc.parent = parent;
       desc.is_exported = av.stx.export;
       descriptors.push(desc);
-      if av.stx.export && module_item {
+      if av.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -3232,7 +3234,7 @@ fn collect_stmt<'a>(
           ctx,
         );
       });
-      if af.stx.export && module_item {
+      if af.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -3260,7 +3262,7 @@ fn collect_stmt<'a>(
       desc.is_exported = ac.stx.export;
       desc.type_source = Some(TypeSource::AmbientClass(ac));
       descriptors.push(desc);
-      if ac.stx.export && module_item {
+      if ac.stx.export && record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -3273,7 +3275,7 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ImportTypeDecl(import_type) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ImportType(import_type),
@@ -3281,17 +3283,17 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ExportTypeDecl(export_type) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportType(export_type),
         });
-      } else {
+      } else if !module_item {
         ctx.warn_non_module_export(span, "export type is only allowed at the module top level");
       }
     }
     AstStmt::ImportEqualsDecl(ie) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ImportEquals(ie),
@@ -3327,12 +3329,12 @@ fn collect_stmt<'a>(
       desc.parent = parent;
       desc.is_exported = true;
       descriptors.push(desc);
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportAssignment(assign),
         });
-      } else {
+      } else if !module_item {
         ctx.warn_non_module_export(
           span,
           "export assignment is only allowed at the module top level",
@@ -3340,12 +3342,12 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ExportAsNamespaceDecl(export_ns) => {
-      if module_item {
+      if record_module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportAsNamespace(export_ns),
         });
-      } else {
+      } else if !module_item {
         ctx.warn_non_module_export(
           span,
           "export as namespace is only allowed at the module top level",

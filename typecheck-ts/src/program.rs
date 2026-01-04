@@ -3098,6 +3098,26 @@ impl ProgramTypeResolver {
       sem_ts::SymbolOrigin::Import { imported, .. } => Some(imported.clone()),
       _ => None,
     };
+
+    if let sem_ts::SymbolOrigin::Import {
+      from: sem_ts::ModuleRef::Ambient(specifier),
+      imported,
+    } = &self.semantics.symbols().symbol(symbol).origin
+    {
+      let origin = sem_ts::ModuleRef::Ambient(specifier.clone());
+      if let Some(def) = self.resolve_export_path_in_module_ref(origin.clone(), &path[1..], final_ns)
+      {
+        return Some(def);
+      }
+      if imported != "*" {
+        let mut segments = Vec::with_capacity(path.len());
+        segments.push(imported.clone());
+        segments.extend_from_slice(&path[1..]);
+        return self.resolve_export_path_in_module_ref(origin, &segments, final_ns);
+      }
+      return None;
+    }
+
     let Some(mut module) = self
       .import_origin_file(symbol)
       .or_else(|| self.symbol_owner_file(symbol))
@@ -3196,6 +3216,51 @@ impl ProgramTypeResolver {
         return None;
       }
       *module = self.import_origin_file(symbol)?;
+    }
+    None
+  }
+
+  fn resolve_export_symbol_in_module_ref(
+    &self,
+    module: &sem_ts::ModuleRef,
+    name: &str,
+    ns: sem_ts::Namespace,
+  ) -> Option<sem_ts::SymbolId> {
+    match module {
+      sem_ts::ModuleRef::File(file) => self.semantics.resolve_export(*file, name, ns),
+      sem_ts::ModuleRef::Ambient(specifier) => self
+        .semantics
+        .exports_of_ambient_module(specifier)?
+        .get(name)?
+        .symbol_for(ns, self.semantics.symbols()),
+      sem_ts::ModuleRef::Unresolved(_) => None,
+    }
+  }
+
+  fn resolve_export_path_in_module_ref(
+    &self,
+    mut module: sem_ts::ModuleRef,
+    segments: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    if segments.is_empty() {
+      return None;
+    }
+    for (idx, segment) in segments.iter().enumerate() {
+      let is_last = idx + 1 == segments.len();
+      let ns = if is_last {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      };
+      let symbol = self.resolve_export_symbol_in_module_ref(&module, segment, ns)?;
+      if is_last {
+        return self.pick_decl(symbol, final_ns);
+      }
+      module = match &self.semantics.symbols().symbol(symbol).origin {
+        sem_ts::SymbolOrigin::Import { from, .. } => from.clone(),
+        _ => return None,
+      };
     }
     None
   }
@@ -12525,6 +12590,142 @@ impl ProgramState {
       })
   }
 
+  fn resolve_ambient_import_alias_target_in_namespace(
+    &self,
+    specifier: &str,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    let semantics = self.semantics.as_ref()?;
+    if path.is_empty() {
+      return None;
+    }
+
+    let module_symbols = semantics.ambient_module_symbols().get(specifier)?;
+    let group = module_symbols.get(&path[0])?;
+    let symbol = group
+      .symbol_for(sem_ts::Namespace::NAMESPACE, semantics.symbols())
+      .or_else(|| group.symbol_for(final_ns, semantics.symbols()))
+      .or_else(|| group.symbol_for(sem_ts::Namespace::VALUE, semantics.symbols()))?;
+
+    let pick_def = |symbol: sem_ts::SymbolId, ns: sem_ts::Namespace| -> Option<DefId> {
+      let symbols = semantics.symbols();
+      let mut best: Option<(u8, usize, DefId)> = None;
+      for (idx, decl_id) in semantics.symbol_decls(symbol, ns).iter().enumerate() {
+        let decl = symbols.decl(*decl_id);
+        let Some(def) = self.map_decl_to_program_def(decl, ns) else {
+          continue;
+        };
+        let pri = self.def_priority(def, ns);
+        if pri == u8::MAX {
+          continue;
+        }
+        let key = (pri, idx, def);
+        best = match best {
+          Some((best_pri, best_idx, best_def)) if (best_pri, best_idx, best_def) <= key => {
+            Some((best_pri, best_idx, best_def))
+          }
+          _ => Some(key),
+        };
+      }
+      best.map(|(_, _, def)| def)
+    };
+
+    if path.len() == 1 {
+      return pick_def(symbol, final_ns)
+        .or_else(|| pick_def(symbol, sem_ts::Namespace::NAMESPACE))
+        .or_else(|| pick_def(symbol, sem_ts::Namespace::VALUE));
+    }
+
+    let sym_data = semantics.symbols().symbol(symbol);
+    let imported_name = match &sym_data.origin {
+      sem_ts::SymbolOrigin::Import { imported, .. } => Some(imported.clone()),
+      _ => None,
+    };
+    let module_ref = match &sym_data.origin {
+      sem_ts::SymbolOrigin::Import { from, .. } => Some(from.clone()),
+      _ => None,
+    };
+
+    let resolve_export_path =
+      |mut module: sem_ts::ModuleRef, segments: &[String], final_ns: sem_ts::Namespace| -> Option<DefId> {
+        for (idx, segment) in segments.iter().enumerate() {
+          let is_last = idx + 1 == segments.len();
+          let ns = if is_last {
+            final_ns
+          } else {
+            sem_ts::Namespace::NAMESPACE
+          };
+          let symbol = match &module {
+            sem_ts::ModuleRef::File(file) => semantics.resolve_export(*file, segment, ns)?,
+            sem_ts::ModuleRef::Ambient(spec) => semantics
+              .exports_of_ambient_module(spec)?
+              .get(segment)?
+              .symbol_for(ns, semantics.symbols())?,
+            sem_ts::ModuleRef::Unresolved(_) => return None,
+          };
+          if is_last {
+            return pick_def(symbol, final_ns)
+              .or_else(|| pick_def(symbol, sem_ts::Namespace::NAMESPACE))
+              .or_else(|| pick_def(symbol, sem_ts::Namespace::VALUE));
+          }
+          module = match &semantics.symbols().symbol(symbol).origin {
+            sem_ts::SymbolOrigin::Import { from, .. } => from.clone(),
+            _ => return None,
+          };
+        }
+        None
+      };
+
+    let Some(origin) = module_ref else {
+      let mut current = pick_def(symbol, sem_ts::Namespace::NAMESPACE)
+        .or_else(|| pick_def(symbol, final_ns))
+        .or_else(|| pick_def(symbol, sem_ts::Namespace::VALUE))?;
+      for (idx, segment) in path.iter().enumerate().skip(1) {
+        let is_last = idx + 1 == path.len();
+        let ns = if is_last {
+          final_ns
+        } else {
+          sem_ts::Namespace::NAMESPACE
+        };
+        current = *self
+          .qualified_def_members
+          .get(&(current, segment.clone(), ns))?;
+      }
+      return Some(current);
+    };
+
+    if let Some(def) = resolve_export_path(origin.clone(), &path[1..], final_ns) {
+      return Some(def);
+    }
+
+    let Some(imported_name) = imported_name else {
+      return None;
+    };
+    if imported_name == "*" {
+      return None;
+    }
+    let mut segments = Vec::with_capacity(path.len());
+    segments.push(imported_name);
+    segments.extend_from_slice(&path[1..]);
+    resolve_export_path(origin, &segments, final_ns)
+  }
+
+  fn resolve_ambient_import_alias_target(&self, specifier: &str, path: &[String]) -> Option<DefId> {
+    self
+      .resolve_ambient_import_alias_target_in_namespace(specifier, path, sem_ts::Namespace::VALUE)
+      .or_else(|| {
+        self.resolve_ambient_import_alias_target_in_namespace(specifier, path, sem_ts::Namespace::TYPE)
+      })
+      .or_else(|| {
+        self.resolve_ambient_import_alias_target_in_namespace(
+          specifier,
+          path,
+          sem_ts::Namespace::NAMESPACE,
+        )
+      })
+  }
+
   fn module_namespace_object_type(&mut self, exports: &ExportMap) -> Result<TypeId, FatalError> {
     if let Some(store) = self.interned_store.as_ref().cloned() {
       let mut shape = tti::Shape::new();
@@ -13131,7 +13332,36 @@ impl ProgramState {
                   self.module_namespace_type(file)?
                 }
               }
-              ImportTarget::Unresolved { .. } => self.builtin.unknown,
+              ImportTarget::Unresolved { ref specifier } => {
+                let exports = self.exports_of_ambient_module(specifier)?;
+                if exports.is_empty() {
+                  self.builtin.unknown
+                } else if let Some(entry) = exports.get("export=") {
+                  if let Some(def) = entry.def {
+                    self
+                      .export_type_for_def(def)?
+                      .unwrap_or(self.type_of_def(def)?)
+                  } else if let Some(ty) = entry.type_id {
+                    let mut unknown = false;
+                    if self.type_store.contains_id(ty) {
+                      unknown = matches!(self.type_store.kind(ty), TypeKind::Unknown);
+                    } else if let Some(store) = self.interned_store.as_ref() {
+                      if store.contains_type_id(ty) {
+                        unknown = matches!(store.type_kind(ty), tti::TypeKind::Unknown);
+                      }
+                    }
+                    if unknown {
+                      self.builtin.unknown
+                    } else {
+                      ty
+                    }
+                  } else {
+                    self.builtin.unknown
+                  }
+                } else {
+                  self.module_namespace_object_type(&exports)?
+                }
+              }
             }
           } else {
             let exports = self.exports_for_import(&import)?;

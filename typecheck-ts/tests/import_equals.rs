@@ -57,6 +57,110 @@ fn import_equals_require_aliases_module_namespace() {
 }
 
 #[test]
+fn import_equals_require_aliases_ambient_module_namespace() {
+  let mut host = MemoryHost::new();
+  host.add_lib(LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(r#"declare module "dep" { export const value: number; }"#),
+  });
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"import Foo = require("dep"); export const x = Foo.value;"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  let entry = exports.get("x").expect("export x");
+  let ty = entry
+    .type_id
+    .or_else(|| entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported x");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
+fn import_equals_require_interops_with_ambient_export_assignment() {
+  let mut host = MemoryHost::new();
+  host.add_lib(LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare module "dep" {
+  declare const foo: 1;
+  export = foo;
+}
+"#,
+    ),
+  });
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"
+import foo = require("dep");
+export const x: 1 = foo;
+"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  let entry = exports.get("x").expect("export x");
+  let ty = entry
+    .type_id
+    .or_else(|| entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported x");
+  assert_eq!(program.display_type(ty).to_string(), "1");
+}
+
+#[test]
+fn ambient_module_exports_resolve_through_import_equals_require_type_members() {
+  let mut host = MemoryHost::new();
+  host.add_lib(LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(r#"declare module "dep" { export interface Foo { x: number } }"#),
+  });
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"
+import dep = require("dep");
+const y: dep.Foo = { x: 1 };
+export const z = y.x;
+"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  let entry = exports.get("z").expect("export z");
+  let ty = entry
+    .type_id
+    .or_else(|| entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported z");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
 fn export_import_equals_entity_name_is_exported() {
   let mut host = MemoryHost::new();
   let main = FileKey::new("main.ts");
