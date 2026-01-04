@@ -7,6 +7,7 @@ use crate::OptimizeResult;
 use hir_js::{
   AssignOp, BinaryOp, CallExpr, ExprId, ExprKind, MemberExpr, NameId, PatId, UnaryOp, UpdateOp,
 };
+use num_bigint::BigInt;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use std::sync::atomic::Ordering;
@@ -93,6 +94,11 @@ impl<'p> HirSourceToInst<'p> {
       hir_js::Literal::String(v) => Arg::Const(Const::Str(v.clone())),
       hir_js::Literal::Null => Arg::Const(Const::Null),
       hir_js::Literal::Undefined => Arg::Const(Const::Undefined),
+      hir_js::Literal::BigInt(v) => {
+        let value = BigInt::parse_bytes(v.as_bytes(), 10)
+          .ok_or_else(|| unsupported_syntax(span, format!("invalid bigint literal {v:?}")))?;
+        Arg::Const(Const::BigInt(value))
+      }
       other => {
         return Err(unsupported_syntax(
           span,
