@@ -140,6 +140,99 @@ fn snapshot_restoration_loads_missing_source_text_from_host() {
 }
 
 #[test]
+fn snapshot_restoration_reachable_files_does_not_reparse() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let parses_before = parse_call_count();
+  let reachable = restored.reachable_files();
+  let parses_after = parse_call_count();
+
+  let math_id = restored.file_id(&key(FileId(1))).expect("math id");
+  assert!(
+    reachable.contains(&math_id),
+    "restored reachable files should include dependencies: {reachable:?}"
+  );
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "reachable_files should not trigger salsa parsing when restored from snapshot"
+  );
+}
+
+#[test]
+fn snapshot_restoration_supports_symbol_queries_without_source_text() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let symbol = program
+    .symbol_at(entry_id, call_offset)
+    .expect("symbol at call");
+  let info = program.symbol_info(symbol).expect("symbol info");
+
+  let mut snapshot = program.snapshot();
+  for file in snapshot.files.iter_mut() {
+    if !file.is_lib {
+      file.text = None;
+    }
+  }
+
+  let mut missing_text_host = host.clone();
+  missing_text_host.files.clear();
+
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(missing_text_host, snapshot);
+
+  let restored_entry = restored
+    .file_id(&key(FileId(0)))
+    .expect("restored entry id");
+  let restored_symbol = restored.symbol_at(restored_entry, call_offset);
+  assert_eq!(restored_symbol, Some(symbol));
+  assert_eq!(restored.symbol_info(symbol), Some(info));
+
+  let parses_before = parse_call_count();
+  let reachable = restored.reachable_files();
+  let parses_after = parse_call_count();
+  let math_id = restored.file_id(&key(FileId(1))).expect("math id");
+  assert!(
+    reachable.contains(&math_id),
+    "restored reachable files should include dependencies: {reachable:?}"
+  );
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "reachable_files should not trigger salsa parsing when source text is missing"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));

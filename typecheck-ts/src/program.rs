@@ -606,13 +606,53 @@ impl Program {
   pub fn reachable_files(&self) -> Vec<FileId> {
     self
       .with_analyzed_state(|state| {
-        let mut files: Vec<FileId> = state
-          .typecheck_db
-          .reachable_files()
-          .iter()
-          .copied()
-          .filter(|file| !state.lib_file_ids.contains(file))
-          .collect();
+        let mut files: Vec<FileId> = if state.snapshot_loaded {
+          use std::collections::{BTreeMap, VecDeque};
+
+          let mut edges: BTreeMap<FileId, Vec<FileId>> = BTreeMap::new();
+          for (from, _specifier, resolved) in state.typecheck_db.module_resolutions_snapshot() {
+            let Some(resolved) = resolved else {
+              continue;
+            };
+            edges.entry(from).or_default().push(resolved);
+          }
+          for deps in edges.values_mut() {
+            deps.sort_by_key(|id| id.0);
+            deps.dedup();
+          }
+
+          let mut queue: VecDeque<FileId> = state.root_ids.iter().copied().collect();
+          let mut libs: Vec<FileId> = state.lib_file_ids.iter().copied().collect();
+          libs.sort_by_key(|id| id.0);
+          queue.extend(libs);
+
+          let mut visited = BTreeMap::<FileId, ()>::new();
+          while let Some(file) = queue.pop_front() {
+            if visited.contains_key(&file) {
+              continue;
+            }
+            visited.insert(file, ());
+            if let Some(deps) = edges.get(&file) {
+              for dep in deps {
+                queue.push_back(*dep);
+              }
+            }
+          }
+
+          visited
+            .keys()
+            .copied()
+            .filter(|file| !state.lib_file_ids.contains(file))
+            .collect()
+        } else {
+          state
+            .typecheck_db
+            .reachable_files()
+            .iter()
+            .copied()
+            .filter(|file| !state.lib_file_ids.contains(file))
+            .collect()
+        };
         files.sort_by_key(|id| id.0);
         Ok(files)
       })
@@ -874,6 +914,11 @@ impl Program {
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
     self.with_analyzed_state(|state| {
+      if state.snapshot_loaded {
+        if let Some(occurrences) = state.symbol_occurrences.get(&file) {
+          return Ok(Self::symbol_from_occurrences(occurrences, offset));
+        }
+      }
       let occurrences = crate::db::symbol_occurrences(&state.typecheck_db, file);
       Ok(Self::symbol_from_occurrences(&occurrences, offset))
     })
@@ -2152,9 +2197,14 @@ impl Program {
 
   /// Raw symbol occurrences for debugging.
   pub fn debug_symbol_occurrences(&self, file: FileId) -> Vec<(TextRange, semantic_js::SymbolId)> {
-    match self
-      .with_analyzed_state(|state| Ok(crate::db::symbol_occurrences(&state.typecheck_db, file)))
-    {
+    match self.with_analyzed_state(|state| {
+      if state.snapshot_loaded {
+        if let Some(occurrences) = state.symbol_occurrences.get(&file) {
+          return Ok(occurrences.clone());
+        }
+      }
+      Ok(crate::db::symbol_occurrences(&state.typecheck_db, file).to_vec())
+    }) {
       Ok(occurrences) => occurrences
         .iter()
         .map(|occ| (occ.range, occ.symbol))
@@ -2618,7 +2668,12 @@ impl Program {
           match state.host.file_text(&key) {
             Ok(text) => text,
             Err(err) => {
-              extra_diagnostics.push(fatal_to_diagnostic(FatalError::Host(err)));
+              let placeholder = Span::new(file.file, TextRange::new(0, 0));
+              let mut diagnostic = codes::HOST_ERROR.error(err.to_string(), placeholder);
+              diagnostic.push_note(
+                "host error while restoring snapshot: file text was not embedded and could not be loaded",
+              );
+              extra_diagnostics.push(diagnostic);
               Arc::<str>::from("")
             }
           }
@@ -2660,6 +2715,15 @@ impl Program {
         .collect();
       state.ensure_body_map_from_defs();
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
+      state.symbol_occurrences = snapshot
+        .symbol_occurrences
+        .into_iter()
+        .map(|(file, mut occs)| {
+          occs.sort_by_key(|occ| (occ.range.start, occ.range.end, occ.symbol.0));
+          occs.dedup_by(|a, b| a.range == b.range && a.symbol == b.symbol);
+          (file, occs)
+        })
+        .collect();
       state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
       state.diagnostics = snapshot.diagnostics;
       state.diagnostics.extend(extra_diagnostics);
