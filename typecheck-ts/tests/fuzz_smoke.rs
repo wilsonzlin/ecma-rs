@@ -161,14 +161,22 @@ fn fuzz_smoke_program_check_is_total_and_fast() {
   let mut rng = Rng::new(SEED);
   for case in 0..CASES {
     let program = generate_program(&mut rng, case);
-    let mut diagnostics = run_with_timeout(case, &program, TIMEOUT);
-    codes::normalize_diagnostics(&mut diagnostics);
+    let mut diagnostics_first = run_with_timeout(case, &program, TIMEOUT);
+    codes::normalize_diagnostics(&mut diagnostics_first);
+
+    let mut diagnostics_second = run_with_timeout(case, &program, TIMEOUT);
+    codes::normalize_diagnostics(&mut diagnostics_second);
 
     assert!(
-      diagnostics
+      diagnostics_first
         .iter()
         .all(|diag| !diag.code.as_str().starts_with("ICE")),
-      "case {case}: checker emitted ICE diagnostics\nsource:\n{program}\n\ndiagnostics:\n{diagnostics:#?}",
+      "case {case}: checker emitted ICE diagnostics\nsource:\n{program}\n\ndiagnostics:\n{diagnostics_first:#?}",
+    );
+
+    assert_eq!(
+      diagnostics_first, diagnostics_second,
+      "case {case}: checker output was not deterministic\nsource:\n{program}"
     );
   }
 }

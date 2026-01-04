@@ -427,7 +427,14 @@ fn expand_ref_no_progress_cycle_does_not_overflow() {
     is_same_origin_private_member: None,
   };
   let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
-  assert!(ctx.is_assignable(self_ref, self_ref));
+  let prim = store.primitive_ids();
+  let res1 = ctx.is_assignable(self_ref, prim.number);
+  let res2 = ctx.is_assignable(self_ref, prim.number);
+  assert_eq!(res1, res2);
+  assert_eq!(ctx.explain_assignable(self_ref, prim.number).result, res1);
+
+  let res3 = ctx.is_assignable(prim.number, self_ref);
+  assert_eq!(ctx.explain_assignable(prim.number, self_ref).result, res3);
 }
 
 proptest! {
@@ -466,15 +473,18 @@ proptest! {
       expander: Some(&expander),
       is_same_origin_private_member: None,
     };
-    let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+    let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks).with_step_limit(20_000);
     let mut expected = Vec::new();
     for (src, dst) in pairs.iter() {
       expected.push(ctx.is_assignable(*src, *dst));
+      prop_assert!(ctx.step_count() < 20_000);
     }
 
     for ((src, dst), expect) in pairs.iter().zip(expected.iter()) {
       prop_assert_eq!(ctx.is_assignable(*src, *dst), *expect);
+      prop_assert!(ctx.step_count() < 20_000);
       prop_assert_eq!(ctx.explain_assignable(*src, *dst).result, *expect);
+      prop_assert!(ctx.step_count() < 20_000);
     }
 
     // Ensure determinism is maintained with fresh caches as well.
@@ -482,9 +492,11 @@ proptest! {
       expander: Some(&expander),
       is_same_origin_private_member: None,
     };
-    let fresh_ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+    let fresh_ctx =
+      RelateCtx::with_hooks(store.clone(), store.options(), hooks).with_step_limit(20_000);
     for ((src, dst), expect) in pairs.iter().zip(expected.iter()) {
       prop_assert_eq!(fresh_ctx.is_assignable(*src, *dst), *expect);
+      prop_assert!(fresh_ctx.step_count() < 20_000);
     }
   }
 
@@ -521,23 +533,34 @@ proptest! {
   #[test]
   fn evaluator_terminates_on_cyclic_graphs((store, root, defs) in store_with_cyclic_graph(1..6)) {
     let expander = StaticExpander { defs: defs.clone() };
-    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander)
+      .with_depth_limit(128)
+      .with_step_limit(10_000);
     let first = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     let second = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     prop_assert_eq!(store.canon(first), store.canon(second));
 
     for (_, ty) in defs {
-      let mut eval = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+      let mut eval = TypeEvaluator::new(store.clone(), &expander)
+        .with_depth_limit(128)
+        .with_step_limit(10_000);
       let _ = eval.evaluate(ty);
+      prop_assert!(eval.step_count() < 10_000);
     }
   }
 
   #[test]
   fn evaluator_handles_recursive_conditional_mapped_and_template_types((store, root, defs) in store_with_recursive_operator_graph()) {
     let expander = StaticExpander { defs: defs.clone() };
-    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander)
+      .with_depth_limit(128)
+      .with_step_limit(10_000);
     let first = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     let second = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     prop_assert_eq!(store.canon(first), store.canon(second));
   }
 }
