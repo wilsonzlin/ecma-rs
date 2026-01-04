@@ -1582,7 +1582,7 @@ impl<'a> Checker<'a> {
           None => self.check_expr(init),
         };
         if let Some(annotation) = annotation {
-          self.check_assignable(init, init_ty, annotation, Some(pat_span));
+          self.check_assignable(init, init_ty, annotation, None);
         }
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
@@ -2100,8 +2100,7 @@ impl<'a> Checker<'a> {
       }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-          let pat_range = loc_to_range(self.file, declarator.pattern.stx.pat.loc);
-          self.check_assignable(init, init_ty, ann, Some(pat_range));
+          self.check_assignable(init, init_ty, ann, None);
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
