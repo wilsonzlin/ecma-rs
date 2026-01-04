@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    // This base config lives in a subdirectory; baseUrl/paths should resolve relative to this file.
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": ["../src/lib/*"],
+    },
+  },
+}
+

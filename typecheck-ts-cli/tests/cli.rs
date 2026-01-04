@@ -974,3 +974,33 @@ fn project_mode_discovers_mts_files() {
     "expected project mode to include main.mts, got {files:?}"
   );
 }
+
+#[test]
+fn project_mode_resolves_paths_relative_to_extended_config() {
+  let tsconfig = fixture("project_mode/extends_basedir/tsconfig.json");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC1001")),
+    "expected @lib/ paths from extended config to resolve, got {diagnostics:?}"
+  );
+}

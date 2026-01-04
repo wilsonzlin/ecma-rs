@@ -84,7 +84,7 @@ pub fn load_project_config(project: &Path) -> Result<ProjectConfig, String> {
     .ok_or_else(|| format!("invalid tsconfig path {}", tsconfig_path.display()))?
     .to_path_buf();
   let mut visited = HashSet::new();
-  let raw = load_raw_config(&tsconfig_path, &mut visited)?;
+  let raw = load_raw_config(&tsconfig_path, &root_dir, &mut visited)?;
 
   let compiler_options = compiler_options_from_raw(&raw.compiler_options)?;
   let mut base_url = raw
@@ -148,7 +148,11 @@ fn resolve_tsconfig_path(project: &Path) -> Result<PathBuf, String> {
     .map_err(|err| format!("failed to read tsconfig {}: {err}", absolute.display()))
 }
 
-fn load_raw_config(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<RawTsConfig, String> {
+fn load_raw_config(
+  path: &Path,
+  root_dir: &Path,
+  visited: &mut HashSet<PathBuf>,
+) -> Result<RawTsConfig, String> {
   let canonical = path
     .canonicalize()
     .map_err(|err| format!("failed to read tsconfig {}: {err}", path.display()))?;
@@ -163,17 +167,119 @@ fn load_raw_config(path: &Path, visited: &mut HashSet<PathBuf>) -> Result<RawTsC
     .map_err(|err| format!("failed to read {}: {err}", canonical.display()))?;
   let mut current: RawTsConfig = json5::from_str(&text)
     .map_err(|err| format!("failed to parse {}: {err}", canonical.display()))?;
+  let config_dir = canonical
+    .parent()
+    .ok_or_else(|| format!("invalid tsconfig path {}", canonical.display()))?;
+  resolve_raw_config_paths(&mut current, config_dir, root_dir);
 
   let Some(extends) = current.extends.take() else {
     return Ok(current);
   };
 
-  let config_dir = canonical
-    .parent()
-    .ok_or_else(|| format!("invalid tsconfig path {}", canonical.display()))?;
   let extends_path = resolve_extends_path(config_dir, &extends)?;
-  let base = load_raw_config(&extends_path, visited)?;
+  let base = load_raw_config(&extends_path, root_dir, visited)?;
   Ok(merge_raw_configs(base, current))
+}
+
+fn resolve_raw_config_paths(config: &mut RawTsConfig, config_dir: &Path, root_dir: &Path) {
+  if let Some(files) = config.files.as_mut() {
+    for file in files.iter_mut() {
+      *file = resolve_path_string_relative_to(config_dir, file);
+    }
+  }
+  if let Some(include) = config.include.as_mut() {
+    for pattern in include.iter_mut() {
+      *pattern = rewrite_glob_pattern(config_dir, root_dir, pattern);
+    }
+  }
+  if let Some(exclude) = config.exclude.as_mut() {
+    for pattern in exclude.iter_mut() {
+      *pattern = rewrite_glob_pattern(config_dir, root_dir, pattern);
+    }
+  }
+
+  let opts = &mut config.compiler_options;
+  if let Some(base_url) = opts.base_url.as_mut() {
+    *base_url = resolve_path_string_relative_to(config_dir, base_url);
+  } else if opts.paths.as_ref().is_some_and(|paths| !paths.is_empty()) {
+    opts.base_url = Some(config_dir.to_string_lossy().to_string());
+  }
+
+  if let Some(type_roots) = opts.type_roots.as_mut() {
+    for root in type_roots.iter_mut() {
+      *root = resolve_path_string_relative_to(config_dir, root);
+    }
+  }
+}
+
+fn resolve_path_string_relative_to(base: &Path, raw: &str) -> String {
+  let raw = raw.trim();
+  if raw.is_empty() {
+    return raw.to_string();
+  }
+  let path = Path::new(raw);
+  let resolved = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    base.join(path)
+  };
+  normalize_path(&resolved).to_string_lossy().to_string()
+}
+
+fn rewrite_glob_pattern(config_dir: &Path, root_dir: &Path, raw: &str) -> String {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return trimmed.to_string();
+  }
+  let normalized = trimmed.replace('\\', "/");
+  let magic_index = normalized
+    .find(|ch| matches!(ch, '*' | '?' | '[' | ']'))
+    .unwrap_or_else(|| normalized.len());
+  let (prefix_str, suffix) = normalized.split_at(magic_index);
+  let prefix_path = if prefix_str.is_empty() {
+    config_dir.to_path_buf()
+  } else {
+    resolve_joined_path(config_dir, Path::new(prefix_str))
+  };
+  let relative_prefix = match prefix_path.strip_prefix(root_dir) {
+    Ok(rel) => rel,
+    Err(_) => return normalized,
+  };
+  let mut rel_str = relative_prefix.to_string_lossy().replace('\\', "/");
+  let needs_sep =
+    (!prefix_str.is_empty() && (prefix_str.ends_with('/') || prefix_str.ends_with('\\')))
+      || (prefix_str.is_empty() && !rel_str.is_empty());
+  if needs_sep && !rel_str.is_empty() && !rel_str.ends_with('/') {
+    rel_str.push('/');
+  }
+  if rel_str.is_empty() {
+    suffix.to_string()
+  } else {
+    format!("{rel_str}{suffix}")
+  }
+}
+
+fn resolve_joined_path(base: &Path, path: &Path) -> PathBuf {
+  if path.is_absolute() {
+    normalize_path(path)
+  } else {
+    normalize_path(&base.join(path))
+  }
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+  use std::path::Component;
+  let mut out = PathBuf::new();
+  for component in path.components() {
+    match component {
+      Component::CurDir => {}
+      Component::ParentDir => {
+        out.pop();
+      }
+      other => out.push(other.as_os_str()),
+    }
+  }
+  out
 }
 
 fn resolve_extends_path(config_dir: &Path, extends: &str) -> Result<PathBuf, String> {
