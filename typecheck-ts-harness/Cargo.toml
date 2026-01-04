@@ -19,7 +19,7 @@ toml = "0.8"
 tempfile = "3.12"
 thiserror = "1.0"
 diagnostics = { path = "../diagnostics" }
-typecheck-ts = { path = "../typecheck-ts" }
+typecheck-ts = { path = "../typecheck-ts", features = ["resolve"] }
 walkdir = "2.5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
