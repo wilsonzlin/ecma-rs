@@ -3872,10 +3872,6 @@ impl ObjectType {
       number_index: None,
     }
   }
-
-  pub(crate) fn has_index_signature(&self) -> bool {
-    self.string_index.is_some() || self.number_index.is_some()
-  }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -4050,41 +4046,6 @@ impl TypeStore {
       asserted,
       asserts,
     })
-  }
-}
-
-pub(crate) fn lookup_property_type(
-  store: &mut TypeStore,
-  ty: TypeId,
-  name: &str,
-  builtin: &BuiltinTypes,
-) -> Option<TypeId> {
-  match store.kind(ty).clone() {
-    TypeKind::Any | TypeKind::Unknown => None,
-    TypeKind::Object(obj) => {
-      if let Some(prop) = obj.props.get(name) {
-        return Some(prop.typ);
-      }
-      if name.parse::<usize>().is_ok() {
-        obj.number_index.or(obj.string_index)
-      } else {
-        obj.string_index
-      }
-    }
-    TypeKind::Union(members) => {
-      let mut collected = Vec::new();
-      for member in members {
-        if let Some(prop_ty) = lookup_property_type(store, member, name, builtin) {
-          collected.push(prop_ty);
-        }
-      }
-      if collected.is_empty() {
-        None
-      } else {
-        Some(store.union(collected, builtin))
-      }
-    }
-    _ => None,
   }
 }
 
