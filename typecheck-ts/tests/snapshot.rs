@@ -658,3 +658,59 @@ fn snapshot_restoration_reuses_cached_body_for_type_at() {
     "restored snapshot should not trigger re-parsing"
   );
 }
+
+#[test]
+fn snapshot_restoration_type_kind_does_not_recompute_types() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+  let entry_id = restored
+    .file_id(&key(FileId(0)))
+    .expect("restored entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let ty = restored
+    .type_at(entry_id, call_offset)
+    .expect("type at call");
+
+  let stats_before = restored.query_stats();
+  let parses_before = parse_call_count();
+  let _ = restored.type_kind(ty);
+  let parses_after = parse_call_count();
+  let stats_after = restored.query_stats();
+
+  let before = stats_before
+    .queries
+    .get(&QueryKind::TypeOfDef)
+    .cloned()
+    .unwrap_or_default();
+  let after = stats_after
+    .queries
+    .get(&QueryKind::TypeOfDef)
+    .cloned()
+    .unwrap_or_default();
+
+  assert_eq!(
+    after.total.saturating_sub(before.total),
+    0,
+    "type_kind should not force recomputing definition types after snapshot restore"
+  );
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "type_kind should not trigger salsa parsing when restored from snapshot"
+  );
+}

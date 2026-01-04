@@ -11183,9 +11183,11 @@ impl ProgramState {
       Some(self.query_stats.clone()),
     );
     if let Some(existing) = self.body_results.get(&body_id).cloned() {
-      self
-        .typecheck_db
-        .set_body_result(body_id, Arc::clone(&existing));
+      if !self.snapshot_loaded {
+        self
+          .typecheck_db
+          .set_body_result(body_id, Arc::clone(&existing));
+      }
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -11235,7 +11237,9 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
-      self.typecheck_db.set_body_result(body_id, res.clone());
+      if !self.snapshot_loaded {
+        self.typecheck_db.set_body_result(body_id, res.clone());
+      }
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -11256,7 +11260,9 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
-      self.typecheck_db.set_body_result(body_id, res.clone());
+      if !self.snapshot_loaded {
+        self.typecheck_db.set_body_result(body_id, res.clone());
+      }
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -11278,7 +11284,9 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
-      self.typecheck_db.set_body_result(body_id, res.clone());
+      if !self.snapshot_loaded {
+        self.typecheck_db.set_body_result(body_id, res.clone());
+      }
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -11317,7 +11325,9 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
-      self.typecheck_db.set_body_result(body_id, res.clone());
+      if !self.snapshot_loaded {
+        self.typecheck_db.set_body_result(body_id, res.clone());
+      }
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -12560,7 +12570,9 @@ impl ProgramState {
       self.cache_stats.merge(&stats);
     }
     self.body_results.insert(body_id, res.clone());
-    self.typecheck_db.set_body_result(body_id, res.clone());
+    if !self.snapshot_loaded {
+      self.typecheck_db.set_body_result(body_id, res.clone());
+    }
     if let Some(span) = span.take() {
       span.finish(None);
     }
