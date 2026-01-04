@@ -2632,7 +2632,6 @@ struct Reexport {
 struct ExportAll {
   from: FileId,
   type_only: bool,
-  span: TextRange,
 }
 
 #[derive(Clone)]
@@ -9509,7 +9508,6 @@ impl ProgramState {
                     export_all.push(ExportAll {
                       from: target,
                       type_only: export_list.stx.type_only,
-                      span: loc_to_span(file, stmt.loc).range,
                     });
                   }
                 }
