@@ -2315,6 +2315,157 @@ fn lowers_parameter_properties_after_super_in_derived_constructors() {
 }
 
 #[test]
+fn lowers_parameter_properties_after_var_super_in_derived_constructors() {
+  let src = r#"
+    class Base { constructor(x: number) {} }
+    class Derived extends Base {
+      constructor(public x: number) {
+        const self = super(x);
+      }
+    }
+  "#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  let derived = match parsed.stx.body.get(1).map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::ClassDecl(decl)) => decl,
+    other => panic!("expected derived class decl, got {other:?}"),
+  };
+  let ctor = derived
+    .stx
+    .members
+    .iter()
+    .find(|member| match &member.stx.key {
+      ClassOrObjKey::Direct(key) => key.stx.key == "constructor",
+      _ => false,
+    })
+    .expect("constructor member");
+  let method = match &ctor.stx.val {
+    ClassOrObjVal::Method(method) => method,
+    other => panic!("expected constructor method, got {other:?}"),
+  };
+  let body = match method.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected constructor body block, got {other:?}"),
+  };
+
+  assert_eq!(body.len(), 2);
+  assert!(
+    matches!(body[0].stx.as_ref(), Stmt::VarDecl(_)),
+    "expected first statement to be a var decl containing super(...)"
+  );
+  let assign_stmt = body.get(1).expect("parameter property assignment");
+  let expr_stmt = match assign_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let assign = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  let left = match assign.stx.left.stx.as_ref() {
+    Expr::ComputedMember(member) => member,
+    other => panic!("expected computed member assignment, got {other:?}"),
+  };
+  assert!(
+    matches!(left.stx.object.stx.as_ref(), Expr::This(_)),
+    "expected this[...] on assignment LHS"
+  );
+}
+
+#[test]
+fn rewrites_return_super_before_inserting_parameter_properties() {
+  let src = r#"
+    class Base { constructor(x: number) {} }
+    class Derived extends Base {
+      constructor(public x: number) {
+        return super(x);
+      }
+    }
+  "#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  let derived = match parsed.stx.body.get(1).map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::ClassDecl(decl)) => decl,
+    other => panic!("expected derived class decl, got {other:?}"),
+  };
+  let ctor = derived
+    .stx
+    .members
+    .iter()
+    .find(|member| match &member.stx.key {
+      ClassOrObjKey::Direct(key) => key.stx.key == "constructor",
+      _ => false,
+    })
+    .expect("constructor member");
+  let method = match &ctor.stx.val {
+    ClassOrObjVal::Method(method) => method,
+    other => panic!("expected constructor method, got {other:?}"),
+  };
+  let body = match method.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected constructor body block, got {other:?}"),
+  };
+
+  assert_eq!(body.len(), 3);
+  let super_stmt = body.first().expect("super call statement");
+  let expr_stmt = match super_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let call = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected super call, got {other:?}"),
+  };
+  assert!(
+    matches!(call.stx.callee.stx.as_ref(), Expr::Super(_)),
+    "expected super(...) call"
+  );
+
+  let assign_stmt = body.get(1).expect("parameter property assignment");
+  let expr_stmt = match assign_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let assign = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  assert!(
+    matches!(assign.stx.left.stx.as_ref(), Expr::ComputedMember(_)),
+    "expected this[...] assignment"
+  );
+
+  let ret_stmt = body.get(2).expect("return this statement");
+  let ret = match ret_stmt.stx.as_ref() {
+    Stmt::Return(ret) => ret,
+    other => panic!("expected return statement, got {other:?}"),
+  };
+  let value = ret.stx.value.as_ref().expect("return value should exist");
+  assert!(
+    matches!(value.stx.as_ref(), Expr::This(_)),
+    "expected `return this;`"
+  );
+}
+
+#[test]
 fn constructor_parameter_properties_preserve_directive_prologue() {
   let src = r#"class C { constructor(public x: number) { "use strict"; } }"#;
   let mut parsed = parse_with_options(

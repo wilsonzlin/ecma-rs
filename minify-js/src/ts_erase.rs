@@ -2445,16 +2445,52 @@ fn strip_class_member(
     out
   }
 
-  fn super_call_insert_after(stmts: &[Node<Stmt>]) -> Option<usize> {
-    for (idx, stmt) in stmts.iter().enumerate() {
-      let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
-        continue;
-      };
-      let Expr::Call(call) = expr_stmt.stx.expr.stx.as_ref() else {
-        continue;
-      };
-      if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_)) {
-        return Some(idx + 1);
+  fn is_super_call(expr: &Node<Expr>) -> bool {
+    matches!(
+      expr.stx.as_ref(),
+      Expr::Call(call) if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_))
+    )
+  }
+
+  enum SuperCallInsert {
+    After(usize),
+    AfterWithReturnThis { insert_at: usize, loc: Loc },
+  }
+
+  fn super_call_insert_after(stmts: &mut Vec<Node<Stmt>>) -> Option<SuperCallInsert> {
+    for idx in 0..stmts.len() {
+      let stmt = &mut stmts[idx];
+      match stmt.stx.as_mut() {
+        Stmt::Expr(expr_stmt) if is_super_call(&expr_stmt.stx.expr) => {
+          return Some(SuperCallInsert::After(idx + 1));
+        }
+        Stmt::VarDecl(decl)
+          if decl
+            .stx
+            .declarators
+            .iter()
+            .any(|declarator| declarator.initializer.as_ref().is_some_and(is_super_call)) =>
+        {
+          return Some(SuperCallInsert::After(idx + 1));
+        }
+        Stmt::Return(ret_stmt) => {
+          let Some(value) = ret_stmt.stx.value.take() else {
+            continue;
+          };
+          if is_super_call(&value) {
+            let loc = stmt.loc;
+            let assoc = std::mem::take(&mut stmt.assoc);
+            let mut expr_stmt = ts_lower::expr_stmt(loc, value);
+            expr_stmt.assoc = assoc;
+            *stmt = expr_stmt;
+            return Some(SuperCallInsert::AfterWithReturnThis {
+              insert_at: idx + 1,
+              loc,
+            });
+          }
+          ret_stmt.stx.value = Some(value);
+        }
+        _ => {}
       }
     }
     None
@@ -2485,6 +2521,19 @@ fn strip_class_member(
         )
       })
       .collect()
+  }
+
+  fn return_this_stmt(loc: Loc) -> Node<Stmt> {
+    let this_expr = Node::new(loc, Expr::This(Node::new(loc, ThisExpr {})));
+    Node::new(
+      loc,
+      Stmt::Return(Node::new(
+        loc,
+        ReturnStmt {
+          value: Some(this_expr),
+        },
+      )),
+    )
   }
 
   let mut member = member;
@@ -2527,12 +2576,28 @@ fn strip_class_member(
     if !props.is_empty() {
       if let ClassOrObjVal::Method(method) = &mut member.stx.val {
         if let Some(FuncBody::Block(stmts)) = method.stx.func.stx.body.as_mut() {
+          let mut assignments = constructor_param_property_assignments(props);
           let insert_at = if is_derived {
-            super_call_insert_after(stmts).unwrap_or(stmts.len())
+            match super_call_insert_after(stmts) {
+              Some(SuperCallInsert::After(insert_at)) => insert_at,
+              Some(SuperCallInsert::AfterWithReturnThis { insert_at, loc }) => {
+                assignments.push(return_this_stmt(loc));
+                insert_at
+              }
+              None => {
+                unsupported_ts(
+                  ctx,
+                  member.loc,
+                  "parameter properties in derived constructors require a top-level `super(...)` call",
+                );
+                // Still insert at the end to keep lowering deterministic, even though we emit an
+                // error diagnostic and the pipeline will abort.
+                stmts.len()
+              }
+            }
           } else {
             directive_prologue_len(stmts)
           };
-          let assignments = constructor_param_property_assignments(props);
           stmts.splice(insert_at..insert_at, assignments);
         }
       }
