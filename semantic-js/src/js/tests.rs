@@ -1444,6 +1444,56 @@ fn reports_tdz_errors_and_sorts_deterministically() {
 }
 
 #[test]
+fn lexical_declaration_in_if_body_is_reported() {
+  let source = "if(true) let x = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(90));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0004");
+  assert_eq!(slice_range(source, &diagnostics[0]), "let");
+}
+
+#[test]
+fn lexical_declaration_in_label_body_is_reported() {
+  let source = "label: let x = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(91));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0004");
+  assert_eq!(slice_range(source, &diagnostics[0]), "let");
+}
+
+#[test]
+fn strict_mode_function_declaration_in_if_body_is_reported() {
+  let source = "'use strict'; if(true) function f(){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(92));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0004");
+  assert_eq!(slice_range(source, &diagnostics[0]), "function");
+}
+
+#[test]
+fn non_strict_function_declaration_in_while_body_is_reported() {
+  let source = "while(false) function f(){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(93));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0004");
+  assert_eq!(slice_range(source, &diagnostics[0]), "function");
+}
+
+#[test]
+fn non_strict_labelled_function_declaration_is_only_allowed_in_statement_lists() {
+  let source = "if(true) label: function f(){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(94));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0004");
+  assert_eq!(slice_range(source, &diagnostics[0]), "function");
+}
+
+#[test]
 fn class_name_is_available_inside_class_body() {
   let mut ast = parse("class C { static x = C; }").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(44));

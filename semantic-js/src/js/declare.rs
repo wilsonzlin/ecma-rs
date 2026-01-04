@@ -30,16 +30,20 @@ use parse_js::ast::stmt::decl::VarDecl;
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::BlockStmt;
 use parse_js::ast::stmt::CatchBlock;
+use parse_js::ast::stmt::DoWhileStmt;
 use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
 use parse_js::ast::stmt::ForInStmt;
 use parse_js::ast::stmt::ForOfStmt;
 use parse_js::ast::stmt::ForTripleStmt;
 use parse_js::ast::stmt::ForTripleStmtInit;
+use parse_js::ast::stmt::IfStmt;
+use parse_js::ast::stmt::LabelStmt;
 use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::SwitchBranch;
 use parse_js::ast::stmt::SwitchStmt;
+use parse_js::ast::stmt::WhileStmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use std::collections::BTreeMap;
@@ -55,13 +59,17 @@ type FuncExprNode = Node<FuncExpr>;
 type FuncNode = Node<Func>;
 type ForBodyNode = Node<ForBody>;
 type ForInStmtNode = Node<ForInStmt>;
+type IfStmtNode = Node<IfStmt>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type ForOfStmtNode = Node<ForOfStmt>;
 type ForTripleStmtNode = Node<ForTripleStmt>;
+type LabelStmtNode = Node<LabelStmt>;
 type PatDeclNode = Node<PatDecl>;
 type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
+type DoWhileStmtNode = Node<DoWhileStmt>;
+type WhileStmtNode = Node<WhileStmt>;
 type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
 
@@ -542,6 +550,18 @@ struct AnnexBBlockFunction {
   closure_scope: Option<ScopeId>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum StmtContext {
+  /// A `StatementListItem` position (e.g. top-level, block bodies, switch case
+  /// bodies, function bodies).
+  StatementList,
+  /// A single-statement position (e.g. the body of `if`, `while`, `for`, or a
+  /// labelled statement).
+  SingleStatement {
+    allow_regular_function: bool,
+  },
+}
+
 #[derive(VisitorMut)]
 #[visitor(
   BlockStmtNode,
@@ -549,20 +569,26 @@ struct AnnexBBlockFunction {
   ClassDeclNode,
   ClassExprNode,
   ClassStaticBlockNode(enter, exit),
+  DoWhileStmtNode(enter, exit),
   ForBodyNode,
   ForInStmtNode(enter, exit),
   ForInOfLhs,
   ForOfStmtNode(enter, exit),
   ForTripleStmtNode(enter, exit),
+  ForTripleStmtInit(enter, exit),
   FuncDeclNode(enter),
   FuncExprNode,
   FuncNode,
   IdPatNode(enter),
+  IfStmtNode(enter, exit),
   ImportStmtNode,
+  LabelStmtNode(enter, exit),
   PatDeclNode,
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
   VarDeclNode,
+  WhileStmtNode(enter, exit),
+  WithStmtNode(enter, exit),
   NodeAssocData(enter)
 )]
 struct DeclareVisitor {
@@ -572,11 +598,13 @@ struct DeclareVisitor {
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
   strict_stack: Vec<bool>,
+  stmt_context_stack: Vec<StmtContext>,
   switch_scope_stack: Vec<(ScopeId, bool)>,
   for_in_of_stack: Vec<ForInOfContext>,
   for_in_of_lhs_scope_stack: Vec<Option<ScopeId>>,
   for_body_loop_scope_stack: Vec<Option<ScopeId>>,
   for_triple_scope_stack: Vec<bool>,
+  for_triple_init_stack: Vec<bool>,
   annex_b_block_functions: Vec<AnnexBBlockFunction>,
 }
 
@@ -591,11 +619,13 @@ impl DeclareVisitor {
       in_pattern_decl: vec![false],
       top_level_mode: mode,
       strict_stack: vec![strict],
+      stmt_context_stack: vec![StmtContext::StatementList],
       switch_scope_stack: Vec::new(),
       for_in_of_stack: Vec::new(),
       for_in_of_lhs_scope_stack: Vec::new(),
       for_body_loop_scope_stack: Vec::new(),
       for_triple_scope_stack: Vec::new(),
+      for_triple_init_stack: Vec::new(),
       annex_b_block_functions: Vec::new(),
     }
   }
@@ -720,6 +750,74 @@ impl DeclareVisitor {
 
   fn is_strict(&self) -> bool {
     *self.strict_stack.last().unwrap_or(&false)
+  }
+
+  fn current_stmt_context(&self) -> StmtContext {
+    *self
+      .stmt_context_stack
+      .last()
+      .unwrap_or(&StmtContext::StatementList)
+  }
+
+  fn in_statement_list(&self) -> bool {
+    matches!(self.current_stmt_context(), StmtContext::StatementList)
+  }
+
+  fn in_for_triple_init_decl(&self) -> bool {
+    self.for_triple_init_stack.last().copied().unwrap_or(false)
+  }
+
+  fn push_stmt_context(&mut self, ctx: StmtContext) {
+    self.stmt_context_stack.push(ctx);
+  }
+
+  fn pop_stmt_context(&mut self) {
+    self.stmt_context_stack.pop();
+  }
+
+  fn report_invalid_statement_declaration(&mut self, message: &str, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0004",
+      message.to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn report_invalid_lexical_declaration(&mut self, keyword_loc: parse_js::loc::Loc, keyword: &str) {
+    self.report_invalid_statement_declaration(
+      "Lexical declaration cannot appear in a single-statement context",
+      ident_range(keyword_loc, keyword),
+    );
+  }
+
+  fn report_invalid_class_declaration(&mut self, node: &Node<ClassDecl>) {
+    let start = node.loc.start_u32();
+    let range = TextRange::new(start, start.saturating_add("class".len() as u32));
+    self.report_invalid_statement_declaration(
+      "Class declaration cannot appear in a single-statement context",
+      range,
+    );
+  }
+
+  fn report_invalid_function_declaration(&mut self, node: &Node<FuncDecl>) {
+    let start = node.loc.start_u32();
+    let message = if node.stx.function.stx.async_ {
+      "Async functions can only be declared at the top level or inside a block."
+    } else if node.stx.function.stx.generator {
+      if self.is_strict() {
+        "In strict mode code, functions can only be declared at top level or inside a block."
+      } else {
+        "Generators can only be declared at the top level or inside a block."
+      }
+    } else if self.is_strict() {
+      "In strict mode code, functions can only be declared at top level or inside a block."
+    } else {
+      "In non-strict mode code, functions can only be declared at top level, inside a block, or as the body of an if statement."
+    };
+    self.report_invalid_statement_declaration(
+      message,
+      TextRange::new(start, start.saturating_add("function".len() as u32)),
+    );
   }
 
   fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
@@ -869,15 +967,79 @@ impl DeclareVisitor {
 }
 
 impl DeclareVisitor {
+  fn enter_do_while_stmt_node(&mut self, _node: &mut DoWhileStmtNode) {
+    self.push_stmt_context(StmtContext::SingleStatement {
+      allow_regular_function: false,
+    });
+  }
+
+  fn exit_do_while_stmt_node(&mut self, _node: &mut DoWhileStmtNode) {
+    self.pop_stmt_context();
+  }
+
+  fn enter_if_stmt_node(&mut self, _node: &mut IfStmtNode) {
+    self.push_stmt_context(StmtContext::SingleStatement {
+      allow_regular_function: !self.is_strict(),
+    });
+  }
+
+  fn exit_if_stmt_node(&mut self, _node: &mut IfStmtNode) {
+    self.pop_stmt_context();
+  }
+
+  fn enter_while_stmt_node(&mut self, _node: &mut WhileStmtNode) {
+    self.push_stmt_context(StmtContext::SingleStatement {
+      allow_regular_function: false,
+    });
+  }
+
+  fn exit_while_stmt_node(&mut self, _node: &mut WhileStmtNode) {
+    self.pop_stmt_context();
+  }
+
+  fn enter_with_stmt_node(&mut self, _node: &mut WithStmtNode) {
+    self.push_stmt_context(StmtContext::SingleStatement {
+      allow_regular_function: false,
+    });
+  }
+
+  fn exit_with_stmt_node(&mut self, _node: &mut WithStmtNode) {
+    self.pop_stmt_context();
+  }
+
+  fn enter_label_stmt_node(&mut self, _node: &mut LabelStmtNode) {
+    let allow_regular_function = !self.is_strict() && self.in_statement_list();
+    self.push_stmt_context(StmtContext::SingleStatement {
+      allow_regular_function,
+    });
+  }
+
+  fn exit_label_stmt_node(&mut self, _node: &mut LabelStmtNode) {
+    self.pop_stmt_context();
+  }
+
+  fn enter_for_triple_stmt_init(&mut self, node: &mut ForTripleStmtInit) {
+    self
+      .for_triple_init_stack
+      .push(matches!(node, ForTripleStmtInit::Decl(_)));
+  }
+
+  fn exit_for_triple_stmt_init(&mut self, _node: &mut ForTripleStmtInit) {
+    self.for_triple_init_stack.pop();
+  }
+
   fn enter_block_stmt_node(&mut self, node: &mut BlockStmtNode) {
+    self.push_stmt_context(StmtContext::StatementList);
     self.push_scope(ScopeKind::Block, range_of(node));
   }
 
   fn exit_block_stmt_node(&mut self, _node: &mut BlockStmtNode) {
     self.pop_scope();
+    self.pop_stmt_context();
   }
 
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
+    self.push_stmt_context(StmtContext::StatementList);
     self.push_scope(ScopeKind::Block, range_of(node));
     // Catch parameters are lexical bindings. They behave like other lexical
     // bindings during destructuring initialization (default initializers can
@@ -896,9 +1058,13 @@ impl DeclareVisitor {
   fn exit_catch_block_node(&mut self, _node: &mut CatchBlockNode) {
     self.pop_scope();
     self.pop_decl_target();
+    self.pop_stmt_context();
   }
 
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
+    if !self.in_statement_list() {
+      self.report_invalid_class_declaration(node);
+    }
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
         name,
@@ -947,11 +1113,13 @@ impl DeclareVisitor {
   }
 
   fn enter_class_static_block_node(&mut self, node: &mut ClassStaticBlockNode) {
+    self.push_stmt_context(StmtContext::StatementList);
     self.push_scope(ScopeKind::StaticBlock, range_of(node));
   }
 
   fn exit_class_static_block_node(&mut self, _node: &mut ClassStaticBlockNode) {
     self.pop_scope();
+    self.pop_stmt_context();
   }
 
   fn enter_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
@@ -1038,11 +1206,28 @@ impl DeclareVisitor {
       }
     }
     self.for_body_loop_scope_stack.push(loop_scope_pushed);
+
+    let span = range_of(node);
+    let is_braced = if node.stx.body.is_empty() {
+      true
+    } else {
+      let first = &node.stx.body[0];
+      span.start < range_of(first).start
+    };
+    if is_braced {
+      self.push_stmt_context(StmtContext::StatementList);
+    } else {
+      self.push_stmt_context(StmtContext::SingleStatement {
+        allow_regular_function: false,
+      });
+    }
+
     self.push_scope(ScopeKind::Block, range_of(node));
   }
 
   fn exit_for_body_node(&mut self, _node: &mut ForBodyNode) {
     self.pop_scope();
+    self.pop_stmt_context();
     if let Some(loop_scope) = self.for_body_loop_scope_stack.pop().flatten() {
       let popped = self.scope_stack.pop();
       debug_assert_eq!(popped, Some(loop_scope));
@@ -1050,6 +1235,7 @@ impl DeclareVisitor {
   }
 
   fn enter_switch_stmt_node(&mut self, node: &mut SwitchStmtNode) {
+    self.push_stmt_context(StmtContext::StatementList);
     let parent = self.current_scope();
     let id = self
       .builder
@@ -1076,6 +1262,7 @@ impl DeclareVisitor {
       let popped = self.scope_stack.pop();
       debug_assert_eq!(popped, Some(scope));
     }
+    self.pop_stmt_context();
   }
 
   fn enter_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {
@@ -1121,6 +1308,19 @@ impl DeclareVisitor {
   }
 
   fn enter_func_decl_node(&mut self, node: &mut FuncDeclNode) {
+    let stmt_ctx = self.current_stmt_context();
+    let func = &node.stx.function.stx;
+    let is_regular = !func.async_ && !func.generator;
+    let func_allowed = match stmt_ctx {
+      StmtContext::StatementList => true,
+      StmtContext::SingleStatement {
+        allow_regular_function,
+      } => allow_regular_function && is_regular,
+    };
+    if !func_allowed {
+      self.report_invalid_function_declaration(node);
+    }
+
     if let Some(name) = &mut node.stx.name {
       let scope_kind = self.builder.scope_kind(self.current_scope());
       let span = ident_range(name.loc, &name.stx.name);
@@ -1231,6 +1431,7 @@ impl DeclareVisitor {
   fn enter_func_node(&mut self, node: &mut FuncNode) {
     let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
     self.strict_stack.push(strict);
+    self.push_stmt_context(StmtContext::StatementList);
 
     let kind = if node.stx.arrow {
       ScopeKind::ArrowFunction
@@ -1245,6 +1446,7 @@ impl DeclareVisitor {
     self.pop_scope();
     self.pop_decl_target();
     self.strict_stack.pop();
+    self.pop_stmt_context();
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
@@ -1283,6 +1485,21 @@ impl DeclareVisitor {
   }
 
   fn enter_var_decl_node(&mut self, node: &mut VarDeclNode) {
+    let is_lexical = matches!(
+      node.stx.mode,
+      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+    );
+    if is_lexical && !self.in_for_triple_init_decl() && !self.in_statement_list() {
+      let keyword = match node.stx.mode {
+        VarDeclMode::Const => "const",
+        VarDeclMode::Let => "let",
+        VarDeclMode::Using => "using",
+        VarDeclMode::AwaitUsing => "await",
+        VarDeclMode::Var => "var",
+      };
+      self.report_invalid_lexical_declaration(node.loc, keyword);
+    }
+
     let target = match node.stx.mode {
       VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
         DeclTarget::IfNotGlobal
