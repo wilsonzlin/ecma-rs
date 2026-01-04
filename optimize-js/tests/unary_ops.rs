@@ -32,3 +32,22 @@ fn delete_operator_is_lowered_without_internal_helpers() {
     "expected delete operator in output: {js}"
   );
 }
+
+#[test]
+fn new_expressions_are_lowered_without_internal_helpers() {
+  let src = "new Array(1);";
+  let program = compile_source(src, TopLevelMode::Module, false);
+  let bytes = program_to_js(
+    &program,
+    &DecompileOptions::default(),
+    emit_js::EmitOptions::minified(),
+  )
+  .expect("emit JS");
+  let js = std::str::from_utf8(&bytes).expect("UTF-8 output");
+
+  assert!(
+    !js.contains("__optimize_js_new"),
+    "internal new helper leaked into output: {js}"
+  );
+  assert!(js.contains("new"), "expected new expression in output: {js}");
+}

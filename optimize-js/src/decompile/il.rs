@@ -397,11 +397,37 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_IN_CALLEE: &str = "__optimize_js_in";
   const INTERNAL_INSTANCEOF_CALLEE: &str = "__optimize_js_instanceof";
   const INTERNAL_DELETE_CALLEE: &str = "__optimize_js_delete";
+  const INTERNAL_NEW_CALLEE: &str = "__optimize_js_new";
 
   if inst.t != InstTyp::Call {
     return None;
   }
   let (tgt, callee_arg, this_arg, args, spreads) = inst.as_call();
+
+  if let Arg::Builtin(path) = callee_arg {
+    if path == INTERNAL_NEW_CALLEE {
+      let ctor_expr = this_expr.unwrap_or_else(|| lower_arg(var_namer, fn_emitter, this_arg));
+      let args_exprs = arg_exprs.unwrap_or_else(|| {
+        args
+          .iter()
+          .map(|a| lower_arg(var_namer, fn_emitter, a))
+          .collect()
+      });
+      let call_expr = node(Expr::Call(node(CallExpr {
+        optional_chaining: false,
+        callee: ctor_expr,
+        arguments: call_args(args_exprs, spreads),
+      })));
+      let expr = node(Expr::Unary(node(UnaryExpr {
+        operator: OperatorName::New,
+        argument: call_expr,
+      })));
+      return match tgt {
+        Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+        None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+      };
+    }
+  }
 
   if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 2 {
     if let Arg::Builtin(path) = callee_arg {

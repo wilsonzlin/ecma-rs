@@ -21,6 +21,7 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_IN_CALLEE: &'static str = "__optimize_js_in";
   const INTERNAL_INSTANCEOF_CALLEE: &'static str = "__optimize_js_instanceof";
   const INTERNAL_DELETE_CALLEE: &'static str = "__optimize_js_delete";
+  const INTERNAL_NEW_CALLEE: &'static str = "__optimize_js_new";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -821,17 +822,48 @@ impl<'p> HirSourceToInst<'p> {
     call: &CallExpr,
     chain: impl Into<Option<Chain>>,
   ) -> OptimizeResult<Arg> {
-    if let ExprKind::Ident(name) = self.body.exprs[call.callee.0 as usize].kind {
-      if self.name_for(name) == "eval" && self.symbol_for_expr(call.callee).is_none() {
-        return Err(unsupported_syntax(span, "direct eval is not supported"));
+    if !call.is_new {
+      if let ExprKind::Ident(name) = self.body.exprs[call.callee.0 as usize].kind {
+        if self.name_for(name) == "eval" && self.symbol_for_expr(call.callee).is_none() {
+          return Err(unsupported_syntax(span, "direct eval is not supported"));
+        }
       }
     }
 
     if call.is_new {
-      return Err(unsupported_syntax(
-        span,
-        "new expressions are not supported",
+      if call.optional {
+        return Err(unsupported_syntax(
+          span,
+          "optional chaining in new expressions is not supported",
+        ));
+      }
+
+      let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
+
+      let ctor_arg = self.compile_expr(call.callee)?;
+      let res_tmp_var = self.c_temp.bump();
+
+      let mut args = Vec::new();
+      let mut spreads = Vec::new();
+      for a in call.args.iter() {
+        let arg = self.compile_expr(a.expr)?;
+        let arg_idx = args.len();
+        args.push(arg);
+        if a.spread {
+          spreads.push(arg_idx + 2);
+        }
+      }
+
+      self.out.push(Inst::call(
+        res_tmp_var,
+        Arg::Builtin(Self::INTERNAL_NEW_CALLEE.to_string()),
+        ctor_arg,
+        args,
+        spreads,
       ));
+
+      self.complete_chain_setup(did_chain_setup, res_tmp_var, chain);
+      return Ok(Arg::Var(res_tmp_var));
     }
 
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
