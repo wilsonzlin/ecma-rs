@@ -9,7 +9,7 @@ use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
-use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
+use parse_js::ast::stmt::decl::{ClassDecl, ParamDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{
   BlockStmt, CatchBlock, ForBody, ForInOfLhs, ForInStmt, ForOfStmt, ForTripleStmt, SwitchBranch,
   SwitchStmt,
@@ -62,6 +62,7 @@ type FuncBodyNode = FuncBody;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ObjPatPropNode = Node<ObjPatProp>;
+type ParamDeclNode = Node<ParamDecl>;
 type VarDeclNode = Node<VarDecl>;
 type VarDeclaratorNode = VarDeclarator;
 type SwitchBranchNode = Node<SwitchBranch>;
@@ -120,6 +121,7 @@ struct ForInOfResolveContext {
   IdExprNode(enter),
   IdPatNode(enter),
   ObjPatPropNode(enter, exit),
+  ParamDeclNode(enter, exit),
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
   VarDeclNode(enter, exit),
@@ -140,6 +142,7 @@ struct ResolveVisitor<'a> {
   var_decl_mode_stack: Vec<VarDeclMode>,
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
+  param_tdz_stack: Vec<HashSet<SymbolId>>,
   class_name_stack: Vec<Option<SymbolId>>,
   in_param_list: Vec<bool>,
   func_scope_stack: Vec<ScopeId>,
@@ -167,6 +170,7 @@ impl ResolveVisitor<'_> {
       var_decl_mode_stack: Vec::new(),
       pending_active: Vec::new(),
       pending_symbols: Vec::new(),
+      param_tdz_stack: Vec::new(),
       class_name_stack: Vec::new(),
       in_param_list: Vec::new(),
       func_scope_stack: Vec::new(),
@@ -221,6 +225,20 @@ impl ResolveVisitor<'_> {
     }
     let decl_scope = self.sem.symbol(symbol).decl_scope;
 
+    // Default parameter initializers can observe a TDZ-like ordering for
+    // parameters: later parameters (and the parameter being initialized) are
+    // uninitialized until their initializer completes.
+    if self.in_param_list.last().copied().unwrap_or(false) {
+      if self
+        .param_tdz_stack
+        .last()
+        .is_some_and(|frame| frame.contains(&symbol))
+        && self.closure_of(use_scope) == self.closure_of(decl_scope)
+      {
+        return true;
+      }
+    }
+
     // Uses inside a nested function can execute after the outer scope is fully
     // initialized, so we only consider TDZ within the same closure.
     if self.closure_of(use_scope) != self.closure_of(decl_scope) {
@@ -242,6 +260,9 @@ impl ResolveVisitor<'_> {
         frame.mark_initialized(symbol);
         break;
       }
+    }
+    if let Some(frame) = self.param_tdz_stack.last_mut() {
+      frame.remove(&symbol);
     }
   }
 
@@ -623,12 +644,34 @@ impl ResolveVisitor<'_> {
       self.func_scope_stack.push(scope);
     }
     self.in_param_list.push(true);
+
+    #[derive(Default, VisitorMut)]
+    #[visitor(IdPatNode(enter))]
+    struct ParamSymbolCollector {
+      symbols: HashSet<SymbolId>,
+    }
+
+    impl ParamSymbolCollector {
+      fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+        if let Some(sym) = declared_symbol(&node.assoc) {
+          self.symbols.insert(sym);
+        }
+      }
+    }
+
+    let mut collector = ParamSymbolCollector::default();
+    for param in node.stx.parameters.iter_mut() {
+      param.stx.pattern.drive_mut(&mut collector);
+    }
+    self.param_tdz_stack.push(collector.symbols);
+
     self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_func_node(&mut self, node: &mut FuncNode) {
     self.pop_scope_from_assoc(&node.assoc);
     self.in_param_list.pop();
+    self.param_tdz_stack.pop();
     self.func_scope_stack.pop();
   }
 
@@ -649,7 +692,7 @@ impl ResolveVisitor<'_> {
       let scope = scope_id(&node.assoc).unwrap_or_else(|| self.sem.symbol(declared).decl_scope);
       let in_tdz = self.symbol_in_tdz(scope, declared);
       self.mark(&mut node.assoc, Some(declared), in_tdz);
-      if self.is_lexical_symbol(declared) {
+      if self.is_lexical_symbol(declared) || self.in_param_list.last().copied().unwrap_or(false) {
         self.record_pending(declared);
       }
     } else {
@@ -665,6 +708,14 @@ impl ResolveVisitor<'_> {
   }
 
   fn exit_obj_pat_prop_node(&mut self, _node: &mut ObjPatPropNode) {
+    self.pop_pending();
+  }
+
+  fn enter_param_decl_node(&mut self, _node: &mut ParamDeclNode) {
+    self.push_pending(true);
+  }
+
+  fn exit_param_decl_node(&mut self, _node: &mut ParamDeclNode) {
     self.pop_pending();
   }
 

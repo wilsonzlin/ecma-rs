@@ -1219,6 +1219,59 @@ fn parameter_default_initializer_prefers_outer_binding() {
 }
 
 #[test]
+fn parameter_default_initializer_later_parameter_is_in_tdz() {
+  let source = "function f(a = b, b = 1) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(83));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "b");
+}
+
+#[test]
+fn parameter_default_initializer_can_reference_prior_parameter() {
+  let source = "function f(a = 1, b = a) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(84));
+  assert!(
+    diagnostics.is_empty(),
+    "expected parameter initializers to allow referencing earlier bindings, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn parameter_destructuring_defaults_can_reference_prior_binding() {
+  let source = "function f({a, b = a}) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(85));
+  assert!(
+    diagnostics.is_empty(),
+    "expected destructuring parameter defaults to allow referencing earlier bindings, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn parameter_destructuring_defaults_later_binding_is_in_tdz() {
+  let source = "function f({a = b, b}) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(86));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "b");
+}
+
+#[test]
+fn parameter_default_initializer_closure_uses_do_not_trigger_tdz_diagnostics() {
+  let source = "function f(a = () => b, b = 1) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(87));
+  assert!(
+    diagnostics.is_empty(),
+    "expected nested closures in parameter initializers to not report TDZ, got {diagnostics:?}"
+  );
+}
+
+#[test]
 fn destructuring_default_initializer_can_reference_prior_binding() {
   let source = "let {a, b = a} = obj;";
   let mut ast = parse(source).unwrap();
