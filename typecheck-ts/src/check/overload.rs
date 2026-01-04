@@ -81,6 +81,12 @@ pub fn expected_arg_type_at(store: &TypeStore, sig: &Signature, index: usize) ->
   expected_arg_type(sig, &arity, index).map(|p| p.ty)
 }
 
+/// Whether the signature can accept the given number of call arguments,
+/// accounting for optional and rest parameters.
+pub fn signature_allows_arg_count(store: &TypeStore, sig: &Signature, arg_count: usize) -> bool {
+  analyze_arity(store, sig).allows(arg_count)
+}
+
 #[derive(Clone, Debug)]
 enum RestStyle {
   Array(TypeId),
@@ -514,7 +520,7 @@ fn reorder_candidates_by_literal_types(store: &TypeStore, candidates: &mut Vec<S
   let mut other = Vec::new();
   for sig_id in candidates.drain(..) {
     let sig = store.signature(sig_id);
-    if signature_has_literal_types(store, &sig) {
+    if signature_contains_literal_types(store, &sig) {
       specialized.push(sig_id);
     } else {
       other.push(sig_id);
@@ -524,7 +530,7 @@ fn reorder_candidates_by_literal_types(store: &TypeStore, candidates: &mut Vec<S
   *candidates = specialized;
 }
 
-fn signature_has_literal_types(store: &TypeStore, sig: &Signature) -> bool {
+pub fn signature_contains_literal_types(store: &TypeStore, sig: &Signature) -> bool {
   sig
     .params
     .iter()
@@ -532,18 +538,45 @@ fn signature_has_literal_types(store: &TypeStore, sig: &Signature) -> bool {
 }
 
 fn type_contains_literal_type(store: &TypeStore, ty: TypeId) -> bool {
-  match store.type_kind(ty) {
-    TypeKind::StringLiteral(_)
-    | TypeKind::NumberLiteral(_)
-    | TypeKind::BooleanLiteral(_)
-    | TypeKind::BigIntLiteral(_)
-    | TypeKind::TemplateLiteral(_)
-    | TypeKind::UniqueSymbol => true,
-    TypeKind::Union(members) | TypeKind::Intersection(members) => members
-      .iter()
-      .any(|member| type_contains_literal_type(store, *member)),
-    _ => false,
+  fn inner(store: &TypeStore, ty: TypeId, seen: &mut HashSet<TypeId>, depth: usize) -> bool {
+    if depth > 32 {
+      return false;
+    }
+    let ty = store.canon(ty);
+    if !seen.insert(ty) {
+      return false;
+    }
+    match store.type_kind(ty) {
+      TypeKind::StringLiteral(_)
+      | TypeKind::NumberLiteral(_)
+      | TypeKind::BooleanLiteral(_)
+      | TypeKind::BigIntLiteral(_)
+      | TypeKind::TemplateLiteral(_)
+      | TypeKind::UniqueSymbol => true,
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .copied()
+        .any(|member| inner(store, member, seen, depth + 1)),
+      TypeKind::Array { ty, .. } => inner(store, ty, seen, depth + 1),
+      TypeKind::Tuple(elems) => elems
+        .iter()
+        .any(|elem| inner(store, elem.ty, seen, depth + 1)),
+      TypeKind::Object(obj) => {
+        let shape = store.shape(store.object(obj).shape);
+        shape
+          .properties
+          .iter()
+          .any(|prop| inner(store, prop.data.ty, seen, depth + 1))
+      }
+      TypeKind::Ref { args, .. } => args
+        .iter()
+        .copied()
+        .any(|arg| inner(store, arg, seen, depth + 1)),
+      _ => false,
+    }
   }
+
+  inner(store, ty, &mut HashSet::new(), 0)
 }
 
 fn dedup_signatures_by_shape(store: &TypeStore, sigs: Vec<SignatureId>) -> Vec<SignatureId> {
@@ -1244,7 +1277,11 @@ fn first_reason_note(node: &ReasonNode) -> Option<String> {
   None
 }
 
-fn describe_rejection(store: &TypeStore, relate: &RelateCtx<'_>, reason: &CandidateRejection) -> String {
+fn describe_rejection(
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  reason: &CandidateRejection,
+) -> String {
   match reason {
     CandidateRejection::Arity { min, max, actual } => match max {
       Some(max) if min == max => format!("expected {min} arguments but got {actual}"),
