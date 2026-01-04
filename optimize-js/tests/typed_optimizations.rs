@@ -116,7 +116,8 @@ fn typed_if_condition_literal_false_elides_then_branch() {
 #[test]
 fn typed_typeof_check_is_folded_when_operand_type_is_known() {
   let src = r#"
-    if (typeof console === "object") {
+    let s: string = "x";
+    if (typeof s === "string") {
       console.log(1);
     } else {
       console.log(2);

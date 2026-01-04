@@ -327,20 +327,20 @@ impl<'p> HirSourceToInst<'p> {
         ExprKind::Unary {
           op: UnaryOp::Typeof,
           expr,
-        } => Some(expr),
+        } => Some((left, expr)),
         _ => None,
       };
       let typeof_right = match right_expr.kind {
         ExprKind::Unary {
           op: UnaryOp::Typeof,
           expr,
-        } => Some(expr),
+        } => Some((right, expr)),
         _ => None,
       };
 
-      if let Some((typeof_operand, typeof_on_left)) = match (typeof_left, typeof_right) {
-        (Some(operand), None) => Some((operand, true)),
-        (None, Some(operand)) => Some((operand, false)),
+      if let Some(((typeof_expr, typeof_operand), typeof_on_left)) = match (typeof_left, typeof_right) {
+        (Some((expr, operand)), None) => Some(((expr, operand), true)),
+        (None, Some((expr, operand))) => Some(((expr, operand), false)),
         _ => None,
       } {
         let literal = if typeof_on_left {
@@ -356,7 +356,7 @@ impl<'p> HirSourceToInst<'p> {
         };
         if let Some(literal) = literal {
           if let Some(known) = self.typeof_string_expr(typeof_operand) {
-            let _ = self.compile_expr(typeof_operand)?;
+            let _ = self.compile_expr(typeof_expr)?;
             return Ok(Arg::Const(Const::Bool(known == literal)));
           }
         }
@@ -482,7 +482,13 @@ impl<'p> HirSourceToInst<'p> {
         Ok(Arg::Var(tmp))
       }
       UnaryOp::Typeof => {
-        let arg = self.compile_expr(argument)?;
+        let arg = match self.body.exprs[argument.0 as usize].kind {
+          ExprKind::Ident(name) => match self.classify_ident(argument, name) {
+            VarType::Unknown(name) => Arg::Builtin(name),
+            _ => self.compile_expr(argument)?,
+          },
+          _ => self.compile_expr(argument)?,
+        };
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Typeof, arg));
         Ok(Arg::Var(tmp))

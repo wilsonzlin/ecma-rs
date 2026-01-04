@@ -209,7 +209,10 @@ fn type_to_typeof_string(
     K::Undefined | K::Void => Some("undefined"),
     K::Null => Some("object"),
     K::Callable { .. } => Some("function"),
-    K::EmptyObject | K::Object | K::Tuple { .. } | K::Array { .. } => Some("object"),
+    // We can only return a `typeof` result when it is uniquely determined by
+    // the type. Note that the TypeScript `{}`/`object` supertypes can include
+    // callable values, so they do *not* map to a single `typeof` tag.
+    K::Tuple { .. } | K::Array { .. } => Some("object"),
     K::Ref { def, .. } => type_to_typeof_string(program, program.declared_type_of_def_interned(def), depth + 1),
     _ => None,
   }
