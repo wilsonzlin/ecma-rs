@@ -40,18 +40,33 @@ fn this_param_dts_matches_baseline_type_facts() {
     .get("results")
     .and_then(|r| r.as_array())
     .expect("results array");
-  let case = results
-    .iter()
-    .find(|case| case.get("name").and_then(|n| n.as_str()) == Some("this_param_dts"))
-    .expect("this_param_dts case present");
-  let status = case
-    .get("status")
-    .and_then(|s| s.as_str())
-    .unwrap_or("missing status");
-  assert_eq!(
-    status, "matched",
-    "expected this_param_dts difftsc case to match baseline (type facts + markers)"
-  );
+
+  fn assert_case_matched<'a>(results: &'a [Value], name: &str) -> &'a Value {
+    let case = results
+      .iter()
+      .find(|case| case.get("name").and_then(|n| n.as_str()) == Some(name))
+      .unwrap_or_else(|| panic!("{name} case present"));
+    let status = case
+      .get("status")
+      .and_then(|s| s.as_str())
+      .unwrap_or("missing status");
+    assert_eq!(
+      status, "matched",
+      "expected {name} difftsc case to match baseline (type facts + markers)"
+    );
+    case
+  }
+
+  for name in [
+    "add_event_listener",
+    "array_reduce",
+    "contextual_overload_return",
+    "overloads",
+  ] {
+    assert_case_matched(results, name);
+  }
+
+  let case = assert_case_matched(results, "this_param_dts");
 
   let actual_types = case.get("actual_types").expect("actual types present");
   let markers = actual_types

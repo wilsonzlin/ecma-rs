@@ -1135,11 +1135,12 @@ fn check_arguments(
       );
     }
 
-    if !relate.is_assignable(expected.ty, *arg) {
+    let param_assignable = relate.is_assignable(expected.ty, *arg);
+    if !param_assignable {
       score.widen += 1;
     }
 
-    if *arg != expected.ty && !relate.is_strict_subtype(*arg, expected.ty) {
+    if *arg != expected.ty && param_assignable {
       subtype = false;
     }
   }
