@@ -254,6 +254,83 @@ impl<'p> HirSourceToInst<'p> {
     Ok(())
   }
 
+  fn compile_switch_stmt(
+    &mut self,
+    span: Loc,
+    discriminant: ExprId,
+    cases: &[hir_js::hir::SwitchCase],
+  ) -> OptimizeResult<()> {
+    let discriminant_tmp_var = self.c_temp.bump();
+    let discriminant_arg = self.compile_expr(discriminant)?;
+    self
+      .out
+      .push(Inst::var_assign(discriminant_tmp_var, discriminant_arg));
+
+    if cases.is_empty() {
+      return Ok(());
+    }
+
+    let after_switch_label = self.c_label.bump();
+    self.break_stack.push(after_switch_label);
+
+    let mut case_labels = Vec::with_capacity(cases.len());
+    let mut default_label = None;
+    for case in cases.iter() {
+      let label = self.c_label.bump();
+      if case.test.is_none() && default_label.is_none() {
+        default_label = Some(label);
+      }
+      case_labels.push(label);
+    }
+
+    let default_or_after = default_label.unwrap_or(after_switch_label);
+    let test_indices: Vec<usize> = cases
+      .iter()
+      .enumerate()
+      .filter_map(|(idx, case)| case.test.map(|_| idx))
+      .collect();
+
+    for (pos, &idx) in test_indices.iter().enumerate() {
+      let test_expr = cases[idx].test.expect("case has test");
+      let test_arg = self.compile_expr(test_expr)?;
+      let cmp_tmp_var = self.c_temp.bump();
+      self.out.push(Inst::bin(
+        cmp_tmp_var,
+        Arg::Var(discriminant_tmp_var),
+        BinOp::StrictEq,
+        test_arg,
+      ));
+      let fallthrough = if pos == test_indices.len() - 1 {
+        default_or_after
+      } else {
+        DUMMY_LABEL
+      };
+      self.out.push(Inst::cond_goto(
+        Arg::Var(cmp_tmp_var),
+        case_labels[idx],
+        fallthrough,
+      ));
+    }
+
+    if test_indices.is_empty() {
+      // Only a `default` clause can exist in this scenario, so always jump to it.
+      self.out.push(Inst::goto(default_or_after));
+    }
+
+    for (idx, case) in cases.iter().enumerate() {
+      self.out.push(Inst::label(case_labels[idx]));
+      for stmt in case.consequent.iter() {
+        self.compile_stmt(*stmt)?;
+      }
+    }
+
+    self.break_stack.pop();
+    self.out.push(Inst::label(after_switch_label));
+
+    let _ = span;
+    Ok(())
+  }
+
   fn compile_do_while_stmt(
     &mut self,
     test: ExprId,
@@ -350,6 +427,10 @@ impl<'p> HirSourceToInst<'p> {
         consequent,
         alternate,
       } => self.compile_if_stmt(span, *test, *consequent, *alternate),
+      StmtKind::Switch {
+        discriminant,
+        cases,
+      } => self.compile_switch_stmt(span, *discriminant, cases),
       StmtKind::Var(decl) => self.compile_var_decl(decl),
       StmtKind::While { test, body } => self.compile_while_stmt(*test, *body, span),
       StmtKind::DoWhile { test, body } => self.compile_do_while_stmt(*test, *body, span),
