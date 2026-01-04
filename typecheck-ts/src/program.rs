@@ -57,7 +57,8 @@ use crate::profile::{
 };
 #[cfg(feature = "serde")]
 use crate::snapshot::{
-  DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
+  DefSnapshot, FileSnapshot, FileStateSnapshot, ModuleResolutionSnapshot, ProgramSnapshot,
+  PROGRAM_SNAPSHOT_VERSION,
 };
 use crate::triple_slash::{
   normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
@@ -2493,6 +2494,17 @@ impl Program {
       }
     };
 
+    let module_resolutions = state
+      .typecheck_db
+      .module_resolutions_snapshot()
+      .into_iter()
+      .map(|(from, specifier, resolved)| ModuleResolutionSnapshot {
+        from,
+        specifier,
+        resolved,
+      })
+      .collect();
+
     ProgramSnapshot {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -2502,6 +2514,7 @@ impl Program {
         .iter()
         .filter_map(|key| state.file_id_for_key(key))
         .collect(),
+      module_resolutions,
       files,
       file_states,
       def_data,
@@ -2559,6 +2572,17 @@ impl Program {
       state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
+      let options = state.compiler_options.clone();
+      let cancelled = state.cancelled.clone();
+      state.typecheck_db.set_compiler_options(options);
+      state.typecheck_db.set_cancellation_flag(cancelled);
+      for resolution in snapshot.module_resolutions.into_iter() {
+        state.typecheck_db.set_module_resolution_ref(
+          resolution.from,
+          resolution.specifier.as_str(),
+          resolution.resolved,
+        );
+      }
       for file in snapshot.files.into_iter() {
         let key = file.key.clone();
         let origin = if file.is_lib {
@@ -5525,6 +5549,7 @@ impl ProgramState {
       let ts_semantics = db::ts_semantics(&self.typecheck_db);
       self.check_cancelled()?;
       self.semantics = Some(Arc::clone(&ts_semantics.semantics));
+      self.extend_symbol_to_def_with_semantic_ids();
       self.push_semantic_diagnostics(ts_semantics.diagnostics.as_ref().clone());
       self.check_import_assignment_requires();
       self.check_required_global_types();
@@ -15209,6 +15234,52 @@ impl ProgramState {
     let id = semantic_js::SymbolId(self.next_symbol.into());
     self.next_symbol += 1;
     id
+  }
+
+  fn extend_symbol_to_def_with_semantic_ids(&mut self) {
+    let Some(semantics) = self.semantics.as_deref() else {
+      return;
+    };
+
+    let mut defs: Vec<DefId> = self.def_data.keys().copied().collect();
+    defs.sort_by_key(|def| def.0);
+
+    let mut symbols: Vec<sem_ts::SymbolId> = Vec::new();
+    for def in defs {
+      for ns in [
+        sem_ts::Namespace::VALUE,
+        sem_ts::Namespace::TYPE,
+        sem_ts::Namespace::NAMESPACE,
+      ] {
+        if let Some(symbol) = semantics.symbol_for_def(def, ns) {
+          symbols.push(symbol);
+        }
+      }
+    }
+    symbols.sort_by_key(|symbol| symbol.0);
+    symbols.dedup();
+
+    for symbol in symbols {
+      let data = semantics.symbols().symbol(symbol);
+      let mut canonical_def = None;
+      for ns in [
+        sem_ts::Namespace::VALUE,
+        sem_ts::Namespace::TYPE,
+        sem_ts::Namespace::NAMESPACE,
+      ] {
+        if !data.namespaces.contains(ns) {
+          continue;
+        }
+        if let Some(decl_id) = semantics.symbol_decls(symbol, ns).first() {
+          canonical_def = Some(semantics.symbols().decl(*decl_id).def_id);
+          break;
+        }
+      }
+
+      if let Some(def) = canonical_def {
+        self.symbol_to_def.entry(symbol.into()).or_insert(def);
+      }
+    }
   }
 
   fn record_def_symbol(&mut self, def: DefId, symbol: semantic_js::SymbolId) {

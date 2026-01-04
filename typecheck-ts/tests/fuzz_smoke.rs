@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{
-  codes, semantic_js, BodyId, ExprId, FileId, FileKey, MemoryHost, Program, SymbolInfo,
-  TypeId, TypeKindSummary,
+  codes, semantic_js, BodyId, ExprId, FileId, FileKey, MemoryHost, Program, SymbolInfo, TypeId,
+  TypeKindSummary,
 };
 
 #[derive(Clone, Debug)]
@@ -223,11 +223,7 @@ fn project_debug_source(project: &Project) -> String {
   out
 }
 
-fn run_with_timeout(
-  case: usize,
-  project: &Project,
-  timeout: Duration,
-) -> SmokeSnapshot {
+fn run_with_timeout(case: usize, project: &Project, timeout: Duration) -> SmokeSnapshot {
   let options = CompilerOptions {
     no_default_lib: true,
     ..CompilerOptions::default()
@@ -240,123 +236,140 @@ fn run_with_timeout(
     host.link(from.clone(), specifier, to.clone());
   }
 
+  let restore_host = host.clone();
   let program = Arc::new(Program::new(host, project.roots.clone()));
   let runner = Arc::clone(&program);
   let handle = thread::spawn(move || {
-    let mut diagnostics = runner.check();
-    codes::normalize_diagnostics(&mut diagnostics);
+    fn collect(program: &Program) -> SmokeSnapshot {
+      let mut diagnostics = program.check();
+      codes::normalize_diagnostics(&mut diagnostics);
 
-    // Exercise a handful of query entry points after checking to ensure they
-    // are also total, deterministic, and cycle-safe for the generated inputs.
-    let reachable = runner.reachable_files();
-    let files = runner.files();
-    let global_bindings = (*runner.global_bindings()).clone();
+      // Exercise a handful of query entry points after checking to ensure they
+      // are also total, deterministic, and cycle-safe for the generated inputs.
+      let reachable = program.reachable_files();
+      let files = program.files();
+      let global_bindings = (*program.global_bindings()).clone();
 
-    let mut exports = Vec::new();
-    let mut offsets = Vec::new();
+      let mut exports = Vec::new();
+      let mut offsets = Vec::new();
 
-    for file in reachable.iter().copied() {
-      let export_map = runner.exports_of(file);
-      exports.push((file, export_map));
+      for file in reachable.iter().copied() {
+        let export_map = program.exports_of(file);
+        exports.push((file, export_map));
 
-      let defs = runner.definitions_in_file(file);
-      for def in defs.into_iter().take(16) {
-        let _ = runner.def_name(def);
-        let _ = runner.span_of_def(def);
-        let _ = runner.type_of_def(def);
-        if let Some(body) = runner.body_of_def(def) {
-          let _ = runner.check_body(body);
+        let defs = program.definitions_in_file(file);
+        for def in defs.into_iter().take(16) {
+          let _ = program.def_name(def);
+          let _ = program.span_of_def(def);
+          let _ = program.type_of_def(def);
+          if let Some(body) = program.body_of_def(def) {
+            let _ = program.check_body(body);
+          }
+        }
+        let bodies = program.bodies_in_file(file);
+        for body in bodies.into_iter().take(8) {
+          let _ = program.check_body(body);
+        }
+        if let Some(body) = program.file_body(file) {
+          let _ = program.check_body(body);
+        }
+
+        if let Some(text) = program.file_text(file) {
+          let len = text.len();
+          let mut probe_offsets = vec![0usize, len / 2, len.saturating_sub(1)];
+          probe_offsets.sort_unstable();
+          probe_offsets.dedup();
+          for offset in probe_offsets {
+            let Ok(offset_u32) = offset.try_into() else {
+              continue;
+            };
+            let symbol = program.symbol_at(file, offset_u32);
+            let symbol_info = symbol.and_then(|symbol| program.symbol_info(symbol));
+            let expr = program.expr_at(file, offset_u32);
+            let expr_ty = expr.map(|(body, expr)| program.type_of_expr(body, expr));
+            let ty = program.type_at(file, offset_u32);
+            let kind = ty.map(|ty| program.type_kind(ty));
+            offsets.push(OffsetQuerySnapshot {
+              file,
+              offset: offset_u32,
+              symbol,
+              symbol_info,
+              expr,
+              ty,
+              kind,
+              expr_ty,
+            });
+          }
         }
       }
-      let bodies = runner.bodies_in_file(file);
-      for body in bodies.into_iter().take(8) {
-        let _ = runner.check_body(body);
-      }
-      if let Some(body) = runner.file_body(file) {
-        let _ = runner.check_body(body);
-      }
 
-      if let Some(text) = runner.file_text(file) {
-        let len = text.len();
-        let mut probe_offsets = vec![0usize, len / 2, len.saturating_sub(1)];
-        probe_offsets.sort_unstable();
-        probe_offsets.dedup();
-        for offset in probe_offsets {
-          let Ok(offset_u32) = offset.try_into() else {
-            continue;
-          };
-          let symbol = runner.symbol_at(file, offset_u32);
-          let symbol_info = symbol.and_then(|symbol| runner.symbol_info(symbol));
-          let expr = runner.expr_at(file, offset_u32);
-          let expr_ty = expr.map(|(body, expr)| runner.type_of_expr(body, expr));
-          let ty = runner.type_at(file, offset_u32);
-          let kind = ty.map(|ty| runner.type_kind(ty));
-          offsets.push(OffsetQuerySnapshot {
-            file,
-            offset: offset_u32,
-            symbol,
-            symbol_info,
-            expr,
-            ty,
-            kind,
-            expr_ty,
-          });
+      let mut types_seen: BTreeSet<TypeId> = BTreeSet::new();
+      for snapshot in offsets.iter() {
+        if let Some(ty) = snapshot.ty {
+          types_seen.insert(ty);
+        }
+        if let Some(ty) = snapshot.expr_ty {
+          types_seen.insert(ty);
         }
       }
-    }
-
-    let mut types_seen: BTreeSet<TypeId> = BTreeSet::new();
-    for snapshot in offsets.iter() {
-      if let Some(ty) = snapshot.ty {
-        types_seen.insert(ty);
+      let mut types = Vec::new();
+      for ty in types_seen {
+        types.push(TypeQuerySnapshot {
+          ty,
+          kind: program.type_kind(ty),
+          display: program.display_type(ty).to_string(),
+          properties: program.properties_of(ty),
+          call_signatures: program.call_signatures(ty),
+          construct_signatures: program.construct_signatures(ty),
+          indexers: program.indexers(ty),
+        });
       }
-      if let Some(ty) = snapshot.expr_ty {
-        types_seen.insert(ty);
-      }
-    }
-    let mut types = Vec::new();
-    for ty in types_seen {
-      types.push(TypeQuerySnapshot {
-        ty,
-        kind: runner.type_kind(ty),
-        display: runner.display_type(ty).to_string(),
-        properties: runner.properties_of(ty),
-        call_signatures: runner.call_signatures(ty),
-        construct_signatures: runner.construct_signatures(ty),
-        indexers: runner.indexers(ty),
-      });
-    }
 
-    let mut explain = None;
-    'outer: for i in 0..types.len() {
-      for j in (i + 1)..types.len() {
-        let src = types[i].ty;
-        let dst = types[j].ty;
-        if let Some(tree) = runner.explain_assignability(src, dst) {
-          explain = Some(ExplainSnapshot { src, dst, tree });
-          break 'outer;
-        }
-        if let Some(tree) = runner.explain_assignability(dst, src) {
-          explain = Some(ExplainSnapshot {
-            src: dst,
-            dst: src,
-            tree,
-          });
-          break 'outer;
+      let mut explain = None;
+      'outer: for i in 0..types.len() {
+        for j in (i + 1)..types.len() {
+          let src = types[i].ty;
+          let dst = types[j].ty;
+          if let Some(tree) = program.explain_assignability(src, dst) {
+            explain = Some(ExplainSnapshot { src, dst, tree });
+            break 'outer;
+          }
+          if let Some(tree) = program.explain_assignability(dst, src) {
+            explain = Some(ExplainSnapshot {
+              src: dst,
+              dst: src,
+              tree,
+            });
+            break 'outer;
+          }
         }
       }
+
+      SmokeSnapshot {
+        diagnostics,
+        files,
+        reachable_files: reachable,
+        exports,
+        global_bindings,
+        offsets,
+        types,
+        explain,
+      }
     }
 
-    SmokeSnapshot {
-      diagnostics,
-      files,
-      reachable_files: reachable,
-      exports,
-      global_bindings,
-      offsets,
-      types,
-      explain,
+    let snapshot = collect(runner.as_ref());
+
+    #[cfg(feature = "serde")]
+    if case == 0 {
+      let restored = Program::from_snapshot(restore_host, runner.snapshot());
+      let restored_snapshot = collect(&restored);
+      assert_eq!(
+        snapshot, restored_snapshot,
+        "case {case}: snapshot restoration changed checker output"
+      );
     }
+
+    snapshot
   });
 
   let started_at = Instant::now();

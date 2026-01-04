@@ -16,6 +16,9 @@ use types_ts_interned::{
 /// 32-bit public `SymbolId` representation; symbol identifiers are now stored as
 /// full `u64` values and imports record their original specifier for ambient
 /// module resolution.
+///
+/// Version 13 captures module resolution edges so restored snapshots can
+/// reconstruct module graphs without re-running host resolution callbacks.
 pub const PROGRAM_SNAPSHOT_VERSION: u32 = 13;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
@@ -73,6 +76,14 @@ pub struct ExportAllSnapshot {
   pub span: TextRange,
 }
 
+/// Serialized view of a single module resolution edge recorded by the host.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModuleResolutionSnapshot {
+  pub from: FileId,
+  pub specifier: String,
+  pub resolved: Option<FileId>,
+}
+
 /// Serialized view of a single definition entry.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DefSnapshot {
@@ -90,6 +101,8 @@ pub struct ProgramSnapshot {
   pub tool_version: String,
   pub compiler_options: CompilerOptions,
   pub roots: Vec<FileId>,
+  #[serde(default)]
+  pub module_resolutions: Vec<ModuleResolutionSnapshot>,
   pub files: Vec<FileSnapshot>,
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,

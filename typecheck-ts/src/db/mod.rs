@@ -324,6 +324,19 @@ impl Database {
     self.set_file(file, key, kind, text, origin);
   }
 
+  /// Snapshot all module resolution inputs currently stored in this database.
+  ///
+  /// Returned entries are ordered deterministically by `(from_file, specifier)`.
+  pub fn module_resolutions_snapshot(&self) -> Vec<(FileId, String, Option<FileId>)> {
+    let mut entries = Vec::new();
+    for (from, inner) in self.module_resolutions.iter() {
+      for (specifier, input) in inner.iter() {
+        entries.push((*from, specifier.as_ref().to_string(), input.resolved(self)));
+      }
+    }
+    entries
+  }
+
   /// Seed or update a module resolution edge.
   pub fn set_module_resolution(
     &mut self,
