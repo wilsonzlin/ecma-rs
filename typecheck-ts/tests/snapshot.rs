@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use serde_json;
 use typecheck_ts::{
-  parse_call_count, reset_parse_call_count, FileId, FileKey, Host, HostError, Program,
-  ProgramSnapshot, QueryKind,
+  lib_support::CompilerOptions, parse_call_count, reset_parse_call_count, FileId, FileKey, Host,
+  HostError, Program, ProgramSnapshot, QueryKind,
 };
 
 fn key(id: FileId) -> FileKey {
@@ -15,6 +15,7 @@ fn key(id: FileId) -> FileKey {
 struct MemoryHost {
   files: HashMap<FileKey, Arc<str>>,
   edges: HashMap<(FileKey, String), FileKey>,
+  options: CompilerOptions,
 }
 
 impl MemoryHost {
@@ -40,6 +41,10 @@ impl Host for MemoryHost {
 
   fn resolve(&self, from: &FileKey, spec: &str) -> Option<FileKey> {
     self.edges.get(&(from.clone(), spec.to_string())).cloned()
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    self.options.clone()
   }
 }
 
@@ -95,6 +100,47 @@ fn snapshot_roundtrips_queries() {
       type_at_call, restored_type_at
     );
   }
+}
+
+#[test]
+fn snapshot_roundtrips_type_package_roots() {
+  let mut host = MemoryHost::default();
+  host.options.types = vec!["example".to_string()];
+  let entry_source = "const value = example;";
+  let types_source = "declare const example: string;";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), types_source);
+  host.link(FileId(0), "example", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let types_id = program.file_id(&key(FileId(1))).expect("types id");
+  let reachable = program.reachable_files();
+  assert!(
+    reachable.contains(&types_id),
+    "reachable files should include type package root: {reachable:?}"
+  );
+
+  let snapshot = program.snapshot();
+  let restored = Program::from_snapshot(host, snapshot);
+  assert_eq!(restored.check(), diagnostics);
+
+  let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
+  let restored_types = restored.file_id(&key(FileId(1))).expect("restored types");
+  assert_eq!(restored_entry, entry_id);
+  assert_eq!(restored_types, types_id);
+
+  let restored_reachable = restored.reachable_files();
+  assert!(
+    restored_reachable.contains(&restored_types),
+    "restored reachable files should include type package root: {restored_reachable:?}"
+  );
 }
 
 #[test]

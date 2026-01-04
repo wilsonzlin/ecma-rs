@@ -2611,11 +2611,12 @@ impl Program {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
       compiler_options: state.compiler_options.clone(),
-      roots: self
-        .roots
-        .iter()
-        .filter_map(|key| state.file_id_for_key(key))
-        .collect(),
+      roots: {
+        let mut roots = state.root_ids.clone();
+        roots.sort_by_key(|id| id.0);
+        roots.dedup();
+        roots
+      },
       module_resolutions,
       files,
       file_states,
