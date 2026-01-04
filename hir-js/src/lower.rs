@@ -4739,7 +4739,15 @@ fn collect_expr<'a>(
       );
     }
     AstExpr::JsxElem(elem) => {
-      collect_jsx_elem(elem, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_jsx_elem(
+        elem,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     _ => {}
   }
@@ -4774,7 +4782,15 @@ fn collect_jsx_elem<'a>(
               }
             }
             jsx::JsxAttrVal::Element(child) => {
-              collect_jsx_elem(child, descriptors, module_items, names, ambient, in_global, ctx);
+              collect_jsx_elem(
+                child,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
             }
           }
         }

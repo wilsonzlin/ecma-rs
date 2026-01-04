@@ -127,7 +127,11 @@ impl<F: ResolveFs> Resolver<F> {
 
     if let Some(entry) = specifier.strip_prefix("./") {
       if entry.is_empty() {
-        return self.resolve_as_file_or_directory_normalized_with_scratch(parent, 0, &mut resolve_scratch);
+        return self.resolve_as_file_or_directory_normalized_with_scratch(
+          parent,
+          0,
+          &mut resolve_scratch,
+        );
       }
 
       let mut joined = virtual_join(parent, entry);
@@ -237,9 +241,11 @@ impl<F: ResolveFs> Resolver<F> {
         if let Some(found) = found {
           return Some(found);
         }
-      } else if let Some(found) =
-        self.resolve_as_file_or_directory_normalized_with_scratch(&package_dir, 0, &mut resolve_scratch)
-      {
+      } else if let Some(found) = self.resolve_as_file_or_directory_normalized_with_scratch(
+        &package_dir,
+        0,
+        &mut resolve_scratch,
+      ) {
         return Some(found);
       }
 
@@ -249,9 +255,11 @@ impl<F: ResolveFs> Resolver<F> {
       }
       if let Some(types_specifier) = types_specifier.as_deref() {
         virtual_join3_into(&mut types_base, dir, "node_modules/@types", types_specifier);
-        if let Some(found) =
-          self.resolve_as_file_or_directory_normalized_with_scratch(&types_base, 0, &mut resolve_scratch)
-        {
+        if let Some(found) = self.resolve_as_file_or_directory_normalized_with_scratch(
+          &types_base,
+          0,
+          &mut resolve_scratch,
+        ) {
           return Some(found);
         }
       }
@@ -410,7 +418,8 @@ impl<F: ResolveFs> Resolver<F> {
               return None;
             }
 
-            if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
+            if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry)
+            {
               normalize_ts_path_into(entry, scratch);
               return self.resolve_as_file_or_directory_normalized_with_scratch(
                 scratch,
@@ -429,7 +438,9 @@ impl<F: ResolveFs> Resolver<F> {
             }
 
             virtual_join_into(scratch, base_candidate, entry);
-            if entry.starts_with('/') || entry.starts_with('\\') || subpath_needs_normalization(entry)
+            if entry.starts_with('/')
+              || entry.starts_with('\\')
+              || subpath_needs_normalization(entry)
             {
               normalize_ts_path_into(scratch.as_str(), resolve_scratch);
               self.resolve_as_file_or_directory_normalized_with_scratch(
@@ -522,7 +533,9 @@ impl<F: ResolveFs> Resolver<F> {
           scratch,
           resolve_scratch,
         ),
-        Some(_) => self.resolve_json_string_to_file(base_dir, s, depth + 1, scratch, resolve_scratch),
+        Some(_) => {
+          self.resolve_json_string_to_file(base_dir, s, depth + 1, scratch, resolve_scratch)
+        }
         None => self.resolve_json_string_to_file(base_dir, s, depth + 1, scratch, resolve_scratch),
       },
       Value::Array(items) => items.iter().find_map(|item| {
@@ -565,12 +578,20 @@ impl<F: ResolveFs> Resolver<F> {
     }
     if entry.starts_with('/') || entry.starts_with('\\') || starts_with_drive_letter(entry) {
       normalize_ts_path_into(entry, scratch);
-      return self.resolve_as_file_or_directory_normalized_with_scratch(scratch, depth, resolve_scratch);
+      return self.resolve_as_file_or_directory_normalized_with_scratch(
+        scratch,
+        depth,
+        resolve_scratch,
+      );
     }
 
     let entry = entry.strip_prefix("./").unwrap_or(entry);
     if entry.is_empty() {
-      return self.resolve_as_file_or_directory_normalized_with_scratch(base_dir, depth, resolve_scratch);
+      return self.resolve_as_file_or_directory_normalized_with_scratch(
+        base_dir,
+        depth,
+        resolve_scratch,
+      );
     }
 
     virtual_join_into(scratch, base_dir, entry);
@@ -609,7 +630,11 @@ impl<F: ResolveFs> Resolver<F> {
 
     let stripped = entry.strip_prefix("./").unwrap_or(entry);
     if stripped.is_empty() {
-      return self.resolve_as_file_or_directory_normalized_with_scratch(base_dir, depth, resolve_scratch);
+      return self.resolve_as_file_or_directory_normalized_with_scratch(
+        base_dir,
+        depth,
+        resolve_scratch,
+      );
     }
 
     scratch.clear();
@@ -724,7 +749,9 @@ fn best_exports_subpath_pattern<'a, 'b>(
 
     let replace = match best_key {
       None => true,
-      Some(existing) => key.len() > existing.len() || (key.len() == existing.len() && key.as_str() < existing),
+      Some(existing) => {
+        key.len() > existing.len() || (key.len() == existing.len() && key.as_str() < existing)
+      }
     };
     if replace {
       best_key = Some(key);
@@ -948,10 +975,7 @@ mod tests {
     }
 
     fn is_dir(&self, path: &Path) -> bool {
-      self
-        .files
-        .keys()
-        .any(|p| p.starts_with(path) && p != path)
+      self.files.keys().any(|p| p.starts_with(path) && p != path)
     }
 
     fn read_to_string(&self, path: &Path) -> Option<String> {
@@ -967,7 +991,10 @@ mod tests {
   fn resolves_package_json_types_entrypoints() {
     let mut fs = FakeFs::default();
     fs.insert("/src/app.ts", "");
-    fs.insert("/node_modules/pkg/package.json", r#"{ "types": "./dist/index.d.ts" }"#);
+    fs.insert(
+      "/node_modules/pkg/package.json",
+      r#"{ "types": "./dist/index.d.ts" }"#,
+    );
     fs.insert("/node_modules/pkg/dist/index.d.ts", "export {};\n");
 
     let resolver = Resolver::with_fs(
@@ -1068,7 +1095,10 @@ mod tests {
     let resolved = resolver
       .resolve(Path::new("/src/app.ts"), "pkg")
       .expect("@types fallback should resolve");
-    assert_eq!(resolved, PathBuf::from("/node_modules/@types/pkg/index.d.ts"));
+    assert_eq!(
+      resolved,
+      PathBuf::from("/node_modules/@types/pkg/index.d.ts")
+    );
   }
 
   #[test]
@@ -1087,6 +1117,9 @@ mod tests {
     let resolved = resolver
       .resolve(Path::new(r"C:\project\src\app.ts"), "pkg")
       .expect("pkg should resolve under c:/project");
-    assert_eq!(resolved, PathBuf::from("c:/project/node_modules/pkg/index.d.ts"));
+    assert_eq!(
+      resolved,
+      PathBuf::from("c:/project/node_modules/pkg/index.d.ts")
+    );
   }
 }

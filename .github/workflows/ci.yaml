@@ -51,6 +51,12 @@ jobs:
       - name: cargo test (workspace)
         run: cargo test --workspace --locked
 
+      - name: Smoke fuzz (bounded)
+        run: |
+          cargo test -p typecheck-ts --features fuzzing --test fuzz_smoke --locked -- --ignored
+          cargo test -p semantic-js --features fuzzing --test fuzz_smoke --locked -- --ignored
+          cargo test -p typecheck-ts-harness --test fuzz_smoke --locked -- --ignored
+
       - name: Regenerate docs/deps.md
         run: ./scripts/gen_deps_graph.sh
 

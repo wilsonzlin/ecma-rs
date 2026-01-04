@@ -1594,7 +1594,10 @@ fn explain_assignable_reason_tree_is_deterministic_for_union_targets() {
   };
 
   let child_dsts: Vec<_> = reason.children.iter().map(|child| child.dst).collect();
-  assert_eq!(child_dsts, members, "union member checks should be ordered deterministically");
+  assert_eq!(
+    child_dsts, members,
+    "union member checks should be ordered deterministically"
+  );
 }
 
 #[test]
@@ -1633,7 +1636,10 @@ fn explain_assignable_reason_tree_truncates_large_unions_deterministically() {
 
   let json1 = serde_json::to_string(&tree1).expect("serialize reason tree");
   let json2 = serde_json::to_string(&tree2).expect("serialize reason tree");
-  assert_eq!(json1, json2, "reason trees should be identical across contexts");
+  assert_eq!(
+    json1, json2,
+    "reason trees should be identical across contexts"
+  );
 
   let recorded: Vec<_> = tree1.children.iter().map(|child| child.dst).collect();
   assert!(
@@ -1644,7 +1650,11 @@ fn explain_assignable_reason_tree_truncates_large_unions_deterministically() {
   );
   assert_eq!(
     recorded,
-    ordered_members.iter().copied().take(recorded.len()).collect::<Vec<_>>(),
+    ordered_members
+      .iter()
+      .copied()
+      .take(recorded.len())
+      .collect::<Vec<_>>(),
     "truncation should preserve union member order deterministically"
   );
 }

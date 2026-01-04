@@ -55,9 +55,7 @@ pub struct TemplateChunk {
   pub ty: TypeId,
 }
 
-#[derive(
-  Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum IntrinsicKind {
   Uppercase,
   Lowercase,

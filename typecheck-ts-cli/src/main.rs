@@ -12,7 +12,9 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, JsxMode, LibFile, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{
+  CompilerOptions, FileKind, JsxMode, LibFile, LibName, ScriptTarget,
+};
 use typecheck_ts::resolve::{canonicalize_path, NodeResolver, ResolveOptions};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
@@ -146,6 +148,7 @@ struct DiskHost {
   resolver: ModuleResolver,
   compiler_options: CompilerOptions,
   lib_files: Vec<LibFile>,
+  type_roots: Vec<PathBuf>,
 }
 
 #[derive(Default, Clone)]
@@ -325,15 +328,22 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     tsconfig: tsconfig_resolver,
   };
 
-  let extra_libs = match project.as_ref() {
-    Some(cfg) => match load_type_libs(cfg, &options) {
-      Ok(libs) => libs,
-      Err(err) => {
-        eprintln!("{err}");
-        return ExitCode::FAILURE;
-      }
-    },
-    None => Vec::new(),
+  let (type_roots, extra_libs) = match project.as_ref() {
+    Some(cfg) => {
+      let type_roots = cfg
+        .type_roots
+        .clone()
+        .unwrap_or_else(|| default_type_roots(&cfg.root_dir));
+      let libs = match load_type_libs(cfg, &options, &type_roots) {
+        Ok(libs) => libs,
+        Err(err) => {
+          eprintln!("{err}");
+          return ExitCode::FAILURE;
+        }
+      };
+      (type_roots, libs)
+    }
+    None => (Vec::new(), Vec::new()),
   };
   // The CLI loads `typeRoots`/`types` packages as host-provided libs, which is closer to how `tsc`
   // treats them (ambient `.d.ts` inputs). Clear the compiler option so `typecheck-ts` doesn't also
@@ -342,7 +352,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     options.types.clear();
   }
 
-  let (host, roots) = match DiskHost::new(&root_paths, resolver, options, extra_libs) {
+  let (host, roots) = match DiskHost::new(&root_paths, resolver, options, extra_libs, type_roots) {
     Ok(res) => res,
     Err(err) => {
       eprintln!("{err}");
@@ -655,6 +665,7 @@ impl DiskHost {
     resolver: ModuleResolver,
     compiler_options: CompilerOptions,
     lib_files: Vec<LibFile>,
+    type_roots: Vec<PathBuf>,
   ) -> Result<(Self, Vec<FileKey>), String> {
     let mut state = DiskState::default();
     let mut roots = Vec::new();
@@ -671,6 +682,7 @@ impl DiskHost {
         resolver,
         compiler_options,
         lib_files,
+        type_roots,
       },
       roots,
     ))
@@ -721,8 +733,14 @@ impl Host for DiskHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    let base = self.path_for_key(from)?;
-    let resolved = self.resolver.resolve(&base, specifier)?;
+    if let Some(base) = self.path_for_key(from) {
+      if let Some(resolved) = self.resolver.resolve(&base, specifier) {
+        let mut state = self.state.lock().unwrap();
+        return Some(state.intern_path(resolved));
+      }
+    }
+
+    let resolved = resolve_at_types_entry(&self.type_roots, specifier)?;
     let mut state = self.state.lock().unwrap();
     Some(state.intern_path(resolved))
   }
@@ -744,12 +762,8 @@ impl Host for DiskHost {
 fn load_type_libs(
   cfg: &tsconfig::ProjectConfig,
   options: &CompilerOptions,
+  type_roots: &[PathBuf],
 ) -> Result<Vec<LibFile>, String> {
-  let type_roots = match cfg.type_roots.as_ref() {
-    Some(roots) => roots.clone(),
-    None => default_type_roots(&cfg.root_dir),
-  };
-
   let mut libs = Vec::new();
   if type_roots.is_empty() {
     return Ok(ensure_placeholder_libs(libs, options));
@@ -760,7 +774,9 @@ fn load_type_libs(
     options.jsx,
     Some(JsxMode::React | JsxMode::ReactJsx | JsxMode::ReactJsxdev | JsxMode::Preserve)
   ) {
-    if let (Some(import_source), Some(types)) = (cfg.jsx_import_source.as_ref(), types_override.as_mut()) {
+    if let (Some(import_source), Some(types)) =
+      (cfg.jsx_import_source.as_ref(), types_override.as_mut())
+    {
       if !types.iter().any(|name| name == import_source) {
         types.push(import_source.clone());
         types.sort();
@@ -771,7 +787,7 @@ fn load_type_libs(
 
   if let Some(types) = types_override.as_ref() {
     for name in types {
-      let Some(dir) = resolve_type_package(&type_roots, name) else {
+      let Some(dir) = resolve_type_package(type_roots, name) else {
         return Err(format!(
           "failed to resolve type definition package '{name}' from {}",
           cfg.root_dir.display()
@@ -784,7 +800,7 @@ fn load_type_libs(
   } else {
     // No explicit `types` list: include all packages in the type roots.
     let mut packages: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for root in &type_roots {
+    for root in type_roots {
       let entries = match fs::read_dir(root) {
         Ok(entries) => entries,
         Err(_) => continue,
@@ -827,6 +843,22 @@ fn load_type_libs(
   }
 
   Ok(ensure_placeholder_libs(libs, options))
+}
+
+fn resolve_at_types_entry(type_roots: &[PathBuf], specifier: &str) -> Option<PathBuf> {
+  let package = specifier.strip_prefix("@types/")?;
+  if package.is_empty() {
+    return None;
+  }
+  for root in type_roots {
+    let dir = root.join(package);
+    if !dir.is_dir() {
+      continue;
+    }
+    let entry = type_package_entry(&dir)?;
+    return Some(entry.canonicalize().unwrap_or(entry));
+  }
+  None
 }
 
 fn ensure_placeholder_libs(mut libs: Vec<LibFile>, options: &CompilerOptions) -> Vec<LibFile> {
@@ -1102,7 +1134,12 @@ fn parse_offset_pair_arg(raw: &str) -> Result<((PathBuf, u32), (PathBuf, u32)), 
   Ok((parse_offset_arg(left)?, parse_offset_arg(right)?))
 }
 
-fn display_file_for_query(program: &Program, host: &DiskHost, file_id: FileId, fallback: &Path) -> String {
+fn display_file_for_query(
+  program: &Program,
+  host: &DiskHost,
+  file_id: FileId,
+  fallback: &Path,
+) -> String {
   host
     .path_for_key(
       &program

@@ -308,14 +308,30 @@ proptest! {
   #[test]
   fn evaluator_terminates_on_random_graphs((store, root, defs) in store_with_defs(0..4)) {
     let expander = StaticExpander { defs: defs.clone() };
-    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(64);
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander)
+      .with_depth_limit(64)
+      .with_step_limit(10_000);
     let first = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     let second = evaluator.evaluate(root);
+    prop_assert!(evaluator.step_count() < 10_000);
     prop_assert_eq!(store.canon(first), store.canon(second));
 
     for (_, ty) in defs {
-      let mut eval = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(64);
+      let mut eval = TypeEvaluator::new(store.clone(), &expander)
+        .with_depth_limit(64)
+        .with_step_limit(10_000);
       let _ = eval.evaluate(ty);
+      prop_assert!(eval.step_count() < 10_000);
+    }
+  }
+
+  #[test]
+  fn relation_engine_terminates_on_random_graphs((store, pairs) in store_with_pairs()) {
+    let ctx = RelateCtx::new(store.clone(), store.options()).with_step_limit(20_000);
+    for (src, dst) in pairs {
+      let _ = ctx.is_assignable(src, dst);
+      prop_assert!(ctx.step_count() < 20_000);
     }
   }
 }

@@ -308,11 +308,11 @@ impl<'p> HirSourceToInst<'p> {
     let is_nullish = |expr_id: ExprId, expr: &hir_js::Expr| match expr.kind {
       ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined) => true,
       ExprKind::Unary {
-        op: UnaryOp::Void,
-        ..
+        op: UnaryOp::Void, ..
       } => true,
       ExprKind::Ident(name) => {
-        self.symbol_for_expr(expr_id).is_none() && self.program.names.resolve(name) == Some("undefined")
+        self.symbol_for_expr(expr_id).is_none()
+          && self.program.names.resolve(name) == Some("undefined")
       }
       _ => false,
     };
@@ -321,7 +321,10 @@ impl<'p> HirSourceToInst<'p> {
 
     if matches!(
       operator,
-      BinaryOp::StrictEquality | BinaryOp::StrictInequality | BinaryOp::Equality | BinaryOp::Inequality
+      BinaryOp::StrictEquality
+        | BinaryOp::StrictInequality
+        | BinaryOp::Equality
+        | BinaryOp::Inequality
     ) {
       if (left_nullish && self.expr_excludes_nullish(right))
         || (right_nullish && self.expr_excludes_nullish(left))
@@ -351,7 +354,10 @@ impl<'p> HirSourceToInst<'p> {
       // equality/inequality. The optimizer doesn't currently lower non-nullish
       // loose equality operators because they can trigger ToPrimitive coercions
       // (and user-defined side effects) on objects.
-      if matches!(operator, BinaryOp::StrictEquality | BinaryOp::StrictInequality) {
+      if matches!(
+        operator,
+        BinaryOp::StrictEquality | BinaryOp::StrictInequality
+      ) {
         if let Some(((typeof_expr, typeof_operand), typeof_on_left)) =
           match (typeof_left, typeof_right) {
             (Some((expr, operand)), None) => Some(((expr, operand), true)),
@@ -374,7 +380,11 @@ impl<'p> HirSourceToInst<'p> {
             if let Some(known) = self.typeof_string_expr(typeof_operand) {
               let _ = self.compile_expr(typeof_expr)?;
               let eq = known == literal;
-              let value = if operator == BinaryOp::StrictEquality { eq } else { !eq };
+              let value = if operator == BinaryOp::StrictEquality {
+                eq
+              } else {
+                !eq
+              };
               return Ok(Arg::Const(Const::Bool(value)));
             }
           }

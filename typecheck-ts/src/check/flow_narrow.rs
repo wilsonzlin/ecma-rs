@@ -615,9 +615,9 @@ fn matches_discriminant_value(
   in_progress: &mut HashSet<TypeId>,
 ) -> bool {
   match store.type_kind(ty) {
-    TypeKind::Union(members) => members.iter().any(|member| {
-      matches_discriminant_value(*member, value, store, expander, in_progress)
-    }),
+    TypeKind::Union(members) => members
+      .iter()
+      .any(|member| matches_discriminant_value(*member, value, store, expander, in_progress)),
     TypeKind::Ref { def, args } => {
       if !in_progress.insert(ty) {
         return false;

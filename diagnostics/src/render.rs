@@ -253,7 +253,10 @@ fn render_highlight_rows<'a>(
   let mut rows: Vec<Vec<LineHighlight<'a>>> = Vec::new();
   'outer: for highlight in highlights {
     for row in &mut rows {
-      if row.iter().all(|existing| !highlights_overlap(existing, &highlight)) {
+      if row
+        .iter()
+        .all(|existing| !highlights_overlap(existing, &highlight))
+      {
         row.push(highlight);
         continue 'outer;
       }
@@ -322,7 +325,11 @@ fn push_marker_run(line: &mut String, highlight: &LineHighlight<'_>, options: &R
   }
 }
 
-fn push_marker_connector(line: &mut String, highlight: &LineHighlight<'_>, options: &RenderOptions) {
+fn push_marker_connector(
+  line: &mut String,
+  highlight: &LineHighlight<'_>,
+  options: &RenderOptions,
+) {
   if options.color {
     line.push_str(marker_color_code(highlight));
     line.push('|');
@@ -410,8 +417,16 @@ fn plan_file_render<'a>(
       let clamped_end = effective_end.clamp(clamped_start, line_end);
       let local_start = clamped_start.saturating_sub(line_start);
       let local_end = clamped_end.saturating_sub(line_start);
-      let start_col = display_column(&cache.text[line_start..line_end], local_start, options.tab_width);
-      let end_col = display_column(&cache.text[line_start..line_end], local_end, options.tab_width);
+      let start_col = display_column(
+        &cache.text[line_start..line_end],
+        local_start,
+        options.tab_width,
+      );
+      let end_col = display_column(
+        &cache.text[line_start..line_end],
+        local_end,
+        options.tab_width,
+      );
       let underline_len = max(1, end_col.saturating_sub(start_col));
       highlights.entry(line_idx).or_default().push(LineHighlight {
         start_col,

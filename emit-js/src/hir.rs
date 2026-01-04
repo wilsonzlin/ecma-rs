@@ -2112,9 +2112,7 @@ fn emit_assign_operator(em: &mut Emitter, op: AssignOp) {
 fn expr_stmt_needs_parens(expr: &Expr) -> bool {
   matches!(
     expr.kind,
-    ExprKind::Object(_)
-      | ExprKind::FunctionExpr { .. }
-      | ExprKind::ClassExpr { .. }
+    ExprKind::Object(_) | ExprKind::FunctionExpr { .. } | ExprKind::ClassExpr { .. }
   )
 }
 

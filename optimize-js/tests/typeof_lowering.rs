@@ -10,7 +10,11 @@ fn typeof_unknown_identifier_is_not_lowered_via_unknown_load() {
   // `typeof <unbound-ident>` must not throw. In the optimizer pipeline, that
   // means we should not emit an `UnknownLoad` for the identifier before applying
   // `typeof`.
-  let program = compile_source("console.log(typeof unknownVar);", TopLevelMode::Module, false);
+  let program = compile_source(
+    "console.log(typeof unknownVar);",
+    TopLevelMode::Module,
+    false,
+  );
   let lowered = lower_program(&program);
 
   let mut saw_unknown_load = false;
@@ -29,4 +33,3 @@ fn typeof_unknown_identifier_is_not_lowered_via_unknown_load() {
     "expected `typeof unknownVar` to avoid lowering `unknownVar` via IdentLoad"
   );
 }
-

@@ -1,5 +1,7 @@
 dist/
 node_modules/
+!typecheck-ts-cli/tests/fixtures/node_project/node_modules/
+!typecheck-ts-cli/tests/fixtures/node_project/node_modules/**
 package-lock.json
 !typecheck-ts-harness/package-lock.json
 target/

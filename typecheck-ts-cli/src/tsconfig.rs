@@ -246,9 +246,9 @@ fn rewrite_glob_pattern(config_dir: &Path, root_dir: &Path, raw: &str) -> String
     Err(_) => return normalized,
   };
   let mut rel_str = relative_prefix.to_string_lossy().replace('\\', "/");
-  let needs_sep =
-    (!prefix_str.is_empty() && (prefix_str.ends_with('/') || prefix_str.ends_with('\\')))
-      || (prefix_str.is_empty() && !rel_str.is_empty());
+  let needs_sep = (!prefix_str.is_empty()
+    && (prefix_str.ends_with('/') || prefix_str.ends_with('\\')))
+    || (prefix_str.is_empty() && !rel_str.is_empty());
   if needs_sep && !rel_str.is_empty() && !rel_str.ends_with('/') {
     rel_str.push('/');
   }
@@ -656,7 +656,10 @@ fn is_supported_source_file(path: &Path) -> bool {
   if name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts") {
     return true;
   }
-  name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".mts") || name.ends_with(".cts")
+  name.ends_with(".ts")
+    || name.ends_with(".tsx")
+    || name.ends_with(".mts")
+    || name.ends_with(".cts")
 }
 
 fn resolve_path_relative_to(base: &Path, path: &Path) -> PathBuf {

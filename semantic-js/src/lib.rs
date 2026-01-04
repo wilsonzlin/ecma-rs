@@ -123,6 +123,9 @@
 //!   and returned as immutable snapshots.
 
 pub mod assoc;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz;
 pub(crate) mod hash;
 pub mod js;
 pub mod ts;

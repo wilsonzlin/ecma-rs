@@ -451,12 +451,14 @@ pub fn fuzz_type_graph(data: &[u8]) {
   let roots = roots_from_graph(&graph, &built);
   let expander = GraphExpander::new(built.clone());
   for ty in roots.iter().copied().take(16) {
-    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander)
+      .with_depth_limit(128)
+      .with_step_limit(50_000);
     let _ = evaluator.evaluate(ty);
     let _ = store.evaluate(ty);
   }
 
-  let mut ctx = RelateCtx::new(store.clone(), store.options());
+  let ctx = RelateCtx::new(store.clone(), store.options()).with_step_limit(50_000);
   for pair in roots.windows(2) {
     let _ = ctx.is_assignable(pair[0], pair[1]);
     let _ = ctx.is_assignable(pair[1], pair[0]);

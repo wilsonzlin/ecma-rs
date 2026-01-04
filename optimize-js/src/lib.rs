@@ -577,7 +577,11 @@ pub fn compile_source_with_typecheck(
 /// Compile and type-check a single source string using the bundled
 /// `typecheck-ts` memory host.
 #[cfg(feature = "typed")]
-pub fn compile_source_typed(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
+pub fn compile_source_typed(
+  source: &str,
+  mode: TopLevelMode,
+  debug: bool,
+) -> OptimizeResult<Program> {
   let mut host = typecheck_ts::MemoryHost::new();
   let file = typecheck_ts::FileKey::new("input.ts");
   host.insert(file.clone(), source);
@@ -676,7 +680,8 @@ impl Program {
     debug: bool,
     types: crate::types::TypeContext,
   ) -> OptimizeResult<Self> {
-    let (semantics, diagnostics) = JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
+    let (semantics, diagnostics) =
+      JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
     if !diagnostics.is_empty() {
       return Err(diagnostics);
     }

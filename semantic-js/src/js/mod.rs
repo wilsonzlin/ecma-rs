@@ -58,8 +58,8 @@
 //! [`std::collections::BTreeMap`] keyed by [`NameId`] so iteration is stable; use
 //! [`ScopeData::iter_symbols_sorted`] or [`JsSemantics::scope_symbols`] to
 //! traverse symbols deterministically.
-use diagnostics::FileId;
 use diagnostics::Diagnostic;
+use diagnostics::FileId;
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use std::collections::BTreeMap;

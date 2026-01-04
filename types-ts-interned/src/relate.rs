@@ -21,9 +21,7 @@ use crate::TypeOptions;
 use crate::TypeStore;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-#[cfg(test)]
-use std::cell::Cell;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
@@ -201,6 +199,8 @@ pub struct RelateCtx<'a> {
   normalizer_caches: EvaluatorCaches,
   in_progress: RefCell<HashSet<RelationKey>>,
   reason_budget: RefCell<ReasonBudget>,
+  step_limit: usize,
+  steps: Cell<usize>,
 }
 
 impl<'a> fmt::Debug for RelateCtx<'a> {
@@ -212,6 +212,8 @@ impl<'a> fmt::Debug for RelateCtx<'a> {
 }
 
 impl<'a> RelateCtx<'a> {
+  const DEFAULT_STEP_LIMIT: usize = usize::MAX;
+
   /// Create a new [`RelateCtx`].
   ///
   /// `options.exact_optional_property_types` and `options.no_unchecked_indexed_access`
@@ -315,7 +317,18 @@ impl<'a> RelateCtx<'a> {
       normalizer_caches,
       in_progress: RefCell::new(HashSet::new()),
       reason_budget: RefCell::new(ReasonBudget::default()),
+      step_limit: Self::DEFAULT_STEP_LIMIT,
+      steps: Cell::new(0),
     }
+  }
+
+  pub fn with_step_limit(mut self, limit: usize) -> Self {
+    self.step_limit = limit;
+    self
+  }
+
+  pub fn step_count(&self) -> usize {
+    self.steps.get()
   }
 
   pub fn cache_stats(&self) -> CacheStats {
@@ -400,6 +413,10 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    if depth == 0 && self.step_limit != Self::DEFAULT_STEP_LIMIT {
+      self.steps.set(0);
+    }
+
     let key = RelationKey {
       src,
       dst,
@@ -421,6 +438,24 @@ impl<'a> RelateCtx<'a> {
         result: true,
         reason: self.cycle_reason(record, key, depth),
       };
+    }
+
+    if self.step_limit != Self::DEFAULT_STEP_LIMIT {
+      let current_steps = self.steps.get();
+      if current_steps >= self.step_limit {
+        return RelationResult {
+          result: true,
+          reason: self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            true,
+            Some("step limit".into()),
+            depth,
+          ),
+        };
+      }
+      self.steps.set(current_steps + 1);
     }
 
     self.in_progress.borrow_mut().insert(key);
@@ -504,7 +539,14 @@ impl<'a> RelateCtx<'a> {
     result: bool,
     depth: usize,
   ) -> Option<ReasonNode> {
-    self.join_reasons(record, key, Vec::new(), result, Some("cached".into()), depth)
+    self.join_reasons(
+      record,
+      key,
+      Vec::new(),
+      result,
+      Some("cached".into()),
+      depth,
+    )
   }
 
   fn cycle_reason(&self, record: bool, key: RelationKey, depth: usize) -> Option<ReasonNode> {
@@ -2323,6 +2365,7 @@ impl<'a> RelateCtx<'a> {
     };
     let mut evaluator =
       TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone())
+        .with_step_limit(self.step_limit)
         .with_conditional_assignability(self);
     evaluator.evaluate(ty)
   }

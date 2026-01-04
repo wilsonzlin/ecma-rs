@@ -310,14 +310,14 @@ impl TT {
         | TT::KeywordBigIntType
         | TT::KeywordBooleanType
         | TT::KeywordDeclare
-      | TT::KeywordImplements
-      | TT::KeywordInfer
-      | TT::KeywordIntrinsic
-      | TT::KeywordInterface
-      | TT::KeywordIs
-      | TT::KeywordKeyof
-      | TT::KeywordModule
-      | TT::KeywordNamespace
+        | TT::KeywordImplements
+        | TT::KeywordInfer
+        | TT::KeywordIntrinsic
+        | TT::KeywordInterface
+        | TT::KeywordIs
+        | TT::KeywordKeyof
+        | TT::KeywordModule
+        | TT::KeywordNamespace
         | TT::KeywordNever
         | TT::KeywordNumberType
         | TT::KeywordObjectType

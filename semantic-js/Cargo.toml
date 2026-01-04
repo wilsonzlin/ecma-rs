@@ -3,6 +3,10 @@ name = "semantic-js"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+fuzzing = []
+
 [dependencies]
 bitflags = "2"
 diagnostics = { path = "../diagnostics" }

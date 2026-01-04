@@ -33,7 +33,10 @@ y.x satisfies number;
 
   let program = Program::new(host, vec![main.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&main).expect("file id for main.ts");
   let exports = program.exports_of(file_id);
@@ -72,7 +75,10 @@ x satisfies 1;
 
   let program = Program::new(host, vec![main.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&main).expect("file id for main.ts");
   let exports = program.exports_of(file_id);
@@ -104,4 +110,3 @@ export const x = 2;
     "expected BIND1005 for mixed export assignment, got {diagnostics:?}"
   );
 }
-

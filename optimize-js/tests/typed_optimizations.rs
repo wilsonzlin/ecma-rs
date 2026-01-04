@@ -47,8 +47,12 @@ fn normalize_registers(js: &str) -> String {
 }
 
 fn emit(program: &optimize_js::Program) -> String {
-  let bytes = program_to_js(program, &DecompileOptions::default(), EmitOptions::minified())
-    .expect("emit optimized JS");
+  let bytes = program_to_js(
+    program,
+    &DecompileOptions::default(),
+    EmitOptions::minified(),
+  )
+  .expect("emit optimized JS");
   normalize_registers(std::str::from_utf8(&bytes).expect("emitted JS should be UTF-8"))
 }
 

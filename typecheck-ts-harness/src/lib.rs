@@ -10,10 +10,10 @@ pub mod expectations;
 mod file_kind;
 pub mod multifile;
 pub mod profile;
-pub mod triage;
 mod resolve;
 pub mod runner;
 mod serde_helpers;
+pub mod triage;
 pub mod tsc;
 
 pub const DEFAULT_PROFILE_OUT: &str = "typecheck_profile.json";

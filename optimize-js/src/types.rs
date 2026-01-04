@@ -144,9 +144,7 @@ impl TypeContext {
       let body = &lower.bodies[*idx];
       let mut body_types = Vec::with_capacity(body.exprs.len());
       for expr in body.exprs.iter() {
-        let ty = span_to_ty
-          .get(&expr.span)
-          .and_then(|ty| *ty);
+        let ty = span_to_ty.get(&expr.span).and_then(|ty| *ty);
         body_types.push(ty);
       }
       expr_types.insert(*body_id, body_types);
@@ -160,7 +158,11 @@ impl TypeContext {
 }
 
 #[cfg(feature = "typed")]
-fn type_excludes_nullish(program: &typecheck_ts::Program, ty: typecheck_ts::TypeId, depth: u8) -> bool {
+fn type_excludes_nullish(
+  program: &typecheck_ts::Program,
+  ty: typecheck_ts::TypeId,
+  depth: u8,
+) -> bool {
   if !program.compiler_options().strict_null_checks {
     return false;
   }
@@ -193,7 +195,11 @@ fn type_excludes_nullish(program: &typecheck_ts::Program, ty: typecheck_ts::Type
     K::Intersection(members) => members
       .into_iter()
       .any(|member| type_excludes_nullish(program, member, depth + 1)),
-    K::Ref { def, .. } => type_excludes_nullish(program, program.declared_type_of_def_interned(def), depth + 1),
+    K::Ref { def, .. } => type_excludes_nullish(
+      program,
+      program.declared_type_of_def_interned(def),
+      depth + 1,
+    ),
     K::EmptyObject => true,
     _ => true,
   }
@@ -223,7 +229,11 @@ fn type_to_typeof_string(
     // the type. Note that the TypeScript `{}`/`object` supertypes can include
     // callable values, so they do *not* map to a single `typeof` tag.
     K::Tuple(_) | K::Array { .. } => Some("object"),
-    K::Ref { def, .. } => type_to_typeof_string(program, program.declared_type_of_def_interned(def), depth + 1),
+    K::Ref { def, .. } => type_to_typeof_string(
+      program,
+      program.declared_type_of_def_interned(def),
+      depth + 1,
+    ),
     K::Union(members) => {
       let mut tag: Option<&'static str> = None;
       for member in members {

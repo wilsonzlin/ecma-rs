@@ -41,11 +41,7 @@ impl SourceProvider for StdinSource {
   }
 }
 
-fn exit_with_diagnostic(
-  source: &StdinSource,
-  diagnostic: Diagnostic,
-  options: RenderOptions,
-) -> ! {
+fn exit_with_diagnostic(source: &StdinSource, diagnostic: Diagnostic, options: RenderOptions) -> ! {
   eprintln!(
     "{}",
     render_diagnostic_with_options(source, &diagnostic, options)

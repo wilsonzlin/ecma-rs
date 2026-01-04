@@ -351,7 +351,13 @@ impl SemanticsBuilder {
     id
   }
 
-  fn record_block_var_decl(&mut self, scope: ScopeId, name: NameId, raw_name: &str, span: TextRange) {
+  fn record_block_var_decl(
+    &mut self,
+    scope: ScopeId,
+    name: NameId,
+    raw_name: &str,
+    span: TextRange,
+  ) {
     let key = (scope, name);
     if self.block_var_decl_spans.contains_key(&key) {
       return;
@@ -425,7 +431,13 @@ impl SemanticsBuilder {
     }
   }
 
-  fn record_block_func_decl(&mut self, scope: ScopeId, name: NameId, raw_name: &str, span: TextRange) {
+  fn record_block_func_decl(
+    &mut self,
+    scope: ScopeId,
+    name: NameId,
+    raw_name: &str,
+    span: TextRange,
+  ) {
     let key = (scope, name);
     if self.block_func_decl_spans.contains_key(&key) {
       return;
@@ -745,7 +757,9 @@ impl DeclareVisitor {
     let name_id = self.builder.intern_name(name);
 
     if ctx.catch_param && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
-      self.builder.record_catch_param_decl(self.current_scope(), name_id, span);
+      self
+        .builder
+        .record_catch_param_decl(self.current_scope(), name_id, span);
     }
 
     // Static semantics: `var`-scoped declarations inside a block participate in
@@ -767,7 +781,9 @@ impl DeclareVisitor {
     }
 
     if ctx.block_lexical && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
-      self.builder.record_block_lexical_decl(self.current_scope(), name_id, name, span);
+      self
+        .builder
+        .record_block_lexical_decl(self.current_scope(), name_id, name, span);
     }
 
     let (symbol, scope) = match ctx.target {
@@ -777,9 +793,13 @@ impl DeclareVisitor {
           None
         } else {
           Some((
-            self
-              .builder
-              .declare_in_scope_with_span(scope, name, ctx.flags, ctx.lexical, Some(span)),
+            self.builder.declare_in_scope_with_span(
+              scope,
+              name,
+              ctx.flags,
+              ctx.lexical,
+              Some(span),
+            ),
             scope,
           ))
         }

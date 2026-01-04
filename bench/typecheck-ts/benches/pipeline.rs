@@ -11,9 +11,9 @@ use typecheck_ts::QueryKind;
 use typecheck_ts_bench::fixtures::{all_fixtures, module_graph_fixtures};
 use typecheck_ts_bench::pipeline::{
   analyze_module_graph, assignability_micro, bind_module_graph, check_body_named,
-  check_body_with_warmups, hir_kind, incremental_recheck, lower_to_hir, parse_and_lower, parse_only,
-  summarize_hir, type_of_exported_defs, typecheck_fixture, typecheck_module_graph, BodyCheckSummary,
-  RelationStats, TypecheckSummary,
+  check_body_with_warmups, hir_kind, incremental_recheck, lower_to_hir, parse_and_lower,
+  parse_only, summarize_hir, type_of_exported_defs, typecheck_fixture, typecheck_module_graph,
+  BodyCheckSummary, RelationStats, TypecheckSummary,
 };
 use typecheck_ts_bench::IncrementalEdit;
 

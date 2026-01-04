@@ -211,7 +211,11 @@ pub fn analyze_report_json_str(input: &str, top: usize) -> Result<TriageReport> 
   analyze_report_json_strs(input, None, top)
 }
 
-pub fn analyze_report_json_strs(input: &str, baseline: Option<&str>, top: usize) -> Result<TriageReport> {
+pub fn analyze_report_json_strs(
+  input: &str,
+  baseline: Option<&str>,
+  top: usize,
+) -> Result<TriageReport> {
   let value: Value = serde_json::from_str(input).context("parse JSON report")?;
   let baseline_value = match baseline {
     Some(raw) => Some(serde_json::from_str(raw).context("parse baseline JSON report")?),
@@ -224,7 +228,11 @@ pub fn analyze_report_path(path: &Path, top: usize) -> Result<TriageReport> {
   analyze_report_paths(path, None, top)
 }
 
-pub fn analyze_report_paths(path: &Path, baseline: Option<&Path>, top: usize) -> Result<TriageReport> {
+pub fn analyze_report_paths(
+  path: &Path,
+  baseline: Option<&Path>,
+  top: usize,
+) -> Result<TriageReport> {
   let content =
     fs::read_to_string(path).with_context(|| format!("read report {}", path.display()))?;
   let value: Value = serde_json::from_str(&content).context("parse JSON report")?;
@@ -275,7 +283,11 @@ pub fn print_human_summary(report: &TriageReport, out: &mut impl Write) -> io::R
   }
 
   if !report.suggestions.is_empty() {
-    writeln!(out, "suggested manifest entries (top {}):", report.suggestions.len())?;
+    writeln!(
+      out,
+      "suggested manifest entries (top {}):",
+      report.suggestions.len()
+    )?;
     for entry in &report.suggestions {
       let matcher = if let Some(id) = entry.id.as_ref() {
         format!("id=\"{id}\"")
@@ -308,7 +320,11 @@ pub fn print_human_summary(report: &TriageReport, out: &mut impl Write) -> io::R
       baseline.missing_cases
     )?;
     if !baseline.regressions.is_empty() {
-      writeln!(out, "baseline regressions (top {}):", baseline.regressions.len())?;
+      writeln!(
+        out,
+        "baseline regressions (top {}):",
+        baseline.regressions.len()
+      )?;
       for case in &baseline.regressions {
         if let Some(code) = &case.code {
           writeln!(out, "  {}: {} ({})", case.id, case.outcome, code)?;
@@ -443,7 +459,9 @@ fn conformance_case_summaries(input: &ConformanceReportInput) -> BTreeMap<String
     let mismatched = case.outcome != TestOutcome::Match;
     let outcome = outcome_key(case.outcome).to_string();
     let prefix = fixture_prefix(&case.id);
-    let code = mismatched.then(|| primary_code_from_detail_or_diags(&case.detail, &case.rust, &case.tsc)).flatten();
+    let code = mismatched
+      .then(|| primary_code_from_detail_or_diags(&case.detail, &case.rust, &case.tsc))
+      .flatten();
     summaries.insert(
       case.id.clone(),
       CaseSummary {
@@ -489,8 +507,14 @@ fn compute_baseline_diff(
   let baseline_total = baseline.len();
   let baseline_mismatches = baseline.values().filter(|case| case.mismatched).count();
 
-  let new_cases = current.keys().filter(|id| !baseline.contains_key(*id)).count();
-  let missing_cases = baseline.keys().filter(|id| !current.contains_key(*id)).count();
+  let new_cases = current
+    .keys()
+    .filter(|id| !baseline.contains_key(*id))
+    .count();
+  let missing_cases = baseline
+    .keys()
+    .filter(|id| !current.contains_key(*id))
+    .count();
 
   let mut regressions = Vec::new();
   let mut regressed = 0usize;
@@ -665,7 +689,8 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
 
   regressions.sort_by(|a, b| a.id.cmp(&b.id));
   let regressions_top: Vec<_> = regressions.into_iter().take(top).collect();
-  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top, input.suite.as_deref());
+  let suggestions =
+    suggest_manifest_entries_for_regressions(&regressions_top, input.suite.as_deref());
 
   Ok(TriageReport {
     kind: ReportKind::Difftsc,

@@ -36,10 +36,7 @@ fn export_assignment_creates_export_equals_entry() {
   let export_eq_entry = exports.get("export=").expect("export= entry");
   let export_eq_ty = export_eq_entry.type_id.expect("type for export= entry");
   let rendered = program.display_type(export_eq_ty).to_string();
-  assert_ne!(
-    rendered, "unknown",
-    "export= type should not be unknown"
-  );
+  assert_ne!(rendered, "unknown", "export= type should not be unknown");
   assert!(
     rendered.contains("=>"),
     "expected callable export= type, got {rendered}"

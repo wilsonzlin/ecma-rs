@@ -63,10 +63,12 @@ fn module_augmentation_merges_interface_members() {
     .expect("main import Foo");
   let import_foo_ty = program.type_of_def(import_foo_def);
   let import_props = program.properties_of(import_foo_ty);
-  let import_has_a =
-    import_props.iter().any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
-  let import_has_b =
-    import_props.iter().any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
+  let import_has_a = import_props
+    .iter()
+    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
+  let import_has_b = import_props
+    .iter()
+    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
   assert!(
     import_has_a && import_has_b,
     "imported Foo should include merged members, got {import_props:?}"
@@ -81,9 +83,16 @@ fn module_augmentation_merges_interface_members() {
 
   let foo_ty = program.type_of_def(foo_def);
   let props = program.properties_of(foo_ty);
-  let has_a = props.iter().any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
-  let has_b = props.iter().any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
-  assert!(has_a && has_b, "merged interface should expose a + b, got {props:?}");
+  let has_a = props
+    .iter()
+    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
+  let has_b = props
+    .iter()
+    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
+  assert!(
+    has_a && has_b,
+    "merged interface should expose a + b, got {props:?}"
+  );
 }
 
 #[test]
@@ -114,7 +123,9 @@ fn declare_global_in_module_is_visible_across_files() {
   let ty = program.type_of_def(x_def);
   let props = program.properties_of(ty);
   assert!(
-    props.iter().any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a")),
+    props
+      .iter()
+      .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a")),
     "GlobalFoo should expose property 'a', got {props:?}"
   );
 }

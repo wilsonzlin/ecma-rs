@@ -1372,7 +1372,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             span,
             expr_span,
           } => {
-            self.add_export_assignment(&module, path, *span, *expr_span, &mut map, &mut export_spans);
+            self.add_export_assignment(
+              &module,
+              path,
+              *span,
+              *expr_span,
+              &mut map,
+              &mut export_spans,
+            );
           }
         }
         self
@@ -1489,7 +1496,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             span,
             expr_span,
           } => {
-            self.add_export_assignment(&module, path, *span, *expr_span, &mut map, &mut export_spans);
+            self.add_export_assignment(
+              &module,
+              path,
+              *span,
+              *expr_span,
+              &mut map,
+              &mut export_spans,
+            );
           }
         }
         self

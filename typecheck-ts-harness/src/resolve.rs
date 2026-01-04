@@ -38,6 +38,33 @@ pub(crate) fn resolve_module_specifier(
   from: &FileKey,
   specifier: &str,
 ) -> Option<FileKey> {
+  if specifier.starts_with('/') || specifier.starts_with('\\') || specifier.starts_with("./") {
+    // `typecheck_ts::resolve` already handles absolute/relative specifiers.
+  } else if !specifier.starts_with("../")
+    && !specifier.starts_with('#')
+    && !specifier.contains('/')
+    && !specifier.contains('\\')
+    && (specifier.ends_with(".ts")
+      || specifier.ends_with(".tsx")
+      || specifier.ends_with(".d.ts")
+      || specifier.ends_with(".mts")
+      || specifier.ends_with(".d.mts")
+      || specifier.ends_with(".cts")
+      || specifier.ends_with(".d.cts")
+      || specifier.ends_with(".js")
+      || specifier.ends_with(".jsx")
+      || specifier.ends_with(".mjs")
+      || specifier.ends_with(".cjs"))
+  {
+    let parent = Path::new(from.as_str())
+      .parent()
+      .unwrap_or_else(|| Path::new("/"));
+    let candidate = normalize_ts_path(&parent.join(specifier).to_string_lossy());
+    if let Some(found) = files.resolve(&candidate) {
+      return Some(found);
+    }
+  }
+
   let fs = HarnessResolveFs {
     files: files.clone(),
   };
@@ -52,4 +79,3 @@ pub(crate) fn resolve_module_specifier(
   let resolved = normalize_ts_path(&resolved.to_string_lossy());
   files.resolve(&resolved)
 }
-

@@ -132,7 +132,10 @@ fn parses_angle_bracket_type_assertion_with_intrinsic_keyword_type_in_ts() {
         .type_annotation
         .as_ref()
         .expect("expected type annotation for assertion");
-      assert!(matches!(type_annotation.stx.as_ref(), TypeExpr::Intrinsic(_)));
+      assert!(matches!(
+        type_annotation.stx.as_ref(),
+        TypeExpr::Intrinsic(_)
+      ));
     }
     ref other => panic!("expected type assertion expression, got {:?}", other),
   }

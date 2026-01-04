@@ -259,7 +259,10 @@ impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
     args: &[TypeId],
   ) -> Option<tti::ExpandedType> {
     if let Some(kind) = self.intrinsics.get(&def).copied() {
-      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let operand = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| store.primitive_ids().unknown);
       let ty = store.intern_type(tti::TypeKind::Intrinsic { kind, ty: operand });
       return Some(tti::ExpandedType {
         params: Vec::new(),
@@ -1752,11 +1755,11 @@ impl Program {
               ty
             } else {
               let caches = state.checker_caches.for_body();
-               let expander = ProgramTypeExpander {
-                 def_types: &state.interned_def_types,
-                 type_params: &state.interned_type_params,
-                 intrinsics: &state.interned_intrinsics,
-               };
+              let expander = ProgramTypeExpander {
+                def_types: &state.interned_def_types,
+                type_params: &state.interned_type_params,
+                intrinsics: &state.interned_intrinsics,
+              };
               let queries =
                 TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
               let evaluated = queries.evaluate(ty);
@@ -2984,9 +2987,10 @@ impl ProgramTypeResolver {
       let mut next: Vec<DefId> = Vec::new();
       let mut seen: HashSet<DefId> = HashSet::new();
       for parent in parents.iter().copied() {
-        if let Some(members) = self
-          .namespace_members
-          .members(parent, sem_ts::Namespace::NAMESPACE, segment)
+        if let Some(members) =
+          self
+            .namespace_members
+            .members(parent, sem_ts::Namespace::NAMESPACE, segment)
         {
           for member in members.iter().copied() {
             if seen.insert(member) {
@@ -3007,7 +3011,10 @@ impl ProgramTypeResolver {
     let mut candidates: Vec<DefId> = Vec::new();
     let mut seen: HashSet<DefId> = HashSet::new();
     for parent in parents.iter().copied() {
-      if let Some(members) = self.namespace_members.members(parent, final_ns, final_segment) {
+      if let Some(members) = self
+        .namespace_members
+        .members(parent, final_ns, final_segment)
+      {
         for member in members.iter().copied() {
           if seen.insert(member) {
             candidates.push(member);
@@ -3134,9 +3141,7 @@ impl ProgramTypeResolver {
       {
         let mut combined = export_assignment;
         combined.extend_from_slice(&path[1..]);
-        if let Some(def) =
-          self.resolve_namespace_member_path_in_file(origin, &combined, final_ns)
-        {
+        if let Some(def) = self.resolve_namespace_member_path_in_file(origin, &combined, final_ns) {
           return Some(def);
         }
       }
@@ -4991,27 +4996,25 @@ impl ProgramState {
       if let Some(base_root) = roots.first() {
         for name in type_packages.iter() {
           self.check_cancelled()?;
-          let resolved = host
-            .resolve(base_root, name)
-            .or_else(|| {
-              type_package_fallback_specifier(name).and_then(|spec| host.resolve(base_root, &spec))
-            });
+          let resolved = host.resolve(base_root, name).or_else(|| {
+            type_package_fallback_specifier(name).and_then(|spec| host.resolve(base_root, &spec))
+          });
           if let Some(key) = resolved {
             root_keys.push(key.clone());
             root_ids.push(self.intern_file_key(key, FileOrigin::Source));
           } else {
-            self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-              format!("cannot resolve type package \"{name}\""),
-              primary,
-            ));
+            self.push_program_diagnostic(
+              codes::UNRESOLVED_MODULE
+                .error(format!("cannot resolve type package \"{name}\""), primary),
+            );
           }
         }
       } else {
         for name in type_packages.iter() {
-          self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-            format!("cannot resolve type package \"{name}\""),
-            primary,
-          ));
+          self.push_program_diagnostic(
+            codes::UNRESOLVED_MODULE
+              .error(format!("cannot resolve type package \"{name}\""), primary),
+          );
         }
       }
     }
@@ -5021,7 +5024,9 @@ impl ProgramState {
     root_ids.sort_unstable_by_key(|id| id.0);
     root_ids.dedup();
     self.root_ids = root_ids;
-    self.typecheck_db.set_roots(Arc::<[FileKey]>::from(root_keys));
+    self
+      .typecheck_db
+      .set_roots(Arc::<[FileKey]>::from(root_keys));
     let mut queue: VecDeque<FileId> = self.root_ids.iter().copied().collect();
     queue.extend(lib_queue);
     let mut seen: AHashSet<FileId> = AHashSet::new();
@@ -6500,14 +6505,22 @@ impl ProgramState {
         .copied()
         .map(|ty| store.canon(ty));
 
-      if matches!(ty.map(|ty| store.type_kind(ty)), Some(tti::TypeKind::Unknown)) || ty.is_none() {
-        ty = self.def_data.get(&iface_def).and_then(|data| match &data.kind {
-          DefKind::Interface(interface) => {
-            let interned = convert_type_for_display(interface.typ, self, store, &mut convert_cache);
-            Some(store.canon(interned))
-          }
-          _ => None,
-        });
+      if matches!(
+        ty.map(|ty| store.type_kind(ty)),
+        Some(tti::TypeKind::Unknown)
+      ) || ty.is_none()
+      {
+        ty = self
+          .def_data
+          .get(&iface_def)
+          .and_then(|data| match &data.kind {
+            DefKind::Interface(interface) => {
+              let interned =
+                convert_type_for_display(interface.typ, self, store, &mut convert_cache);
+              Some(store.canon(interned))
+            }
+            _ => None,
+          });
       }
 
       let Some(ty) = ty else {

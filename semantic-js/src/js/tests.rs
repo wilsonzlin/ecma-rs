@@ -289,7 +289,10 @@ fn top_level_tdz_and_hoisting_are_tracked() {
 fn class_name_is_visible_inside_static_block() {
   let mut ast = parse("class Foo{static{Foo.x++}}").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(50));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }
 
 #[test]
@@ -384,7 +387,10 @@ fn block_function_is_lexical_in_modules() {
   let source = "function outer(){ if(true){ function foo(){} foo; } foo; }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(59));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collector = FooCollector::default();
   ast.drive_mut(&mut collector);
@@ -401,7 +407,10 @@ fn catch_parameter_allows_var_redecl() {
   let source = "function f(){ try{}catch(e){ var e; } }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(60));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }
 
 #[test]
@@ -455,11 +464,16 @@ fn script_block_function_is_block_scoped_when_shadowed_by_let() {
   let source = "function outer(){ if(true){ function foo(){} foo; } let foo = 1; foo; }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(62));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collector = FooCollector::default();
   ast.drive_mut(&mut collector);
-  let func_decl = collector.func_decl.expect("expected function foo declaration");
+  let func_decl = collector
+    .func_decl
+    .expect("expected function foo declaration");
   let let_decl = collector.let_decl.expect("expected let foo declaration");
   assert_ne!(func_decl, let_decl);
 
@@ -501,7 +515,10 @@ fn script_block_function_hoists_when_not_shadowed() {
   let source = "function outer(){ if(true){ function foo(){} } foo; }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(63));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collector = FooCollector::default();
   ast.drive_mut(&mut collector);
@@ -544,7 +561,10 @@ fn script_block_function_does_not_hoist_over_parameter() {
   let source = "function outer(foo){ if(true){ function foo(){} foo; } foo; }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(64));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collector = FooCollector::default();
   ast.drive_mut(&mut collector);

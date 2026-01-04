@@ -4,7 +4,7 @@ use crate::{
   EmitBackend,
 };
 use crate::{
-  minify, minify_with_options, Dialect, Diagnostic, FileId, MinifyOptions, Severity, TopLevelMode,
+  minify, minify_with_options, Diagnostic, Dialect, FileId, MinifyOptions, Severity, TopLevelMode,
 };
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
@@ -386,7 +386,9 @@ fn returns_diagnostics_on_binding_error() {
   let diagnostics = minify(TopLevelMode::Module, source, &mut output).unwrap_err();
   assert!(!diagnostics.is_empty());
   assert!(
-    diagnostics.iter().any(|diag| diag.code.as_str().starts_with("BIND")),
+    diagnostics
+      .iter()
+      .any(|diag| diag.code.as_str().starts_with("BIND")),
     "expected binder diagnostics, got {diagnostics:?}"
   );
   assert!(output.is_empty());
@@ -758,7 +760,8 @@ fn hir_emitter_matches_ast_output() {
   let mut failures = Vec::new();
 
   for (name, mode, dialect, src) in cases {
-    let hir = try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
+    let hir =
+      try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
     let (hir_output, hir_backend) = match hir {
       Ok(ok) => ok,
       Err(diags) => {
@@ -776,7 +779,8 @@ fn hir_emitter_matches_ast_output() {
     }
 
     force_hir_emit_failure_for_tests();
-    let ast = try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
+    let ast =
+      try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
     let (ast_output, ast_backend) = match ast {
       Ok(ok) => ok,
       Err(diags) => {

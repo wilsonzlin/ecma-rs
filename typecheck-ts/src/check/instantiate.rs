@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use smallvec::SmallVec;
+use types_ts_interned::ShapeId;
 use types_ts_interned::{
   CacheConfig, CacheStats, ObjectType, Shape, ShardedCache, Signature, SignatureId, TupleElem,
   TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
-use types_ts_interned::ShapeId;
 
 /// Performs type parameter substitution over [`TypeKind`] trees.
 ///
@@ -275,7 +275,10 @@ impl InstantiationCache {
     for tp in sig.type_params.iter() {
       key_args.push(subst.get(&tp.id).copied().unwrap_or(unknown));
     }
-    let cache_key = InstantiationKey { sig: sig_id, args: key_args };
+    let cache_key = InstantiationKey {
+      sig: sig_id,
+      args: key_args,
+    };
     if let Some(hit) = self.signature_cache.get(&cache_key) {
       return hit;
     }

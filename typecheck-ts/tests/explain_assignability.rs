@@ -41,12 +41,8 @@ fn explain_assignability_output_is_stable_for_a_known_mismatch() {
   let program = Program::new(host, vec![key.clone()]);
   let file_id = program.file_id(&key).expect("file id available");
 
-  let src_offset = source
-    .find("true")
-    .expect("expected 'true' in source") as u32;
-  let dst_offset = source
-    .find("value")
-    .expect("expected 'value' in source") as u32;
+  let src_offset = source.find("true").expect("expected 'true' in source") as u32;
+  let dst_offset = source.find("value").expect("expected 'value' in source") as u32;
 
   let src_ty = program.type_at(file_id, src_offset).expect("type at src");
   let dst_ty = program.type_at(file_id, dst_offset).expect("type at dst");

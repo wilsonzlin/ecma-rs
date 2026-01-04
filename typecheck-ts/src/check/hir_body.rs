@@ -1497,7 +1497,10 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn lookup_typeof_query_binding(&self, ty: &Node<parse_js::ast::type_expr::TypeExpr>) -> Option<TypeId> {
+  fn lookup_typeof_query_binding(
+    &self,
+    ty: &Node<parse_js::ast::type_expr::TypeExpr>,
+  ) -> Option<TypeId> {
     let parse_js::ast::type_expr::TypeExpr::TypeQuery(query) = ty.stx.as_ref() else {
       return None;
     };
@@ -1611,19 +1614,19 @@ impl<'a> Checker<'a> {
             if let Some(sig_id) = resolution.signature {
               let sig = self.store.signature(sig_id);
               for (idx, arg) in arg_exprs.iter().enumerate() {
-                  if let Some(param) = sig.params.get(idx) {
-                    let arg_expr = &arg.stx.value;
-                    let arg_ty = match arg_expr.stx.as_ref() {
-                      AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
-                        self.check_expr_with_expected(arg_expr, param.ty)
-                      }
-                      _ => arg_types
-                        .get(idx)
-                        .copied()
-                        .unwrap_or(self.store.primitive_ids().unknown),
-                    };
-                    self.check_assignable(arg_expr, arg_ty, param.ty);
-                  }
+                if let Some(param) = sig.params.get(idx) {
+                  let arg_expr = &arg.stx.value;
+                  let arg_ty = match arg_expr.stx.as_ref() {
+                    AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+                      self.check_expr_with_expected(arg_expr, param.ty)
+                    }
+                    _ => arg_types
+                      .get(idx)
+                      .copied()
+                      .unwrap_or(self.store.primitive_ids().unknown),
+                  };
+                  self.check_assignable(arg_expr, arg_ty, param.ty);
+                }
               }
             }
           }
@@ -3072,24 +3075,30 @@ impl<'a> Checker<'a> {
         let mut elems = Vec::new();
         for elem in arr.stx.elements.iter() {
           match elem {
-            parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(types_ts_interned::TupleElem {
-              ty: self.const_inference_type(v),
-              optional: false,
-              rest: false,
-              readonly: true,
-            }),
-            parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(types_ts_interned::TupleElem {
-              ty: self.const_inference_type(v),
-              optional: false,
-              rest: true,
-              readonly: true,
-            }),
-            parse_js::ast::expr::lit::LitArrElem::Empty => elems.push(types_ts_interned::TupleElem {
-              ty: prim.undefined,
-              optional: true,
-              rest: false,
-              readonly: true,
-            }),
+            parse_js::ast::expr::lit::LitArrElem::Single(v) => {
+              elems.push(types_ts_interned::TupleElem {
+                ty: self.const_inference_type(v),
+                optional: false,
+                rest: false,
+                readonly: true,
+              })
+            }
+            parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
+              elems.push(types_ts_interned::TupleElem {
+                ty: self.const_inference_type(v),
+                optional: false,
+                rest: true,
+                readonly: true,
+              })
+            }
+            parse_js::ast::expr::lit::LitArrElem::Empty => {
+              elems.push(types_ts_interned::TupleElem {
+                ty: prim.undefined,
+                optional: true,
+                rest: false,
+                readonly: true,
+              })
+            }
           }
         }
         self.store.intern_type(TypeKind::Tuple(elems))
@@ -4813,11 +4822,8 @@ impl<'a> Checker<'a> {
     }
 
     let adapter = Adapter { hook: expander };
-    let mut evaluator = TypeEvaluator::with_caches(
-      Arc::clone(&self.store),
-      &adapter,
-      self.eval_caches.clone(),
-    );
+    let mut evaluator =
+      TypeEvaluator::with_caches(Arc::clone(&self.store), &adapter, self.eval_caches.clone());
     evaluator.evaluate(ty)
   }
 

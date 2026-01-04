@@ -139,6 +139,9 @@ pub mod db;
 mod error;
 pub mod expand;
 mod files;
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzz;
 mod lower_metrics;
 mod parse_metrics;
 mod profile;

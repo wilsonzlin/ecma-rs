@@ -260,6 +260,8 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
   caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
+  step_limit: usize,
+  steps: usize,
   depth_limit: usize,
   max_template_strings: usize,
 }
@@ -267,6 +269,8 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
 impl<'a, E: TypeExpander> std::fmt::Debug for TypeEvaluator<'a, E> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("TypeEvaluator")
+      .field("step_limit", &self.step_limit)
+      .field("steps", &self.steps)
       .field("depth_limit", &self.depth_limit)
       .field("max_template_strings", &self.max_template_strings)
       .finish()
@@ -276,6 +280,7 @@ impl<'a, E: TypeExpander> std::fmt::Debug for TypeEvaluator<'a, E> {
 impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   const DEFAULT_DEPTH_LIMIT: usize = 64;
   const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
+  const DEFAULT_STEP_LIMIT: usize = usize::MAX;
 
   fn has_free_type_param(
     &self,
@@ -445,6 +450,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
+      step_limit: Self::DEFAULT_STEP_LIMIT,
+      steps: 0,
       depth_limit: Self::DEFAULT_DEPTH_LIMIT,
       max_template_strings: Self::DEFAULT_MAX_TEMPLATE_STRINGS,
     }
@@ -463,9 +470,18 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     self
   }
 
+  pub fn with_step_limit(mut self, limit: usize) -> Self {
+    self.step_limit = limit;
+    self
+  }
+
   pub fn with_max_template_strings(mut self, limit: usize) -> Self {
     self.max_template_strings = limit;
     self
+  }
+
+  pub fn step_count(&self) -> usize {
+    self.steps
   }
 
   pub fn cache_stats(&self) -> EvaluatorCacheStats {
@@ -477,6 +493,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   pub fn evaluate(&mut self, ty: TypeId) -> TypeId {
+    self.steps = 0;
     self.evaluate_with_subst(ty, &Substitution::empty(), 0)
   }
 
@@ -488,6 +505,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     pairs.sort_by_key(|(param, _)| param.0);
     pairs.dedup_by_key(|(param, _)| param.0);
     let subst = Substitution { bindings: pairs };
+    self.steps = 0;
     self.evaluate_with_subst(ty, &subst, 0)
   }
 
@@ -502,6 +520,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if let Some(cached) = self.caches.eval.get(&key) {
       return cached;
     }
+
+    if self.step_limit != Self::DEFAULT_STEP_LIMIT {
+      if self.steps >= self.step_limit {
+        return ty;
+      }
+      self.steps += 1;
+    }
+
     if self.eval_in_progress.contains(&key) {
       return ty;
     }
@@ -1260,7 +1286,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           IntrinsicKind::NoInfer => unreachable!("handled above"),
         }
       }
-      _ => self.store.intern_type(TypeKind::Intrinsic { kind, ty: evaluated }),
+      _ => self.store.intern_type(TypeKind::Intrinsic {
+        kind,
+        ty: evaluated,
+      }),
     }
   }
 

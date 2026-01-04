@@ -79,7 +79,10 @@ impl<'db> TypeExpander for DbTypeExpander<'db> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
 
     if let Some(kind) = self.db.intrinsic_kind(def) {
-      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let operand = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| store.primitive_ids().unknown);
       let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
       return Some(ExpandedType {
         params: Vec::new(),
@@ -99,7 +102,10 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
     }
 
     if let Some(kind) = self.db.intrinsic_kind(def) {
-      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let operand = args
+        .first()
+        .copied()
+        .unwrap_or_else(|| store.primitive_ids().unknown);
       let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
       self.caches.insert_ref(def, args, ty);
       return Some(ty);

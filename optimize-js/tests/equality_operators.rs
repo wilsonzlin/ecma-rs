@@ -25,7 +25,10 @@ fn loose_nullish_equality_and_inequality_are_lowered() {
   }
 
   assert!(saw_loose_eq, "expected BinOp::LooseEq for `x == null`");
-  assert!(saw_not_loose_eq, "expected BinOp::NotLooseEq for `x != null`");
+  assert!(
+    saw_not_loose_eq,
+    "expected BinOp::NotLooseEq for `x != null`"
+  );
 }
 
 #[test]

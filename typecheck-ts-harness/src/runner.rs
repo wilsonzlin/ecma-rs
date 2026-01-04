@@ -1130,7 +1130,6 @@ fn execute_case(
   }
 
   let options = build_test_options(harness_options, compiler_options, tsc_options);
-  let notes = notes;
   let path_display = path.display().to_string();
 
   TestResult {

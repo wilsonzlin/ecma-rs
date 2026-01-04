@@ -10,4 +10,3 @@ fn compiles_not_plus_and_void() {
   let src = "console.log(!true, +1, void 0);";
   let _program = compile_source(src, TopLevelMode::Module, false);
 }
-

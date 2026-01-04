@@ -36,7 +36,11 @@ fn emits_enum_computed_initializer() {
 #[test]
 fn emits_enum_initializer_with_arrow_block_body() {
   let source = "enum E { A = (() => { return 1 })() }";
-  assert_roundtrip(source, EmitMode::Canonical, "enum E { A= (()=>{return 1;})() }");
+  assert_roundtrip(
+    source,
+    EmitMode::Canonical,
+    "enum E { A= (()=>{return 1;})() }",
+  );
   assert_roundtrip(source, EmitMode::Minified, "enum E{A=(()=>{return 1;})()}");
 }
 
@@ -48,7 +52,11 @@ fn emits_namespace_value_initializer() {
     EmitMode::Canonical,
     "namespace N { export const x=1+2; }",
   );
-  assert_roundtrip(source, EmitMode::Minified, "namespace N{export const x=1+2;}");
+  assert_roundtrip(
+    source,
+    EmitMode::Minified,
+    "namespace N{export const x=1+2;}",
+  );
 }
 
 #[test]
@@ -74,6 +82,9 @@ fn emits_export_assignment_with_class_expression() {
     EmitMode::Canonical,
     "export = class{method(){return 1;}};",
   );
-  assert_roundtrip(source, EmitMode::Minified, "export=class{method(){return 1;}};");
+  assert_roundtrip(
+    source,
+    EmitMode::Minified,
+    "export=class{method(){return 1;}};",
+  );
 }
-

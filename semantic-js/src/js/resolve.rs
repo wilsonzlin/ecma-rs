@@ -265,7 +265,9 @@ impl ResolveVisitor<'_> {
       let should_report_tdz = self.file.is_some() && in_tdz && symbol.is_some();
       self.mark(assoc, symbol, in_tdz);
       if should_report_tdz {
-        let file = self.file.expect("file id present when reporting diagnostics");
+        let file = self
+          .file
+          .expect("file id present when reporting diagnostics");
         self.diagnostics.push(Diagnostic::error(
           "BIND0003",
           format!("Cannot access `{name}` before initialization"),
@@ -340,7 +342,9 @@ impl ResolveVisitor<'_> {
       .name
       .as_ref()
       .and_then(|name| declared_symbol(&name.assoc));
-    let active = symbol.map(|sym| self.is_lexical_symbol(sym)).unwrap_or(false);
+    let active = symbol
+      .map(|sym| self.is_lexical_symbol(sym))
+      .unwrap_or(false);
     self.push_pending(active);
     if active {
       if let Some(name) = &mut node.stx.name {
@@ -349,7 +353,9 @@ impl ResolveVisitor<'_> {
         }
       }
     }
-    self.class_name_stack.push(if active { symbol } else { None });
+    self
+      .class_name_stack
+      .push(if active { symbol } else { None });
     self.push_scope_from_assoc(&node.assoc);
   }
 
@@ -365,7 +371,9 @@ impl ResolveVisitor<'_> {
       .name
       .as_ref()
       .and_then(|name| declared_symbol(&name.assoc));
-    let active = symbol.map(|sym| self.is_lexical_symbol(sym)).unwrap_or(false);
+    let active = symbol
+      .map(|sym| self.is_lexical_symbol(sym))
+      .unwrap_or(false);
     self.push_pending(active);
     if active {
       if let Some(name) = &mut node.stx.name {
@@ -374,7 +382,9 @@ impl ResolveVisitor<'_> {
         }
       }
     }
-    self.class_name_stack.push(if active { symbol } else { None });
+    self
+      .class_name_stack
+      .push(if active { symbol } else { None });
     self.push_scope_from_assoc(&node.assoc);
   }
 
@@ -402,9 +412,8 @@ impl ResolveVisitor<'_> {
 
   fn enter_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
     let class_symbol = self.class_name_stack.last().copied().flatten();
-    let should_override = class_symbol.is_some()
-      && self.class_member_depth > 0
-      && self.class_or_obj_key_depth == 0;
+    let should_override =
+      class_symbol.is_some() && self.class_member_depth > 0 && self.class_or_obj_key_depth == 0;
     let pushed = if should_override {
       let sym = class_symbol.expect("class symbol must exist when overriding");
       self.tdz_overrides.push(sym);
@@ -480,11 +489,7 @@ impl ResolveVisitor<'_> {
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
     let start = node.loc.start_u32();
     let end = start.saturating_add(node.stx.name.len() as u32);
-    self.resolve_use(
-      &mut node.assoc,
-      &node.stx.name,
-      TextRange::new(start, end),
-    );
+    self.resolve_use(&mut node.assoc, &node.stx.name, TextRange::new(start, end));
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
@@ -498,11 +503,7 @@ impl ResolveVisitor<'_> {
     } else {
       let start = node.loc.start_u32();
       let end = start.saturating_add(node.stx.name.len() as u32);
-      self.resolve_use(
-        &mut node.assoc,
-        &node.stx.name,
-        TextRange::new(start, end),
-      );
+      self.resolve_use(&mut node.assoc, &node.stx.name, TextRange::new(start, end));
     }
   }
 

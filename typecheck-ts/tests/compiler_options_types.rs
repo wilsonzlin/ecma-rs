@@ -23,4 +23,3 @@ fn compiler_options_types_includes_ambient_type_packages() {
     "expected no diagnostics, got {diagnostics:?}"
   );
 }
-

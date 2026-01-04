@@ -5,7 +5,10 @@ use std::path::PathBuf;
 
 fn assert_snapshot(name: &str, actual: &str) {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-  let path = root.join("tests").join("snapshots").join(format!("{name}.snap"));
+  let path = root
+    .join("tests")
+    .join("snapshots")
+    .join(format!("{name}.snap"));
   let expected = std::fs::read_to_string(&path).expect("read snapshot");
   assert_eq!(actual, expected, "snapshot mismatch for {name}");
 }
