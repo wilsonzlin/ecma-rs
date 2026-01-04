@@ -979,6 +979,17 @@ fn test_with_in_nested_scope_only_disables_that_scope() {
 }
 
 #[test]
+fn with_in_nested_scope_pins_outer_bindings() {
+  let src =
+    "function outer(){let top=1;function inner(obj){with(obj){top;}return top;}return inner({})+top;}";
+  let result = minified(TopLevelMode::Module, src);
+  assert_eq!(
+    result,
+    "function a(){let top=1;function a(obj){with(obj){top;}return top;}return a({})+top;}"
+  );
+}
+
+#[test]
 fn erases_type_annotations_and_aliases() {
   let src = r#"
     type Alias = { foo: string };
