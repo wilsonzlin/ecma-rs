@@ -14847,7 +14847,11 @@ impl ProgramState {
   }
 
   fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    if self.snapshot_loaded && !self.body_results.is_empty() {
+    if self.snapshot_loaded {
+      if self.body_results.is_empty() {
+        return None;
+      }
+
       let mut best_containing: Option<(
         (u32, u32, u32, u32, u32, u32, BodyId, ExprId),
         (BodyId, ExprId, TextRange),
@@ -14905,20 +14909,21 @@ impl ProgramState {
         }
       }
 
-      match (best_containing, best_empty) {
+      return match (best_containing, best_empty) {
         (
           Some((_, (cont_body, cont_expr, cont_span))),
           Some((_, (empty_body, empty_expr, empty_span))),
         ) => {
           if empty_span.start > cont_span.start && empty_span.end < cont_span.end {
-            return Some((empty_body, empty_expr));
+            Some((empty_body, empty_expr))
+          } else {
+            Some((cont_body, cont_expr))
           }
-          return Some((cont_body, cont_expr));
         }
-        (Some((_, (body, expr, _))), None) => return Some((body, expr)),
-        (None, Some((_, (body, expr, _)))) => return Some((body, expr)),
-        (None, None) => {}
-      }
+        (Some((_, (body, expr, _))), None) => Some((body, expr)),
+        (None, Some((_, (body, expr, _)))) => Some((body, expr)),
+        (None, None) => None,
+      };
     }
 
     db::expr_at(&self.typecheck_db, file, offset)

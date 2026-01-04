@@ -144,6 +144,39 @@ fn snapshot_roundtrips_type_package_roots() {
 }
 
 #[test]
+fn snapshot_restoration_expr_at_does_not_reparse_trivia() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let entry_id = restored
+    .file_id(&key(FileId(0)))
+    .expect("restored entry id");
+  let parses_before = parse_call_count();
+  let _ = restored.expr_at(entry_id, 0);
+  let parses_after = parse_call_count();
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "expr_at should not trigger salsa parsing when restored from snapshot"
+  );
+}
+
+#[test]
 fn snapshot_restoration_loads_missing_source_text_from_host() {
   let mut host = MemoryHost::default();
   let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
