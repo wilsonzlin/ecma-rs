@@ -59,11 +59,21 @@ enum OverloadKind {
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
 pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+  callable_signatures_with_expander(store, ty, None)
+}
+
+/// Collect all callable signatures from a type, expanding unions/intersections
+/// and object call signatures.
+pub fn callable_signatures_with_expander(
+  store: &TypeStore,
+  ty: TypeId,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> Vec<SignatureId> {
   match store.type_kind(ty) {
-    TypeKind::Union(members) => union_common_signatures(store, OverloadKind::Call, &members, None),
+    TypeKind::Union(members) => union_common_signatures(store, OverloadKind::Call, &members, expander),
     _ => {
       let mut collected = Vec::new();
-      collect_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
+      collect_signatures(store, ty, &mut collected, &mut HashSet::new(), expander);
       let mut by_shape: HashMap<SignatureShapeKey, Vec<SignatureId>> = HashMap::new();
       for sig_id in collected.into_iter() {
         let sig = store.signature(sig_id);
@@ -111,13 +121,23 @@ pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
 /// Collect all construct signatures from a type, expanding unions/intersections
 /// and object construct signatures.
 pub fn construct_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+  construct_signatures_with_expander(store, ty, None)
+}
+
+/// Collect all construct signatures from a type, expanding unions/intersections
+/// and object construct signatures.
+pub fn construct_signatures_with_expander(
+  store: &TypeStore,
+  ty: TypeId,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> Vec<SignatureId> {
   match store.type_kind(ty) {
     TypeKind::Union(members) => {
-      union_common_signatures(store, OverloadKind::Construct, &members, None)
+      union_common_signatures(store, OverloadKind::Construct, &members, expander)
     }
     _ => {
       let mut collected = Vec::new();
-      collect_construct_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
+      collect_construct_signatures(store, ty, &mut collected, &mut HashSet::new(), expander);
       let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
       for sig_id in collected.into_iter() {
         let sig = store.signature(sig_id);

@@ -47,7 +47,8 @@ use super::expr::{resolve_call, resolve_construct};
 use super::infer::infer_type_arguments_for_call;
 use super::instantiate::{InstantiationCache, Substituter};
 use super::overload::{
-  callable_signatures, construct_signatures, expected_arg_type_at, signature_allows_arg_count,
+  callable_signatures, callable_signatures_with_expander, construct_signatures_with_expander,
+  expected_arg_type_at, signature_allows_arg_count,
   signature_contains_literal_types, CallArgType,
 };
 use super::type_expr::{TypeLowerer, TypeResolver};
@@ -2280,7 +2281,8 @@ impl<'a> Checker<'a> {
       callee_ty
     };
 
-    let all_candidate_sigs = callable_signatures(self.store.as_ref(), callee_base);
+    let all_candidate_sigs =
+      callable_signatures_with_expander(self.store.as_ref(), callee_base, self.ref_expander);
     let mut candidate_sigs = all_candidate_sigs.clone();
     let has_spread = call.stx.arguments.iter().any(|arg| arg.stx.spread);
     let mut callee_for_resolution = callee_base;
@@ -2756,7 +2758,8 @@ impl<'a> Checker<'a> {
     };
     let callee_ty = self.check_expr(callee_expr);
     let arg_exprs = arg_exprs.unwrap_or(&[]);
-    let all_candidate_sigs = construct_signatures(self.store.as_ref(), callee_ty);
+    let all_candidate_sigs =
+      construct_signatures_with_expander(self.store.as_ref(), callee_ty, self.ref_expander);
     let mut candidate_sigs = all_candidate_sigs.clone();
     let has_spread = arg_exprs.iter().any(|arg| arg.stx.spread);
     let mut callee_for_resolution = callee_ty;
