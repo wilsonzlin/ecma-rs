@@ -27,6 +27,84 @@ use std::collections::{HashMap, HashSet};
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
 type IdExprNode = Node<IdExpr>;
+type IdPatNode = Node<IdPat>;
+type EnumDeclNode = Node<EnumDecl>;
+type NamespaceDeclNode = Node<NamespaceDecl>;
+type ModuleDeclNode = Node<ModuleDecl>;
+type ImportEqualsDeclNode = Node<ImportEqualsDecl>;
+
+#[derive(Debug)]
+struct FreshInternalNameGenerator {
+  used: HashSet<String>,
+}
+
+impl FreshInternalNameGenerator {
+  fn new(used: HashSet<String>) -> Self {
+    Self { used }
+  }
+
+  fn fresh(&mut self, preferred: String) -> String {
+    if self.used.insert(preferred.clone()) {
+      return preferred;
+    }
+    for suffix in 1usize.. {
+      let candidate = format!("{preferred}_{suffix}");
+      if self.used.insert(candidate.clone()) {
+        return candidate;
+      }
+    }
+    unreachable!();
+  }
+}
+
+fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<String> {
+  #[derive(VisitorMut)]
+  #[visitor(
+    IdExprNode(enter),
+    IdPatNode(enter),
+    EnumDeclNode(enter),
+    NamespaceDeclNode(enter),
+    ModuleDeclNode(enter),
+    ImportEqualsDeclNode(enter)
+  )]
+  struct Collector {
+    names: HashSet<String>,
+  }
+
+  impl Collector {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_enum_decl_node(&mut self, node: &mut EnumDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_namespace_decl_node(&mut self, node: &mut NamespaceDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_module_decl_node(&mut self, node: &mut ModuleDeclNode) {
+      if let ModuleName::Identifier(name) = &node.stx.name {
+        self.names.insert(name.clone());
+      }
+    }
+
+    fn enter_import_equals_decl_node(&mut self, node: &mut ImportEqualsDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+  }
+
+  let mut collector = Collector {
+    names: HashSet::new(),
+  };
+  top_level.drive_mut(&mut collector);
+  collector.names
+}
 
 #[derive(VisitorMut)]
 #[visitor(IdExprNode(enter))]
@@ -64,6 +142,7 @@ struct StripContext {
   value_bindings_stack: Vec<HashSet<String>>,
   top_level_module_exports: HashSet<String>,
   emitted_export_var: HashSet<String>,
+  fresh_internal_names: FreshInternalNameGenerator,
   ts_erase_options: TsEraseOptions,
   diagnostics: Vec<Diagnostic>,
 }
@@ -81,6 +160,10 @@ impl StripContext {
       .value_bindings_stack
       .last_mut()
       .expect("value binding stack must never be empty")
+  }
+
+  fn fresh_internal_name(&mut self, preferred: String) -> String {
+    self.fresh_internal_names.fresh(preferred)
   }
 }
 
@@ -266,6 +349,7 @@ pub fn erase_types_with_options(
   top_level: &mut Node<TopLevel>,
   ts_erase_options: TsEraseOptions,
 ) -> Result<(), Vec<Diagnostic>> {
+  let all_identifier_strings = collect_all_identifier_strings(top_level);
   let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
   let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
     collect_top_level_module_exports(&top_level.stx.body)
@@ -278,6 +362,7 @@ pub fn erase_types_with_options(
     value_bindings_stack: vec![top_level_value_bindings],
     top_level_module_exports,
     emitted_export_var: HashSet::new(),
+    fresh_internal_names: FreshInternalNameGenerator::new(all_identifier_strings),
     ts_erase_options,
     diagnostics: Vec::new(),
   };
@@ -592,45 +677,6 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
     }
   }
   names
-}
-
-fn collect_namespace_body_binding_names_for_synthetic_param(
-  body: &NamespaceBody,
-) -> HashSet<String> {
-  match body {
-    NamespaceBody::Block(stmts) => {
-      let mut names = collect_top_level_value_bindings(stmts);
-      for stmt in stmts {
-        match stmt.stx.as_ref() {
-          Stmt::EnumDecl(decl) if !decl.stx.declare => {
-            names.insert(decl.stx.name.clone());
-          }
-          Stmt::NamespaceDecl(decl) if !decl.stx.declare => {
-            names.insert(decl.stx.name.clone());
-          }
-          Stmt::ModuleDecl(decl) if !decl.stx.declare => {
-            let Some(_body) = &decl.stx.body else {
-              continue;
-            };
-            let ModuleName::Identifier(name) = &decl.stx.name else {
-              // String modules have no runtime representation.
-              continue;
-            };
-            names.insert(name.clone());
-          }
-          _ => {}
-        }
-      }
-      names
-    }
-    NamespaceBody::Namespace(inner) => {
-      let mut names = HashSet::new();
-      if !inner.stx.declare {
-        names.insert(inner.stx.name.clone());
-      }
-      names
-    }
-  }
 }
 
 fn collect_top_level_module_exports(stmts: &[Node<Stmt>]) -> HashSet<String> {
@@ -2000,7 +2046,7 @@ fn strip_enum_decl(
   let enum_param_ident = if name_is_binding_identifier {
     enum_name.clone()
   } else {
-    format!("__minify_ts_enum_obj_{enum_name}")
+    ctx.fresh_internal_name(format!("__minify_ts_enum_obj_{enum_name}"))
   };
   let binding_ident = if name_is_binding_identifier {
     enum_name.clone()
@@ -2062,7 +2108,7 @@ fn strip_enum_decl(
     ctx.current_value_bindings_mut().insert(binding_ident.clone());
   }
 
-  let enum_alias = format!("__minify_ts_enum_{enum_name}");
+  let enum_alias = ctx.fresh_internal_name(format!("__minify_ts_enum_{enum_name}"));
   let mut used_enum_alias = false;
   let mut body = Vec::with_capacity(decl.stx.members.len());
   let rewrite_enum_source_name_refs = !is_valid_identifier_reference(&enum_name, ctx.top_level_mode);
@@ -2414,26 +2460,11 @@ fn strip_namespace_decl(
       return vec![];
     }
   }
-  let mut namespace_param_ident = if name_is_binding_identifier {
+  let namespace_param_ident = if name_is_binding_identifier {
     namespace_name.clone()
   } else {
-    format!("__minify_ts_namespace_{namespace_name}")
+    ctx.fresh_internal_name(format!("__minify_ts_namespace_{namespace_name}"))
   };
-  if !name_is_binding_identifier {
-    let used_bindings = collect_namespace_body_binding_names_for_synthetic_param(&decl.stx.body);
-    if used_bindings.contains(&namespace_param_ident) {
-      let base = namespace_param_ident;
-      let mut suffix = 1usize;
-      loop {
-        let candidate = format!("{base}_{suffix}");
-        if !used_bindings.contains(&candidate) {
-          namespace_param_ident = candidate;
-          break;
-        }
-        suffix += 1;
-      }
-    }
-  }
   let binding_ident = if name_is_binding_identifier {
     namespace_name.clone()
   } else {
