@@ -1173,16 +1173,52 @@ impl<'a> Checker<'a> {
     let Some(ctx) = self.class_field_initializer else {
       return;
     };
-    if !matches!(obj.stx.as_ref(), AstExpr::This(_)) {
-      return;
+    enum CheckObject {
+      This,
+      ClassName,
     }
+
+    let obj_kind = match obj.stx.as_ref() {
+      AstExpr::This(_) => CheckObject::This,
+      AstExpr::Id(id) => {
+        // TypeScript also reports TS2729 for `C.x` reads in class field initializers when
+        // `C` is the current class name and `x` is a later-declared *static* field.
+        //
+        // Note: For instance field initializers, this check is only active when targeting
+        // native class fields (ES2022/ESNext) with `useDefineForClassFields` enabled.
+        let Some(name) = self
+          .index
+          .classes
+          .get(ctx.class_index)
+          .and_then(|info| info.name.as_deref())
+        else {
+          return;
+        };
+        if id.stx.name != name {
+          return;
+        }
+        if !ctx.is_static && !self.native_define_class_fields {
+          return;
+        }
+        CheckObject::ClassName
+      }
+      _ => return,
+    };
+
+    let check_static = match obj_kind {
+      CheckObject::This => ctx.is_static,
+      CheckObject::ClassName => true,
+    };
+
     if !self
       .index
-      .field_declared_not_before(ctx.class_index, ctx.member_index, prop, ctx.is_static)
+      .field_declared_not_before(ctx.class_index, ctx.member_index, prop, check_static)
     {
       return;
     }
+
     if !ctx.is_static
+      && matches!(obj_kind, CheckObject::This)
       && !self.use_define_for_class_fields
       && self
         .index

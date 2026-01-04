@@ -31,6 +31,14 @@
       "end": 187,
       "category": "error",
       "message": "Property 'x' is used before its initialization."
+    },
+    {
+      "code": 2729,
+      "file": "use_define_for_class_fields_true.ts",
+      "start": 233,
+      "end": 236,
+      "category": "error",
+      "message": "Property 'baz' is used before its initialization."
     }
   ]
 }

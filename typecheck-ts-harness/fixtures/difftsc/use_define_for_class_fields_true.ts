@@ -13,3 +13,8 @@ class Derived extends Base {
   y = this.x;
   x = 2;
 }
+
+class StaticC {
+  foo = StaticC.baz;
+  static baz = 1;
+}
