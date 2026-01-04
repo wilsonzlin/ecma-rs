@@ -25,7 +25,7 @@ interface Disposable {
 }
 
 interface AsyncDisposable {
-  [Symbol.asyncDispose](): PromiseLike<void> | void;
+  [Symbol.asyncDispose](): PromiseLike<void>;
 }
 
 interface SuppressedError {

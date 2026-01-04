@@ -1,5 +1,7 @@
+extern crate semantic_js as semantic_js_crate;
+
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
-use ::semantic_js::ts as sem_ts;
+use semantic_js_crate::ts as sem_ts;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use types_ts_interned as tti;

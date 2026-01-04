@@ -1,8 +1,9 @@
+extern crate semantic_js as semantic_js_crate;
+
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
-use ::semantic_js::ts as sem_ts;
 use ahash::AHashSet;
 use hir_js::{
   BinaryOp as HirBinaryOp, BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind,
@@ -28,6 +29,7 @@ use parse_js::{
   parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
+use semantic_js_crate::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -6147,6 +6149,16 @@ impl ProgramState {
     }
 
     self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
+    self.check_class_implements(
+      host,
+      &store,
+      &def_types,
+      &type_params,
+      &type_param_decls,
+      &lowered_entries,
+      &hir_def_maps,
+      &def_by_name,
+    )?;
 
     // Populate declared types for ambient value declarations (notably `.d.ts`
     // `declare const ...: ...` bindings). These do not appear in HIR `type_info`
@@ -6985,6 +6997,215 @@ impl ProgramState {
         }
       }
     }
+  }
+
+  fn check_class_implements(
+    &mut self,
+    host: &Arc<dyn Host>,
+    store: &Arc<tti::TypeStore>,
+    def_types: &HashMap<DefId, tti::TypeId>,
+    type_params: &HashMap<DefId, Vec<TypeParamId>>,
+    type_param_decls: &HashMap<DefId, Arc<[tti::TypeParamDecl]>>,
+    lowered_entries: &[(FileId, Arc<LowerResult>)],
+    hir_def_maps: &HashMap<FileId, HashMap<HirDefId, DefId>>,
+    def_by_name: &HashMap<(FileId, Option<DefId>, String, sem_ts::Namespace), DefId>,
+  ) -> Result<(), FatalError> {
+    if lowered_entries.is_empty() {
+      return Ok(());
+    }
+
+    let mut ordered_globals: Vec<(String, FileId, DefId)> = def_by_name
+      .iter()
+      .filter_map(|((file, parent, name, ns), def)| {
+        (parent.is_none() && *ns == sem_ts::Namespace::TYPE).then_some((name.clone(), *file, *def))
+      })
+      .collect();
+    ordered_globals.sort_by(|(name_a, file_a, def_a), (name_b, file_b, def_b)| {
+      (name_a.as_str(), file_a.0, def_a.0).cmp(&(name_b.as_str(), file_b.0, def_b.0))
+    });
+    let mut global_types_by_name: HashMap<String, DefId> = HashMap::new();
+    for (name, _file, def) in ordered_globals.into_iter() {
+      global_types_by_name.entry(name).or_insert(def);
+    }
+
+    let caches = self.checker_caches.for_body();
+    let expander = RefExpander::new(
+      Arc::clone(store),
+      def_types,
+      type_params,
+      type_param_decls,
+      &self.interned_intrinsics,
+      &self.interned_class_instances,
+      caches.eval.clone(),
+    );
+    let mut hooks = relate_hooks();
+    hooks.expander = Some(&expander);
+    let relate = RelateCtx::with_hooks_and_cache(
+      Arc::clone(store),
+      store.options(),
+      hooks,
+      caches.relation.clone(),
+    );
+    let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+
+    fn resolve_member_symbol<'a>(
+      names: &'a hir_js::NameInterner,
+      name: &hir_js::PropertyName,
+    ) -> Option<&'a str> {
+      match name {
+        hir_js::PropertyName::Symbol(id) => names.resolve(*id),
+        _ => None,
+      }
+    }
+
+    fn member_span_for_symbol(
+      names: &hir_js::NameInterner,
+      members: &[hir_js::ClassMemberSig],
+      symbol: &str,
+    ) -> Option<TextRange> {
+      for member in members {
+        if member.static_ {
+          continue;
+        }
+        let name = match &member.kind {
+          hir_js::ClassMemberSigKind::Field { name, .. } => name,
+          hir_js::ClassMemberSigKind::Method { name, .. } => name,
+          hir_js::ClassMemberSigKind::Getter { name, .. } => name,
+          hir_js::ClassMemberSigKind::Setter { name, .. } => name,
+          _ => continue,
+        };
+        if resolve_member_symbol(names, name) == Some(symbol) {
+          return Some(member.span);
+        }
+      }
+      None
+    }
+
+    fn find_symbol_key_range(text: &str, span: TextRange, symbol: &str) -> Option<TextRange> {
+      let start = span.start as usize;
+      let end = span.end as usize;
+      let slice = text.get(start..end)?;
+      let direct = format!("[Symbol.{symbol}]");
+      if let Some(offset) = slice.find(&direct) {
+        let start = span.start.saturating_add(offset as u32);
+        let end = start.saturating_add(direct.len() as u32);
+        return Some(TextRange::new(start, end));
+      }
+      let computed = format!("[Symbol[\"{symbol}\"]]");
+      if let Some(offset) = slice.find(&computed) {
+        let start = span.start.saturating_add(offset as u32);
+        let end = start.saturating_add(computed.len() as u32);
+        return Some(TextRange::new(start, end));
+      }
+      None
+    }
+
+    for (file_idx, (file, lowered)) in lowered_entries.iter().enumerate() {
+      if (file_idx % 16) == 0 {
+        self.check_cancelled()?;
+      }
+      if self.compiler_options.skip_lib_check && self.file_kinds.get(file) == Some(&FileKind::Dts) {
+        continue;
+      }
+      let Ok(text) = self.load_text(*file, host) else {
+        continue;
+      };
+      let def_map = hir_def_maps.get(file);
+      for def in lowered.defs.iter() {
+        let Some(hir_js::DefTypeInfo::Class {
+          implements,
+          members,
+          ..
+        }) = def.type_info.as_ref()
+        else {
+          continue;
+        };
+        if implements.is_empty() {
+          continue;
+        }
+        let Some(arenas) = lowered.type_arenas(def.id) else {
+          continue;
+        };
+        let mapped = def_map
+          .and_then(|map| map.get(&def.id).copied())
+          .unwrap_or(def.id);
+        let Some(class_ty) = def_types.get(&mapped).copied() else {
+          continue;
+        };
+        for implemented in implements.iter().copied() {
+          let mut expr_id = implemented;
+          loop {
+            let Some(expr) = arenas.type_exprs.get(expr_id.0 as usize) else {
+              break;
+            };
+            match &expr.kind {
+              hir_js::TypeExprKind::Parenthesized(inner) => expr_id = *inner,
+              _ => break,
+            }
+          }
+          let Some(expr) = arenas.type_exprs.get(expr_id.0 as usize) else {
+            continue;
+          };
+          let hir_js::TypeExprKind::TypeRef(type_ref) = &expr.kind else {
+            continue;
+          };
+          if !type_ref.type_args.is_empty() {
+            continue;
+          }
+          let hir_js::TypeName::Ident(name_id) = &type_ref.name else {
+            continue;
+          };
+          let Some(name) = lowered.names.resolve(*name_id).map(|s| s.to_string()) else {
+            continue;
+          };
+          let def_id = def_by_name
+            .get(&(*file, None, name.clone(), sem_ts::Namespace::TYPE))
+            .copied()
+            .or_else(|| global_types_by_name.get(&name).copied());
+          let Some(def_id) = def_id else {
+            continue;
+          };
+          let iface_ty = store.intern_type(tti::TypeKind::Ref {
+            def: def_id,
+            args: Vec::new(),
+          });
+          if relate.is_assignable(class_ty, iface_ty) {
+            continue;
+          }
+
+          let mut mismatched: Option<PropertyKey> = None;
+          for prop in queries.properties_of(iface_ty) {
+            let Some(actual) = queries.property_type(class_ty, prop.key.clone()) else {
+              continue;
+            };
+            if !relate.is_assignable(actual, prop.ty) {
+              mismatched = Some(prop.key);
+              break;
+            }
+          }
+          let Some(PropertyKey::Symbol(symbol)) = mismatched else {
+            continue;
+          };
+          let Some(member_span) = member_span_for_symbol(&lowered.names, members, &symbol) else {
+            continue;
+          };
+          let key_span =
+            find_symbol_key_range(text.as_ref(), member_span, &symbol).unwrap_or(member_span);
+          self
+            .diagnostics
+            .push(codes::PROPERTY_IN_TYPE_NOT_ASSIGNABLE_TO_BASE.error(
+              "property not assignable to base type",
+              Span::new(*file, key_span),
+            ));
+        }
+      }
+    }
+
+    if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
+      self.cache_stats.merge(&caches.stats());
+    }
+
+    Ok(())
   }
 
   fn lower_function_signature(

@@ -2179,11 +2179,18 @@ impl<'a> Checker<'a> {
     if self.relate.is_assignable(init_ty, required_ty) {
       return;
     }
+    let mut range = loc_to_range(self.file, init.loc);
+    if let AstExpr::Unary(unary) = init.stx.as_ref() {
+      if matches!(unary.stx.operator, OperatorName::New) {
+        let arg_end = unary.stx.argument.loc.end_u32();
+        range.end = range.end.min(arg_end);
+      }
+    }
     self
       .diagnostics
       .push(codes::INVALID_USING_INITIALIZER.error(
         format!("initializer must be assignable to `{required}`"),
-        Span::new(self.file, loc_to_range(self.file, init.loc)),
+        Span::new(self.file, range),
       ));
   }
 

@@ -282,7 +282,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   ) -> (TypeId, TypeId) {
     let DefTypeInfo::Class {
       extends,
-      implements,
+      implements: _,
       members,
       ..
     } = info
@@ -464,9 +464,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let mut instance_parts = vec![instance_obj];
     if let Some(ext) = extends {
       instance_parts.push(self.lower_type_expr(*ext, names));
-    }
-    for implemented in implements.iter() {
-      instance_parts.push(self.lower_type_expr(*implemented, names));
     }
     let instance = if instance_parts.len() == 1 {
       instance_parts[0]

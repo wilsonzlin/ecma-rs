@@ -268,6 +268,22 @@ pub const USE_BEFORE_ASSIGNMENT: Code = Code::new(
   &[],
 );
 
+/// TS2416: Property in type is not assignable to the same property in base type.
+///
+/// TypeScript emits this diagnostic when a class member conflicts with the
+/// corresponding property declared in an implemented interface or base class.
+///
+/// - Primary span: the property name in the derived type declaration.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const PROPERTY_IN_TYPE_NOT_ASSIGNABLE_TO_BASE: Code = Code::new(
+  "TS2416",
+  "property not assignable to base type",
+  "property name in the derived type declaration",
+  &["primary: property name"],
+  &[],
+);
+
 /// TS1202: Import assignment cannot be used when targeting ECMAScript modules.
 ///
 /// - Primary span: the full `import x = require("...")` statement.

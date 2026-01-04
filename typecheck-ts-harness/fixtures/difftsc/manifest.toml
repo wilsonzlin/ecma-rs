@@ -12,8 +12,3 @@ reason = "Rust checker does not yet follow tsc's function+namespace merge rules,
 id = "difftsc/merged_function_namespace"
 status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
-
-[[expectations]]
-id = "difftsc/await_using_valid"
-status = "xfail"
-reason = "Rust checker does not yet match tsc's `AsyncDisposable` validation; tsc reports TS2416/TS2851 diagnostics."
