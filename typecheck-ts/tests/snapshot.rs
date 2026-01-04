@@ -98,6 +98,48 @@ fn snapshot_roundtrips_queries() {
 }
 
 #[test]
+fn snapshot_restoration_loads_missing_source_text_from_host() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+  let file_entry = program.file_id(&key(FileId(0))).expect("entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let type_at_call = program
+    .type_at(file_entry, call_offset)
+    .expect("type at call");
+
+  let mut snapshot = program.snapshot();
+  for file in snapshot.files.iter_mut() {
+    if !file.is_lib {
+      file.text = None;
+    }
+  }
+  let restored = Program::from_snapshot(host, snapshot);
+
+  assert_eq!(restored.check(), diagnostics);
+  let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
+  assert_eq!(
+    restored.file_text(restored_entry).as_deref(),
+    Some(entry_source)
+  );
+  assert_eq!(
+    restored.type_at(restored_entry, call_offset),
+    Some(type_at_call),
+    "snapshot restoration should load host text for missing sources"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));

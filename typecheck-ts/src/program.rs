@@ -2582,6 +2582,7 @@ impl Program {
     let program = Program::with_lib_manager(host, root_keys, Arc::new(LibManager::new()));
     {
       let mut state = program.lock_state();
+      let mut extra_diagnostics = Vec::new();
       state.analyzed = true;
       state.snapshot_loaded = true;
       state.compiler_options = snapshot.compiler_options;
@@ -2611,13 +2612,19 @@ impl Program {
         if file.is_lib {
           state.lib_file_ids.insert(file.file);
         }
-        if let Some(text) = file.text {
-          let arc = Arc::from(text);
-          state.lib_texts.insert(file.file, Arc::clone(&arc));
-          state.set_salsa_inputs(file.file, file.kind, arc);
+        let arc = if let Some(text) = file.text {
+          Arc::from(text)
         } else {
-          state.typecheck_db.set_file_kind(file.file, file.kind);
-        }
+          match state.host.file_text(&key) {
+            Ok(text) => text,
+            Err(err) => {
+              extra_diagnostics.push(fatal_to_diagnostic(FatalError::Host(err)));
+              Arc::<str>::from("")
+            }
+          }
+        };
+        state.lib_texts.insert(file.file, Arc::clone(&arc));
+        state.set_salsa_inputs(file.file, file.kind, arc);
       }
       state.files = snapshot
         .file_states
@@ -2655,6 +2662,7 @@ impl Program {
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
       state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
       state.diagnostics = snapshot.diagnostics;
+      state.diagnostics.extend(extra_diagnostics);
       state.type_store = snapshot.type_store;
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
