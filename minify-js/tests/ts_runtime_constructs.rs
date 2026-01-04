@@ -2,6 +2,7 @@ use minify_js::{minify_with_options, Dialect, MinifyOptions, TopLevelMode};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::Expr;
+use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
@@ -34,6 +35,32 @@ fn has_exported_var_decl(program: &Node<TopLevel>, name: &str) -> bool {
     Stmt::VarDecl(decl) if decl.stx.export => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
     }),
+    _ => false,
+  })
+}
+
+fn has_exported_name(program: &Node<TopLevel>, exported: &str) -> bool {
+  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+    Stmt::VarDecl(decl) if decl.stx.export => decl.stx.declarators.iter().any(|declarator| {
+      matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == exported)
+    }),
+    Stmt::FunctionDecl(func) if func.stx.export => func
+      .stx
+      .name
+      .as_ref()
+      .is_some_and(|name| name.stx.name == exported),
+    Stmt::ClassDecl(class_decl) if class_decl.stx.export => class_decl
+      .stx
+      .name
+      .as_ref()
+      .is_some_and(|name| name.stx.name == exported),
+    Stmt::ExportList(export_stmt) if !export_stmt.stx.type_only => match &export_stmt.stx.names {
+      ExportNames::Specific(entries) => entries.iter().any(|entry| {
+        !entry.stx.type_only && entry.stx.alias.stx.name == exported
+      }),
+      ExportNames::All(Some(alias)) => alias.stx.name == exported,
+      ExportNames::All(None) => false,
+    },
     _ => false,
   })
 }
@@ -465,5 +492,42 @@ fn lowers_export_import_equals_inside_runtime_namespaces() {
       Expr::Member(member) if member.stx.right == "Nested"
     ),
     "expected Bar initializer to reference `.Nested`, got {bar_init:?}"
+  );
+}
+
+#[test]
+fn exported_runtime_enums_preserve_self_export_when_exported_under_alias() {
+  let src = r#"
+    export enum E { A }
+    export { E as E2 };
+  "#;
+  let (_code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_exported_name(&parsed, "E"),
+    "expected enum lowering to export `E`"
+  );
+  assert!(
+    has_exported_name(&parsed, "E2"),
+    "expected the alias export `E2` to be preserved"
+  );
+}
+
+#[test]
+fn exported_runtime_namespaces_merged_with_functions_preserve_self_export_when_exported_under_alias() {
+  let src = r#"
+    function N() {}
+    export namespace N { export const x = 1; }
+    export { N as N2 };
+  "#;
+  let (_code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_exported_name(&parsed, "N"),
+    "expected namespace merging to export `N`"
+  );
+  assert!(
+    has_exported_name(&parsed, "N2"),
+    "expected the alias export `N2` to be preserved"
   );
 }
