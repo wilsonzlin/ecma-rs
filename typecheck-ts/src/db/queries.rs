@@ -963,6 +963,7 @@ pub mod body_check {
         &bindings,
         resolver,
         Some(&expander),
+        Some(&ctx.interned_type_param_decls),
         contextual_fn_ty,
         ctx.no_implicit_any,
         ctx.jsx_mode,

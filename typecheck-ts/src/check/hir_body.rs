@@ -30,7 +30,7 @@ use semantic_js::ts::SymbolId;
 use types_ts_interned::{
   EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData,
   PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander,
-  TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -945,6 +945,7 @@ pub fn check_body(
     resolver,
     None,
     None,
+    None,
     false,
     None,
     None,
@@ -967,6 +968,7 @@ pub fn check_body_with_expander(
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+  type_param_decls: Option<&HashMap<DefId, Arc<[TypeParamDecl]>>>,
   contextual_fn_ty: Option<TypeId>,
   no_implicit_any: bool,
   jsx_mode: Option<JsxMode>,
@@ -1062,6 +1064,7 @@ pub fn check_body_with_expander(
     class_field_initializer: None,
     file,
     ref_expander: relate_expander,
+    def_type_param_decls: type_param_decls,
     contextual_fn_ty,
     cancelled,
     _names: names,
@@ -1189,6 +1192,7 @@ struct Checker<'a> {
   class_field_initializer: Option<ClassFieldInitializerContext>,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
+  def_type_param_decls: Option<&'a HashMap<DefId, Arc<[TypeParamDecl]>>>,
   contextual_fn_ty: Option<TypeId>,
   cancelled: Option<&'a Arc<AtomicBool>>,
   _names: &'a NameInterner,
@@ -2290,11 +2294,37 @@ impl<'a> Checker<'a> {
         } else {
           obj_ty
         };
-        let prop_ty = if chain_optional && base_obj_ty == prim.never {
+        let mut prop_ty = if chain_optional && base_obj_ty == prim.never {
           prim.undefined
         } else {
           self.member_type(base_obj_ty, &mem.stx.right)
         };
+
+        let is_callable =
+          !callable_signatures_with_expander(self.store.as_ref(), base_obj_ty, self.ref_expander)
+            .is_empty();
+
+        if is_callable
+          && prop_ty == prim.unknown
+          && !matches!(
+            self.store.type_kind(base_obj_ty),
+            TypeKind::Any | TypeKind::Unknown | TypeKind::Never
+          )
+          && !self.type_has_prop(base_obj_ty, &mem.stx.right)
+        {
+          let name_len = mem.stx.right.len() as u32;
+          let start = full_range.end.saturating_sub(name_len);
+          let range = TextRange::new(start, full_range.end);
+          self.diagnostics.push(codes::PROPERTY_DOES_NOT_EXIST.error(
+            format!(
+              "Property '{}' does not exist on type '{}'.",
+              mem.stx.right,
+              TypeDisplay::new(self.store.as_ref(), base_obj_ty)
+            ),
+            Span::new(self.file, range),
+          ));
+          prop_ty = prim.any;
+        }
         if self.native_define_class_fields {
           if let Some(props) = self.current_class_field_param_props {
             if matches!(mem.stx.left.stx.as_ref(), AstExpr::This(_))
@@ -5450,25 +5480,22 @@ impl<'a> Checker<'a> {
               });
             }
             ClassOrObjVal::Method(method) => {
-              let prop_ty = if expected_prop != prim.unknown {
-                expected_prop
-              } else {
-                self.function_type(&method.stx.func)
-              };
-              let expr_ty = if expected_prop != prim.unknown {
-                // Use a callable type for contextual typing, even if the expected
-                // property type is wrapped in unions/intersections.
-                self
+              let mut ty = self.function_type(&method.stx.func);
+              if expected_prop != prim.unknown {
+                let expected_callable = self
                   .contextual_callable_type(expected_prop)
-                  .unwrap_or(expected_prop)
-              } else {
-                prop_ty
-              };
-              self.record_expr_type(method.loc, expr_ty);
+                  .unwrap_or(expected_prop);
+                if let Some(refined) =
+                  self.refine_function_expr_with_expected(&method.stx.func, expected_callable)
+                {
+                  ty = refined;
+                }
+              }
+              self.record_expr_type(method.loc, ty);
               shape.properties.push(types_ts_interned::Property {
                 key: prop_key,
                 data: PropData {
-                  ty: prop_ty,
+                  ty,
                   optional: false,
                   readonly: false,
                   accessibility: None,
@@ -6613,7 +6640,7 @@ impl<'a> Checker<'a> {
         return;
       }
     }
-    if self.relate.is_assignable(src, dst) {
+    if self.relate.is_assignable(src, dst) && self.variance_allows_assignability(src, dst) {
       return;
     }
     if std::env::var("DEBUG_TYPE_MISMATCH").is_ok() {
@@ -6735,6 +6762,64 @@ impl<'a> Checker<'a> {
         range: base_range,
       },
     ));
+  }
+
+  fn variance_allows_assignability(&self, src: TypeId, dst: TypeId) -> bool {
+    let Some(type_param_decls) = self.def_type_param_decls else {
+      return true;
+    };
+    let src = self.store.canon(src);
+    let dst = self.store.canon(dst);
+    let (def, src_args, dst_args) = match (self.store.type_kind(src), self.store.type_kind(dst)) {
+      (
+        TypeKind::Ref {
+          def: src_def,
+          args: src_args,
+        },
+        TypeKind::Ref {
+          def: dst_def,
+          args: dst_args,
+        },
+      ) if src_def == dst_def => (src_def, src_args, dst_args),
+      _ => return true,
+    };
+    let Some(decls) = type_param_decls.get(&def) else {
+      return true;
+    };
+    if !decls.iter().any(|decl| decl.variance.is_some()) {
+      return true;
+    }
+    for (idx, decl) in decls.iter().enumerate() {
+      let Some(variance) = decl.variance else {
+        continue;
+      };
+      let Some(src_arg) = src_args.get(idx).copied() else {
+        continue;
+      };
+      let Some(dst_arg) = dst_args.get(idx).copied() else {
+        continue;
+      };
+      match variance {
+        TypeParamVariance::Out => {
+          if !self.relate.is_assignable(src_arg, dst_arg) {
+            return false;
+          }
+        }
+        TypeParamVariance::In => {
+          if !self.relate.is_assignable(dst_arg, src_arg) {
+            return false;
+          }
+        }
+        TypeParamVariance::InOut => {
+          if !self.relate.is_assignable(src_arg, dst_arg)
+            || !self.relate.is_assignable(dst_arg, src_arg)
+          {
+            return false;
+          }
+        }
+      }
+    }
+    true
   }
 }
 

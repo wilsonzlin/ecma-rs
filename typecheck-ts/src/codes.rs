@@ -237,6 +237,45 @@ pub const MISSING_GLOBAL_PROPERTY: Code = Code::new(
   &[],
 );
 
+/// TS2339: Property does not exist on type.
+///
+/// - Primary span: the property name being accessed.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const PROPERTY_DOES_NOT_EXIST: Code = Code::new(
+  "TS2339",
+  "property does not exist on type",
+  "property name within a member expression",
+  &["primary: property name"],
+  &[],
+);
+
+/// TS2395: Merged declarations must be all exported or all local.
+///
+/// - Primary span: the identifier name of the declaration participating in the merge.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const MERGED_DECLARATIONS_EXPORT_MISMATCH: Code = Code::new(
+  "TS2395",
+  "merged declarations must be all exported or all local",
+  "declaration name participating in the merge",
+  &["primary: declaration name"],
+  &[],
+);
+
+/// TS2434: Namespace declaration cannot appear before the class/function it merges with.
+///
+/// - Primary span: the namespace name being merged.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const NAMESPACE_BEFORE_MERGE_TARGET: Code = Code::new(
+  "TS2434",
+  "namespace declaration cannot appear before the class/function it merges with",
+  "namespace name participating in the merge",
+  &["primary: namespace name"],
+  &[],
+);
+
 /// TS2318: Cannot find global type.
 ///
 /// TypeScript reports this diagnostic when the default library set is disabled
