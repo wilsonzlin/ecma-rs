@@ -20,6 +20,13 @@ use typecheck_ts_harness::Shard;
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";
 const DEFAULT_TIMEOUT: u64 = 10;
 
+fn default_jobs() -> usize {
+  // Keep defaults conservative to avoid excessive memory usage when many
+  // independent programs are checked in parallel. Callers can override via
+  // `--jobs`.
+  num_cpus::get().min(4)
+}
+
 #[derive(Parser)]
 #[command(author, version, about = "TypeScript type-checking harness utilities", long_about = None)]
 struct Cli {
@@ -103,7 +110,7 @@ enum Commands {
     fail_on: FailOn,
 
     /// Number of worker threads to use (defaults to CPU count)
-    #[arg(long, default_value_t = num_cpus::get())]
+    #[arg(long, default_value_t = default_jobs())]
     jobs: usize,
   },
 

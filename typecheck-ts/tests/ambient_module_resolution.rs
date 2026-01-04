@@ -120,7 +120,7 @@ fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_
   host.insert(
     ambient.clone(),
     r#"
-export {};
+export as namespace pkg;
 declare module "pkg" {
   declare function Foo(): 1;
   declare namespace Foo {
@@ -174,7 +174,7 @@ fn import_equals_require_resolves_ambient_export_assignment_through_host_module_
   host.insert(
     ambient.clone(),
     r#"
-export {};
+export as namespace pkg;
 declare module "pkg" {
   declare const foo: 1;
   export = foo;

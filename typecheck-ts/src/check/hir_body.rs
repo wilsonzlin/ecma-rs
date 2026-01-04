@@ -39,7 +39,7 @@ use super::flow_bindings::{FlowBindingId, FlowBindings};
 use super::flow_narrow::{
   and_facts, narrow_by_assignability, narrow_by_discriminant_path, narrow_by_in_check,
   narrow_by_instanceof_rhs, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
-  narrow_non_nullish, or_facts, truthy_falsy_types, Facts, LiteralValue,
+  narrow_non_nullish, nullish_coalesce_facts, or_facts, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::caches::BodyCaches;
@@ -7542,18 +7542,28 @@ impl<'a> FlowBodyChecker<'a> {
         self.store.union(vec![left_ty, right_ty])
       }
       BinaryOp::NullishCoalescing => {
-        let (present, nullish) = self.split_nullish(left_ty);
+        let prim = self.store.primitive_ids();
+        let (nonnullish, nullish) = narrow_non_nullish(left_ty, &self.store);
+
         let mut right_env = env.clone();
-        if nullish != self.store.primitive_ids().never {
-          if let Some(binding) = self.ident_binding(left) {
-            right_env.set(binding, nullish);
-          }
+        right_env.apply_map(&left_facts.assertions);
+
+        let mut left_nullish = HashMap::new();
+        if let Some(binding) = self.nullish_coalesce_binding(left) {
+          let key = FlowKey::root(binding);
+          left_nullish.insert(key.clone(), nullish);
+          right_env.set(binding, nullish);
         }
-        let right_ty = self.eval_expr(right, &mut right_env).0;
-        if nullish == self.store.primitive_ids().never {
-          present
+
+        let (right_ty, right_facts) = self.eval_expr(right, &mut right_env);
+        if nullish == prim.never {
+          // The RHS is unreachable at runtime; still type-check it, but do not
+          // incorporate its narrowing facts into the current environment.
+          *out = left_facts;
+          nonnullish
         } else {
-          self.store.union(vec![present, right_ty])
+          *out = nullish_coalesce_facts(left_facts, right_facts, left_nullish, &self.store);
+          self.store.union(vec![nonnullish, right_ty])
         }
       }
       _ => {
@@ -8223,6 +8233,16 @@ impl<'a> FlowBodyChecker<'a> {
   fn ident_binding(&self, expr_id: ExprId) -> Option<FlowBindingId> {
     match self.body.exprs[expr_id.0 as usize].kind {
       ExprKind::Ident(_) => self.bindings.binding_for_expr(expr_id),
+      _ => None,
+    }
+  }
+
+  fn nullish_coalesce_binding(&self, expr_id: ExprId) -> Option<FlowBindingId> {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(_) => self.ident_binding(expr_id),
+      ExprKind::TypeAssertion { expr, .. }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr, .. } => self.nullish_coalesce_binding(*expr),
       _ => None,
     }
   }

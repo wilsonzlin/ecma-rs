@@ -60,3 +60,24 @@ function optionalChainNarrows(x: { foo: string } | undefined) {
 function nullishCoalescingNarrowsRhs(x: string | null | undefined) {
   x ?? x/*^?*/;
 }
+
+type Tagged =
+  | { kind: "a"; a: number }
+  | { kind: "b"; b: number };
+
+function pickTagged(x: Tagged) {
+  if (x.kind === "a") {
+    const a: number = x.a;
+    return a;
+  }
+  const b: number = x.b;
+  return b;
+}
+
+function optionalChainNullishCoalesce(x: { value: number } | undefined) {
+  if (x?.value ?? false) {
+    const v: number = x.value;
+    return v;
+  }
+  return 0;
+}

@@ -31,6 +31,15 @@ use std::time::{Duration, Instant};
 use typecheck_ts::Program;
 use walkdir::WalkDir;
 
+fn default_jobs() -> usize {
+  // Many CI environments report very large logical CPU counts. Running too many
+  // difftsc cases in parallel can balloon memory usage (each case builds a full
+  // `Program` + lib types) and lead to thrashing or timeouts in harness
+  // integration tests. Keep the default conservative; callers can still opt
+  // into a larger pool via `--jobs`.
+  num_cpus::get().min(4)
+}
+
 #[derive(Debug, Clone, Args)]
 pub struct DifftscArgs {
   /// Path to the suite containing fixture tests.
@@ -78,7 +87,7 @@ pub struct DifftscArgs {
   pub fail_on: FailOn,
 
   /// Number of worker threads to use.
-  #[arg(long, default_value_t = num_cpus::get())]
+  #[arg(long, default_value_t = default_jobs())]
   pub jobs: usize,
 }
 

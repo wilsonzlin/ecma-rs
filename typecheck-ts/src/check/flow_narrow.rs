@@ -3,9 +3,49 @@ use std::collections::{HashMap, HashSet};
 
 use hir_js::BinaryOp;
 use num_bigint::BigInt;
-use types_ts_interned::{RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore};
+use types_ts_interned::{IntrinsicKind, RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore};
 
 use super::flow::{FlowKey, PathSegment};
+
+/// Expand `TypeKind::Ref` nodes, stopping when expansion makes no progress or
+/// encounters a cycle.
+///
+/// `RelateTypeExpander::expand_ref` is already recursion-safe during expansion,
+/// but callers must still defend against "no-progress" results (e.g. a
+/// self-referential type alias whose expansion is itself a `Ref`, or a small
+/// alias cycle like `A = B; B = A`).
+fn expand_ref_no_progress_guard(
+  ty: TypeId,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
+) -> TypeId {
+  let Some(expander) = expander else {
+    return store.canon(ty);
+  };
+  let mut current = store.canon(ty);
+  while *budget > 0 {
+    match store.type_kind(current) {
+      TypeKind::Ref { def, args } => {
+        if !seen.insert(current) {
+          break;
+        }
+        let Some(expanded) = expander.expand_ref(store, def, &args) else {
+          break;
+        };
+        let expanded = store.canon(expanded);
+        if expanded == current {
+          break;
+        }
+        current = expanded;
+        *budget -= 1;
+      }
+      _ => break,
+    }
+  }
+  current
+}
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -127,6 +167,40 @@ pub fn or_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
     truthy,
     falsy,
     assertions,
+  }
+}
+
+/// Compose facts for `A ?? B`.
+///
+/// The right-hand side is evaluated only when `A` is `null` / `undefined`. This
+/// helper keeps the implementation conservative: it preserves narrowing facts
+/// from `A` (when `A` itself decides the branch) and combines them with the
+/// facts that hold when `B` is evaluated, seeded by the provided
+/// `left_nullish_facts`.
+pub fn nullish_coalesce_facts(
+  left: Facts,
+  right: Facts,
+  left_nullish_facts: HashMap<FlowKey, TypeId>,
+  store: &TypeStore,
+) -> Facts {
+  let Facts {
+    truthy: left_truthy,
+    falsy: left_falsy,
+    assertions: left_assertions,
+  } = left;
+  let Facts {
+    truthy: right_truthy,
+    falsy: right_falsy,
+    assertions: right_assertions,
+  } = right;
+
+  let right_truthy = apply_sequence(&left_nullish_facts, &right_truthy);
+  let right_falsy = apply_sequence(&left_nullish_facts, &right_falsy);
+
+  Facts {
+    truthy: join_alternatives(&left_truthy, &right_truthy, store),
+    falsy: join_alternatives(&left_falsy, &right_falsy, store),
+    assertions: merge_assertions(left_assertions, right_assertions, store),
   }
 }
 
@@ -358,8 +432,11 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
     | TypeKind::Array { .. }
     | TypeKind::Tuple(_)
     | TypeKind::Callable { .. } => (ty, primitives.never),
+    TypeKind::Intrinsic {
+      kind: IntrinsicKind::NoInfer,
+      ty: operand,
+    } => truthy_falsy_types(operand, store),
     TypeKind::Ref { .. }
-    | TypeKind::Intrinsic { .. }
     | TypeKind::TypeParam(_)
     | TypeKind::Infer { .. }
     | TypeKind::Intersection(_)
@@ -369,6 +446,7 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
     | TypeKind::KeyOf(_)
     | TypeKind::This
     | TypeKind::Predicate { .. } => (ty, ty),
+    TypeKind::Intrinsic { .. } => (ty, ty),
   }
 }
 
@@ -391,6 +469,14 @@ pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       (store.union(non_nullish), store.union(nullish))
     }
     TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
+    TypeKind::Intrinsic {
+      kind: IntrinsicKind::NoInfer,
+      ty: operand,
+    } => narrow_non_nullish(operand, store),
+    TypeKind::Intrinsic {
+      kind: IntrinsicKind::BuiltinIteratorReturn,
+      ..
+    } => (ty, ty),
     TypeKind::Any | TypeKind::Unknown | TypeKind::Intersection(_) => (ty, ty),
     TypeKind::Never => (primitives.never, primitives.never),
     _ => (ty, primitives.never),
@@ -400,7 +486,8 @@ pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
 /// Narrow a variable by a typeof comparison (e.g. `typeof x === "string"`).
 pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
-  let matches = |k: &TypeKind| match k {
+  fn matches_typeof(kind: &TypeKind, target: &str, store: &TypeStore) -> bool {
+    match kind {
     TypeKind::String | TypeKind::StringLiteral(_) => target == "string",
     TypeKind::Number | TypeKind::NumberLiteral(_) => target == "number",
     TypeKind::Boolean | TypeKind::BooleanLiteral(_) => target == "boolean",
@@ -410,15 +497,22 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
     TypeKind::Undefined => target == "undefined",
     TypeKind::Null => target == "object",
     TypeKind::Object(_) | TypeKind::Array { .. } | TypeKind::Ref { .. } => target == "object",
+    TypeKind::Intrinsic { kind, ty } => match kind {
+      IntrinsicKind::NoInfer => matches_typeof(&store.type_kind(*ty), target, store),
+      IntrinsicKind::BuiltinIteratorReturn => false,
+      _ => target == "string",
+    },
+    TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject | TypeKind::TypeParam(_) => false,
     _ => false,
-  };
+    }
+  }
 
   match store.type_kind(ty) {
     TypeKind::Union(members) => {
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        if matches(&store.type_kind(member)) {
+        if matches_typeof(&store.type_kind(member), target, store) {
           yes.push(member);
         } else {
           no.push(member);
@@ -426,8 +520,30 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
       }
       (store.union(yes), store.union(no))
     }
+    TypeKind::Any | TypeKind::EmptyObject => (ty, ty),
+    TypeKind::Intrinsic {
+      kind: IntrinsicKind::NoInfer,
+      ty: operand,
+    } => narrow_by_typeof(operand, target, store),
+    TypeKind::Intrinsic {
+      kind: IntrinsicKind::BuiltinIteratorReturn,
+      ..
+    } => (ty, ty),
+    TypeKind::Unknown => {
+      let prim = store.primitive_ids();
+      let yes = match target {
+        "string" => prim.string,
+        "number" => prim.number,
+        "boolean" => prim.boolean,
+        "bigint" => prim.bigint,
+        "symbol" => prim.symbol,
+        "undefined" => prim.undefined,
+        _ => return (ty, ty),
+      };
+      (yes, ty)
+    }
     _ => {
-      if matches(&store.type_kind(ty)) {
+      if matches_typeof(&store.type_kind(ty), target, store) {
         (ty, primitives.never)
       } else {
         (primitives.never, ty)
@@ -461,8 +577,9 @@ pub fn narrow_by_discriminant_path(
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> (TypeId, TypeId) {
-  let mut in_progress = HashSet::new();
-  narrow_by_discriminant_path_inner(ty, path, value, store, expander, &mut in_progress)
+  let mut seen = HashSet::new();
+  let mut budget = 64usize;
+  narrow_by_discriminant_path_inner(ty, path, value, store, expander, &mut seen, &mut budget)
 }
 
 fn narrow_by_discriminant_path_inner(
@@ -471,17 +588,19 @@ fn narrow_by_discriminant_path_inner(
   value: &LiteralValue,
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
-  in_progress: &mut HashSet<TypeId>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
+  let ty = store.canon(ty);
   match store.type_kind(ty) {
-    TypeKind::Any | TypeKind::Unknown => (ty, ty),
+    TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject | TypeKind::TypeParam(_) => (ty, ty),
     TypeKind::Union(members) => {
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
         let (t, f) =
-          narrow_by_discriminant_path_inner(member, path, value, store, expander, in_progress);
+          narrow_by_discriminant_path_inner(member, path, value, store, expander, seen, budget);
         if t != primitives.never {
           yes.push(t);
         }
@@ -491,34 +610,26 @@ fn narrow_by_discriminant_path_inner(
       }
       (store.union(yes), store.union(no))
     }
-    TypeKind::Ref { def, args } => {
-      if !in_progress.insert(ty) {
-        // Cycle detected while expanding references. Be conservative and avoid
-        // narrowing (mirror TS's behavior of bailing out on recursive structures).
+    TypeKind::Ref { .. } => {
+      let expanded = expand_ref_no_progress_guard(ty, store, expander, seen, budget);
+      if expanded == ty {
+        // Without progress we cannot establish whether the discriminant holds.
         return (ty, ty);
       }
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        let (yes, no) =
-          narrow_by_discriminant_path_inner(expanded, path, value, store, expander, in_progress);
-        // Preserve the reference when the narrowing is an all-or-nothing match,
-        // so difftsc marker output keeps named types intact.
-        let result = if yes == expanded && no == primitives.never {
-          (ty, primitives.never)
-        } else if yes == primitives.never && no == expanded {
-          (primitives.never, ty)
-        } else {
-          (yes, no)
-        };
-        in_progress.remove(&ty);
-        result
+      let (yes, no) =
+        narrow_by_discriminant_path_inner(expanded, path, value, store, expander, seen, budget);
+      // Preserve the reference when the narrowing is an all-or-nothing match, so
+      // marker output keeps named types intact.
+      if yes == expanded && no == primitives.never {
+        (ty, primitives.never)
+      } else if yes == primitives.never && no == expanded {
+        (primitives.never, ty)
       } else {
-        // Without an expander we cannot prove whether the property exists.
-        in_progress.remove(&ty);
-        (ty, ty)
+        (yes, no)
       }
     }
     _ => {
-      if matches_discriminant_path(ty, path, value, store, expander, in_progress) {
+      if matches_discriminant_path(ty, path, value, store, expander, seen, budget) {
         (ty, primitives.never)
       } else {
         (primitives.never, ty)
@@ -533,74 +644,60 @@ fn matches_discriminant_path(
   value: &LiteralValue,
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
-  in_progress: &mut HashSet<TypeId>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
 ) -> bool {
   if path.is_empty() {
     return false;
   }
+  let ty = expand_ref_no_progress_guard(ty, store, expander, seen, budget);
   match store.type_kind(ty) {
     TypeKind::Union(members) => members
       .iter()
-      .any(|member| matches_discriminant_path(*member, path, value, store, expander, in_progress)),
+      .any(|member| matches_discriminant_path(*member, path, value, store, expander, seen, budget)),
     TypeKind::Intersection(members) => members
       .iter()
-      .any(|member| matches_discriminant_path(*member, path, value, store, expander, in_progress)),
-    TypeKind::Ref { def, args } => {
-      if !in_progress.insert(ty) {
-        return false;
-      }
-      let expanded = expander.and_then(|e| e.expand_ref(store, def, &args));
-      let result = expanded.map_or(false, |expanded| {
-        matches_discriminant_path(expanded, path, value, store, expander, in_progress)
-      });
-      in_progress.remove(&ty);
-      result
-    }
+      .any(|member| matches_discriminant_path(*member, path, value, store, expander, seen, budget)),
     TypeKind::Object(obj) => {
       let object = store.object(obj);
       let shape = store.shape(object.shape);
-      match path.first() {
-        None => false,
-        Some(first) => {
-          let prop_ty = shape
-            .properties
-            .iter()
-            .find_map(|prop| match (&prop.key, first) {
-              (types_ts_interned::PropKey::String(name), PathSegment::String(seg))
-                if store.name(*name) == *seg =>
-              {
-                Some(prop.data.ty)
-              }
-              (types_ts_interned::PropKey::Number(num), PathSegment::Number(seg))
-                if num.to_string() == *seg =>
-              {
-                Some(prop.data.ty)
-              }
-              _ => None,
-            })
-            .or_else(|| {
-              let empty_name = store.intern_name(String::new());
-              let probe_key = match first {
-                PathSegment::String(_) => types_ts_interned::PropKey::String(empty_name),
-                PathSegment::Number(_) => types_ts_interned::PropKey::Number(0),
-              };
-              shape.indexers.iter().find_map(|idx| {
-                crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, store)
-                  .then_some(idx.value_type)
-              })
-            });
-
-          match prop_ty {
-            None => false,
-            Some(prop_ty) => {
-              if path.len() == 1 {
-                matches_discriminant_value(prop_ty, value, store, expander, in_progress)
-              } else {
-                matches_discriminant_path(prop_ty, &path[1..], value, store, expander, in_progress)
-              }
-            }
+      let Some(first) = path.first() else {
+        return false;
+      };
+      let prop_ty = shape
+        .properties
+        .iter()
+        .find_map(|prop| match (&prop.key, first) {
+          (types_ts_interned::PropKey::String(name), PathSegment::String(seg))
+            if store.name(*name) == *seg =>
+          {
+            Some(prop.data.ty)
           }
-        }
+          (types_ts_interned::PropKey::Number(num), PathSegment::Number(seg))
+            if num.to_string() == *seg =>
+          {
+            Some(prop.data.ty)
+          }
+          _ => None,
+        });
+      let prop_ty = prop_ty.or_else(|| {
+        let empty_name = store.intern_name(String::new());
+        let probe_key = match first {
+          PathSegment::String(_) => types_ts_interned::PropKey::String(empty_name),
+          PathSegment::Number(_) => types_ts_interned::PropKey::Number(0),
+        };
+        shape.indexers.iter().find_map(|idx| {
+          crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, store)
+            .then_some(idx.value_type)
+        })
+      });
+      let Some(prop_ty) = prop_ty else {
+        return false;
+      };
+      if path.len() == 1 {
+        matches_discriminant_value(prop_ty, value, store, expander, seen, budget)
+      } else {
+        matches_discriminant_path(prop_ty, &path[1..], value, store, expander, seen, budget)
       }
     }
     _ => false,
@@ -612,23 +709,14 @@ fn matches_discriminant_value(
   value: &LiteralValue,
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
-  in_progress: &mut HashSet<TypeId>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
 ) -> bool {
+  let ty = expand_ref_no_progress_guard(ty, store, expander, seen, budget);
   match store.type_kind(ty) {
     TypeKind::Union(members) => members
       .iter()
-      .any(|member| matches_discriminant_value(*member, value, store, expander, in_progress)),
-    TypeKind::Ref { def, args } => {
-      if !in_progress.insert(ty) {
-        return false;
-      }
-      let expanded = expander.and_then(|e| e.expand_ref(store, def, &args));
-      let result = expanded.map_or(false, |expanded| {
-        matches_discriminant_value(expanded, value, store, expander, in_progress)
-      });
-      in_progress.remove(&ty);
-      result
-    }
+      .any(|member| matches_discriminant_value(*member, value, store, expander, seen, budget)),
     kind => match (kind, value) {
       (TypeKind::StringLiteral(name_id), LiteralValue::String(target)) => {
         store.name(name_id) == *target
@@ -652,8 +740,9 @@ pub fn narrow_by_in_check(
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> (TypeId, TypeId) {
-  let mut in_progress = HashSet::new();
-  narrow_by_in_check_inner(ty, prop, store, expander, &mut in_progress)
+  let mut seen = HashSet::new();
+  let mut budget = 64usize;
+  narrow_by_in_check_inner(ty, prop, store, expander, &mut seen, &mut budget)
 }
 
 fn narrow_by_in_check_inner(
@@ -661,20 +750,19 @@ fn narrow_by_in_check_inner(
   prop: &str,
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
-  in_progress: &mut HashSet<TypeId>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
-  if !in_progress.insert(ty) {
-    return (ty, ty);
-  }
-
-  let result = match store.type_kind(ty) {
-    TypeKind::Any | TypeKind::Unknown => (ty, ty),
+  let original = store.canon(ty);
+  let preserve_ref = matches!(store.type_kind(original), TypeKind::Ref { .. });
+  let mut yes = Vec::new();
+  let mut no = Vec::new();
+  let ty = expand_ref_no_progress_guard(original, store, expander, seen, budget);
+  match store.type_kind(ty) {
     TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
       for member in members {
-        let (t, f) = narrow_by_in_check_inner(member, prop, store, expander, in_progress);
+        let (t, f) = narrow_by_in_check_inner(member, prop, store, expander, seen, budget);
         if t != primitives.never {
           yes.push(t);
         }
@@ -682,21 +770,33 @@ fn narrow_by_in_check_inner(
           no.push(f);
         }
       }
-      (store.union(yes), store.union(no))
     }
-    TypeKind::Array { .. } => (ty, primitives.never),
-    TypeKind::Ref { def, args } => {
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        let (yes, no) = narrow_by_in_check_inner(expanded, prop, store, expander, in_progress);
-        if yes == expanded && no == primitives.never {
-          (ty, primitives.never)
-        } else if yes == primitives.never && no == expanded {
-          (primitives.never, ty)
-        } else {
-          (yes, no)
-        }
+    TypeKind::Intersection(members) => {
+      let mut can_have = false;
+      let mut can_lack = true;
+      for member in members {
+        let (t, f) = narrow_by_in_check_inner(member, prop, store, expander, seen, budget);
+        can_have |= t != primitives.never;
+        can_lack &= f != primitives.never;
+      }
+      if can_have {
+        yes.push(ty);
+      }
+      if can_lack {
+        no.push(ty);
+      }
+    }
+    TypeKind::Array { .. } | TypeKind::Tuple(_) => {
+      // Model only the high-value array properties we represent explicitly: a
+      // numeric index signature and the `length` property.
+      let is_numeric = prop
+        .parse::<f64>()
+        .map(|n| n.fract() == 0.0 && n >= 0.0)
+        .unwrap_or(false);
+      if prop == "length" || is_numeric {
+        yes.push(ty);
       } else {
-        (ty, ty)
+        no.push(ty);
       }
     }
     TypeKind::Object(obj) => {
@@ -717,16 +817,36 @@ fn narrow_by_in_check_inner(
         _ => false,
       }) || has_indexer;
       if has_prop {
-        (ty, primitives.never)
+        yes.push(ty);
       } else {
-        (primitives.never, ty)
+        no.push(ty);
       }
     }
-    _ => (primitives.never, ty),
-  };
-
-  in_progress.remove(&ty);
-  result
+    // Unknown object-like types: preserve the original type on both branches
+    // rather than incorrectly narrowing to `never`.
+    TypeKind::Any
+    | TypeKind::Unknown
+    | TypeKind::EmptyObject
+    | TypeKind::TypeParam(_)
+    | TypeKind::Ref { .. } => {
+      yes.push(ty);
+      no.push(ty);
+    }
+    _ => no.push(ty),
+  }
+  let yes = store.union(yes);
+  let no = store.union(no);
+  if preserve_ref && ty != original {
+    if yes == ty && no == primitives.never {
+      (original, primitives.never)
+    } else if yes == primitives.never && no == ty {
+      (primitives.never, original)
+    } else {
+      (yes, no)
+    }
+  } else {
+    (yes, no)
+  }
 }
 
 /// Narrow by an `instanceof` check, keeping only object-like members.
@@ -805,8 +925,9 @@ fn instance_type_from_ctor(
   expander: Option<&dyn RelateTypeExpander>,
 ) -> Option<TypeId> {
   let mut targets = Vec::new();
-  let mut in_progress = HashSet::new();
-  collect_instance_types(ty, store, expander, &mut targets, &mut in_progress);
+  let mut seen = HashSet::new();
+  let mut budget = 64usize;
+  collect_instance_types(ty, store, expander, &mut targets, &mut seen, &mut budget);
   if targets.is_empty() {
     None
   } else {
@@ -819,21 +940,20 @@ fn collect_instance_types(
   store: &TypeStore,
   expander: Option<&dyn RelateTypeExpander>,
   out: &mut Vec<TypeId>,
-  in_progress: &mut HashSet<TypeId>,
+  seen: &mut HashSet<TypeId>,
+  budget: &mut usize,
 ) {
-  if !in_progress.insert(ty) {
-    return;
-  }
+  let ty = expand_ref_no_progress_guard(ty, store, expander, seen, budget);
   match store.type_kind(ty) {
     TypeKind::Union(members) | TypeKind::Intersection(members) => {
       for member in members {
-        collect_instance_types(member, store, expander, out, in_progress);
+        collect_instance_types(member, store, expander, out, seen, budget);
       }
     }
     TypeKind::Callable { overloads } => {
       for sig in overloads {
-        // `instanceof` narrows to the *instance* side of a constructor signature. Our
-        // representation reuses `Callable` for both function and constructor
+        // `instanceof` narrows to the *instance* side of a constructor signature.
+        // Our representation reuses `Callable` for both function and constructor
         // signatures, so be conservative and only treat clearly object-like
         // returns as potential instance types. This avoids accidentally using
         // ordinary function return types (e.g. `() => void`) as `instanceof`
@@ -859,11 +979,6 @@ fn collect_instance_types(
         }
       }
     }
-    TypeKind::Ref { def, args } => {
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        collect_instance_types(expanded, store, expander, out, in_progress);
-      }
-    }
     TypeKind::Object(obj) => {
       let shape = store.shape(store.object(obj).shape);
       for sig in shape.construct_signatures.iter() {
@@ -872,7 +987,6 @@ fn collect_instance_types(
     }
     _ => {}
   }
-  in_progress.remove(&ty);
 }
 
 /// Narrow by an asserted type from a predicate.
