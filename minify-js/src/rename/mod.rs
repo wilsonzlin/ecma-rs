@@ -344,6 +344,11 @@ fn reserved_names() -> HashSet<String> {
   names.insert("true".to_string());
   names.insert("false".to_string());
   names.insert("null".to_string());
+  // Strict-mode reserved word (but lexed as an identifier).
+  names.insert("package".to_string());
+  // Strict-mode restricted identifiers.
+  names.insert("eval".to_string());
+  names.insert("arguments".to_string());
   names
 }
 
@@ -688,6 +693,9 @@ mod tests {
     assert!(names.contains("true"));
     assert!(names.contains("false"));
     assert!(names.contains("null"));
+    assert!(names.contains("package"));
+    assert!(names.contains("eval"));
+    assert!(names.contains("arguments"));
   }
 
   #[test]
