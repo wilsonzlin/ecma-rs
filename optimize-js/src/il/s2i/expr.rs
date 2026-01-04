@@ -322,6 +322,45 @@ impl<'p> HirSourceToInst<'p> {
         let _ = self.compile_expr(right)?;
         return Ok(Arg::Const(Const::Bool(false)));
       }
+
+      let typeof_left = match left_expr.kind {
+        ExprKind::Unary {
+          op: UnaryOp::Typeof,
+          expr,
+        } => Some(expr),
+        _ => None,
+      };
+      let typeof_right = match right_expr.kind {
+        ExprKind::Unary {
+          op: UnaryOp::Typeof,
+          expr,
+        } => Some(expr),
+        _ => None,
+      };
+
+      if let Some((typeof_operand, typeof_on_left)) = match (typeof_left, typeof_right) {
+        (Some(operand), None) => Some((operand, true)),
+        (None, Some(operand)) => Some((operand, false)),
+        _ => None,
+      } {
+        let literal = if typeof_on_left {
+          match &right_expr.kind {
+            ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+            _ => None,
+          }
+        } else {
+          match &left_expr.kind {
+            ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+            _ => None,
+          }
+        };
+        if let Some(literal) = literal {
+          if let Some(known) = self.typeof_string_expr(typeof_operand) {
+            let _ = self.compile_expr(typeof_operand)?;
+            return Ok(Arg::Const(Const::Bool(known == literal)));
+          }
+        }
+      };
     }
 
     if matches!(
@@ -440,6 +479,12 @@ impl<'p> HirSourceToInst<'p> {
         let arg = self.compile_expr(argument)?;
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Neg, arg));
+        Ok(Arg::Var(tmp))
+      }
+      UnaryOp::Typeof => {
+        let arg = self.compile_expr(argument)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::un(tmp, UnOp::Typeof, arg));
         Ok(Arg::Var(tmp))
       }
       _ => Err(unsupported_syntax(

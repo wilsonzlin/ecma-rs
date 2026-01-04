@@ -80,6 +80,25 @@ impl TypeContext {
       false
     }
   }
+
+  /// Returns the JavaScript `typeof` tag for the expression when it is known.
+  ///
+  /// This is intentionally conservative; if we cannot reliably map the
+  /// TypeScript type to a single runtime `typeof` string we return `None` and
+  /// callers should fall back to untyped behaviour.
+  pub fn expr_typeof_string(&self, body: BodyId, expr: ExprId) -> Option<&'static str> {
+    #[cfg(feature = "typed")]
+    {
+      let program = self.program.as_ref()?;
+      let ty = self.expr_type(body, expr)?;
+      type_to_typeof_string(program, ty, 0)
+    }
+    #[cfg(not(feature = "typed"))]
+    {
+      let _ = (body, expr);
+      None
+    }
+  }
 }
 
 #[cfg(feature = "typed")]
@@ -167,5 +186,31 @@ fn type_excludes_nullish(program: &typecheck_ts::Program, ty: typecheck_ts::Type
     | K::KeyOf => false,
     K::Ref { def, .. } => type_excludes_nullish(program, program.declared_type_of_def_interned(def), depth + 1),
     _ => true,
+  }
+}
+
+#[cfg(feature = "typed")]
+fn type_to_typeof_string(
+  program: &typecheck_ts::Program,
+  ty: typecheck_ts::TypeId,
+  depth: u8,
+) -> Option<&'static str> {
+  if depth >= 8 {
+    return None;
+  }
+
+  use typecheck_ts::TypeKindSummary as K;
+  match program.type_kind(ty) {
+    K::Boolean | K::BooleanLiteral(_) => Some("boolean"),
+    K::Number | K::NumberLiteral(_) => Some("number"),
+    K::String | K::StringLiteral(_) => Some("string"),
+    K::BigInt | K::BigIntLiteral(_) => Some("bigint"),
+    K::Symbol | K::UniqueSymbol => Some("symbol"),
+    K::Undefined | K::Void => Some("undefined"),
+    K::Null => Some("object"),
+    K::Callable { .. } => Some("function"),
+    K::EmptyObject | K::Object | K::Tuple { .. } | K::Array { .. } => Some("object"),
+    K::Ref { def, .. } => type_to_typeof_string(program, program.declared_type_of_def_interned(def), depth + 1),
+    _ => None,
   }
 }

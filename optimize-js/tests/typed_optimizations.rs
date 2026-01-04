@@ -114,6 +114,23 @@ fn typed_if_condition_literal_false_elides_then_branch() {
 }
 
 #[test]
+fn typed_typeof_check_is_folded_when_operand_type_is_known() {
+  let src = r#"
+    if (typeof console === "object") {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_mode_is_noop_when_type_info_is_unavailable() {
   let src = "let x = 1; console?.log(x);";
 
