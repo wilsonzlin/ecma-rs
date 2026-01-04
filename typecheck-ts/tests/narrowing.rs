@@ -831,6 +831,87 @@ function f(x) {
 }
 
 #[test]
+fn optional_chain_member_chain_adds_undefined() {
+  let src = r#"
+function f(x) {
+  const y = x?.a.b;
+  return y;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let inner = obj_type(&store, &[("b", prim.number)]);
+  let outer = obj_type(&store, &[("a", inner)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![outer, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let expected = store.union(vec![prim.number, prim.undefined]);
+  assert_eq!(
+    TypeDisplay::new(&store, res.return_types()[0]).to_string(),
+    TypeDisplay::new(&store, expected).to_string()
+  );
+}
+
+#[test]
+fn optional_chain_member_chain_truthiness_narrows_base() {
+  let src = r#"
+function f(x) {
+  if (x?.a.b) {
+    return x;
+  } else {
+    return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let inner = obj_type(&store, &[("b", prim.number)]);
+  let outer = obj_type(&store, &[("a", inner)]);
+  let init_ty = store.union(vec![outer, prim.null]);
+  let mut initial = HashMap::new();
+  initial.insert(name_id(lowered.names.as_ref(), "x"), init_ty);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let ret_types = res.return_types();
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[0]).to_string(),
+    TypeDisplay::new(&store, outer).to_string()
+  );
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[1]).to_string(),
+    TypeDisplay::new(&store, init_ty).to_string()
+  );
+}
+
+#[test]
 fn optional_member_adds_undefined() {
   let src = r#"function g(x: {v: number} | null) { const y = x?.v; return y; }"#;
   let lowered = lower_from_source(src).expect("lower");

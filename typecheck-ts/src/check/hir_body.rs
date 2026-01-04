@@ -6919,18 +6919,14 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
-        let (obj_non_nullish, obj_nullish) = if mem.optional {
-          // Optional chaining short-circuits on `null` / `undefined`, so the
-          // property lookup is performed only on the non-nullish portion of the
-          // base type. Doing the lookup on the full union would introduce
-          // `unknown` from the nullish branches (and `unknown | T` collapses to
-          // `unknown`).
+        let chain_short_circuit = self.optional_chain_short_circuits(expr_id, env);
+        let (obj_non_nullish, obj_nullish) = if mem.optional || chain_short_circuit {
           narrow_non_nullish(obj_ty, &self.store)
         } else {
           (obj_ty, prim.never)
         };
 
-        if mem.optional && obj_non_nullish == prim.never {
+        if (mem.optional || chain_short_circuit) && obj_non_nullish == prim.never {
           // Optional chaining (`x?.y`) short-circuits on a nullish base; if
           // the base is always nullish, the whole expression is `undefined`
           // and the property expression is not evaluated.
@@ -6939,7 +6935,7 @@ impl<'a> FlowBodyChecker<'a> {
           if let ObjectKey::Computed(expr) = &mem.property {
             let _ = self.eval_expr(*expr, env);
           }
-          let obj_ty_for_member = if mem.optional {
+          let obj_ty_for_member = if mem.optional || chain_short_circuit {
             obj_non_nullish
           } else {
             obj_ty
@@ -6966,13 +6962,18 @@ impl<'a> FlowBodyChecker<'a> {
             }
             _ => self.member_type(obj_ty_for_member, mem),
           };
-          if mem.optional {
-            if let Some(key) = self.flow_key_for_expr(mem.object) {
-              if obj_non_nullish != prim.never {
-                facts.truthy.insert(key, obj_non_nullish);
+          if chain_short_circuit {
+            self.insert_optional_chain_truthy_facts(expr_id, env, &mut facts);
+          }
+          if mem.optional || chain_short_circuit {
+            if mem.optional {
+              if let Some(key) = self.flow_key_for_expr(mem.object) {
+                if obj_non_nullish != prim.never {
+                  facts.truthy.insert(key, obj_non_nullish);
+                }
               }
             }
-            if obj_nullish != prim.never {
+            if chain_short_circuit || obj_nullish != prim.never {
               self.store.union(vec![prop_ty, prim.undefined])
             } else {
               prop_ty
@@ -7622,6 +7623,77 @@ impl<'a> FlowBodyChecker<'a> {
       return Some(key);
     }
     None
+  }
+
+  fn optional_chain_base_keys(&self, expr_id: ExprId, out: &mut Vec<FlowKey>) {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Member(mem) => {
+        self.optional_chain_base_keys(mem.object, out);
+        if mem.optional {
+          if let Some(key) = self.flow_key_for_expr(mem.object) {
+            out.push(key);
+          }
+        }
+      }
+      ExprKind::Call(call) => {
+        self.optional_chain_base_keys(call.callee, out);
+        if call.optional {
+          if let Some(key) = self.flow_key_for_expr(call.callee) {
+            out.push(key);
+          }
+        }
+      }
+      ExprKind::TypeAssertion { expr, .. }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr, .. } => {
+        self.optional_chain_base_keys(*expr, out);
+      }
+      _ => {}
+    }
+  }
+
+  fn flow_key_type(&self, env: &Env, key: &FlowKey) -> TypeId {
+    let prim = self.store.primitive_ids();
+    if let Some(ty) = env.get_path(key) {
+      return ty;
+    }
+    let root_ty = env
+      .get(key.root)
+      .or_else(|| self.initial.get(&key.root).copied())
+      .unwrap_or(prim.unknown);
+    if key.segments.is_empty() {
+      return root_ty;
+    }
+    self
+      .object_prop_type_path(root_ty, &key.segments)
+      .unwrap_or(prim.unknown)
+  }
+
+  fn optional_chain_short_circuits(&self, expr_id: ExprId, env: &Env) -> bool {
+    let prim = self.store.primitive_ids();
+    let mut bases = Vec::new();
+    self.optional_chain_base_keys(expr_id, &mut bases);
+    for base in bases {
+      let base_ty = self.flow_key_type(env, &base);
+      let (_, nullish) = narrow_non_nullish(base_ty, &self.store);
+      if nullish != prim.never {
+        return true;
+      }
+    }
+    false
+  }
+
+  fn insert_optional_chain_truthy_facts(&self, expr_id: ExprId, env: &Env, facts: &mut Facts) {
+    let prim = self.store.primitive_ids();
+    let mut bases = Vec::new();
+    self.optional_chain_base_keys(expr_id, &mut bases);
+    for base in bases {
+      let base_ty = self.flow_key_type(env, &base);
+      let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
+      if non_nullish != prim.never {
+        facts.truthy.insert(base, non_nullish);
+      }
+    }
   }
 
   fn excludes_nullish(&self, ty: TypeId) -> bool {
