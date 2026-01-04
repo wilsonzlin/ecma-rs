@@ -275,7 +275,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     .as_ref()
     .map(|cfg| cfg.compiler_options.clone())
     .unwrap_or_default();
-  let options = match build_compiler_options(&args, options_base) {
+  let mut options = match build_compiler_options(&args, options_base) {
     Ok(opts) => opts,
     Err(err) => {
       eprintln!("{err}");
@@ -334,6 +334,12 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     },
     None => Vec::new(),
   };
+  // The CLI loads `typeRoots`/`types` packages as host-provided libs, which is closer to how `tsc`
+  // treats them (ambient `.d.ts` inputs). Clear the compiler option so `typecheck-ts` doesn't also
+  // try to resolve them via module resolution.
+  if project.is_some() {
+    options.types.clear();
+  }
 
   let (host, roots) = match DiskHost::new(&root_paths, resolver, options, extra_libs) {
     Ok(res) => res,

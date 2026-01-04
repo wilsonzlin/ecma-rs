@@ -1003,3 +1003,35 @@ fn project_mode_resolves_paths_relative_to_extended_config() {
     "expected @lib/ paths from extended config to resolve, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn project_mode_uses_include_from_extended_config() {
+  let tsconfig = fixture("project_mode/extends_include/tsconfig.json");
+  let main = fixture("project_mode/extends_include/src/main.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+  assert!(
+    files.contains(&normalized(&main).as_str()),
+    "expected include from extended config to include main.ts, got {files:?}"
+  );
+}
