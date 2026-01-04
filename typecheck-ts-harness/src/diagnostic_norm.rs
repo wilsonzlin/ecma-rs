@@ -371,9 +371,10 @@ pub fn normalize_path_for_compare(path: &str, options: &NormalizationOptions) ->
 /// Normalize a rendered type string for stable comparisons.
 ///
 /// The normalizer is intentionally lightweight; it collapses whitespace, sorts
-/// top-level union and intersection members, and strips parameter names from
-/// arrow-function signatures so differences in source-level identifiers do not
-/// cause spurious diffs.
+/// top-level union and intersection members, normalizes call/construct signature
+/// members in object types, and strips parameter names from signatures so
+/// differences in source-level identifiers (or overload ordering) do not cause
+/// spurious diffs.
 pub fn normalize_type_string(raw: &str) -> String {
   fn collapse_whitespace(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
@@ -528,6 +529,71 @@ pub fn normalize_type_string(raw: &str) -> String {
     out
   }
 
+  fn normalize_object_member(raw: &str) -> String {
+    let member = raw.trim();
+    if member.is_empty() {
+      return String::new();
+    }
+
+    let Some(start_paren) = member.find('(') else {
+      return member.to_string();
+    };
+
+    let mut depth_paren = 0i32;
+    let mut end_paren = None;
+    for (idx, ch) in member.char_indices().skip(start_paren) {
+      match ch {
+        '(' => depth_paren += 1,
+        ')' => {
+          depth_paren -= 1;
+          if depth_paren == 0 {
+            end_paren = Some(idx);
+            break;
+          }
+        }
+        _ => {}
+      }
+    }
+    let Some(end_paren) = end_paren else {
+      return member.to_string();
+    };
+
+    let suffix = &member[end_paren + 1..];
+    let suffix = suffix.trim_start();
+    if !suffix.starts_with(':') {
+      return member.to_string();
+    }
+
+    let prefix = member[..start_paren].trim_start();
+    let params = &member[start_paren + 1..end_paren];
+    let stripped = strip_param_names(params);
+    let ret = normalize_type_string(suffix[1..].trim_start());
+    format!("{prefix}({stripped}): {ret}")
+  }
+
+  fn normalize_object_members(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if !(trimmed.starts_with('{') && trimmed.ends_with('}')) {
+      return None;
+    }
+
+    let inner = trimmed[1..trimmed.len() - 1].trim();
+    if inner.is_empty() {
+      return Some("{}".to_string());
+    }
+
+    let parts = split_top_level(inner, ';').unwrap_or_else(|| vec![inner]);
+    let mut members: Vec<String> = parts
+      .into_iter()
+      .map(normalize_object_member)
+      .filter(|member| !member.is_empty())
+      .collect();
+
+    members.sort();
+    members.dedup();
+    Some(format!("{{ {} }}", members.join("; ")))
+  }
+
   fn tighten(value: String) -> String {
     if !value.contains("< ") && !value.contains(" >") {
       return value;
@@ -578,6 +644,10 @@ pub fn normalize_type_string(raw: &str) -> String {
     normalized_parts.sort();
     normalized_parts.dedup();
     return tighten(normalized_parts.join(" & "));
+  }
+
+  if let Some(obj) = normalize_object_members(&normalized) {
+    return tighten(obj);
   }
 
   if let Some(arrow_idx) = normalized.find("=>") {
@@ -707,5 +777,12 @@ mod tests {
       normalize_type_string("Promise< string | number >"),
       "Promise<string | number>".to_string()
     );
+  }
+
+  #[test]
+  fn normalizes_call_signature_param_names_and_overload_order() {
+    let expected = "{ (x: string): 1; (x: number): 2 }";
+    let actual = "{ (number): 2; (string): 1 }";
+    assert_eq!(normalize_type_string(expected), normalize_type_string(actual));
   }
 }
