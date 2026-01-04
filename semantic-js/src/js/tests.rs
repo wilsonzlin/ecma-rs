@@ -1044,6 +1044,26 @@ fn switch_discriminant_does_not_resolve_to_case_lexicals() {
 }
 
 #[test]
+fn switch_case_expr_use_before_declaration_is_in_tdz() {
+  let source = "switch(0){case a: let a = 1; break;}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(96));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn switch_case_body_use_before_declaration_is_in_tdz() {
+  let source = "switch(0){case 0: a; let a = 1; break;}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(97));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
 fn for_of_lexicals_are_not_visible_outside_loop() {
   let mut ast = parse("for (let a of [1]) {} a;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(74));
