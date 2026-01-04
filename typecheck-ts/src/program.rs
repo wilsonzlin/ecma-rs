@@ -14748,22 +14748,6 @@ impl ProgramState {
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
-    let mut files: Vec<_> = self.file_kinds.keys().copied().collect();
-    files.sort_by_key(|file| file.0);
-    for file in files {
-      let locals = crate::db::local_symbol_info(&self.typecheck_db, file);
-      if let Some(local) = locals.get(&symbol) {
-        return Some(SymbolInfo {
-          symbol,
-          def: None,
-          file: Some(local.file),
-          type_id: None,
-          name: Some(local.name.clone()),
-          span: local.span,
-        });
-      }
-    }
-
     let binding = self
       .global_bindings
       .iter()
@@ -14816,6 +14800,21 @@ impl ProgramState {
     }
 
     if def.is_none() && type_id.is_none() && name.is_none() && file.is_none() {
+      let mut files: Vec<_> = self.file_kinds.keys().copied().collect();
+      files.sort_by_key(|file| file.0);
+      for file in files {
+        let locals = crate::db::local_symbol_info(&self.typecheck_db, file);
+        if let Some(local) = locals.get(&symbol) {
+          return Some(SymbolInfo {
+            symbol,
+            def: None,
+            file: Some(local.file),
+            type_id: None,
+            name: Some(local.name.clone()),
+            span: local.span,
+          });
+        }
+      }
       return None;
     }
     if name.is_none() {
