@@ -18,6 +18,16 @@ pub struct NodeAssocData {
   items: SmallVec<[(TypeId, Box<dyn Any + Send + Sync>); 1]>,
 }
 
+/// Marker attached to an expression node that was parsed from a parenthesized
+/// expression (e.g. `(x)`).
+///
+/// `parse-js` intentionally does not keep parentheses as distinct AST nodes;
+/// they are only preserved via this marker so downstream crates can still
+/// implement syntax-sensitive behaviors (e.g. exponentiation operand rules or
+/// directive prologue parsing).
+#[derive(Clone, Copy, Debug)]
+pub struct ParenthesizedExpr;
+
 impl NodeAssocData {
   pub fn is_empty(&self) -> bool {
     self.items.is_empty()

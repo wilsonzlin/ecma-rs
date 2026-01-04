@@ -23,6 +23,7 @@ use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
+use parse_js::ast::node::ParenthesizedExpr;
 use parse_js::ast::stmt::decl::ClassDecl;
 use parse_js::ast::stmt::decl::FuncDecl;
 use parse_js::ast::stmt::decl::PatDecl;
@@ -294,6 +295,15 @@ fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
     let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
       break;
     };
+    if expr_stmt
+      .stx
+      .expr
+      .assoc
+      .get::<ParenthesizedExpr>()
+      .is_some()
+    {
+      break;
+    }
     let Expr::LitStr(lit) = expr_stmt.stx.expr.stx.as_ref() else {
       break;
     };

@@ -25,6 +25,7 @@ use crate::ast::expr::UnaryExpr;
 use crate::ast::expr::UnaryPostfixExpr;
 use crate::ast::func::Func;
 use crate::ast::node::Node;
+use crate::ast::node::ParenthesizedExpr;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
@@ -40,8 +41,6 @@ use crate::token::TT;
 use pat::is_valid_pattern_identifier;
 use pat::ParsePatternRules;
 use util::lhs_expr_to_assign_target;
-
-struct ParenthesizedExpr;
 
 pub struct Asi {
   pub can_end_with_asi: bool,

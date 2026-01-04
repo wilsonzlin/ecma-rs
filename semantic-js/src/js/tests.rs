@@ -509,6 +509,52 @@ fn strict_script_block_function_is_block_scoped() {
 }
 
 #[test]
+fn parenthesized_use_strict_is_not_a_directive() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), ClassOrFuncNameNode(enter))]
+  struct FooCollector {
+    decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl FooCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "foo" {
+        self.decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "foo" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = r#"function outer(){ ("use strict"); if(true){ function foo(){} } foo; }"#;
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(90));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collector = FooCollector::default();
+  ast.drive_mut(&mut collector);
+  let decl = collector.decl.expect("expected foo declaration symbol");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 1);
+  assert_eq!(collector.uses[0].1, Some(decl));
+}
+
+#[test]
 fn catch_parameter_allows_var_redecl() {
   let source = "function f(){ try{}catch(e){ var e; } }";
   let mut ast = parse(source).unwrap();
