@@ -589,6 +589,85 @@ fn catch_parameter_conflicts_with_lexical_decl() {
 }
 
 #[test]
+fn catch_parameter_does_not_suppress_script_block_function_hoisting() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), IdPatNode(enter), ClassOrFuncNameNode(enter))]
+  struct XCollector {
+    func_decl: Option<SymbolId>,
+    catch_decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl XCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "x" {
+        self.func_decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+      if node.stx.name == "x" {
+        if let Some(sym) = declared_symbol(&node.assoc) {
+          self.catch_decl = Some(sym);
+        }
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "x" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = r#"
+    function outer(){
+      try { throw 1; } catch (x) {
+        x;
+        { function x(){} x; }
+        x;
+      }
+      x;
+    }
+  "#;
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(93));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collector = XCollector::default();
+  ast.drive_mut(&mut collector);
+  let func_decl = collector
+    .func_decl
+    .expect("expected function x declaration");
+  let catch_decl = collector.catch_decl.expect("expected catch parameter x");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 4);
+  assert_eq!(collector.uses[0].1, Some(catch_decl));
+  assert_eq!(collector.uses[1].1, Some(func_decl));
+  assert_eq!(collector.uses[2].1, Some(catch_decl));
+
+  let outside = collector.uses[3]
+    .1
+    .expect("expected hoisted var binding for x");
+  assert_ne!(outside, func_decl);
+  assert_ne!(outside, catch_decl);
+  assert_eq!(
+    sem.annex_b_function_decls.get(&func_decl).copied(),
+    Some(outside)
+  );
+}
+
+#[test]
 fn script_block_function_is_block_scoped_when_shadowed_by_let() {
   use crate::assoc::js::resolved_symbol;
   use parse_js::ast::expr::pat::ClassOrFuncName;

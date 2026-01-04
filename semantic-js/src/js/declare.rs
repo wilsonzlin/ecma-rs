@@ -618,7 +618,8 @@ impl DeclareVisitor {
 
       // Annex B hoisting is suppressed if any enclosing lexical environment
       // between the function's block and the nearest variable scope already
-      // declares the same name.
+      // declares the same name. Catch parameters are excluded from this check
+      // (they behave like a separate environment record in legacy semantics).
       let mut current = self
         .builder
         .scopes
@@ -629,14 +630,16 @@ impl DeclareVisitor {
         if scope_id == closure_scope {
           break;
         }
-        if self
-          .builder
-          .scopes
-          .get(&scope_id)
-          .is_some_and(|scope| scope.symbols.contains_key(&func.name))
-        {
-          suppressed = true;
-          break;
+        if let Some(scope) = self.builder.scopes.get(&scope_id) {
+          if scope.symbols.contains_key(&func.name)
+            && !self
+              .builder
+              .catch_param_decl_spans
+              .contains_key(&(scope_id, func.name))
+          {
+            suppressed = true;
+            break;
+          }
         }
         current = self
           .builder
