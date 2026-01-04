@@ -335,6 +335,7 @@ const EXPECTED_CONFORMANCE_TRIAGE_WITH_BASELINE: &str = r#"{
 
 const DIFFTSC_REPORT: &str = r#"
 {
+  "suite": "difftsc",
   "results": [
     {
       "name": "a",
@@ -434,17 +435,17 @@ const EXPECTED_DIFFTSC_TRIAGE: &str = r#"{
   ],
   "suggestions": [
     {
-      "id": "c",
+      "id": "difftsc/c",
       "status": "skip",
       "reason": "triage: baseline_missing"
     },
     {
-      "id": "a",
+      "id": "difftsc/a",
       "status": "xfail",
       "reason": "triage: mismatch TS1111"
     },
     {
-      "id": "b",
+      "id": "difftsc/b",
       "status": "xfail",
       "reason": "triage: mismatch TS2222"
     }
@@ -454,6 +455,7 @@ const EXPECTED_DIFFTSC_TRIAGE: &str = r#"{
 
 const DIFFTSC_REPORT_FOR_BASELINE: &str = r#"
 {
+  "suite": "difftsc",
   "results": [
     {
       "name": "a",
@@ -472,6 +474,7 @@ const DIFFTSC_REPORT_FOR_BASELINE: &str = r#"
 
 const DIFFTSC_BASELINE_REPORT: &str = r#"
 {
+  "suite": "difftsc",
   "results": [
     { "name": "a", "status": "matched" },
     {
@@ -535,12 +538,12 @@ const EXPECTED_DIFFTSC_TRIAGE_WITH_BASELINE: &str = r#"{
   ],
   "suggestions": [
     {
-      "id": "c",
+      "id": "difftsc/c",
       "status": "skip",
       "reason": "triage: baseline_missing"
     },
     {
-      "id": "a",
+      "id": "difftsc/a",
       "status": "xfail",
       "reason": "triage: mismatch TS1111"
     }

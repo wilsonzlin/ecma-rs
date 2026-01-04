@@ -107,6 +107,8 @@ struct ConformanceExpectationInput {
 
 #[derive(Debug, Deserialize)]
 struct DifftscReportInput {
+  #[serde(default)]
+  suite: Option<String>,
   results: Vec<DifftscCaseInput>,
 }
 
@@ -588,7 +590,7 @@ fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<Tria
   regressions.sort_by(|a, b| a.id.cmp(&b.id));
 
   let regressions_top: Vec<_> = regressions.into_iter().take(top).collect();
-  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top);
+  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top, None);
 
   Ok(TriageReport {
     kind: ReportKind::Conformance,
@@ -659,7 +661,7 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
 
   regressions.sort_by(|a, b| a.id.cmp(&b.id));
   let regressions_top: Vec<_> = regressions.into_iter().take(top).collect();
-  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top);
+  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top, input.suite.as_deref());
 
   Ok(TriageReport {
     kind: ReportKind::Difftsc,
@@ -732,7 +734,10 @@ fn difftsc_case_outcomes_and_code(case: &DifftscCaseInput) -> (Vec<String>, Opti
   (outcomes, primary)
 }
 
-fn suggest_manifest_entries_for_regressions(regressions: &[Regression]) -> Vec<SuggestedManifestEntry> {
+fn suggest_manifest_entries_for_regressions(
+  regressions: &[Regression],
+  suite: Option<&str>,
+) -> Vec<SuggestedManifestEntry> {
   let mut suggestions = Vec::new();
   for reg in regressions {
     let status = match reg.outcome.as_str() {
@@ -745,8 +750,13 @@ fn suggest_manifest_entries_for_regressions(regressions: &[Regression]) -> Vec<S
       None => Some(format!("triage: {}", reg.outcome)),
     };
 
+    let id = match suite {
+      Some(suite) => format!("{suite}/{}", reg.id),
+      None => reg.id.clone(),
+    };
+
     suggestions.push(SuggestedManifestEntry {
-      id: Some(reg.id.clone()),
+      id: Some(id),
       glob: None,
       status: status.to_string(),
       reason,

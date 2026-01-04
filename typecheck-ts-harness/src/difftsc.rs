@@ -270,6 +270,7 @@ struct Summary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct JsonReport {
+  suite: String,
   summary: Summary,
   results: Vec<CaseReport>,
 }
@@ -420,6 +421,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
     serde_json::to_writer_pretty(
       &mut handle,
       &JsonReport {
+        suite: suite_name.clone(),
         summary: summary.clone(),
         results,
       },
