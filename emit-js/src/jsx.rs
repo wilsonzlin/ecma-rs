@@ -2,7 +2,7 @@ use std::fmt::{self, Write};
 
 use parse_js::ast::expr::jsx::{
   JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxExprContainer, JsxMemberExpr,
-  JsxName, JsxSpreadAttr, JsxText,
+  JsxName, JsxSpreadAttr,
 };
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -128,10 +128,6 @@ pub fn emit_jsx_attr_value<W: fmt::Write>(out: &mut W, value: &JsxAttrVal) -> Em
     JsxAttrVal::Expression(expr) => emit_jsx_expr_container(out, expr),
     JsxAttrVal::Element(elem) => emit_jsx_elem(out, elem),
   }
-}
-
-pub fn emit_jsx_expression_text<W: fmt::Write>(out: &mut W, text: &Node<JsxText>) -> EmitResult {
-  with_node_context(text.loc, || escape_jsx_child_text(out, &text.stx.value))
 }
 
 pub fn escape_jsx_string_literal<W: fmt::Write>(out: &mut W, value: &str) -> EmitResult {

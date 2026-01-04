@@ -1014,16 +1014,6 @@ fn emit_type_params(em: &mut Emitter, params: Option<&[Node<TypeParameter>]>) {
   }
 }
 
-fn emit_comma_separated_exprs(em: &mut Emitter, exprs: &[Node<Expr>]) -> EmitResult {
-  for (idx, expr) in exprs.iter().enumerate() {
-    if idx > 0 {
-      em.write_punct(",");
-    }
-    emit_expr(em, expr, ExprCtx::Default)?;
-  }
-  Ok(())
-}
-
 fn emit_string_literal(em: &mut Emitter, value: &str) {
   em.write_string_literal(value);
 }

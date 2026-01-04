@@ -2,75 +2,7 @@ use crate::cfg::cfg::Cfg;
 use crate::cfg::cfg::CfgGraph;
 use ahash::HashMap;
 use ahash::HashSet;
-use ahash::HashSetExt;
 use itertools::Itertools;
-use std::collections::VecDeque;
-
-fn reachable_from_entry(cfg: &Cfg) -> HashSet<u32> {
-  let mut reachable = HashSet::new();
-  let mut queue = VecDeque::from([cfg.entry]);
-  while let Some(label) = queue.pop_front() {
-    if !reachable.insert(label) {
-      continue;
-    };
-    let mut children = cfg.graph.children(label).collect_vec();
-    children.sort_unstable();
-    queue.extend(children);
-  }
-  reachable
-}
-
-fn terminal_nodes(cfg: &Cfg, reachable: &HashSet<u32>) -> Vec<u32> {
-  let mut terminals = reachable
-    .iter()
-    .copied()
-    .filter(|label| cfg.graph.children(*label).next().is_none())
-    .collect_vec();
-  terminals.sort_unstable();
-  terminals
-}
-
-fn blocks_that_can_reach_terminals(
-  cfg: &Cfg,
-  reachable: &HashSet<u32>,
-  terminals: &[u32],
-) -> HashSet<u32> {
-  let mut can_reach_terminal = HashSet::new();
-  let mut queue = VecDeque::new();
-  for &label in terminals.iter() {
-    if can_reach_terminal.insert(label) {
-      queue.push_back(label);
-    }
-  }
-  while let Some(label) = queue.pop_front() {
-    let mut parents = cfg.graph.parents(label).collect_vec();
-    parents.sort_unstable();
-    for parent in parents {
-      if reachable.contains(&parent) && can_reach_terminal.insert(parent) {
-        queue.push_back(parent);
-      }
-    }
-  }
-  can_reach_terminal
-}
-
-/// Returns reachable blocks from entry and the set of blocks that should be treated as exits for
-/// postdominance calculations (terminal + divergent).
-pub(crate) fn virtual_exit_roots(cfg: &Cfg) -> (HashSet<u32>, Vec<u32>) {
-  let reachable = reachable_from_entry(cfg);
-  let terminals = terminal_nodes(cfg, &reachable);
-  let can_reach_terminal = blocks_that_can_reach_terminals(cfg, &reachable, &terminals);
-  let mut exits = terminals;
-  exits.extend(
-    reachable
-      .iter()
-      .filter(|label| !can_reach_terminal.contains(label))
-      .copied(),
-  );
-  exits.sort_unstable();
-  exits.dedup();
-  (reachable, exits)
-}
 
 pub struct DominatesGraph(HashMap<u32, HashSet<u32>>);
 

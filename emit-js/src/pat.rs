@@ -1,5 +1,5 @@
 use parse_js::ast::class_or_object::ClassOrObjKey;
-use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
+use parse_js::ast::expr::pat::{ArrPat, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::{Decorator, Expr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
@@ -69,11 +69,6 @@ pub fn emit_param_decl(out: &mut Emitter, decl: &Node<ParamDecl>) -> EmitResult 
     out.write_punct("=");
     emit_expr(out, default)?;
   }
-  Ok(())
-}
-
-pub fn emit_class_or_func_name(out: &mut Emitter, name: &Node<ClassOrFuncName>) -> EmitResult {
-  out.write_identifier(&name.stx.name);
   Ok(())
 }
 
