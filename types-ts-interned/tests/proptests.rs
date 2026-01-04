@@ -252,6 +252,23 @@ fn store_with_pairs() -> impl Strategy<Value = (Arc<TypeStore>, Vec<(TypeId, Typ
   })
 }
 
+fn store_with_shape_props(
+) -> impl Strategy<Value = (Arc<TypeStore>, Vec<(String, TypeId, bool, bool, bool)>)> {
+  LazyJust::new(TypeStore::new).prop_flat_map(|store| {
+    let props = prop::collection::vec(
+      (
+        small_string(),
+        arbitrary_type(store.clone()),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+      ),
+      0..8,
+    );
+    props.prop_map(move |props| (store.clone(), props))
+  })
+}
+
 fn store_with_cyclic_pairs(
   def_count: std::ops::Range<u32>,
 ) -> impl Strategy<Value = (Arc<TypeStore>, Vec<(DefId, TypeId)>, Vec<(TypeId, TypeId)>)> {
@@ -467,6 +484,16 @@ proptest! {
   }
 
   #[test]
+  fn union_and_intersection_are_order_independent((store, pairs) in store_with_pairs()) {
+    for (a, b) in pairs {
+      prop_assert_eq!(store.union(vec![a, b]), store.union(vec![b, a]));
+      prop_assert_eq!(store.intersection(vec![a, b]), store.intersection(vec![b, a]));
+      prop_assert_eq!(store.union(vec![a, a]), store.canon(a));
+      prop_assert_eq!(store.intersection(vec![a, a]), store.canon(a));
+    }
+  }
+
+  #[test]
   fn relation_engine_terminates_on_cyclic_graphs((store, defs, pairs) in store_with_cyclic_pairs(1..6)) {
     let expander = StaticExpander { defs: defs.clone() };
     let hooks = RelateHooks {
@@ -549,6 +576,45 @@ proptest! {
       let _ = eval.evaluate(ty);
       prop_assert!(eval.step_count() < 10_000);
     }
+  }
+
+  #[test]
+  fn shape_interning_is_order_independent((store, props) in store_with_shape_props()) {
+    let mut shape_a = Shape::new();
+    for (name, ty, optional, readonly, is_method) in props.iter().cloned() {
+      shape_a.properties.push(Property {
+        key: PropKey::String(store.intern_name(name)),
+        data: PropData {
+          ty,
+          optional,
+          readonly,
+          accessibility: None,
+          is_method,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+
+    let mut shape_b = Shape::new();
+    for (name, ty, optional, readonly, is_method) in props.iter().rev().cloned() {
+      shape_b.properties.push(Property {
+        key: PropKey::String(store.intern_name(name)),
+        data: PropData {
+          ty,
+          optional,
+          readonly,
+          accessibility: None,
+          is_method,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+
+    let id_a = store.intern_shape(shape_a);
+    let id_b = store.intern_shape(shape_b);
+    prop_assert_eq!(id_a, id_b);
   }
 
   #[test]
