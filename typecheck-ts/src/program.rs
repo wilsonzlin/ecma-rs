@@ -14785,26 +14785,27 @@ impl ProgramState {
     if def.is_none() {
       if let Some(semantics) = self.semantics.as_ref() {
         let sem_symbol: sem_ts::SymbolId = symbol.into();
-        let sym_data = semantics.symbols().symbol(sem_symbol);
-        for ns in [
-          sem_ts::Namespace::VALUE,
-          sem_ts::Namespace::TYPE,
-          sem_ts::Namespace::NAMESPACE,
-        ] {
-          if !sym_data.namespaces.contains(ns) {
-            continue;
-          }
-          if let Some(decl_id) = semantics.symbol_decls(sem_symbol, ns).first() {
-            let decl = semantics.symbols().decl(*decl_id);
-            def = Some(decl.def_id);
-            file = Some(decl.file);
-            if name.is_none() {
-              name = Some(sym_data.name.clone());
+        if let Some(sym_data) = semantics.symbols().symbol_opt(sem_symbol) {
+          for ns in [
+            sem_ts::Namespace::VALUE,
+            sem_ts::Namespace::TYPE,
+            sem_ts::Namespace::NAMESPACE,
+          ] {
+            if !sym_data.namespaces.contains(ns) {
+              continue;
             }
-            if type_id.is_none() {
-              type_id = self.def_types.get(&decl.def_id).copied();
+            if let Some(decl_id) = semantics.symbol_decls(sem_symbol, ns).first() {
+              let decl = semantics.symbols().decl(*decl_id);
+              def = Some(decl.def_id);
+              file = Some(decl.file);
+              if name.is_none() {
+                name = Some(sym_data.name.clone());
+              }
+              if type_id.is_none() {
+                type_id = self.def_types.get(&decl.def_id).copied();
+              }
+              break;
             }
-            break;
           }
         }
       }

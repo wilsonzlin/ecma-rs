@@ -1760,9 +1760,7 @@ fn collect_marker_type_facts(
           // `ts.getTokenAtPosition`: marker offsets immediately following
           // punctuation (like `=`) intentionally yield `any`.
           let candidate = bytes[offset as usize];
-          if candidate.is_ascii_alphanumeric()
-            || matches!(candidate, b'_' | b'$' | b')' | b']' | b'}')
-          {
+          if candidate.is_ascii_alphanumeric() || matches!(candidate, b'_' | b'$') {
             ty = program.type_at(file_id, offset);
           }
         }

@@ -544,6 +544,10 @@ impl SymbolTable {
     self.symbols.get(&id).expect("symbol exists for id")
   }
 
+  pub fn symbol_opt(&self, id: SymbolId) -> Option<&SymbolData> {
+    self.symbols.get(&id)
+  }
+
   pub fn symbol_mut(&mut self, id: SymbolId) -> &mut SymbolData {
     self.symbols.get_mut(&id).expect("symbol exists for id")
   }

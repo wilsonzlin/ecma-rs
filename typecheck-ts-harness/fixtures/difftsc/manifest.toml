@@ -14,11 +14,6 @@ status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
-id = "difftsc/narrowing_types"
-status = "xfail"
-reason = "Type marker queries for optional-call expressions differ: tsc reports `any` at `x?.a.b()` / `x?.()` markers (token-based), Rust reports `number | undefined`."
-
-[[expectations]]
 id = "difftsc/rest_inference"
 status = "xfail"
 reason = "tsc rejects heterogeneous rest inference for `collect<T>(...args: T[])` (TS2345) and infers `collected` as number[]; Rust allows unions and emits no diagnostic."
