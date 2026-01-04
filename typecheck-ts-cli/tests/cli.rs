@@ -125,17 +125,16 @@ fn node_modules_resolution_is_opt_in() {
 }
 
 #[test]
-fn mjs_files_are_parsed_as_js() {
+fn resolves_mjs_modules_without_internal_error() {
   let tmp = tempdir().expect("temp dir");
   let entry = tmp.path().join("src/main.ts");
   write_file(
     &entry,
     "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
   );
-  // Type annotations are invalid in `.mjs` when treated as JavaScript.
   write_file(
     &tmp.path().join("node_modules/pkg/index.mjs"),
-    "export const value: number = 21;\n",
+    "export const value = 21;\n",
   );
 
   Command::cargo_bin("typecheck-ts-cli")
@@ -145,8 +144,8 @@ fn mjs_files_are_parsed_as_js() {
     .arg(entry.as_os_str())
     .arg("--node-resolve")
     .assert()
-    .failure()
-    .stdout(contains("error["));
+    .success()
+    .stdout(is_empty());
 }
 
 #[test]

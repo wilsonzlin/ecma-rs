@@ -4919,10 +4919,10 @@ impl ProgramState {
                   FileKind::Tsx => ParseDialect::Tsx,
                   FileKind::Dts => ParseDialect::Dts,
                 },
-                source_type: match file_kind {
-                  FileKind::Js | FileKind::Jsx => JsSourceType::Script,
-                  _ => JsSourceType::Module,
-                },
+                // `parse_via_salsa` always parses sources as modules to allow `import`/`export`
+                // syntax. Keep the reparse path consistent so JS/JSX files with ESM exports do
+                // not ICE when the cached AST is shared by salsa.
+                source_type: JsSourceType::Module,
               },
               Arc::clone(&self.cancelled),
             ) {
