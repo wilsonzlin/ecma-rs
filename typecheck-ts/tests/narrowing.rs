@@ -1168,6 +1168,61 @@ function f(x) {
 }
 
 #[test]
+fn optional_chain_call_chain_shadowed_undefined_does_not_narrow_truthy() {
+  let src = r#"
+function f(x) {
+  let undefined = 0;
+  if (x?.a.b() !== undefined) {
+    return x;
+  } else {
+    return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let sig = Signature {
+    params: Vec::new(),
+    ret: prim.number,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+  let sig_id = store.intern_signature(sig);
+  let callable = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig_id],
+  });
+
+  let inner = obj_type(&store, &[("b", callable)]);
+  let outer = obj_type(&store, &[("a", inner)]);
+  let init_ty = store.union(vec![outer, prim.null]);
+  let mut initial = HashMap::new();
+  initial.insert(name_id(lowered.names.as_ref(), "x"), init_ty);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let ret_types = res.return_types();
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[0]).to_string(),
+    TypeDisplay::new(&store, init_ty).to_string()
+  );
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[1]).to_string(),
+    TypeDisplay::new(&store, outer).to_string()
+  );
+}
+
+#[test]
 fn optional_call_adds_undefined() {
   let src = r#"
 function f(x) {

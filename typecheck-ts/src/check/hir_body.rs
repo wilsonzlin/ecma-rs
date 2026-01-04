@@ -7963,7 +7963,14 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn literal_value(&self, expr_id: ExprId) -> Option<LiteralValue> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(name) if self.hir_name(*name) == "undefined" => Some(LiteralValue::Undefined),
+      ExprKind::Ident(name) if self.hir_name(*name) == "undefined" => {
+        let binding = self.ident_binding(expr_id);
+        let binding_key = binding.and_then(|id| self.bindings.binding_for_flow(id));
+        match binding_key {
+          Some(BindingKey::External(_)) | None => Some(LiteralValue::Undefined),
+          _ => None,
+        }
+      }
       ExprKind::Literal(lit) => match lit {
         hir_js::Literal::String(s) => Some(LiteralValue::String(s.clone())),
         hir_js::Literal::Number(n) => Some(LiteralValue::Number(n.clone())),
