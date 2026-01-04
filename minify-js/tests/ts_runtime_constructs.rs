@@ -649,3 +649,38 @@ fn lowers_dotted_namespaces_with_reserved_keyword_segments_to_parseable_js() {
     "lowering should not introduce a `function(class)` parameter (invalid JS): {code}"
   );
 }
+
+#[test]
+fn lowers_dotted_namespaces_with_strict_mode_restricted_identifiers_to_parseable_js() {
+  // `eval` / `arguments` are not keywords, but they are invalid binding identifiers in strict mode
+  // (including ESM output).
+  let src = r#"
+    export namespace A.eval.arguments {
+      eval("x");
+      export const x = 1;
+    }
+    console.log(A["eval"]["arguments"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    code.contains("\"eval\"") && code.contains("\"arguments\""),
+    "expected restricted namespace segments to be accessed via string keys: {code}"
+  );
+  assert!(
+    !code.contains("var eval"),
+    "lowering should not introduce a `var eval` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(eval"),
+    "lowering should not introduce a `function(eval)` parameter (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("var arguments"),
+    "lowering should not introduce a `var arguments` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(arguments"),
+    "lowering should not introduce a `function(arguments)` parameter (invalid strict mode JS): {code}"
+  );
+}

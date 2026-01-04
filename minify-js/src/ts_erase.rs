@@ -96,8 +96,9 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
   //
   // When lowering runtime namespaces to JS, we must avoid synthesizing binding identifiers
   // (e.g. `var class;` / `function(class){}`) that are invalid in the output mode.
-  if matches!(top_level_mode, TopLevelMode::Module) && name == "package" {
-    // `package` is reserved in strict mode but is not tokenized as a keyword by the lexer.
+  if matches!(top_level_mode, TopLevelMode::Module) && matches!(name, "package" | "eval" | "arguments") {
+    // `package`, `eval`, and `arguments` are invalid binding identifiers in strict mode but are not
+    // tokenized as keywords by the lexer.
     return false;
   }
 
