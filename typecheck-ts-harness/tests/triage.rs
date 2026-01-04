@@ -5,6 +5,10 @@ use tempfile::tempdir;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn harness_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
+}
+
 const CONFORMANCE_REPORT: &str = r#"
 {
   "compare_mode": "tsc",
@@ -576,8 +580,7 @@ fn triage_conformance_json_output_is_stable() {
   let path = dir.path().join("report.json");
   fs::write(&path, CONFORMANCE_REPORT).expect("write report");
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("triage")
@@ -599,8 +602,7 @@ fn triage_conformance_json_output_is_stable() {
 
 #[test]
 fn triage_can_read_report_from_stdin() {
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("triage")
@@ -629,8 +631,7 @@ fn triage_conformance_baseline_diff_json_output_is_stable() {
   fs::write(&path, CONFORMANCE_REPORT).expect("write report");
   fs::write(&baseline, CONFORMANCE_BASELINE_REPORT).expect("write baseline");
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("triage")
@@ -658,8 +659,7 @@ fn triage_difftsc_json_output_is_stable() {
   let path = dir.path().join("report.json");
   fs::write(&path, DIFFTSC_REPORT).expect("write report");
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("triage")
@@ -687,8 +687,7 @@ fn triage_difftsc_baseline_diff_json_output_is_stable() {
   fs::write(&path, DIFFTSC_REPORT_FOR_BASELINE).expect("write report");
   fs::write(&baseline, DIFFTSC_BASELINE_REPORT).expect("write baseline");
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("triage")

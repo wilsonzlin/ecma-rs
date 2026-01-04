@@ -5,15 +5,17 @@ use std::time::Duration;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn harness_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
+}
+
 fn run_difftsc() -> Value {
   let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("difftsc");
   let manifest = suite.join("manifest.toml");
 
-  #[allow(deprecated)]
-  let output = Command::cargo_bin("typecheck-ts-harness")
-    .expect("binary")
+  let output = harness_cli()
     .timeout(CLI_TIMEOUT)
     .arg("difftsc")
     .arg("--suite")

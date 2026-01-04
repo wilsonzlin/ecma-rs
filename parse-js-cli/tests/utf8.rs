@@ -1,11 +1,13 @@
 use assert_cmd::Command;
 use std::time::Duration;
 
+fn parse_js_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("parse-js-cli")
+}
+
 #[test]
 fn rejects_invalid_utf8() {
-  #[allow(deprecated)]
-  let assert = Command::cargo_bin("parse-js-cli")
-    .expect("binary")
+  let assert = parse_js_cli()
     .timeout(Duration::from_secs(5))
     .write_stdin(vec![0xFF])
     .assert()

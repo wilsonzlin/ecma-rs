@@ -5,6 +5,10 @@ use std::time::Duration;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn harness_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
+}
+
 #[test]
 fn difftsc_honors_fixture_directives_for_rust_runs() {
   let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -15,9 +19,7 @@ fn difftsc_honors_fixture_directives_for_rust_runs() {
     .join("difftsc")
     .join("win_paths.json");
 
-  #[allow(deprecated)]
-  let output = Command::cargo_bin("typecheck-ts-harness")
-    .expect("binary")
+  let output = harness_cli()
     .timeout(CLI_TIMEOUT)
     .arg("difftsc")
     .arg("--suite")

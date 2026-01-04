@@ -13,6 +13,10 @@ use typecheck_ts_harness::TestOutcome;
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn harness_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
+}
+
 fn conformance_options(root: PathBuf) -> ConformanceOptions {
   let mut options = ConformanceOptions::new(root);
   options.compare = CompareMode::None;
@@ -62,8 +66,7 @@ impl Drop for EnvGuard {
 }
 
 fn run_cli_json_report(root: &Path) -> JsonReport {
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
@@ -152,8 +155,7 @@ fn cli_json_output_is_deterministic() {
 fn cli_requires_suite_unless_allowed_to_be_empty() {
   let dir = tempdir().expect("tempdir");
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
@@ -175,8 +177,7 @@ fn cli_requires_suite_unless_allowed_to_be_empty() {
     "stderr should mention overriding the root: {stderr}"
   );
 
-  #[allow(deprecated)]
-  let mut allow_cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut allow_cmd = harness_cli();
   allow_cmd.timeout(CLI_TIMEOUT);
   allow_cmd
     .arg("conformance")
@@ -195,8 +196,7 @@ fn cli_requires_suite_unless_allowed_to_be_empty() {
 fn cli_runs_with_filter_and_json() {
   let (_dir, root) = write_fixtures();
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
@@ -223,8 +223,7 @@ fn cli_runs_with_filter_and_json() {
 fn cli_json_report_is_machine_readable_with_trace_enabled() {
   let (_dir, root) = write_fixtures();
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
@@ -277,8 +276,7 @@ fn conformance_enforces_timeouts_per_test() {
   fs::write(root.join("fast.ts"), "const fast = 1;\n").unwrap();
   fs::write(root.join("slow.ts"), "const slow = 1;\n").unwrap();
 
-  #[allow(deprecated)]
-  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
   cmd
     .arg("conformance")
@@ -355,8 +353,7 @@ fn difftsc_results_are_sorted_with_parallel_execution() {
   let suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/difftsc");
 
   let run = || -> Value {
-    #[allow(deprecated)]
-    let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+    let mut cmd = harness_cli();
     cmd.timeout(CLI_TIMEOUT);
     cmd
       .arg("difftsc")

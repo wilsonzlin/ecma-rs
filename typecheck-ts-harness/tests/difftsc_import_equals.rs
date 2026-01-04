@@ -5,6 +5,10 @@ use std::time::Duration;
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn harness_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
+}
+
 #[test]
 fn this_param_dts_matches_baseline_type_facts() {
   let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -12,9 +16,7 @@ fn this_param_dts_matches_baseline_type_facts() {
     .join("difftsc");
   let manifest = suite.join("manifest.toml");
 
-  #[allow(deprecated)]
-  let output = Command::cargo_bin("typecheck-ts-harness")
-    .expect("binary")
+  let output = harness_cli()
     .timeout(CLI_TIMEOUT)
     .arg("difftsc")
     .arg("--suite")
