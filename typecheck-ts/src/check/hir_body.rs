@@ -2330,30 +2330,6 @@ impl<'a> Checker<'a> {
       }
     };
 
-    fn fixed_spread_len(
-      store: &TypeStore,
-      ty: TypeId,
-      expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
-      seen: &mut HashSet<TypeId>,
-    ) -> Option<usize> {
-      if !seen.insert(ty) {
-        return None;
-      }
-      match store.type_kind(ty) {
-        TypeKind::Tuple(elems) => {
-          if elems.iter().any(|elem| elem.optional || elem.rest) {
-            None
-          } else {
-            Some(elems.len())
-          }
-        }
-        TypeKind::Ref { def, args } => expander
-          .and_then(|expander| expander.expand_ref(store, def, &args))
-          .and_then(|expanded| fixed_spread_len(store, expanded, expander, seen)),
-        _ => None,
-      }
-    }
-
     let mut arg_types = Vec::with_capacity(call.stx.arguments.len());
     let mut const_arg_types = Vec::with_capacity(call.stx.arguments.len());
     // For each argument expression, record which parameter index it corresponds
@@ -2640,27 +2616,46 @@ impl<'a> Checker<'a> {
     };
     let callee_ty = self.check_expr(callee_expr);
     let arg_exprs = arg_exprs.unwrap_or(&[]);
-    let has_spread = arg_exprs.iter().any(|arg| arg.stx.spread);
-    let arg_types: Vec<CallArgType> = arg_exprs
-      .iter()
-      .map(|arg| {
+    let mut arg_types = Vec::with_capacity(arg_exprs.len());
+    let mut const_arg_types = Vec::with_capacity(arg_exprs.len());
+    let mut param_index_map = Vec::with_capacity(arg_exprs.len());
+    let mut mapping_known = true;
+    let mut next_param_index = 0usize;
+
+    for arg in arg_exprs.iter() {
+      if arg.stx.spread {
         let ty = self.check_expr(&arg.stx.value);
-        if arg.stx.spread {
-          CallArgType::spread(ty)
-        } else {
-          CallArgType::new(ty)
+        arg_types.push(CallArgType::spread(ty));
+        const_arg_types.push(self.const_inference_type(&arg.stx.value));
+        param_index_map.push(None);
+
+        if mapping_known {
+          let mut seen = HashSet::new();
+          let fixed_len = fixed_spread_len(self.store.as_ref(), ty, self.ref_expander, &mut seen);
+          if let Some(fixed_len) = fixed_len {
+            next_param_index = next_param_index.saturating_add(fixed_len);
+          } else {
+            mapping_known = false;
+          }
         }
-      })
-      .collect();
-    let const_arg_types: Vec<TypeId> = arg_exprs
-      .iter()
-      .map(|arg| self.const_inference_type(&arg.stx.value))
-      .collect();
+        continue;
+      }
+
+      let param_index = mapping_known.then_some(next_param_index);
+      param_index_map.push(param_index);
+
+      let ty = self.check_expr(&arg.stx.value);
+      arg_types.push(CallArgType::new(ty));
+      const_arg_types.push(self.const_inference_type(&arg.stx.value));
+      if mapping_known {
+        next_param_index = next_param_index.saturating_add(1);
+      }
+    }
     let span = Span {
       file: self.file,
       range: loc_to_range(self.file, span_loc),
     };
-    let resolution = resolve_construct(
+    let mut resolution = resolve_construct(
       &self.store,
       &self.relate,
       &self.instantiation_cache,
@@ -2672,26 +2667,76 @@ impl<'a> Checker<'a> {
       span,
       self.ref_expander,
     );
+
+    if let Some(sig_id) = resolution.signature.or(resolution.contextual_signature) {
+      let sig = self.store.signature(sig_id);
+      let mut refined = false;
+      for (idx, arg) in arg_exprs.iter().enumerate() {
+        let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
+          continue;
+        };
+        let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+          continue;
+        };
+        let Some(func) = (match arg.stx.value.stx.as_ref() {
+          AstExpr::ArrowFunc(arrow) => Some(&arrow.stx.func),
+          AstExpr::Func(func) => Some(&func.stx.func),
+          _ => None,
+        }) else {
+          continue;
+        };
+
+        let Some(refined_ty) = self.refine_function_expr_with_expected(func, param_ty) else {
+          continue;
+        };
+        if let Some(slot) = arg_types.get_mut(idx) {
+          slot.ty = refined_ty;
+          refined = true;
+        }
+        if let Some(slot) = const_arg_types.get_mut(idx) {
+          *slot = refined_ty;
+        }
+        self.record_expr_type(arg.stx.value.loc, refined_ty);
+      }
+
+      if refined {
+        let next = resolve_construct(
+          &self.store,
+          &self.relate,
+          &self.instantiation_cache,
+          callee_ty,
+          &arg_types,
+          Some(&const_arg_types),
+          None,
+          contextual_return,
+          span,
+          self.ref_expander,
+        );
+        if next.diagnostics.is_empty() && next.signature.is_some() {
+          resolution = next;
+        }
+      }
+    }
+
     for diag in &resolution.diagnostics {
       self.diagnostics.push(diag.clone());
     }
     if resolution.diagnostics.is_empty() {
       if let Some(sig_id) = resolution.signature {
         let sig = self.store.signature(sig_id);
-        if !has_spread {
-          for (idx, arg) in arg_exprs.iter().enumerate() {
-            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) else {
-              continue;
-            };
-            let arg_expr = &arg.stx.value;
-            let arg_ty = match arg_expr.stx.as_ref() {
-              AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
-                self.check_expr_with_expected(arg_expr, param_ty)
-              }
-              _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
-            };
-            self.check_assignable(arg_expr, arg_ty, param_ty, None);
-          }
+        for (idx, arg) in arg_exprs.iter().enumerate() {
+          let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
+            continue;
+          };
+          let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+            continue;
+          };
+          let arg_expr = &arg.stx.value;
+          let arg_ty = match arg_expr.stx.as_ref() {
+            AstExpr::LitObj(_) | AstExpr::LitArr(_) => self.check_expr_with_expected(arg_expr, param_ty),
+            _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
+          };
+          self.check_assignable(arg_expr, arg_ty, param_ty, None);
         }
       }
     }
@@ -6012,6 +6057,30 @@ fn parse_canonical_index_str(s: &str) -> Option<i64> {
     s.parse().ok()
   } else {
     None
+  }
+}
+
+fn fixed_spread_len(
+  store: &TypeStore,
+  ty: TypeId,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+  seen: &mut HashSet<TypeId>,
+) -> Option<usize> {
+  if !seen.insert(ty) {
+    return None;
+  }
+  match store.type_kind(ty) {
+    TypeKind::Tuple(elems) => {
+      if elems.iter().any(|elem| elem.optional || elem.rest) {
+        None
+      } else {
+        Some(elems.len())
+      }
+    }
+    TypeKind::Ref { def, args } => expander
+      .and_then(|expander| expander.expand_ref(store, def, &args))
+      .and_then(|expanded| fixed_spread_len(store, expanded, expander, seen)),
+    _ => None,
   }
 }
 
