@@ -5,7 +5,7 @@ use crate::util::counter::Counter;
 use crate::OptimizeResult;
 use crate::ProgramCompiler;
 use hir_js::{
-  Body, BodyId, ExprId, ForInit, ObjectKey, PatId, PatKind, StmtId, StmtKind, VarDecl,
+  Body, BodyId, BodyKind, ExprId, ForInit, ObjectKey, PatId, PatKind, StmtId, StmtKind, VarDecl,
   VarDeclarator,
 };
 use parse_js::loc::Loc;
@@ -412,6 +412,16 @@ impl<'p> HirSourceToInst<'p> {
         self.out.push(Inst::goto(target));
         Ok(())
       }
+      StmtKind::Return(value) => {
+        if let Some(value) = value {
+          let _ = self.compile_expr(*value)?;
+        }
+        let target = self
+          .return_label
+          .ok_or_else(|| unsupported_syntax_range(stmt.span, "return statement outside function"))?;
+        self.out.push(Inst::goto(target));
+        Ok(())
+      }
       StmtKind::Expr(expr) => {
         self.compile_expr(*expr)?;
         Ok(())
@@ -457,8 +467,14 @@ pub fn translate_body(
   body_id: BodyId,
 ) -> OptimizeResult<(Vec<Inst>, Counter, Counter)> {
   let mut compiler = HirSourceToInst::new(program, body_id);
+  if compiler.body.kind == BodyKind::Function {
+    compiler.return_label = Some(compiler.c_label.bump());
+  }
   for stmt in root_statements(compiler.body) {
     compiler.compile_stmt(stmt)?;
+  }
+  if let Some(label) = compiler.return_label {
+    compiler.out.push(Inst::label(label));
   }
   Ok((compiler.out, compiler.c_label, compiler.c_temp))
 }
