@@ -9,7 +9,7 @@ use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
 use typecheck_ts::check::overload::CallArgType;
 use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
-  CacheConfig, DefId, Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl,
+  CacheConfig, Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl,
   TypeParamId, TypeStore,
 };
 
@@ -325,7 +325,7 @@ fn instantiation_cache_evictions_are_bounded_and_deterministic() {
     this_param: None,
   };
 
-  let mut cache = InstantiationCache::with_config(CacheConfig {
+  let cache = InstantiationCache::with_config(CacheConfig {
     max_entries: 2,
     shard_count: 1,
   });
