@@ -14,11 +14,6 @@ status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
-id = "difftsc/rest_inference"
-status = "xfail"
-reason = "tsc rejects heterogeneous rest inference for `collect<T>(...args: T[])` (TS2345) and infers `collected` as number[]; Rust allows unions and emits no diagnostic."
-
-[[expectations]]
 id = "difftsc/await_using_valid"
 status = "xfail"
 reason = "Rust checker does not yet match tsc's `AsyncDisposable` validation; tsc reports TS2416/TS2851 diagnostics."

@@ -49,16 +49,37 @@ pub fn infer_type_arguments_for_call(
   let rest_index = sig.params.iter().position(|p| p.rest);
   let mut skip_from_index = None;
   if let Some(rest_index) = rest_index {
-    if let TypeKind::TypeParam(tp) = store.type_kind(sig.params[rest_index].ty) {
-      if ctx.decls.contains_key(&tp) {
-        let rest_args = args.get(rest_index..).unwrap_or(&[]);
-        let rest_const_args = const_args.and_then(|types| types.get(rest_index..));
-        let readonly = ctx.decls.get(&tp).is_some_and(|decl| decl.const_);
-        let inferred =
-          infer_variadic_rest_tuple(store.as_ref(), rest_args, rest_const_args, readonly);
-        ctx.add_bound(tp, Variance::Covariant, inferred);
-        skip_from_index = Some(rest_index);
+    match store.type_kind(sig.params[rest_index].ty) {
+      TypeKind::TypeParam(tp) => {
+        if ctx.decls.contains_key(&tp) {
+          let rest_args = args.get(rest_index..).unwrap_or(&[]);
+          let rest_const_args = const_args.and_then(|types| types.get(rest_index..));
+          let readonly = ctx.decls.get(&tp).is_some_and(|decl| decl.const_);
+          let inferred =
+            infer_variadic_rest_tuple(store.as_ref(), rest_args, rest_const_args, readonly);
+          ctx.add_bound(tp, Variance::Covariant, inferred);
+          skip_from_index = Some(rest_index);
+        }
       }
+      TypeKind::Array { ty, .. } => {
+        if let TypeKind::TypeParam(tp) = store.type_kind(ty) {
+          if ctx.decls.contains_key(&tp) {
+            let rest_args = args.get(rest_index..).unwrap_or(&[]);
+            let rest_const_args = const_args.and_then(|types| types.get(rest_index..));
+            let use_const = ctx.decls.get(&tp).is_some_and(|decl| decl.const_);
+            let inferred = infer_homogenous_rest_array_element(
+              store.as_ref(),
+              relate,
+              rest_args,
+              rest_const_args,
+              use_const,
+            );
+            ctx.add_bound(tp, Variance::Covariant, inferred);
+            skip_from_index = Some(rest_index);
+          }
+        }
+      }
+      _ => {}
     }
   }
 
@@ -136,6 +157,87 @@ fn infer_variadic_rest_tuple(
     })
     .collect();
   store.intern_type(TypeKind::Tuple(elems))
+}
+
+fn infer_homogenous_rest_array_element(
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+  rest_args: &[CallArgType],
+  const_args: Option<&[TypeId]>,
+  use_const: bool,
+) -> TypeId {
+  let prim = store.primitive_ids();
+  let mut candidates = Vec::new();
+  for (idx, arg) in rest_args.iter().enumerate() {
+    let mut ty = if use_const {
+      const_args
+        .and_then(|types| types.get(idx))
+        .copied()
+        .unwrap_or(arg.ty)
+    } else {
+      arg.ty
+    };
+    if arg.spread {
+      ty = relate.spread_element_type(ty);
+    }
+    candidates.push(ty);
+  }
+
+  if candidates.is_empty() {
+    return prim.unknown;
+  }
+
+  if candidates.len() > 1 {
+    let has_specific = candidates
+      .iter()
+      .any(|ty| !matches!(store.type_kind(*ty), TypeKind::Unknown | TypeKind::Any));
+    if has_specific {
+      candidates.retain(|ty| !matches!(store.type_kind(*ty), TypeKind::Unknown | TypeKind::Any));
+    }
+  }
+
+  // Prefer a candidate that all other arguments are assignable to (e.g. if one
+  // argument is already a union supertype).
+  for candidate in candidates.iter().copied() {
+    if candidates
+      .iter()
+      .copied()
+      .all(|other| relate.is_assignable(other, candidate))
+    {
+      return candidate;
+    }
+  }
+
+  // When all candidates are literals of the same primitive kind, widen to the
+  // primitive type (`collect(1, 2)` infers `number`, not `1`).
+  if candidates
+    .iter()
+    .all(|ty| matches!(store.type_kind(*ty), TypeKind::NumberLiteral(_)))
+  {
+    return prim.number;
+  }
+  if candidates
+    .iter()
+    .all(|ty| matches!(store.type_kind(*ty), TypeKind::StringLiteral(_)))
+  {
+    return prim.string;
+  }
+  if candidates
+    .iter()
+    .all(|ty| matches!(store.type_kind(*ty), TypeKind::BooleanLiteral(_)))
+  {
+    return prim.boolean;
+  }
+  if candidates
+    .iter()
+    .all(|ty| matches!(store.type_kind(*ty), TypeKind::BigIntLiteral(_)))
+  {
+    return prim.bigint;
+  }
+
+  // Otherwise, keep the first inferred type and let argument checking surface
+  // mismatches (mirrors `tsc` for `collect(1, "x")`).
+  candidates[0]
 }
 
 /// Infer type arguments using a contextual function type (e.g. arrow function
