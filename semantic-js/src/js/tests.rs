@@ -1524,6 +1524,56 @@ fn module_import_restricted_identifier_is_reported() {
 }
 
 #[test]
+fn strict_assignment_to_eval_is_reported() {
+  let source = "'use strict'; eval = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(101));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0005");
+  assert_eq!(slice_range(source, &diagnostics[0]), "eval");
+}
+
+#[test]
+fn strict_destructuring_assignment_to_eval_is_reported() {
+  let source = "'use strict'; ({eval} = obj);";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(102));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0005");
+  assert_eq!(slice_range(source, &diagnostics[0]), "eval");
+}
+
+#[test]
+fn strict_for_in_assignment_to_eval_is_reported() {
+  let source = "'use strict'; for (eval in obj) {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(103));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0005");
+  assert_eq!(slice_range(source, &diagnostics[0]), "eval");
+}
+
+#[test]
+fn strict_with_statement_is_reported() {
+  let source = "'use strict'; with({}){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(104));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0007");
+  assert_eq!(slice_range(source, &diagnostics[0]), "with");
+}
+
+#[test]
+fn strict_delete_identifier_is_reported() {
+  let source = "'use strict'; delete a;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(105));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0008");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
 fn duplicate_parameters_in_strict_functions_are_reported() {
   let source = "'use strict'; function f(a,a){}";
   let mut ast = parse(source).unwrap();

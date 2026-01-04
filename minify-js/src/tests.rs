@@ -970,22 +970,22 @@ fn test_shadowed_eval_allows_renaming() {
 
 #[test]
 fn test_with_in_nested_scope_only_disables_that_scope() {
-  let src = "function outer(){let top=1;function inner(obj){let value=obj.v;with(obj){value;}return value;}return inner({v:top})+top;}";
-  let result = minified(TopLevelMode::Module, src);
+  let src = "(()=>{function outer(){let top=1;function inner(obj){let value=obj.v;with(obj){value;}return value;}return inner({v:top})+top;}return outer();})();";
+  let result = minified(TopLevelMode::Global, src);
   assert_eq!(
     result,
-    "function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}"
+    "(()=>{function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}return a();})();"
   );
 }
 
 #[test]
 fn with_in_nested_scope_pins_outer_bindings() {
   let src =
-    "function outer(){let top=1;function inner(obj){with(obj){top;}return top;}return inner({})+top;}";
-  let result = minified(TopLevelMode::Module, src);
+    "(()=>{function outer(){let top=1;function inner(obj){with(obj){top;}return top;}return inner({})+top;}return outer();})();";
+  let result = minified(TopLevelMode::Global, src);
   assert_eq!(
     result,
-    "function a(){let top=1;function a(obj){with(obj){top;}return top;}return a({})+top;}"
+    "(()=>{function a(){let top=1;function a(obj){with(obj){top;}return top;}return a({})+top;}return a();})();"
   );
 }
 

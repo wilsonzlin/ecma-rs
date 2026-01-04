@@ -15,10 +15,13 @@ use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::BinaryExpr;
 use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
+use parse_js::ast::expr::UnaryExpr;
+use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
@@ -39,17 +42,19 @@ use parse_js::ast::stmt::ForOfStmt;
 use parse_js::ast::stmt::ForTripleStmt;
 use parse_js::ast::stmt::ForTripleStmtInit;
 use parse_js::ast::stmt::IfStmt;
-use parse_js::ast::stmt::LabelStmt;
 use parse_js::ast::stmt::ImportStmt;
+use parse_js::ast::stmt::LabelStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::SwitchBranch;
 use parse_js::ast::stmt::SwitchStmt;
 use parse_js::ast::stmt::WhileStmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::operator::OperatorName;
 use std::collections::BTreeMap;
 
 type BlockStmtNode = Node<BlockStmt>;
+type BinaryExprNode = Node<BinaryExpr>;
 type CallExprNode = Node<CallExpr>;
 type CatchBlockNode = Node<CatchBlock>;
 type ClassStaticBlockNode = Node<ClassStaticBlock>;
@@ -70,6 +75,8 @@ type PatDeclNode = Node<PatDecl>;
 type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
 type DoWhileStmtNode = Node<DoWhileStmt>;
+type UnaryExprNode = Node<UnaryExpr>;
+type UnaryPostfixExprNode = Node<UnaryPostfixExpr>;
 type WhileStmtNode = Node<WhileStmt>;
 type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
@@ -566,13 +573,12 @@ enum StmtContext {
   StatementList,
   /// A single-statement position (e.g. the body of `if`, `while`, `for`, or a
   /// labelled statement).
-  SingleStatement {
-    allow_regular_function: bool,
-  },
+  SingleStatement { allow_regular_function: bool },
 }
 
 #[derive(VisitorMut)]
 #[visitor(
+  BinaryExprNode(enter),
   BlockStmtNode,
   CatchBlockNode,
   ClassDeclNode,
@@ -595,6 +601,8 @@ enum StmtContext {
   PatDeclNode,
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
+  UnaryExprNode(enter),
+  UnaryPostfixExprNode(enter),
   VarDeclNode,
   WhileStmtNode(enter, exit),
   WithStmtNode(enter, exit),
@@ -829,8 +837,33 @@ impl DeclareVisitor {
     );
   }
 
+  fn report_strict_eval_or_arguments(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0005",
+      "Unexpected eval or arguments in strict mode".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn report_strict_with_statement(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0007",
+      "Strict mode code may not include a with statement".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn report_strict_delete_identifier(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0008",
+      "Delete of an unqualified identifier in strict mode.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
   fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
-    let disallow_duplicates = strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
+    let disallow_duplicates =
+      strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
     if !disallow_duplicates {
       return;
     }
@@ -846,9 +879,7 @@ impl DeclareVisitor {
       fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
         let span = ident_range(node.loc, &node.stx.name);
         if let Some(prev) = self.seen.get(&node.stx.name).copied() {
-          self
-            .duplicates
-            .push((node.stx.name.clone(), span, prev));
+          self.duplicates.push((node.stx.name.clone(), span, prev));
         } else {
           self.seen.insert(node.stx.name.clone(), span);
         }
@@ -946,11 +977,7 @@ impl DeclareVisitor {
     span: TextRange,
   ) -> Option<(SymbolId, ScopeId)> {
     if self.is_strict() && (name == "eval" || name == "arguments") {
-      self.builder.diagnostics.push(Diagnostic::error(
-        "BIND0005",
-        "Unexpected eval or arguments in strict mode".to_string(),
-        Span::new(self.builder.file, span),
-      ));
+      self.report_strict_eval_or_arguments(span);
     }
 
     let name_id = self.builder.intern_name(name);
@@ -1029,6 +1056,71 @@ impl DeclareVisitor {
 }
 
 impl DeclareVisitor {
+  fn enter_binary_expr_node(&mut self, node: &mut BinaryExprNode) {
+    if !self.is_strict() || !node.stx.operator.is_assignment() {
+      return;
+    }
+
+    #[derive(Default, VisitorMut)]
+    #[visitor(IdPatNode(enter))]
+    struct AssignmentTargetCollector {
+      restricted: Vec<TextRange>,
+    }
+
+    impl AssignmentTargetCollector {
+      fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+        if node.stx.name == "eval" || node.stx.name == "arguments" {
+          self.restricted.push(ident_range(node.loc, &node.stx.name));
+        }
+      }
+    }
+
+    let mut collector = AssignmentTargetCollector::default();
+    node.stx.left.drive_mut(&mut collector);
+    for range in collector.restricted {
+      self.report_strict_eval_or_arguments(range);
+    }
+  }
+
+  fn enter_unary_expr_node(&mut self, node: &mut UnaryExprNode) {
+    if !self.is_strict() {
+      return;
+    }
+
+    match node.stx.operator {
+      OperatorName::Delete => {
+        if let Expr::Id(id) = node.stx.argument.stx.as_ref() {
+          self.report_strict_delete_identifier(ident_range(id.loc, &id.stx.name));
+        }
+      }
+      OperatorName::PrefixIncrement | OperatorName::PrefixDecrement => {
+        if let Expr::Id(id) = node.stx.argument.stx.as_ref() {
+          if id.stx.name == "eval" || id.stx.name == "arguments" {
+            self.report_strict_eval_or_arguments(ident_range(id.loc, &id.stx.name));
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn enter_unary_postfix_expr_node(&mut self, node: &mut UnaryPostfixExprNode) {
+    if !self.is_strict() {
+      return;
+    }
+
+    match node.stx.operator {
+      OperatorName::PostfixIncrement | OperatorName::PostfixDecrement => {
+        if let Expr::Id(id) = node.stx.argument.stx.as_ref() {
+          if id.stx.name == "eval" || id.stx.name == "arguments" {
+            self.report_strict_eval_or_arguments(ident_range(id.loc, &id.stx.name));
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
   fn enter_do_while_stmt_node(&mut self, _node: &mut DoWhileStmtNode) {
     self.push_stmt_context(StmtContext::SingleStatement {
       allow_regular_function: false,
@@ -1060,6 +1152,9 @@ impl DeclareVisitor {
   }
 
   fn enter_with_stmt_node(&mut self, _node: &mut WithStmtNode) {
+    if self.is_strict() {
+      self.report_strict_with_statement(ident_range(_node.loc, "with"));
+    }
     self.push_stmt_context(StmtContext::SingleStatement {
       allow_regular_function: false,
     });
@@ -1335,6 +1430,30 @@ impl DeclareVisitor {
       self.scope_stack.push(scope);
     }
     self.for_in_of_lhs_scope_stack.push(loop_scope);
+
+    if self.is_strict() {
+      if let ForInOfLhs::Assign(pat) = node {
+        #[derive(Default, VisitorMut)]
+        #[visitor(IdPatNode(enter))]
+        struct TargetCollector {
+          ranges: Vec<TextRange>,
+        }
+
+        impl TargetCollector {
+          fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+            if node.stx.name == "eval" || node.stx.name == "arguments" {
+              self.ranges.push(ident_range(node.loc, &node.stx.name));
+            }
+          }
+        }
+
+        let mut collector = TargetCollector::default();
+        pat.drive_mut(&mut collector);
+        for range in collector.ranges {
+          self.report_strict_eval_or_arguments(range);
+        }
+      }
+    }
 
     if let ForInOfLhs::Decl((mode, _)) = node {
       let target = match mode {

@@ -179,7 +179,7 @@ fn shadowed_eval_is_allowed() {
 #[test]
 fn with_statement_is_rejected() {
   let source = r#"with (obj) { answer = 42; }"#;
-  let err = compile_source(source, TopLevelMode::Module, false)
+  let err = compile_source(source, TopLevelMode::Global, false)
     .expect_err("with statements are unsupported");
   assert!(
     err
