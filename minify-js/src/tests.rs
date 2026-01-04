@@ -693,6 +693,16 @@ fn direct_eval_disables_undefined_rewrites_in_descendant_scopes() {
 }
 
 #[test]
+fn direct_eval_disables_nullish_or_rewrite_in_descendant_scopes() {
+  // `x===null||x===undefined` → `x==null` is only sound when `undefined` is known
+  // to be the global value. Direct `eval` in a parent scope can introduce a new
+  // `undefined` binding at runtime that nested functions close over.
+  let src = r#"function f(x){eval("var undefined=1");return()=>x===null||x===undefined;}"#;
+  let result = minified(TopLevelMode::Global, src);
+  assert_eq!(result, src);
+}
+
+#[test]
 fn removes_unused_var_decls_with_pure_initializers() {
   let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
   assert_eq!(result, "console.log(2);");
@@ -2689,7 +2699,10 @@ fn lowers_class_fields_with_define_for_class_fields_semantics() {
     Stmt::Expr(expr) => match expr.stx.expr.stx.as_ref() {
       Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => {
         let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
-          panic!("expected this[\"foo\"]=... assignment, got {:?}", bin.stx.left);
+          panic!(
+            "expected this[\"foo\"]=... assignment, got {:?}",
+            bin.stx.left
+          );
         };
         assert!(matches!(member.stx.object.stx.as_ref(), Expr::This(_)));
         match member.stx.member.stx.as_ref() {
