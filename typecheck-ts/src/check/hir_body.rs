@@ -119,6 +119,7 @@ struct ClassInfo {
   instance_fields: Vec<ClassFieldDecl>,
   static_fields: Vec<ClassFieldDecl>,
   instance_param_props: Vec<String>,
+  instance_param_props_private: HashSet<String>,
   instance_member_names: HashSet<String>,
 }
 
@@ -127,6 +128,9 @@ struct ClassFieldDecl {
   name: String,
   member_index: usize,
   optional: bool,
+  has_initializer: bool,
+  is_private: bool,
+  key_range: TextRange,
 }
 
 #[derive(Clone, Copy)]
@@ -634,6 +638,7 @@ impl AstIndex {
       instance_fields: Vec::new(),
       static_fields: Vec::new(),
       instance_param_props: Vec::new(),
+      instance_param_props_private: HashSet::new(),
       instance_member_names: HashSet::new(),
     });
     index
@@ -647,6 +652,7 @@ impl AstIndex {
     cancelled: Option<&Arc<AtomicBool>>,
   ) {
     let mut param_props: Vec<String> = Vec::new();
+    let mut param_props_private: HashSet<String> = HashSet::new();
     for (idx, member) in members.iter().enumerate() {
       if idx % 128 == 0 {
         Self::check_cancelled(cancelled);
@@ -668,6 +674,12 @@ impl AstIndex {
         if param.stx.accessibility.is_some() || param.stx.readonly {
           if let AstPat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref() {
             param_props.push(id.stx.name.clone());
+            if matches!(
+              param.stx.accessibility,
+              Some(parse_js::ast::stmt::decl::Accessibility::Private)
+            ) {
+              param_props_private.insert(id.stx.name.clone());
+            }
           }
         }
       }
@@ -678,6 +690,7 @@ impl AstIndex {
     }
     if let Some(info) = self.classes.get_mut(class_index) {
       info.instance_param_props = param_props.clone();
+      info.instance_param_props_private = param_props_private;
       for prop in param_props.iter() {
         info.instance_member_names.insert(prop.clone());
       }
@@ -724,6 +737,12 @@ impl AstIndex {
           name: key.stx.key.clone(),
           member_index,
           optional: member.stx.optional,
+          has_initializer: matches!(member.stx.val, ClassOrObjVal::Prop(Some(_))),
+          is_private: matches!(
+            member.stx.accessibility,
+            Some(parse_js::ast::stmt::decl::Accessibility::Private)
+          ),
+          key_range: loc_to_range(file, key.loc),
         };
         if member.stx.static_ {
           info.static_fields.push(field);
@@ -812,6 +831,40 @@ impl AstIndex {
       if base.instance_member_names.contains(name) {
         return true;
       }
+      current = base.extends.clone();
+    }
+    false
+  }
+
+  fn instance_data_prop_declared_in_base_chain(&self, base_name: &str, prop: &str) -> bool {
+    let mut current = Some(base_name.to_string());
+    let mut visited = HashSet::<String>::new();
+    while let Some(base_name) = current.take() {
+      if !visited.insert(base_name.clone()) {
+        break;
+      }
+      let Some(base_index) = self.classes_by_name.get(&base_name).copied() else {
+        break;
+      };
+      let Some(base) = self.classes.get(base_index) else {
+        break;
+      };
+
+      if base
+        .instance_fields
+        .iter()
+        .any(|field| field.name == prop && !field.name.starts_with('#') && !field.is_private)
+      {
+        return true;
+      }
+      if base
+        .instance_param_props
+        .iter()
+        .any(|name| name == prop && !base.instance_param_props_private.contains(prop))
+      {
+        return true;
+      }
+
       current = base.extends.clone();
     }
     false
@@ -1006,6 +1059,7 @@ pub fn check_body_with_expander(
 
   match body.kind {
     BodyKind::TopLevel => {
+      checker.check_class_field_overwrites_base_properties();
       checker.check_stmt_list(&ast.stx.body);
     }
     BodyKind::Function => {
@@ -1199,6 +1253,38 @@ impl<'a> Checker<'a> {
         }
       }
       AstPat::AssignTarget(_) => {}
+    }
+  }
+
+  fn check_class_field_overwrites_base_properties(&mut self) {
+    if !self.use_define_for_class_fields {
+      return;
+    }
+    for class in self.index.classes.iter() {
+      let Some(base_name) = class.extends.as_deref() else {
+        continue;
+      };
+
+      for field in class.instance_fields.iter() {
+        if field.has_initializer || field.name.starts_with('#') || field.is_private {
+          continue;
+        }
+        if !self
+          .index
+          .instance_data_prop_declared_in_base_chain(base_name, &field.name)
+        {
+          continue;
+        }
+        self
+          .diagnostics
+          .push(codes::PROPERTY_WILL_OVERWRITE_BASE_PROPERTY.error(
+            format!(
+              "Property '{}' will overwrite the base property in '{}'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration.",
+              field.name, base_name
+            ),
+            Span::new(self.file, field.key_range),
+          ));
+      }
     }
   }
 

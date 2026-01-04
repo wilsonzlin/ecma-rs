@@ -18,3 +18,11 @@ class StaticC {
   foo = StaticC.baz;
   static baz = 1;
 }
+
+class BaseOverwrite {
+  x = 1;
+}
+
+class DerivedOverwrite extends BaseOverwrite {
+  x: number;
+}

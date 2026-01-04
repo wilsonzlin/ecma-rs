@@ -259,6 +259,19 @@ pub const PROPERTY_USED_BEFORE_INITIALIZATION: Code = Code::new(
   &[],
 );
 
+/// TS2612: Property will overwrite the base property in a derived class.
+///
+/// - Primary span: the property name in the derived class declaration.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const PROPERTY_WILL_OVERWRITE_BASE_PROPERTY: Code = Code::new(
+  "TS2612",
+  "property will overwrite base property",
+  "property name in the derived class declaration",
+  &["primary: property name"],
+  &[],
+);
+
 /// TC1001: Module specifier could not be resolved.
 ///
 /// - Primary span: the module specifier in an import/export statement or a
@@ -278,8 +291,13 @@ pub const UNRESOLVED_MODULE: Code = Code::new(
 /// - Primary span: the path string inside the triple-slash directive (excluding quotes).
 /// - Labels: primary only.
 /// - Notes: none.
-pub const FILE_NOT_FOUND: Code =
-  Code::new("TS6053", "file not found", "reference path value", &["primary: reference path"], &[]);
+pub const FILE_NOT_FOUND: Code = Code::new(
+  "TS6053",
+  "file not found",
+  "reference path value",
+  &["primary: reference path"],
+  &[],
+);
 
 /// TS2688: Triple-slash `reference types` package could not be resolved.
 ///
