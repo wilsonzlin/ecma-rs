@@ -290,7 +290,8 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
         .map(|s| s.trim().to_ascii_lowercase())
         .as_deref(),
       Some("node" | "node10" | "node16" | "nodenext" | "bundler")
-    );
+    )
+    || !options.types.is_empty();
   let resolve_options = ResolveOptions {
     node_modules: node_resolve,
     package_imports: node_resolve,

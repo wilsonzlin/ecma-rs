@@ -205,6 +205,86 @@ fn resolves_package_json_exports_types() {
 }
 
 #[test]
+fn resolves_package_json_exports_types_without_dot_key() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/package.json"),
+    r#"{ "name": "pkg", "version": "1.0.0", "exports": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } }"#,
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/dist/index.d.ts"),
+    "export const value: number;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn resolves_package_json_typings_entry() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/package.json"),
+    r#"{ "name": "pkg", "version": "1.0.0", "typings": "./index.d.ts" }"#,
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/index.d.ts"),
+    "export const value: number;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn resolves_node_modules_from_ancestor_directories() {
+  let tmp = tempdir().expect("temp dir");
+  let entry = tmp.path().join("src/nested/main.ts");
+  write_file(
+    &entry,
+    "import { value } from \"pkg\";\n\nexport const doubled = value * 2;\n",
+  );
+  write_file(
+    &tmp.path().join("node_modules/pkg/index.d.ts"),
+    "export const value: number;\n",
+  );
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(entry.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
 fn resolves_imports_specifiers_from_package_json() {
   let tmp = tempdir().expect("temp dir");
   write_file(
