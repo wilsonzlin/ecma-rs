@@ -361,3 +361,25 @@ fn avoids_synthetic_namespace_param_collisions_with_function_decls() {
     "expected one namespace IIFE targeting the synthesized binding. output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_namespace_param_collisions_with_import_equals_entity_name_base() {
+  let src = r#"
+    eval("x");
+    import Foo = __minify_ts_namespace_static.Bar;
+    export namespace static { export const x = 1; }
+    console.log(Foo, x);
+  "#;
+  let (code, mut parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid using a name that appears as the base of an import= entity name. output: {code}"
+  );
+  assert!(
+    program_contains_id_expr(&mut parsed, "__minify_ts_namespace_static"),
+    "expected the import= initializer to continue referring to `__minify_ts_namespace_static`. output: {code}"
+  );
+}

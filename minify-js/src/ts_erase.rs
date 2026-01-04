@@ -102,6 +102,9 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
 
     fn enter_import_equals_decl_node(&mut self, node: &mut ImportEqualsDeclNode) {
       self.names.insert(node.stx.name.clone());
+      if let ImportEqualsRhs::EntityName { path } = &node.stx.rhs {
+        self.names.extend(path.iter().cloned());
+      }
     }
   }
 
