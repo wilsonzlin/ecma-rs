@@ -2164,11 +2164,29 @@ fn strip_namespace_decl(
     );
     return vec![];
   }
-  let namespace_param_ident = if name_is_binding_identifier {
+  let mut namespace_param_ident = if name_is_binding_identifier {
     namespace_name.clone()
   } else {
     format!("__minify_ts_namespace_{namespace_name}")
   };
+  if !name_is_binding_identifier {
+    let used_bindings = match &decl.stx.body {
+      NamespaceBody::Block(stmts) => collect_top_level_value_bindings(stmts),
+      NamespaceBody::Namespace(_) => HashSet::new(),
+    };
+    if used_bindings.contains(&namespace_param_ident) {
+      let base = namespace_param_ident;
+      let mut suffix = 1usize;
+      loop {
+        let candidate = format!("{base}_{suffix}");
+        if !used_bindings.contains(&candidate) {
+          namespace_param_ident = candidate;
+          break;
+        }
+        suffix += 1;
+      }
+    }
+  }
   let has_value_binding =
     name_is_binding_identifier && ctx.current_value_bindings().contains(&namespace_name);
   let mut out = Vec::new();

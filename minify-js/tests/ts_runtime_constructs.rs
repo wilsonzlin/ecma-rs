@@ -686,6 +686,32 @@ fn lowers_dotted_namespaces_with_strict_mode_restricted_identifiers_to_parseable
 }
 
 #[test]
+fn avoids_synthetic_namespace_param_collisions_with_user_bindings() {
+  // When a dotted namespace segment is not a valid binding identifier, TS erasure synthesizes an
+  // internal IIFE parameter name. That name must not collide with user-declared bindings in the
+  // namespace body, otherwise the output is invalid JS (and we can't rely on renaming when direct
+  // eval is present).
+  let src = r#"
+    export namespace A.class {
+      eval("x");
+      const __minify_ts_namespace_class = 123;
+      export const x = 1;
+    }
+    console.log(A["class"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    !code.contains("function(__minify_ts_namespace_class)"),
+    "expected synthesized namespace param to avoid colliding with user binding: {code}"
+  );
+  assert!(
+    code.contains("function(__minify_ts_namespace_class_"),
+    "expected synthesized namespace param to be disambiguated with a suffix: {code}"
+  );
+}
+
+#[test]
 fn lowers_top_level_namespaces_named_using_to_parseable_js() {
   let src = r#"
     export namespace using {
