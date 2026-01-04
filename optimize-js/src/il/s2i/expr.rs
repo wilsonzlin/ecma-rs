@@ -167,58 +167,126 @@ impl<'p> HirSourceToInst<'p> {
           }
         };
         let value_tmp_var = self.c_temp.bump();
-        let mut value_arg = self.compile_expr(value)?;
-        if operator == AssignOp::Assign {
-          self
-            .out
-            .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
-        } else {
-          let op = match operator {
-            AssignOp::AddAssign => BinOp::Add,
-            AssignOp::SubAssign => BinOp::Sub,
-            AssignOp::MulAssign => BinOp::Mul,
-            AssignOp::DivAssign => BinOp::Div,
-            AssignOp::RemAssign => BinOp::Mod,
-            AssignOp::ShiftLeftAssign => BinOp::Shl,
-            AssignOp::ShiftRightAssign => BinOp::Shr,
-            AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
-            AssignOp::BitAndAssign => BinOp::BitAnd,
-            AssignOp::BitOrAssign => BinOp::BitOr,
-            AssignOp::BitXorAssign => BinOp::BitXor,
-            AssignOp::ExponentAssign => BinOp::Exp,
-            _ => {
-              return Err(unsupported_syntax(
-                span,
-                format!("unsupported assignment operator {operator:?}"),
-              ))
+        match operator {
+          AssignOp::Assign => {
+            let value_arg = self.compile_expr(value)?;
+            self
+              .out
+              .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
+            *assign_inst.args.last_mut().unwrap() = value_arg;
+            self.out.push(assign_inst);
+            Ok(Arg::Var(value_tmp_var))
+          }
+          AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign => {
+            let left_arg = match assign_inst.t {
+              InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
+              InstTyp::ForeignStore => {
+                let left_tmp_var = self.c_temp.bump();
+                self
+                  .out
+                  .push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
+                Arg::Var(left_tmp_var)
+              }
+              InstTyp::UnknownStore => {
+                let left_tmp_var = self.c_temp.bump();
+                self.out.push(Inst::unknown_load(
+                  left_tmp_var,
+                  assign_inst.unknown.clone(),
+                ));
+                Arg::Var(left_tmp_var)
+              }
+              _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
+            };
+
+            self
+              .out
+              .push(Inst::var_assign(value_tmp_var, left_arg.clone()));
+            let converge_label_id = self.c_label.bump();
+
+            match operator {
+              AssignOp::LogicalAndAssign => self.out.push(Inst::cond_goto(
+                Arg::Var(value_tmp_var),
+                DUMMY_LABEL,
+                converge_label_id,
+              )),
+              AssignOp::LogicalOrAssign => self.out.push(Inst::cond_goto(
+                Arg::Var(value_tmp_var),
+                converge_label_id,
+                DUMMY_LABEL,
+              )),
+              AssignOp::NullishAssign => {
+                let is_nullish_tmp_var = self.c_temp.bump();
+                self.out.push(Inst::bin(
+                  is_nullish_tmp_var,
+                  Arg::Var(value_tmp_var),
+                  BinOp::LooseEq,
+                  Arg::Const(Const::Null),
+                ));
+                self.out.push(Inst::cond_goto(
+                  Arg::Var(is_nullish_tmp_var),
+                  DUMMY_LABEL,
+                  converge_label_id,
+                ));
+              }
+              _ => unreachable!(),
             }
-          };
-          let left_arg = match assign_inst.t {
-            InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
-            InstTyp::ForeignStore => {
-              let left_tmp_var = self.c_temp.bump();
-              self
-                .out
-                .push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
-              Arg::Var(left_tmp_var)
-            }
-            InstTyp::UnknownStore => {
-              let left_tmp_var = self.c_temp.bump();
-              self.out.push(Inst::unknown_load(
-                left_tmp_var,
-                assign_inst.unknown.clone(),
-              ));
-              Arg::Var(left_tmp_var)
-            }
-            _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
-          };
-          let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
-          self.out.push(rhs_inst);
-          value_arg = Arg::Var(value_tmp_var);
-        };
-        *assign_inst.args.last_mut().unwrap() = value_arg;
-        self.out.push(assign_inst);
-        Ok(Arg::Var(value_tmp_var))
+
+            let rhs = self.compile_expr(value)?;
+            self.out.push(Inst::var_assign(value_tmp_var, rhs.clone()));
+            *assign_inst.args.last_mut().unwrap() = rhs;
+            self.out.push(assign_inst);
+            self.out.push(Inst::label(converge_label_id));
+
+            Ok(Arg::Var(value_tmp_var))
+          }
+          _ => {
+            let value_arg = self.compile_expr(value)?;
+            let op = match operator {
+              AssignOp::AddAssign => BinOp::Add,
+              AssignOp::SubAssign => BinOp::Sub,
+              AssignOp::MulAssign => BinOp::Mul,
+              AssignOp::DivAssign => BinOp::Div,
+              AssignOp::RemAssign => BinOp::Mod,
+              AssignOp::ShiftLeftAssign => BinOp::Shl,
+              AssignOp::ShiftRightAssign => BinOp::Shr,
+              AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
+              AssignOp::BitAndAssign => BinOp::BitAnd,
+              AssignOp::BitOrAssign => BinOp::BitOr,
+              AssignOp::BitXorAssign => BinOp::BitXor,
+              AssignOp::ExponentAssign => BinOp::Exp,
+              _ => {
+                return Err(unsupported_syntax(
+                  span,
+                  format!("unsupported assignment operator {operator:?}"),
+                ))
+              }
+            };
+            let left_arg = match assign_inst.t {
+              InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
+              InstTyp::ForeignStore => {
+                let left_tmp_var = self.c_temp.bump();
+                self
+                  .out
+                  .push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
+                Arg::Var(left_tmp_var)
+              }
+              InstTyp::UnknownStore => {
+                let left_tmp_var = self.c_temp.bump();
+                self.out.push(Inst::unknown_load(
+                  left_tmp_var,
+                  assign_inst.unknown.clone(),
+                ));
+                Arg::Var(left_tmp_var)
+              }
+              _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
+            };
+            let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
+            self.out.push(rhs_inst);
+            *assign_inst.args.last_mut().unwrap() = Arg::Var(value_tmp_var);
+            self.out.push(assign_inst);
+            Ok(Arg::Var(value_tmp_var))
+          }
+        }
       }
       PatKind::AssignTarget(expr_id) => {
         let target_expr = &self.body.exprs[expr_id.0 as usize];
@@ -238,47 +306,104 @@ impl<'p> HirSourceToInst<'p> {
           _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
         };
         let value_tmp_var = self.c_temp.bump();
-        let mut value_arg = self.compile_expr(value)?;
-        if operator == AssignOp::Assign {
-          self
-            .out
-            .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
-        } else {
-          let op = match operator {
-            AssignOp::AddAssign => BinOp::Add,
-            AssignOp::SubAssign => BinOp::Sub,
-            AssignOp::MulAssign => BinOp::Mul,
-            AssignOp::DivAssign => BinOp::Div,
-            AssignOp::RemAssign => BinOp::Mod,
-            AssignOp::ShiftLeftAssign => BinOp::Shl,
-            AssignOp::ShiftRightAssign => BinOp::Shr,
-            AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
-            AssignOp::BitAndAssign => BinOp::BitAnd,
-            AssignOp::BitOrAssign => BinOp::BitOr,
-            AssignOp::BitXorAssign => BinOp::BitXor,
-            AssignOp::ExponentAssign => BinOp::Exp,
-            _ => {
-              return Err(unsupported_syntax(
-                span,
-                format!("unsupported assignment operator {operator:?}"),
-              ))
+        match operator {
+          AssignOp::Assign => {
+            let value_arg = self.compile_expr(value)?;
+            self
+              .out
+              .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
+            *assign_inst.args.last_mut().unwrap() = value_arg;
+            self.out.push(assign_inst);
+            Ok(Arg::Var(value_tmp_var))
+          }
+          AssignOp::LogicalAndAssign | AssignOp::LogicalOrAssign | AssignOp::NullishAssign => {
+            let (obj, prop, _) = assign_inst.as_prop_assign();
+            let left_tmp_var = self.c_temp.bump();
+            self.out.push(Inst::bin(
+              left_tmp_var,
+              obj.clone(),
+              BinOp::GetProp,
+              prop.clone(),
+            ));
+            self
+              .out
+              .push(Inst::var_assign(value_tmp_var, Arg::Var(left_tmp_var)));
+
+            let converge_label_id = self.c_label.bump();
+
+            match operator {
+              AssignOp::LogicalAndAssign => self.out.push(Inst::cond_goto(
+                Arg::Var(value_tmp_var),
+                DUMMY_LABEL,
+                converge_label_id,
+              )),
+              AssignOp::LogicalOrAssign => self.out.push(Inst::cond_goto(
+                Arg::Var(value_tmp_var),
+                converge_label_id,
+                DUMMY_LABEL,
+              )),
+              AssignOp::NullishAssign => {
+                let is_nullish_tmp_var = self.c_temp.bump();
+                self.out.push(Inst::bin(
+                  is_nullish_tmp_var,
+                  Arg::Var(value_tmp_var),
+                  BinOp::LooseEq,
+                  Arg::Const(Const::Null),
+                ));
+                self.out.push(Inst::cond_goto(
+                  Arg::Var(is_nullish_tmp_var),
+                  DUMMY_LABEL,
+                  converge_label_id,
+                ));
+              }
+              _ => unreachable!(),
             }
-          };
-          let (obj, prop, _) = assign_inst.as_prop_assign();
-          let left_tmp_var = self.c_temp.bump();
-          self.out.push(Inst::bin(
-            left_tmp_var,
-            obj.clone(),
-            BinOp::GetProp,
-            prop.clone(),
-          ));
-          let rhs_inst = Inst::bin(value_tmp_var, Arg::Var(left_tmp_var), op, value_arg);
-          self.out.push(rhs_inst);
-          value_arg = Arg::Var(value_tmp_var);
+
+            let rhs = self.compile_expr(value)?;
+            self.out.push(Inst::var_assign(value_tmp_var, rhs.clone()));
+            *assign_inst.args.last_mut().unwrap() = rhs;
+            self.out.push(assign_inst);
+            self.out.push(Inst::label(converge_label_id));
+
+            Ok(Arg::Var(value_tmp_var))
+          }
+          _ => {
+            let value_arg = self.compile_expr(value)?;
+            let op = match operator {
+              AssignOp::AddAssign => BinOp::Add,
+              AssignOp::SubAssign => BinOp::Sub,
+              AssignOp::MulAssign => BinOp::Mul,
+              AssignOp::DivAssign => BinOp::Div,
+              AssignOp::RemAssign => BinOp::Mod,
+              AssignOp::ShiftLeftAssign => BinOp::Shl,
+              AssignOp::ShiftRightAssign => BinOp::Shr,
+              AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
+              AssignOp::BitAndAssign => BinOp::BitAnd,
+              AssignOp::BitOrAssign => BinOp::BitOr,
+              AssignOp::BitXorAssign => BinOp::BitXor,
+              AssignOp::ExponentAssign => BinOp::Exp,
+              _ => {
+                return Err(unsupported_syntax(
+                  span,
+                  format!("unsupported assignment operator {operator:?}"),
+                ))
+              }
+            };
+            let (obj, prop, _) = assign_inst.as_prop_assign();
+            let left_tmp_var = self.c_temp.bump();
+            self.out.push(Inst::bin(
+              left_tmp_var,
+              obj.clone(),
+              BinOp::GetProp,
+              prop.clone(),
+            ));
+            let rhs_inst = Inst::bin(value_tmp_var, Arg::Var(left_tmp_var), op, value_arg);
+            self.out.push(rhs_inst);
+            *assign_inst.args.last_mut().unwrap() = Arg::Var(value_tmp_var);
+            self.out.push(assign_inst);
+            Ok(Arg::Var(value_tmp_var))
+          }
         }
-        *assign_inst.args.last_mut().unwrap() = value_arg;
-        self.out.push(assign_inst);
-        Ok(Arg::Var(value_tmp_var))
       }
       _ => Err(unsupported_syntax(span, "unsupported assignment target")),
     }

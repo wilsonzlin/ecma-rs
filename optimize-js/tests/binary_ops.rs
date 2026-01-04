@@ -251,3 +251,62 @@ fn in_and_instanceof_are_lowered_without_internal_helpers() {
     "expected `instanceof` operator in output: {js}"
   );
 }
+
+#[test]
+fn logical_assignment_operators_short_circuit_rhs() {
+  let src = r#"
+    let x = unknownVar;
+    x &&= console.log("and");
+    x ||= console.log("or");
+    x ??= console.log("nullish");
+  "#;
+  let program = compile_source(src, TopLevelMode::Module, false);
+  let lowered = lower_program(&program);
+
+  let and_label =
+    call_block_label_with_str_arg(&lowered, "and").expect("expected &&= rhs call block");
+  let or_label =
+    call_block_label_with_str_arg(&lowered, "or").expect("expected ||= rhs call block");
+  let nullish_label =
+    call_block_label_with_str_arg(&lowered, "nullish").expect("expected ??= rhs call block");
+
+  let mut saw_branch_to_and = false;
+  let mut saw_branch_to_or = false;
+  let mut saw_branch_to_nullish = false;
+  let mut saw_nullish_check = false;
+
+  for block in lowered.top_level.bblocks.iter() {
+    for inst in block.insts.iter() {
+      match inst {
+        LoweredInst::CondGoto {
+          t_label, f_label, ..
+        } => {
+          saw_branch_to_and |= *t_label == and_label || *f_label == and_label;
+          saw_branch_to_or |= *t_label == or_label || *f_label == or_label;
+          saw_branch_to_nullish |= *t_label == nullish_label || *f_label == nullish_label;
+        }
+        LoweredInst::Bin { op, .. } => {
+          saw_nullish_check |= *op == BinOp::LooseEq;
+        }
+        _ => {}
+      }
+    }
+  }
+
+  assert!(
+    saw_branch_to_and,
+    "expected &&= to lower with a conditional branch guarding RHS evaluation"
+  );
+  assert!(
+    saw_branch_to_or,
+    "expected ||= to lower with a conditional branch guarding RHS evaluation"
+  );
+  assert!(
+    saw_branch_to_nullish,
+    "expected ??= to lower with a conditional branch guarding RHS evaluation"
+  );
+  assert!(
+    saw_nullish_check,
+    "expected ??= to perform a nullish check using BinOp::LooseEq"
+  );
+}
