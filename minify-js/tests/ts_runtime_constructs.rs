@@ -31,16 +31,19 @@ fn minify_ts_module(src: &str) -> (String, Node<TopLevel>) {
 }
 
 fn has_exported_var_decl(program: &Node<TopLevel>, name: &str) -> bool {
-  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+  program.stx.body.iter().any(|stmt| {
+    match stmt.stx.as_ref() {
     Stmt::VarDecl(decl) if decl.stx.export => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
     }),
     _ => false,
+  }
   })
 }
 
 fn has_exported_name(program: &Node<TopLevel>, exported: &str) -> bool {
-  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+  program.stx.body.iter().any(|stmt| {
+    match stmt.stx.as_ref() {
     Stmt::VarDecl(decl) if decl.stx.export => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == exported)
     }),
@@ -62,6 +65,7 @@ fn has_exported_name(program: &Node<TopLevel>, exported: &str) -> bool {
       ExportNames::All(None) => false,
     },
     _ => false,
+  }
   })
 }
 
@@ -312,7 +316,10 @@ fn derived_constructor_parameter_properties_follow_super_call() {
       Expr::Call(call) if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_))
     )
   };
-  assert!(is_super_call_stmt(&stmts[0]), "expected first statement to be super(...)");
+  assert!(
+    is_super_call_stmt(&stmts[0]),
+    "expected first statement to be super(...)"
+  );
 
   let is_this_assignment_stmt = |stmt: &Node<Stmt>| {
     let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
@@ -352,11 +359,7 @@ fn lowers_namespaces_merged_with_classes_inside_runtime_namespaces() {
   let class_name = body
     .iter()
     .find_map(|stmt| match stmt.stx.as_ref() {
-      Stmt::ClassDecl(decl) => decl
-        .stx
-        .name
-        .as_ref()
-        .map(|name| name.stx.name.clone()),
+      Stmt::ClassDecl(decl) => decl.stx.name.as_ref().map(|name| name.stx.name.clone()),
       _ => None,
     })
     .expect("expected class declaration inside the N namespace body");
@@ -514,7 +517,8 @@ fn exported_runtime_enums_preserve_self_export_when_exported_under_alias() {
 }
 
 #[test]
-fn exported_runtime_namespaces_merged_with_functions_preserve_self_export_when_exported_under_alias() {
+fn exported_runtime_namespaces_merged_with_functions_preserve_self_export_when_exported_under_alias(
+) {
   let src = r#"
     function N() {}
     export namespace N { export const x = 1; }
@@ -616,5 +620,32 @@ fn lowers_computed_numeric_enum_members_and_preserves_auto_increments() {
   assert!(
     matches!(d_add.stx.right.stx.as_ref(), Expr::LitNum(num) if num.stx.value.0 == 1.0),
     "expected D initializer to add 1, got {d_value:?}"
+  );
+}
+
+#[test]
+fn lowers_dotted_namespaces_with_reserved_keyword_segments_to_parseable_js() {
+  // Disable renaming to ensure the TS erasure itself produces valid JS identifiers even when the
+  // dotted namespace path contains reserved words.
+  let src = r#"
+    export namespace A.class {
+      eval("x");
+      export const x = 1;
+    }
+    console.log(A["class"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    code.contains("\"class\""),
+    "expected reserved namespace segment to be accessed via a string key: {code}"
+  );
+  assert!(
+    !code.contains("var class"),
+    "lowering should not introduce a `var class` binding (invalid JS): {code}"
+  );
+  assert!(
+    !code.contains("function(class"),
+    "lowering should not introduce a `function(class)` parameter (invalid JS): {code}"
   );
 }

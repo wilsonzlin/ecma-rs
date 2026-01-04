@@ -22,7 +22,7 @@ use parse_js::ast::ts_stmt::{
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
-use parse_js::token::TT;
+use parse_js::token::{keyword_from_str, TT};
 use std::collections::{HashMap, HashSet};
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
@@ -88,6 +88,77 @@ fn dummy_jsx_elem() -> Node<JsxElem> {
       children: Vec::new(),
     },
   )
+}
+
+fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool {
+  // `parse-js` intentionally parses some keyword-like names as identifiers in TS namespace
+  // dotted paths (e.g. `namespace A.class {}`) for conformance with TypeScript.
+  //
+  // When lowering runtime namespaces to JS, we must avoid synthesizing binding identifiers
+  // (e.g. `var class;` / `function(class){}`) that are invalid in the output mode.
+  if matches!(top_level_mode, TopLevelMode::Module) && name == "package" {
+    // `package` is reserved in strict mode but is not tokenized as a keyword by the lexer.
+    return false;
+  }
+
+  let Some(keyword) = keyword_from_str(name) else {
+    return true;
+  };
+
+  match keyword {
+    // Contextual keywords that remain valid identifiers in strict mode.
+    TT::KeywordAs
+    | TT::KeywordAsync
+    | TT::KeywordConstructor
+    | TT::KeywordFrom
+    | TT::KeywordGet
+    | TT::KeywordOf
+    | TT::KeywordOut
+    | TT::KeywordSet => true,
+
+    // `await` is reserved in modules, but allowed as an identifier in scripts.
+    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global),
+
+    // Strict-mode reserved words (allowed in non-strict scripts).
+    TT::KeywordImplements
+    | TT::KeywordInterface
+    | TT::KeywordLet
+    | TT::KeywordPrivate
+    | TT::KeywordProtected
+    | TT::KeywordPublic
+    | TT::KeywordStatic
+    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global),
+
+    // TypeScript keywords that are not reserved in JS.
+    TT::KeywordAbstract
+    | TT::KeywordAccessor
+    | TT::KeywordAny
+    | TT::KeywordAsserts
+    | TT::KeywordBigIntType
+    | TT::KeywordBooleanType
+    | TT::KeywordDeclare
+    | TT::KeywordInfer
+    | TT::KeywordIntrinsic
+    | TT::KeywordIs
+    | TT::KeywordKeyof
+    | TT::KeywordModule
+    | TT::KeywordNamespace
+    | TT::KeywordNever
+    | TT::KeywordNumberType
+    | TT::KeywordObjectType
+    | TT::KeywordOverride
+    | TT::KeywordReadonly
+    | TT::KeywordSatisfies
+    | TT::KeywordStringType
+    | TT::KeywordSymbolType
+    | TT::KeywordType
+    | TT::KeywordUndefinedType
+    | TT::KeywordUnique
+    | TT::KeywordUnknown => true,
+
+    // Remaining JavaScript keywords (including `class`, `enum`, etc.) are not valid binding ids.
+    _ => false,
+  }
 }
 
 fn take_expr(expr: &mut Node<Expr>) -> Node<Expr> {
@@ -472,7 +543,11 @@ fn lower_import_equals_decl(
     return None;
   }
   if decl.stx.export && !is_top_level {
-    unsupported_ts(ctx, loc, "exported import= assignments must be at top level");
+    unsupported_ts(
+      ctx,
+      loc,
+      "exported import= assignments must be at top level",
+    );
     return None;
   }
   let initializer = match &decl.stx.rhs {
@@ -1839,24 +1914,34 @@ fn strip_enum_decl(
   out
 }
 
-fn namespace_iife_arg(loc: Loc, name: &str, parent_namespace: Option<&str>) -> Node<Expr> {
+fn namespace_iife_arg(
+  loc: Loc,
+  local_ident: &str,
+  property_name: &str,
+  parent_namespace: Option<&str>,
+  bind_to_local: bool,
+) -> Node<Expr> {
   match parent_namespace {
     None => ts_lower::binary_expr(
       loc,
       OperatorName::LogicalOr,
-      ts_lower::id(loc, name),
-      ts_lower::assign_expr(loc, ts_lower::id(loc, name), ts_lower::empty_object(loc)),
+      ts_lower::id(loc, local_ident),
+      ts_lower::assign_expr(
+        loc,
+        ts_lower::id(loc, local_ident),
+        ts_lower::empty_object(loc),
+      ),
     ),
     Some(namespace_param) => {
       let prop_read = ts_lower::member_expr(
         loc,
         ts_lower::id(loc, namespace_param),
-        ts_lower::MemberKey::Name(name.to_string()),
+        ts_lower::MemberKey::Name(property_name.to_string()),
       );
       let prop_write = ts_lower::member_expr(
         loc,
         ts_lower::id(loc, namespace_param),
-        ts_lower::MemberKey::Name(name.to_string()),
+        ts_lower::MemberKey::Name(property_name.to_string()),
       );
       let prop_or = ts_lower::binary_expr(
         loc,
@@ -1864,7 +1949,11 @@ fn namespace_iife_arg(loc: Loc, name: &str, parent_namespace: Option<&str>) -> N
         prop_read,
         ts_lower::assign_expr(loc, prop_write, ts_lower::empty_object(loc)),
       );
-      ts_lower::assign_expr(loc, ts_lower::id(loc, name), prop_or)
+      if bind_to_local {
+        ts_lower::assign_expr(loc, ts_lower::id(loc, local_ident), prop_or)
+      } else {
+        prop_or
+      }
     }
   }
 }
@@ -2064,7 +2153,22 @@ fn strip_namespace_decl(
   }
 
   let namespace_name = decl.stx.name.clone();
-  let has_value_binding = ctx.current_value_bindings().contains(&namespace_name);
+  let name_is_binding_identifier = is_valid_binding_identifier(&namespace_name, ctx.top_level_mode);
+  if parent_namespace.is_none() && !name_is_binding_identifier {
+    unsupported_ts(
+      ctx,
+      loc,
+      format!("runtime namespace name `{namespace_name}` is not a valid JavaScript identifier"),
+    );
+    return vec![];
+  }
+  let namespace_param_ident = if name_is_binding_identifier {
+    namespace_name.clone()
+  } else {
+    format!("__minify_ts_namespace_{namespace_name}")
+  };
+  let has_value_binding =
+    name_is_binding_identifier && ctx.current_value_bindings().contains(&namespace_name);
   let mut out = Vec::new();
 
   let should_export_binding = parent_namespace.is_none()
@@ -2090,7 +2194,7 @@ fn strip_namespace_decl(
     }
   }
 
-  if !has_value_binding {
+  if name_is_binding_identifier && !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
       namespace_name.clone(),
@@ -2098,12 +2202,20 @@ fn strip_namespace_decl(
       should_export_var,
       VarDeclMode::Var,
     ));
-    ctx.current_value_bindings_mut().insert(namespace_name.clone());
+    ctx
+      .current_value_bindings_mut()
+      .insert(namespace_name.clone());
   }
 
-  let body = strip_namespace_body(ctx, decl.stx.body, &namespace_name);
-  let arg = namespace_iife_arg(loc, &namespace_name, parent_namespace);
-  out.push(ts_lower::iife_stmt(loc, namespace_name, arg, body));
+  let body = strip_namespace_body(ctx, decl.stx.body, &namespace_param_ident);
+  let arg = namespace_iife_arg(
+    loc,
+    &namespace_param_ident,
+    &namespace_name,
+    parent_namespace,
+    name_is_binding_identifier,
+  );
+  out.push(ts_lower::iife_stmt(loc, namespace_param_ident, arg, body));
   out
 }
 
