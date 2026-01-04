@@ -525,11 +525,14 @@ fn expand_directory_pattern(pattern: &str) -> String {
     .file_name()
     .and_then(|s| s.to_str())
     .unwrap_or("");
-  if file_name.ends_with(".d.ts") {
+  if file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
+  {
     return trimmed.to_string();
   }
   match Path::new(trimmed).extension().and_then(|e| e.to_str()) {
-    Some("ts" | "tsx" | "js" | "jsx" | "json") => trimmed.to_string(),
+    Some("ts" | "tsx" | "mts" | "cts" | "js" | "jsx" | "mjs" | "cjs" | "json") => {
+      trimmed.to_string()
+    }
     Some(_) => trimmed.to_string(),
     None => format!("{trimmed}/**/*"),
   }
@@ -543,13 +546,11 @@ fn contains_glob_magic(pattern: &str) -> bool {
 
 fn is_supported_source_file(path: &Path) -> bool {
   let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-  if name.ends_with(".d.ts") {
+  let name = name.to_ascii_lowercase();
+  if name.ends_with(".d.ts") || name.ends_with(".d.mts") || name.ends_with(".d.cts") {
     return true;
   }
-  matches!(
-    path.extension().and_then(|e| e.to_str()),
-    Some("ts" | "tsx")
-  )
+  name.ends_with(".ts") || name.ends_with(".tsx") || name.ends_with(".mts") || name.ends_with(".cts")
 }
 
 fn resolve_path_relative_to(base: &Path, path: &Path) -> PathBuf {

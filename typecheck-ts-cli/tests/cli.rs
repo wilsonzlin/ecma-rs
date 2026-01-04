@@ -941,3 +941,36 @@ fn project_mode_applies_jsx_import_source_types() {
     "did not expect missing JSX namespace diagnostics, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn project_mode_discovers_mts_files() {
+  let tsconfig = fixture("project_mode/mts_files/tsconfig.json");
+  let main = fixture("project_mode/mts_files/src/main.mts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(
+    files.contains(&normalized(&main).as_str()),
+    "expected project mode to include main.mts, got {files:?}"
+  );
+}
