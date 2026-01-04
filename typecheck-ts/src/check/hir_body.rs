@@ -48,8 +48,7 @@ use super::infer::infer_type_arguments_for_call;
 use super::instantiate::{InstantiationCache, Substituter};
 use super::overload::{
   callable_signatures, callable_signatures_with_expander, construct_signatures_with_expander,
-  expected_arg_type_at, signature_allows_arg_count,
-  signature_contains_literal_types, CallArgType,
+  expected_arg_type_at, signature_allows_arg_count, signature_contains_literal_types, CallArgType,
 };
 use super::type_expr::{TypeLowerer, TypeResolver};
 use crate::lib_support::{JsxMode, ScriptTarget};
@@ -533,9 +532,15 @@ impl AstIndex {
                 self.index_expr(expr, file, cancelled);
               }
               match val {
-                ClassOrObjVal::Getter(getter) => self.index_function(&getter.stx.func, file, cancelled),
-                ClassOrObjVal::Setter(setter) => self.index_function(&setter.stx.func, file, cancelled),
-                ClassOrObjVal::Method(method) => self.index_function(&method.stx.func, file, cancelled),
+                ClassOrObjVal::Getter(getter) => {
+                  self.index_function(&getter.stx.func, file, cancelled)
+                }
+                ClassOrObjVal::Setter(setter) => {
+                  self.index_function(&setter.stx.func, file, cancelled)
+                }
+                ClassOrObjVal::Method(method) => {
+                  self.index_function(&method.stx.func, file, cancelled)
+                }
                 ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
                 ClassOrObjVal::StaticBlock(block) => {
                   self.index_stmt_list(&block.stx.body, file, cancelled)
@@ -5101,25 +5106,47 @@ impl<'a> Checker<'a> {
             }
             ClassOrObjKey::Computed(_) => continue,
           };
-          if let ClassOrObjVal::Prop(Some(expr)) = val {
-            let ty = self.check_expr(expr);
-            let ty = if self.widen_object_literals {
-              self.widen_object_prop(ty)
-            } else {
-              ty
-            };
-            shape.properties.push(types_ts_interned::Property {
-              key: prop_key,
-              data: PropData {
-                ty,
-                optional: false,
-                readonly: false,
-                accessibility: None,
-                is_method: false,
-                origin: None,
-                declared_on: None,
-              },
-            });
+          match val {
+            ClassOrObjVal::Prop(Some(expr)) => {
+              let ty = self.check_expr(expr);
+              let ty = if self.widen_object_literals {
+                self.widen_object_prop(ty)
+              } else {
+                ty
+              };
+              shape.properties.push(types_ts_interned::Property {
+                key: prop_key,
+                data: PropData {
+                  ty,
+                  optional: false,
+                  readonly: false,
+                  accessibility: None,
+                  is_method: false,
+                  origin: None,
+                  declared_on: None,
+                },
+              });
+            }
+            ClassOrObjVal::Method(method) => {
+              let ty = self.function_type(&method.stx.func);
+              // Object literal methods are lowered into HIR as `ExprKind::FunctionExpr`
+              // spans (keyed by `method.loc`), so ensure we record an expression type
+              // for `type_at` queries.
+              self.record_expr_type(method.loc, ty);
+              shape.properties.push(types_ts_interned::Property {
+                key: prop_key,
+                data: PropData {
+                  ty,
+                  optional: false,
+                  readonly: false,
+                  accessibility: None,
+                  is_method: true,
+                  origin: None,
+                  declared_on: None,
+                },
+              });
+            }
+            _ => {}
           }
         }
         ObjMemberType::Shorthand { id } => {
@@ -5167,52 +5194,84 @@ impl<'a> Checker<'a> {
           };
           let prop_key = PropKey::String(self.store.intern_name(name.clone()));
           let expected_prop = self.member_type(expected, &name);
-          if let ClassOrObjVal::Prop(Some(expr)) = val {
-            let expr_ty = if expected_prop != prim.unknown {
-              self.check_expr_with_expected(expr, expected_prop)
-            } else {
-              self.check_expr(expr)
-            };
-            // Nested object literals are also "fresh" and participate in excess
-            // property checks when contextually typed by an expected property
-            // type.
-            //
-            // Without this, `let x: { nested: { foo: number } } = { nested: { foo: 1, bar: 2 } }`
-            // would be accepted because `{ foo: 1, bar: 2 }` is structurally
-            // assignable to `{ foo: number }` once it is no longer treated as a
-            // fresh literal.
-            if expected_prop != prim.unknown {
-              if let AstExpr::LitObj(nested_obj) = expr.stx.as_ref() {
-                if self.has_excess_properties(nested_obj, expected_prop) {
-                  self.diagnostics.push(codes::EXCESS_PROPERTY.error(
-                    "excess property",
-                    Span {
-                      file: self.file,
-                      range: loc_to_range(self.file, nested_obj.loc),
-                    },
-                  ));
+          match val {
+            ClassOrObjVal::Prop(Some(expr)) => {
+              let expr_ty = if expected_prop != prim.unknown {
+                self.check_expr_with_expected(expr, expected_prop)
+              } else {
+                self.check_expr(expr)
+              };
+              // Nested object literals are also "fresh" and participate in excess
+              // property checks when contextually typed by an expected property
+              // type.
+              //
+              // Without this, `let x: { nested: { foo: number } } = { nested: { foo: 1, bar: 2 } }`
+              // would be accepted because `{ foo: 1, bar: 2 }` is structurally
+              // assignable to `{ foo: number }` once it is no longer treated as a
+              // fresh literal.
+              if expected_prop != prim.unknown {
+                if let AstExpr::LitObj(nested_obj) = expr.stx.as_ref() {
+                  if self.has_excess_properties(nested_obj, expected_prop) {
+                    self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                      "excess property",
+                      Span {
+                        file: self.file,
+                        range: loc_to_range(self.file, nested_obj.loc),
+                      },
+                    ));
+                  }
                 }
               }
+              let ty = if expected_prop != prim.unknown {
+                self.contextual_widen_container(expr_ty, expected_prop)
+              } else if self.widen_object_literals {
+                self.widen_object_prop(expr_ty)
+              } else {
+                expr_ty
+              };
+              shape.properties.push(types_ts_interned::Property {
+                key: prop_key,
+                data: PropData {
+                  ty,
+                  optional: false,
+                  readonly: false,
+                  accessibility: None,
+                  is_method: false,
+                  origin: None,
+                  declared_on: None,
+                },
+              });
             }
-            let ty = if expected_prop != prim.unknown {
-              self.contextual_widen_container(expr_ty, expected_prop)
-            } else if self.widen_object_literals {
-              self.widen_object_prop(expr_ty)
-            } else {
-              expr_ty
-            };
-            shape.properties.push(types_ts_interned::Property {
-              key: prop_key,
-              data: PropData {
-                ty,
-                optional: false,
-                readonly: false,
-                accessibility: None,
-                is_method: false,
-                origin: None,
-                declared_on: None,
-              },
-            });
+            ClassOrObjVal::Method(method) => {
+              let prop_ty = if expected_prop != prim.unknown {
+                expected_prop
+              } else {
+                self.function_type(&method.stx.func)
+              };
+              let expr_ty = if expected_prop != prim.unknown {
+                // Use a callable type for contextual typing, even if the expected
+                // property type is wrapped in unions/intersections.
+                self
+                  .contextual_callable_type(expected_prop)
+                  .unwrap_or(expected_prop)
+              } else {
+                prop_ty
+              };
+              self.record_expr_type(method.loc, expr_ty);
+              shape.properties.push(types_ts_interned::Property {
+                key: prop_key,
+                data: PropData {
+                  ty: prop_ty,
+                  optional: false,
+                  readonly: false,
+                  accessibility: None,
+                  is_method: true,
+                  origin: None,
+                  declared_on: None,
+                },
+              });
+            }
+            _ => {}
           }
         }
         ObjMemberType::Shorthand { id } => {

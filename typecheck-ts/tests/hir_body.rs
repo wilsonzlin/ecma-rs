@@ -120,7 +120,11 @@ fn object_literal_methods_have_checkable_bodies() {
     None,
   );
 
-  let codes: Vec<_> = result.diagnostics().iter().map(|d| d.code.as_str()).collect();
+  let codes: Vec<_> = result
+    .diagnostics()
+    .iter()
+    .map(|d| d.code.as_str())
+    .collect();
   assert!(
     !codes.contains(&"ICE0002"),
     "object literal method bodies should be checkable without ICE0002; got {codes:?}"
@@ -128,6 +132,26 @@ fn object_literal_methods_have_checkable_bodies() {
   assert!(
     codes.contains(&"TC0005"),
     "expected unknown identifier diagnostic from method body; got {codes:?}"
+  );
+}
+
+#[test]
+fn object_literal_method_satisfies_interface_method() {
+  let source = r#"
+interface Dog {
+  kind: "animal";
+  bark(): void;
+}
+
+export const ok: Dog = { kind: "animal", bark() {} };
+"#;
+  let host = NoLibHost { text: source };
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
   );
 }
 
