@@ -48,7 +48,11 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
     // Variable is used before being assigned.
     "TC0009" => Some(&[2454]),
     // Cannot find module '...'.
-    "TC1001" => Some(&[2307]),
+    //
+    // `typecheck-ts` also reuses this code for missing triple-slash reference
+    // directives (`/// <reference path="..." />` and `types="..."`), which tsc
+    // reports as TS6053 / TS2688 respectively.
+    "TC1001" => Some(&[2307, 6053, 2688]),
     // Module '"..."' has no exported member '...'.
     "TC1002" => Some(&[2305]),
     // Expected N arguments, but got M.
@@ -108,6 +112,8 @@ mod tests {
 
     assert!(rust_code_matches_tsc("TC0008", 2339));
     assert!(rust_code_matches_tsc("TC1001", 2307));
+    assert!(rust_code_matches_tsc("TC1001", 6053));
+    assert!(rust_code_matches_tsc("TC1001", 2688));
     assert!(rust_code_matches_tsc("TC1002", 2305));
     assert!(rust_code_matches_tsc("TC1006", 2554));
     assert!(rust_code_matches_tsc("TC2010", 2307));
