@@ -493,10 +493,22 @@ impl<'p> HirSourceToInst<'p> {
     argument: ExprId,
   ) -> OptimizeResult<Arg> {
     match operator {
+      UnaryOp::Not => {
+        let arg = self.compile_expr(argument)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::un(tmp, UnOp::Not, arg));
+        Ok(Arg::Var(tmp))
+      }
       UnaryOp::Minus => {
         let arg = self.compile_expr(argument)?;
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Neg, arg));
+        Ok(Arg::Var(tmp))
+      }
+      UnaryOp::Plus => {
+        let arg = self.compile_expr(argument)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::un(tmp, UnOp::Plus, arg));
         Ok(Arg::Var(tmp))
       }
       UnaryOp::Typeof => {
@@ -509,6 +521,12 @@ impl<'p> HirSourceToInst<'p> {
         };
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Typeof, arg));
+        Ok(Arg::Var(tmp))
+      }
+      UnaryOp::Void => {
+        let arg = self.compile_expr(argument)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::un(tmp, UnOp::Void, arg));
         Ok(Arg::Var(tmp))
       }
       _ => Err(unsupported_syntax(
