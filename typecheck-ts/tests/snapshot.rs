@@ -413,6 +413,69 @@ fn snapshot_restoration_preserves_pat_span_queries() {
 }
 
 #[test]
+fn snapshot_restoration_preserves_expr_span_and_id_queries() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let (body, expr) = program
+    .expr_at(entry_id, call_offset)
+    .expect("expr at call");
+
+  let top_body = program.file_body(entry_id).expect("top-level body");
+  let result = program.check_body(top_body);
+  let total_start = entry_source.find("total").expect("total offset") as u32;
+  let total_end = total_start + "total".len() as u32;
+  let expected_pat = typecheck_ts::TextRange::new(total_start, total_end);
+  let pat_index = result
+    .pat_spans()
+    .iter()
+    .position(|span| *span == expected_pat)
+    .expect("pat span for total");
+  let pat_id = typecheck_ts::PatId(pat_index as u32);
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
+  let restored_top_body = restored
+    .file_body(restored_entry)
+    .expect("restored top-level body");
+  assert_eq!(restored_top_body, top_body);
+  let (restored_body, restored_expr) = restored
+    .expr_at(restored_entry, call_offset)
+    .expect("restored expr at call");
+  assert_eq!(restored_body, body);
+  assert_eq!(restored_expr, expr);
+
+  let parses_before = parse_call_count();
+  assert!(restored.expr_span(restored_body, restored_expr).is_some());
+  assert!(restored
+    .exprs_in_body(restored_body)
+    .contains(&restored_expr));
+  assert!(restored.pats_in_body(restored_top_body).contains(&pat_id));
+  let parses_after = parse_call_count();
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "expr/pat id queries should not trigger salsa parsing when restored from snapshot"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));
