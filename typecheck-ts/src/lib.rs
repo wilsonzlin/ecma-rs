@@ -124,6 +124,11 @@
 //!
 //! # Features
 //!
+//! - `bundled-libs` (default): embeds the official TypeScript `lib.*.d.ts` files
+//!   (pinned to the workspace TypeScript version) and makes them available
+//!   offline. Disable this if you want to supply your own lib files via
+//!   [`Host::lib_files`] (for example, to reduce binary size).
+//!
 //! - `serde` (default): enables serialization for identifiers, diagnostics, and
 //!   [`TypeDisplay`] (which renders to a string for JSON outputs).
 //!
