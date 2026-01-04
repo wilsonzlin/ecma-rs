@@ -220,15 +220,35 @@ impl<'p> HirSourceToInst<'p> {
     await_: bool,
     label: Option<NameId>,
   ) -> OptimizeResult<()> {
-    if !is_for_of {
-      return Err(unsupported_syntax_range(span, "for-in statements are not supported"));
+    if await_ && !is_for_of {
+      return Err(unsupported_syntax_range(
+        span,
+        "for-in statements do not support await",
+      ));
     }
 
-    let iterable_tmp_var = self.c_temp.bump();
-    let iterable_arg = self.compile_expr(right)?;
-    self
-      .out
-      .push(Inst::var_assign(iterable_tmp_var, iterable_arg));
+    let iterable_tmp_var = if is_for_of {
+      let iterable_tmp_var = self.c_temp.bump();
+      let iterable_arg = self.compile_expr(right)?;
+      self
+        .out
+        .push(Inst::var_assign(iterable_tmp_var, iterable_arg));
+      iterable_tmp_var
+    } else {
+      let obj_tmp_var = self.c_temp.bump();
+      let obj_arg = self.compile_expr(right)?;
+      self.out.push(Inst::var_assign(obj_tmp_var, obj_arg));
+
+      let keys_tmp_var = self.c_temp.bump();
+      self.out.push(Inst::call(
+        keys_tmp_var,
+        Arg::Builtin("Object.keys".to_string()),
+        Arg::Const(Const::Undefined),
+        vec![Arg::Var(obj_tmp_var)],
+        Vec::new(),
+      ));
+      keys_tmp_var
+    };
 
     let iterator_method_tmp_var = self.c_temp.bump();
     self.out.push(Inst::bin(
