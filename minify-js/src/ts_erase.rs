@@ -197,6 +197,46 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
   }
 }
 
+fn is_valid_identifier_reference(name: &str, top_level_mode: TopLevelMode) -> bool {
+  // `package` is not tokenized as a keyword but is a reserved word in strict mode.
+  if matches!(top_level_mode, TopLevelMode::Module) && name == "package" {
+    return false;
+  }
+
+  let Some(keyword) = keyword_from_str(name) else {
+    return true;
+  };
+
+  match keyword {
+    // Contextual keywords that remain valid identifiers in strict mode.
+    TT::KeywordAs
+    | TT::KeywordAsync
+    | TT::KeywordConstructor
+    | TT::KeywordFrom
+    | TT::KeywordGet
+    | TT::KeywordOf
+    | TT::KeywordOut
+    | TT::KeywordSet
+    | TT::KeywordUsing => true,
+
+    // `await` is reserved in modules, but allowed as an identifier in scripts.
+    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global),
+
+    // Strict-mode reserved words (allowed in non-strict scripts).
+    TT::KeywordImplements
+    | TT::KeywordInterface
+    | TT::KeywordLet
+    | TT::KeywordPrivate
+    | TT::KeywordProtected
+    | TT::KeywordPublic
+    | TT::KeywordStatic
+    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global),
+
+    // All remaining keywords are not valid identifier references.
+    _ => false,
+  }
+}
+
 fn take_expr(expr: &mut Node<Expr>) -> Node<Expr> {
   std::mem::replace(expr, dummy_expr())
 }
@@ -2383,7 +2423,9 @@ fn strip_namespace_decl(
   }
 
   let mut body = strip_namespace_body(ctx, decl.stx.body, &namespace_param_ident);
-  if namespace_param_ident != namespace_name {
+  if namespace_param_ident != namespace_name
+    && !is_valid_identifier_reference(&namespace_name, ctx.top_level_mode)
+  {
     let mut visitor = RewriteIdExprName {
       from: &namespace_name,
       to: &namespace_param_ident,

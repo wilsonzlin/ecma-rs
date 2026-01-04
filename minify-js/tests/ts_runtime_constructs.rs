@@ -686,6 +686,28 @@ fn lowers_dotted_namespaces_with_strict_mode_restricted_identifiers_to_parseable
 }
 
 #[test]
+fn preserves_direct_eval_calls_inside_namespaces_named_eval() {
+  // `eval` is a restricted identifier in strict mode: it cannot be used as a binding identifier, so
+  // TS erasure must synthesize a safe IIFE parameter name for `namespace eval`.
+  //
+  // At the same time, `eval("...")` calls inside the namespace body should continue to refer to the
+  // global `eval` function (so that renaming is correctly disabled in that scope), rather than being
+  // rewritten to the synthesized namespace parameter identifier.
+  let src = r#"
+    export namespace A.eval.arguments {
+      eval("x");
+      export const x = 1;
+    }
+    console.log(A["eval"]["arguments"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+  assert!(
+    code.contains("eval(\"x\")"),
+    "expected direct eval call to be preserved: {code}"
+  );
+}
+
+#[test]
 fn avoids_synthetic_namespace_param_collisions_with_user_bindings() {
   // When a dotted namespace segment is not a valid binding identifier, TS erasure synthesizes an
   // internal IIFE parameter name. That name must not collide with user-declared bindings in the
@@ -801,6 +823,52 @@ fn rewrites_namespace_self_references_for_strict_reserved_names() {
   assert!(
     !visitor.found,
     "expected `package` identifier references inside namespace bodies to be rewritten"
+  );
+}
+
+#[test]
+fn preserves_arguments_identifier_inside_namespaces_named_arguments() {
+  // `arguments` is a restricted identifier in strict mode, but *using* `arguments` as an identifier
+  // reference inside functions is valid and should continue to refer to the function arguments
+  // object.
+  let src = r#"
+    export namespace A.arguments {
+      export function f() {
+        return arguments.length;
+      }
+    }
+    console.log(A["arguments"].f(1,2,3));
+  "#;
+  let (_code, mut parsed) = minify_ts_module(src);
+
+  use derive_visitor::{DriveMut, VisitorMut};
+  use parse_js::ast::expr::IdExpr;
+  type IdExprNode = Node<IdExpr>;
+
+  #[derive(VisitorMut)]
+  #[visitor(IdExprNode(enter))]
+  struct FindIdExpr<'a> {
+    target: &'a str,
+    found: bool,
+  }
+
+  impl FindIdExpr<'_> {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == self.target {
+        self.found = true;
+      }
+    }
+  }
+
+  let mut visitor = FindIdExpr {
+    target: "arguments",
+    found: false,
+  };
+  parsed.drive_mut(&mut visitor);
+
+  assert!(
+    visitor.found,
+    "expected `arguments` identifier references inside functions to be preserved"
   );
 }
 
