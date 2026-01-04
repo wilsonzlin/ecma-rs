@@ -256,6 +256,12 @@ pub struct JsSemantics {
   /// Maps the block-scoped binding introduced by an Annex B block function
   /// declaration to the corresponding hoisted `var` binding in the nearest
   /// variable scope.
+  ///
+  /// In [`TopLevelMode::Global`], global bindings are intentionally not
+  /// surfaced as renameable symbols. In that mode, the "hoisted" symbol may be
+  /// synthetic (present in [`JsSemantics::symbols`] but not referenced from the
+  /// global scope's symbol table) so minifiers can treat the block binding as
+  /// pinned.
   pub annex_b_function_decls: BTreeMap<SymbolId, SymbolId>,
   pub top_scope: ScopeId,
 }
