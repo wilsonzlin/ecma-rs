@@ -6,6 +6,23 @@ use typecheck_ts::FileKey;
 
 use crate::runner::HarnessFileSet;
 
+fn starts_with_drive_letter(path: &str) -> bool {
+  let bytes = path.as_bytes();
+  bytes.len() >= 3
+    && bytes[0].is_ascii_alphabetic()
+    && bytes[1] == b':'
+    && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn looks_like_source_path(specifier: &str) -> bool {
+  // `/// <reference path="a.ts" />` style specifiers are relative paths but do
+  // not require a leading `./`.
+  const SUFFIXES: &[&str] = &[
+    ".ts", ".tsx", ".d.ts", ".mts", ".d.mts", ".cts", ".d.cts", ".js", ".jsx", ".mjs", ".cjs",
+  ];
+  SUFFIXES.iter().any(|suffix| specifier.ends_with(suffix))
+}
+
 #[derive(Clone)]
 struct HarnessResolveFs {
   files: HarnessFileSet,
@@ -75,7 +92,23 @@ pub(crate) fn resolve_module_specifier(
       package_imports: true,
     },
   );
-  let resolved = resolver.resolve(Path::new(from.as_str()), specifier)?;
+  let from_path = Path::new(from.as_str());
+  let mut resolved = resolver.resolve(from_path, specifier);
+  if resolved.is_none()
+    && !specifier.starts_with("./")
+    && !specifier.starts_with("../")
+    && !specifier.starts_with('#')
+    && !specifier.starts_with('/')
+    && !specifier.starts_with('\\')
+    && !starts_with_drive_letter(specifier)
+    && looks_like_source_path(specifier)
+  {
+    let mut prefixed = String::with_capacity(2 + specifier.len());
+    prefixed.push_str("./");
+    prefixed.push_str(specifier);
+    resolved = resolver.resolve(from_path, &prefixed);
+  }
+  let resolved = resolved?;
   let resolved = normalize_ts_path(&resolved.to_string_lossy());
   files.resolve(&resolved)
 }

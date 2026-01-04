@@ -14,6 +14,7 @@ mod resolve;
 pub mod runner;
 mod serde_helpers;
 pub mod triage;
+mod tsc_codes;
 pub mod tsc;
 
 pub const DEFAULT_PROFILE_OUT: &str = "typecheck_profile.json";

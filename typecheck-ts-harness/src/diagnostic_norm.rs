@@ -1,4 +1,5 @@
 use crate::multifile::normalize_name_into;
+use crate::tsc_codes::rust_code_matches_tsc;
 use crate::tsc::TscDiagnostic;
 use serde::{Deserialize, Serialize};
 use typecheck_ts::{Diagnostic, FileId, Severity};
@@ -209,19 +210,12 @@ fn codes_match(a: &Option<DiagnosticCode>, b: &Option<DiagnosticCode>) -> bool {
       (DiagnosticCode::Tsc(a_code), DiagnosticCode::Tsc(b_code)) => a_code == b_code,
       (DiagnosticCode::Rust(rust_code), DiagnosticCode::Tsc(tsc_code))
       | (DiagnosticCode::Tsc(tsc_code), DiagnosticCode::Rust(rust_code)) => {
-        numeric_code(rust_code).map_or(false, |num| num == *tsc_code)
+        rust_code_matches_tsc(rust_code, *tsc_code)
       }
     },
     (None, None) => true,
     _ => false,
   }
-}
-
-fn numeric_code(raw: &str) -> Option<u32> {
-  let trimmed = raw
-    .trim_start_matches(|c| c == 't' || c == 'T')
-    .trim_start_matches('S');
-  trimmed.parse().ok()
 }
 
 fn severity_matches(a: &Option<String>, b: &Option<String>) -> bool {

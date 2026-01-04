@@ -832,6 +832,17 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
+  fn binding_name_range(&self, pat: &Node<AstPat>) -> TextRange {
+    match pat.stx.as_ref() {
+      AstPat::Id(id) => {
+        let range = loc_to_range(self.file, id.loc);
+        let len = id.stx.name.len() as u32;
+        TextRange::new(range.start, range.start.saturating_add(len))
+      }
+      _ => loc_to_range(self.file, pat.loc),
+    }
+  }
+
   fn report_implicit_any(&mut self, range: TextRange, name: Option<&str>) {
     if !self.no_implicit_any {
       return;
@@ -1052,7 +1063,15 @@ impl<'a> Checker<'a> {
           None => self.check_expr(init),
         };
         if let Some(annotation) = annotation {
-          self.check_assignable(init, init_ty, annotation);
+          let range_override = self
+            .index
+            .pats
+            .get(&pat_span)
+            .copied()
+            .map(|pat| unsafe { &*pat })
+            .map(|pat| self.binding_name_range(pat))
+            .unwrap_or(pat_span);
+          self.check_assignable(init, init_ty, annotation, Some(range_override));
         }
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
@@ -1278,7 +1297,7 @@ impl<'a> Checker<'a> {
           expr_ty
         };
         if let Some(expected) = self.expected_return {
-          self.check_assignable(expr, ty, expected);
+          self.check_assignable(expr, ty, expected, None);
         }
         self.return_types.push(ty);
       }
@@ -1324,7 +1343,7 @@ impl<'a> Checker<'a> {
           expr_ty
         };
         if let (Some(expected), Some(value)) = (self.expected_return, ret.stx.value.as_ref()) {
-          self.check_assignable(value, ty, expected);
+          self.check_assignable(value, ty, expected, None);
         }
         self.return_types.push(ty);
       }
@@ -1526,7 +1545,8 @@ impl<'a> Checker<'a> {
       }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-          self.check_assignable(init, init_ty, ann);
+          let pat_range = self.binding_name_range(&declarator.pattern.stx.pat);
+          self.check_assignable(init, init_ty, ann, Some(pat_range));
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
@@ -1907,7 +1927,7 @@ impl<'a> Checker<'a> {
           for (idx, arg) in call.stx.arguments.iter().enumerate() {
             if let Some(param) = sig.params.get(idx) {
               let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
-              self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+              self.check_assignable(&arg.stx.value, arg_ty, param.ty, None);
             }
           }
           reported_assignability = self.diagnostics.len() > before;
@@ -1935,7 +1955,7 @@ impl<'a> Checker<'a> {
                 }
                 _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
               };
-              self.check_assignable(arg_expr, arg_ty, param.ty);
+              self.check_assignable(arg_expr, arg_ty, param.ty, None);
             }
           }
           if let TypeKind::Predicate {
@@ -2051,22 +2071,22 @@ impl<'a> Checker<'a> {
     if resolution.diagnostics.is_empty() {
       if let Some(sig_id) = resolution.signature {
         let sig = self.store.signature(sig_id);
-        if let Some(arg_exprs) = arg_exprs {
-          for (idx, arg) in arg_exprs.iter().enumerate() {
-            if let Some(param) = sig.params.get(idx) {
-              let arg_expr = &arg.stx.value;
+            if let Some(arg_exprs) = arg_exprs {
+              for (idx, arg) in arg_exprs.iter().enumerate() {
+                if let Some(param) = sig.params.get(idx) {
+                  let arg_expr = &arg.stx.value;
               let arg_ty = match arg_expr.stx.as_ref() {
                 AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
                   self.check_expr_with_expected(arg_expr, param.ty)
                 }
                 _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
-              };
-              self.check_assignable(arg_expr, arg_ty, param.ty);
+                  };
+                  self.check_assignable(arg_expr, arg_ty, param.ty, None);
+                }
+              }
             }
           }
         }
-      }
-    }
     resolution.return_type
   }
 
@@ -5076,7 +5096,13 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
+  fn check_assignable(
+    &mut self,
+    expr: &Node<AstExpr>,
+    src: TypeId,
+    dst: TypeId,
+    range_override: Option<TextRange>,
+  ) {
     let prim = self.store.primitive_ids();
     if matches!(self.store.type_kind(src), TypeKind::Any | TypeKind::Unknown)
       || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
@@ -5120,7 +5146,7 @@ impl<'a> Checker<'a> {
         self.store.type_kind(dst)
       );
     }
-    let mut range = loc_to_range(self.file, expr.loc);
+    let mut range = range_override.unwrap_or_else(|| loc_to_range(self.file, expr.loc));
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
       for member in obj.stx.members.iter() {
         let (prop, key_loc) = match &member.stx.typ {

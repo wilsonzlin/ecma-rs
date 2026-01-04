@@ -2047,6 +2047,32 @@ mod tests {
   }
 
   #[test]
+  fn diff_matches_rust_internal_tc_code_with_tsc_numeric_code() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TC0007".into())),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2322)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
+    }];
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::Match);
+    assert!(detail.is_none());
+  }
+
+  #[test]
   fn diff_reports_code_mismatch_for_different_codes() {
     let rust = vec![NormalizedDiagnostic {
       engine: crate::diagnostic_norm::DiagnosticEngine::Rust,

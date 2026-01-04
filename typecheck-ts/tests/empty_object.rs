@@ -25,12 +25,14 @@ let bad_null: {} = null;
   assert_eq!(mismatches.len(), 2, "diagnostics: {diagnostics:?}");
 
   let file_id = program.file_id(&file).expect("file id for a.ts");
-  let bad_object_offset = u32::try_from(source.find("object = 1").expect("bad object assignment"))
+  // TypeScript anchors `TS2322`-style assignability diagnostics on the binding
+  // identifier (rather than the initializer expression). Mirror that here.
+  let bad_object_offset = u32::try_from(source.find("bad_object").expect("bad object binding"))
     .expect("offset fits in u32")
-    + "object = ".len() as u32;
-  let bad_null_offset = u32::try_from(source.find("= null").expect("bad null assignment"))
+    + 1;
+  let bad_null_offset = u32::try_from(source.find("bad_null").expect("bad null binding"))
     .expect("offset fits in u32")
-    + "= ".len() as u32;
+    + 1;
 
   assert!(
     mismatches.iter().any(|diag| {
@@ -38,7 +40,7 @@ let bad_null: {} = null;
         && diag.primary.range.start <= bad_object_offset
         && diag.primary.range.end >= bad_object_offset + 1
     }),
-    "expected mismatch span to cover `object = 1`; got {mismatches:?}",
+    "expected mismatch span to cover `bad_object`; got {mismatches:?}",
   );
   assert!(
     mismatches.iter().any(|diag| {
@@ -46,7 +48,7 @@ let bad_null: {} = null;
         && diag.primary.range.start <= bad_null_offset
         && diag.primary.range.end >= bad_null_offset + 1
     }),
-    "expected mismatch span to cover `null`; got {mismatches:?}",
+    "expected mismatch span to cover `bad_null`; got {mismatches:?}",
   );
 }
 
