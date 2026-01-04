@@ -98,6 +98,7 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   }
   if let Some(ast) = parsed.ast.as_deref() {
     collect_type_only_module_specifier_values_from_ast(ast, &mut specs);
+    collect_module_augmentation_specifier_values_from_ast(ast, &mut specs);
   }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
@@ -261,6 +262,41 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
           }
           _ => {}
         }
+      }
+    }
+
+    if let Some(ast) = parse_for(db, file).ast.as_deref() {
+      if ast_has_module_syntax(ast) {
+        use parse_js::ast::node::Node;
+        use parse_js::ast::stmt::Stmt;
+        use parse_js::ast::ts_stmt::ModuleName;
+        use parse_js::loc::Loc;
+
+        fn to_range(loc: Loc) -> TextRange {
+          TextRange::new(loc.start_u32(), loc.end_u32())
+        }
+
+        fn walk<'a>(
+          stmts: &'a [Node<Stmt>],
+          checker: &mut UnresolvedModuleChecker<'a>,
+          diags: &mut Vec<Diagnostic>,
+        ) {
+          for stmt in stmts {
+            match stmt.stx.as_ref() {
+              Stmt::ModuleDecl(module) => {
+                if let ModuleName::String(spec) = &module.stx.name {
+                  checker.check_value(spec.as_str(), to_range(module.stx.name_loc), diags);
+                }
+              }
+              Stmt::GlobalDecl(global) => {
+                walk(&global.stx.body, checker, diags);
+              }
+              _ => {}
+            }
+          }
+        }
+
+        walk(&ast.stx.body, &mut checker, &mut diagnostics);
       }
     }
   }
@@ -1769,6 +1805,127 @@ fn collect_type_only_module_specifier_values_from_ast(
 
   let mut collector = Collector { specs };
   ast.drive(&mut collector);
+}
+
+fn ast_has_module_syntax(ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>) -> bool {
+  use parse_js::ast::node::Node;
+  use parse_js::ast::stmt::Stmt;
+  use parse_js::ast::ts_stmt::ImportEqualsRhs;
+
+  fn walk(stmts: &[Node<Stmt>]) -> bool {
+    for stmt in stmts.iter() {
+      match stmt.stx.as_ref() {
+        Stmt::Import(_)
+        | Stmt::ExportList(_)
+        | Stmt::ExportDefaultExpr(_)
+        | Stmt::ExportAssignmentDecl(_)
+        | Stmt::ExportAsNamespaceDecl(_)
+        | Stmt::ImportTypeDecl(_)
+        | Stmt::ExportTypeDecl(_) => return true,
+        Stmt::ImportEqualsDecl(import_equals) => match import_equals.stx.rhs {
+          ImportEqualsRhs::Require { .. } => return true,
+          ImportEqualsRhs::EntityName { .. } => {
+            if import_equals.stx.export {
+              return true;
+            }
+          }
+        },
+        Stmt::VarDecl(var) => {
+          if var.stx.export {
+            return true;
+          }
+        }
+        Stmt::FunctionDecl(func) => {
+          if func.stx.export {
+            return true;
+          }
+        }
+        Stmt::ClassDecl(class) => {
+          if class.stx.export {
+            return true;
+          }
+        }
+        Stmt::InterfaceDecl(interface) => {
+          if interface.stx.export {
+            return true;
+          }
+        }
+        Stmt::TypeAliasDecl(alias) => {
+          if alias.stx.export {
+            return true;
+          }
+        }
+        Stmt::EnumDecl(en) => {
+          if en.stx.export {
+            return true;
+          }
+        }
+        Stmt::NamespaceDecl(ns) => {
+          if ns.stx.export {
+            return true;
+          }
+        }
+        Stmt::ModuleDecl(module) => {
+          if module.stx.export {
+            return true;
+          }
+        }
+        Stmt::AmbientVarDecl(av) => {
+          if av.stx.export {
+            return true;
+          }
+        }
+        Stmt::AmbientFunctionDecl(af) => {
+          if af.stx.export {
+            return true;
+          }
+        }
+        Stmt::AmbientClassDecl(ac) => {
+          if ac.stx.export {
+            return true;
+          }
+        }
+        Stmt::GlobalDecl(global) => {
+          if walk(&global.stx.body) {
+            return true;
+          }
+        }
+        _ => {}
+      }
+    }
+    false
+  }
+
+  walk(&ast.stx.body)
+}
+
+fn collect_module_augmentation_specifier_values_from_ast(
+  ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
+  specs: &mut Vec<Arc<str>>,
+) {
+  if !ast_has_module_syntax(ast) {
+    return;
+  }
+
+  use parse_js::ast::node::Node;
+  use parse_js::ast::stmt::Stmt;
+  use parse_js::ast::ts_stmt::ModuleName;
+
+  fn walk(stmts: &[Node<Stmt>], specs: &mut Vec<Arc<str>>) {
+    for stmt in stmts {
+      match stmt.stx.as_ref() {
+        Stmt::ModuleDecl(module) => {
+          if let ModuleName::String(spec) = &module.stx.name {
+            specs.push(Arc::<str>::from(spec.as_str()));
+          }
+        }
+        Stmt::GlobalDecl(global) => walk(&global.stx.body, specs),
+        _ => {}
+      }
+    }
+  }
+
+  walk(&ast.stx.body, specs);
 }
 
 /// Current compiler options.

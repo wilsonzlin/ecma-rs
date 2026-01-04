@@ -158,7 +158,7 @@ pub fn bind_ts_program_with_cancellation(
     diagnostics: Vec::new(),
     export_cache: HashMap::new(),
     ambient_export_cache: HashMap::new(),
-    pending_file_augmentations: Vec::new(),
+    pending_augmentations: Vec::new(),
   };
   binder.run(roots)
 }
@@ -174,15 +174,21 @@ struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   diagnostics: Vec<Diagnostic>,
   export_cache: HashMap<FileId, ExportStatus>,
   ambient_export_cache: HashMap<String, ExportStatus>,
-  pending_file_augmentations: Vec<PendingModuleAugmentation>,
+  pending_augmentations: Vec<PendingModuleAugmentation>,
 }
 
 #[derive(Clone, Debug)]
 struct PendingModuleAugmentation {
-  target: FileId,
+  target: AugmentationTarget,
   origin: FileId,
   origin_file_kind: FileKind,
   module: AmbientModule,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum AugmentationTarget {
+  File(FileId),
+  Ambient(String),
 }
 
 impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
@@ -199,7 +205,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     }
     let mut queue: VecDeque<FileId> = roots.iter().cloned().collect();
     let mut seen = HashMap::new();
-    while !queue.is_empty() || !self.pending_file_augmentations.is_empty() {
+    while !queue.is_empty() || !self.pending_augmentations.is_empty() {
       while let Some(file_id) = queue.pop_front() {
         if self.is_cancelled() {
           return (TsProgramSemantics::empty(), Vec::new());
@@ -215,7 +221,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         queue.extend(deps);
       }
 
-      if !self.pending_file_augmentations.is_empty() {
+      if !self.pending_augmentations.is_empty() {
         if self.is_cancelled() {
           return (TsProgramSemantics::empty(), Vec::new());
         }
@@ -363,6 +369,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let owner = SymbolOwner::Module(hir.file_id);
     let mut state = ModuleState::new(owner.clone(), hir.file_id, hir.file_kind, is_script);
     let mut deps = Vec::new();
+    // Ambient modules declared in `.d.ts` files can still satisfy module
+    // resolution even when the file is an external module (e.g. `import "pkg"`
+    // alongside `declare module "pkg" { ... }`). Pass the ambient module list so
+    // `resolve_spec` can see in-file declarations before they've been bound.
+    let ambient_modules_for_resolution: &[AmbientModule] = &hir.ambient_modules;
 
     self.bind_module_items(
       &mut state,
@@ -378,7 +389,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &hir.import_equals,
       &hir.exports,
       &hir.export_as_namespace,
-      &hir.ambient_modules,
+      ambient_modules_for_resolution,
       &mut deps,
     );
 
@@ -389,17 +400,28 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
 
       if let Some(target) = self.resolver.resolve(hir.file_id, &ambient.name) {
-        self
-          .pending_file_augmentations
-          .push(PendingModuleAugmentation {
-            target,
-            origin: hir.file_id,
-            origin_file_kind: hir.file_kind,
-            module: ambient.clone(),
-          });
+        self.pending_augmentations.push(PendingModuleAugmentation {
+          target: AugmentationTarget::File(target),
+          origin: hir.file_id,
+          origin_file_kind: hir.file_kind,
+          module: ambient.clone(),
+        });
         deps.push(target);
-      } else {
+      } else if !is_relative_module_specifier(&ambient.name) {
+        // If the module specifier does not resolve to a file and is non-relative,
+        // treat it as an ambient module declaration even within an external
+        // module. This matches existing `.d.ts` patterns that declare packages
+        // inline and then import from them.
         deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
+      } else {
+        // Relative module declarations inside modules are treated as augmentations
+        // and must resolve to an existing file or ambient module.
+        self.pending_augmentations.push(PendingModuleAugmentation {
+          target: AugmentationTarget::Ambient(ambient.name.clone()),
+          origin: hir.file_id,
+          origin_file_kind: hir.file_kind,
+          module: ambient.clone(),
+        });
       }
     }
 
@@ -411,11 +433,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     if self.is_cancelled() {
       return Vec::new();
     }
-    if self.pending_file_augmentations.is_empty() {
+    if self.pending_augmentations.is_empty() {
       return Vec::new();
     }
 
-    self.pending_file_augmentations.sort_by(|a, b| {
+    self.pending_augmentations.sort_by(|a, b| {
       a.target
         .cmp(&b.target)
         .then_with(|| a.origin.cmp(&b.origin))
@@ -423,35 +445,83 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         .then_with(|| a.module.name_span.end.cmp(&b.module.name_span.end))
     });
 
-    let pending = std::mem::take(&mut self.pending_file_augmentations);
+    let pending = std::mem::take(&mut self.pending_augmentations);
     let mut deps = Vec::new();
+    let mut remaining = Vec::new();
+    let mut applied_any = false;
     for aug in pending {
-      if let Some(mut state) = self.modules.remove(&aug.target) {
-        let owner = SymbolOwner::Module(aug.target);
-        self.bind_module_items(
-          &mut state,
-          &owner,
-          aug.origin,
-          aug.origin_file_kind,
-          ModuleKind::Module,
-          false,
-          false,
-          &aug.module.decls,
-          &aug.module.type_imports,
-          &aug.module.imports,
-          &aug.module.import_equals,
-          &aug.module.exports,
-          &aug.module.export_as_namespace,
-          &aug.module.ambient_modules,
-          &mut deps,
-        );
+      match &aug.target {
+        AugmentationTarget::File(target) => {
+          if let Some(mut state) = self.modules.remove(target) {
+            let owner = SymbolOwner::Module(*target);
+            self.bind_module_items(
+              &mut state,
+              &owner,
+              aug.origin,
+              aug.origin_file_kind,
+              ModuleKind::Module,
+              false,
+              false,
+              &aug.module.decls,
+              &aug.module.type_imports,
+              &aug.module.imports,
+              &aug.module.import_equals,
+              &aug.module.exports,
+              &aug.module.export_as_namespace,
+              &aug.module.ambient_modules,
+              &mut deps,
+            );
 
-        for nested in &aug.module.ambient_modules {
-          deps.extend(self.bind_ambient_module(aug.origin, aug.origin_file_kind, nested));
+            for nested in &aug.module.ambient_modules {
+              deps.extend(self.bind_ambient_module(aug.origin, aug.origin_file_kind, nested));
+            }
+
+            self.modules.insert(*target, state);
+            applied_any = true;
+          } else {
+            remaining.push(aug);
+          }
         }
+        AugmentationTarget::Ambient(specifier) => {
+          if let Some(mut state) = self.ambient_modules.remove(specifier) {
+            let owner = SymbolOwner::AmbientModule(specifier.clone());
+            self.bind_module_items(
+              &mut state,
+              &owner,
+              aug.origin,
+              aug.origin_file_kind,
+              ModuleKind::Module,
+              false,
+              false,
+              &aug.module.decls,
+              &aug.module.type_imports,
+              &aug.module.imports,
+              &aug.module.import_equals,
+              &aug.module.exports,
+              &aug.module.export_as_namespace,
+              &aug.module.ambient_modules,
+              &mut deps,
+            );
 
-        self.modules.insert(aug.target, state);
+            for nested in &aug.module.ambient_modules {
+              deps.extend(self.bind_ambient_module(aug.origin, aug.origin_file_kind, nested));
+            }
+
+            self.ambient_modules.insert(specifier.clone(), state);
+            applied_any = true;
+          } else {
+            remaining.push(aug);
+          }
+        }
       }
+    }
+
+    if applied_any {
+      self.pending_augmentations = remaining;
+    } else {
+      // No progress was made; any remaining augmentations target modules that are
+      // not present in this program. Drop them to prevent an infinite loop.
+      self.pending_augmentations.clear();
     }
 
     deps
@@ -930,7 +1000,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             .all(|ie| !matches!(ie.target, ImportEqualsTarget::Require { .. }))
           && exports.is_empty()
           && export_as_namespace.is_empty()
-          && ambient_modules.is_empty()
+          && !has_relative_ambient_module(ambient_modules)
           && decls
             .iter()
             .all(|decl| matches!(decl.exported, Exported::No))
@@ -1754,6 +1824,17 @@ fn has_ambient_module_named(specifier: &str, modules: &[AmbientModule]) -> bool 
   modules.iter().any(|m| {
     m.name == specifier
       || (!m.ambient_modules.is_empty() && has_ambient_module_named(specifier, &m.ambient_modules))
+  })
+}
+
+fn is_relative_module_specifier(specifier: &str) -> bool {
+  specifier.starts_with('.') || specifier.starts_with('/')
+}
+
+fn has_relative_ambient_module(modules: &[AmbientModule]) -> bool {
+  modules.iter().any(|m| {
+    is_relative_module_specifier(&m.name)
+      || (!m.ambient_modules.is_empty() && has_relative_ambient_module(&m.ambient_modules))
   })
 }
 
