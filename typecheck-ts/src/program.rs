@@ -7202,19 +7202,40 @@ impl ProgramState {
     specifier: &str,
     host: &Arc<dyn Host>,
   ) -> Option<FileId> {
-    let resolved = self
+    let resolved_key = self
       .file_key_for_id(from)
-      .and_then(|from_key| host.resolve(&from_key, specifier))
-      .map(|target_key| {
-        // Prefer an already-known file ID when the host resolution points at a
-        // library file key. Many hosts provide `.d.ts` libraries via
-        // `Host::lib_files()` only (without implementing `file_text` for them),
-        // so interning them as `Source` would create a second `FileId` that
-        // cannot be loaded.
-        self
-          .file_id_for_key(&target_key)
-          .unwrap_or_else(|| self.intern_file_key(target_key, FileOrigin::Source))
-      });
+      .and_then(|from_key| host.resolve(&from_key, specifier));
+    let mut resolved = resolved_key.as_ref().map(|target_key| {
+      // Prefer an already-known file ID when the host resolution points at a
+      // library file key. Many hosts provide `.d.ts` libraries via
+      // `Host::lib_files()` only (without implementing `file_text` for them),
+      // so interning them as `Source` would create a second `FileId` that
+      // cannot be loaded.
+      self
+        .file_id_for_key(target_key)
+        .unwrap_or_else(|| self.intern_file_key(target_key.clone(), FileOrigin::Source))
+    });
+    if let (Some(file), Some(target_key)) = (resolved, resolved_key.as_ref()) {
+      if db::Db::file_input(&self.typecheck_db, file).is_none() {
+        // Lib file inputs are seeded up-front in `process_libs`. When resolving
+        // module specifiers during lib processing we may see dependent lib IDs
+        // before their texts are staged, so only auto-seed source files here.
+        let origin = self
+          .file_registry
+          .lookup_origin(file)
+          .unwrap_or(FileOrigin::Source);
+        if matches!(origin, FileOrigin::Source) {
+          let kind = *self
+            .file_kinds
+            .entry(file)
+            .or_insert_with(|| host.file_kind(target_key));
+          match self.load_text(file, host) {
+            Ok(text) => self.set_salsa_inputs(file, kind, text),
+            Err(_) => resolved = None,
+          }
+        }
+      }
+    }
     self
       .typecheck_db
       .set_module_resolution_ref(from, specifier, resolved);

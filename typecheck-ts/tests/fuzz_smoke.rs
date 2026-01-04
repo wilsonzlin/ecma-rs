@@ -6,6 +6,13 @@ use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{codes, FileKey, MemoryHost, Program};
 
 #[derive(Clone, Debug)]
+struct Project {
+  roots: Vec<FileKey>,
+  files: Vec<(FileKey, Arc<str>)>,
+  links: Vec<(FileKey, String, FileKey)>,
+}
+
+#[derive(Clone, Debug)]
 struct Rng(u64);
 
 impl Rng {
@@ -101,16 +108,90 @@ fn generate_program(rng: &mut Rng, case: usize) -> String {
   out
 }
 
-fn run_with_timeout(case: usize, source: &str, timeout: Duration) -> Vec<typecheck_ts::Diagnostic> {
+fn generate_project(rng: &mut Rng, case: usize) -> Project {
+  // Mix in a small multi-file import cycle to stress module-graph + binder
+  // termination and determinism.
+  if rng.gen_usize(4) == 0 {
+    let main = FileKey::new("file0.ts");
+    let dep = FileKey::new("file1.ts");
+
+    let mut main_src = String::new();
+    main_src.push_str("import { value as depValue } from \"./file1\";\n");
+    main_src.push_str("export const value = depValue;\n");
+    main_src.push_str("export type ValueType = typeof value;\n");
+
+    let main_fragments = 3 + rng.gen_usize(5);
+    for idx in 0..main_fragments {
+      let id = (case as u32) * 1_000 + idx as u32;
+      main_src.push_str(&fragment(rng, id));
+    }
+
+    let mut dep_src = String::new();
+    dep_src.push_str("import { value as mainValue } from \"./file0\";\n");
+    dep_src.push_str("export const value = mainValue;\n");
+    dep_src.push_str("export type ValueType = typeof value;\n");
+
+    let dep_fragments = 3 + rng.gen_usize(5);
+    for idx in 0..dep_fragments {
+      let id = (case as u32) * 1_000 + 100 + idx as u32;
+      dep_src.push_str(&fragment(rng, id));
+    }
+
+    Project {
+      roots: vec![main.clone()],
+      files: vec![
+        (main.clone(), Arc::from(main_src)),
+        (dep.clone(), Arc::from(dep_src)),
+      ],
+      links: vec![
+        (main.clone(), "./file1".to_string(), dep.clone()),
+        (dep, "./file0".to_string(), main),
+      ],
+    }
+  } else {
+    let file = FileKey::new(format!("case_{case}.ts"));
+    let source = generate_program(rng, case);
+    Project {
+      roots: vec![file.clone()],
+      files: vec![(file, Arc::from(source))],
+      links: Vec::new(),
+    }
+  }
+}
+
+fn project_debug_source(project: &Project) -> String {
+  let mut out = String::new();
+  for (idx, (key, text)) in project.files.iter().enumerate() {
+    if idx > 0 {
+      out.push('\n');
+    }
+    out.push_str(&format!("// file: {}\n", key.as_str()));
+    out.push_str(text);
+    if !text.ends_with('\n') {
+      out.push('\n');
+    }
+  }
+  out
+}
+
+fn run_with_timeout(
+  case: usize,
+  project: &Project,
+  timeout: Duration,
+) -> Vec<typecheck_ts::Diagnostic> {
   let options = CompilerOptions {
     no_default_lib: true,
     ..CompilerOptions::default()
   };
   let mut host = MemoryHost::with_options(options);
-  let file = FileKey::new(format!("case_{case}.ts"));
-  host.insert(file.clone(), Arc::<str>::from(source.to_string()));
+  for (key, text) in project.files.iter() {
+    host.insert(key.clone(), Arc::clone(text));
+  }
+  for (from, specifier, to) in project.links.iter() {
+    host.link(from.clone(), specifier, to.clone());
+  }
 
-  let program = Arc::new(Program::new(host, vec![file]));
+  let program = Arc::new(Program::new(host, project.roots.clone()));
   let runner = Arc::clone(&program);
   let handle = thread::spawn(move || runner.check());
 
@@ -160,23 +241,24 @@ fn fuzz_smoke_program_check_is_total_and_fast() {
 
   let mut rng = Rng::new(SEED);
   for case in 0..CASES {
-    let program = generate_program(&mut rng, case);
-    let mut diagnostics_first = run_with_timeout(case, &program, TIMEOUT);
+    let project = generate_project(&mut rng, case);
+    let src = project_debug_source(&project);
+    let mut diagnostics_first = run_with_timeout(case, &project, TIMEOUT);
     codes::normalize_diagnostics(&mut diagnostics_first);
 
-    let mut diagnostics_second = run_with_timeout(case, &program, TIMEOUT);
+    let mut diagnostics_second = run_with_timeout(case, &project, TIMEOUT);
     codes::normalize_diagnostics(&mut diagnostics_second);
 
     assert!(
       diagnostics_first
         .iter()
         .all(|diag| !diag.code.as_str().starts_with("ICE")),
-      "case {case}: checker emitted ICE diagnostics\nsource:\n{program}\n\ndiagnostics:\n{diagnostics_first:#?}",
+      "case {case}: checker emitted ICE diagnostics\nsource:\n{src}\n\ndiagnostics:\n{diagnostics_first:#?}",
     );
 
     assert_eq!(
       diagnostics_first, diagnostics_second,
-      "case {case}: checker output was not deterministic\nsource:\n{program}"
+      "case {case}: checker output was not deterministic\nsource:\n{src}"
     );
   }
 }
