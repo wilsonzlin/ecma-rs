@@ -1128,6 +1128,28 @@ fn marks_dynamic_scopes_for_with_and_eval() {
   assert!(!sem.scope(shadowed_eval_scope).is_dynamic);
 }
 
+#[test]
+fn with_marks_nested_function_scopes_dynamic() {
+  let mut ast = parse(r#"with (obj) { (() => shadow)(); (function () { shadow; })(); }"#).unwrap();
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(27));
+
+  let arrow_scopes: Vec<_> = sem
+    .scopes
+    .iter()
+    .filter(|(_, scope)| scope.kind == ScopeKind::ArrowFunction)
+    .collect();
+  assert_eq!(arrow_scopes.len(), 1);
+  assert!(arrow_scopes[0].1.is_dynamic);
+
+  let non_arrow_scopes: Vec<_> = sem
+    .scopes
+    .iter()
+    .filter(|(_, scope)| scope.kind == ScopeKind::NonArrowFunction)
+    .collect();
+  assert_eq!(non_arrow_scopes.len(), 1);
+  assert!(non_arrow_scopes[0].1.is_dynamic);
+}
+
 fn slice_range<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
   let range = diagnostic.primary.range;
   &source[range.start as usize..range.end as usize]
