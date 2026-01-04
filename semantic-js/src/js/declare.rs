@@ -33,6 +33,8 @@ use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
 use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::SwitchBranch;
+use parse_js::ast::stmt::SwitchStmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,6 +51,8 @@ type ForBodyNode = Node<ForBody>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type PatDeclNode = Node<PatDecl>;
+type SwitchBranchNode = Node<SwitchBranch>;
+type SwitchStmtNode = Node<SwitchStmt>;
 type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
 
@@ -123,6 +127,7 @@ fn collect_pat_names(file: FileId, pat: &Pat, out: &mut BTreeSet<NameId>) {
   ForBodyNode(enter, exit),
   ForInOfLhs(enter, exit),
   FuncNode(enter, exit),
+  SwitchStmtNode(enter, exit),
   VarDeclNode(enter)
 )]
 struct ClosureLexicalCollector {
@@ -206,6 +211,14 @@ impl ClosureLexicalCollector {
   }
 
   fn exit_func_node(&mut self, _node: &FuncNode) {
+    self.depth = self.depth.saturating_sub(1);
+  }
+
+  fn enter_switch_stmt_node(&mut self, _node: &SwitchStmtNode) {
+    self.depth += 1;
+  }
+
+  fn exit_switch_stmt_node(&mut self, _node: &SwitchStmtNode) {
     self.depth = self.depth.saturating_sub(1);
   }
 
@@ -649,6 +662,8 @@ struct DeclContext {
   IdPatNode(enter),
   ImportStmtNode,
   PatDeclNode,
+  SwitchStmtNode(enter, exit),
+  SwitchBranchNode(enter),
   VarDeclNode,
   NodeAssocData(enter)
 )]
@@ -659,6 +674,7 @@ struct DeclareVisitor {
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
   closure_lexical_names_stack: Vec<BTreeSet<NameId>>,
+  switch_scope_stack: Vec<(ScopeId, bool)>,
 }
 
 impl DeclareVisitor {
@@ -672,6 +688,7 @@ impl DeclareVisitor {
       in_pattern_decl: vec![false],
       top_level_mode: mode,
       closure_lexical_names_stack: Vec::new(),
+      switch_scope_stack: Vec::new(),
     }
   }
 
@@ -904,6 +921,35 @@ impl DeclareVisitor {
 
   fn exit_for_body_node(&mut self, _node: &mut ForBodyNode) {
     self.pop_scope();
+  }
+
+  fn enter_switch_stmt_node(&mut self, node: &mut SwitchStmtNode) {
+    let parent = self.current_scope();
+    let id = self
+      .builder
+      .new_scope(parent, ScopeKind::Block, range_of(node));
+    self.switch_scope_stack.push((id, false));
+  }
+
+  fn enter_switch_branch_node(&mut self, _node: &mut SwitchBranchNode) {
+    let Some((scope, active)) = self.switch_scope_stack.last_mut() else {
+      return;
+    };
+    if *active {
+      return;
+    }
+    self.scope_stack.push(*scope);
+    *active = true;
+  }
+
+  fn exit_switch_stmt_node(&mut self, _node: &mut SwitchStmtNode) {
+    let Some((scope, active)) = self.switch_scope_stack.pop() else {
+      return;
+    };
+    if active {
+      let popped = self.scope_stack.pop();
+      debug_assert_eq!(popped, Some(scope));
+    }
   }
 
   fn enter_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {

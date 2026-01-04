@@ -587,6 +587,74 @@ fn script_block_function_var_conflict_is_reported() {
 }
 
 #[test]
+fn switch_case_lexicals_are_not_visible_outside_switch() {
+  let mut ast = parse("switch(0){case 0: let a = 1; break;} a;").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(70));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+
+  assert_eq!(collect.id_exprs, vec![("a".to_string(), None)]);
+  let use_after_switch = collect.id_exprs[0].1;
+
+  let inner_decl = collect
+    .id_pats
+    .iter()
+    .find(|(name, _, is_decl)| name == "a" && *is_decl)
+    .and_then(|(_, sym, _)| *sym)
+    .expect("expected inner declaration symbol");
+  assert_ne!(use_after_switch, Some(inner_decl));
+}
+
+#[test]
+fn switch_case_lexicals_do_not_conflict_with_outer_let() {
+  let source = "switch(0){case 0: let a = 1; break;} let a = 2;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(71));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+}
+
+#[test]
+fn switch_discriminant_prefers_outer_binding() {
+  let source = "let a = 0; switch(a){case 0: let a = 1; break;}";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(72));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let outer = sem
+    .resolve_name_in_scope(sem.top_scope(), "a")
+    .expect("expected outer binding");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  let discriminant = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "a")
+    .and_then(|(_, sym)| *sym)
+    .expect("expected discriminant to resolve");
+  assert_eq!(discriminant, outer);
+}
+
+#[test]
+fn switch_discriminant_does_not_resolve_to_case_lexicals() {
+  let source = "switch(a){case 0: let a = 1; break;}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(73));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  let discriminant = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "a")
+    .and_then(|(_, sym)| *sym);
+  assert_eq!(discriminant, None);
+}
+
+#[test]
 fn hoisted_var_uses_are_not_in_tdz() {
   let mut ast = parse("console.log(x); var x = 1;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));

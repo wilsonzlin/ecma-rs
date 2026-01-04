@@ -9,7 +9,7 @@ use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
-use parse_js::ast::stmt::{BlockStmt, CatchBlock, ForBody, ForInOfLhs};
+use parse_js::ast::stmt::{BlockStmt, CatchBlock, ForBody, ForInOfLhs, SwitchBranch, SwitchStmt};
 use parse_js::ast::stx::TopLevel;
 use std::collections::{HashMap, HashSet};
 
@@ -59,6 +59,8 @@ type IdPatNode = Node<IdPat>;
 type ObjPatPropNode = Node<ObjPatProp>;
 type VarDeclNode = Node<VarDecl>;
 type VarDeclaratorNode = VarDeclarator;
+type SwitchBranchNode = Node<SwitchBranch>;
+type SwitchStmtNode = Node<SwitchStmt>;
 
 struct TdzFrame {
   scope: ScopeId,
@@ -100,6 +102,8 @@ impl TdzFrame {
   IdExprNode(enter),
   IdPatNode(enter),
   ObjPatPropNode(enter, exit),
+  SwitchStmtNode(enter, exit),
+  SwitchBranchNode(enter),
   VarDeclNode(enter, exit),
   VarDeclaratorNode(enter, exit)
 )]
@@ -122,6 +126,7 @@ struct ResolveVisitor<'a> {
   in_param_list: Vec<bool>,
   func_scope_stack: Vec<ScopeId>,
   closure_cache: HashMap<ScopeId, ScopeId>,
+  switch_scope_stack: Vec<(Option<ScopeId>, bool)>,
 }
 
 impl ResolveVisitor<'_> {
@@ -146,6 +151,7 @@ impl ResolveVisitor<'_> {
       in_param_list: Vec::new(),
       func_scope_stack: Vec::new(),
       closure_cache: HashMap::new(),
+      switch_scope_stack: Vec::new(),
     }
   }
 
@@ -456,6 +462,42 @@ impl ResolveVisitor<'_> {
 
   fn exit_for_in_of_lhs(&mut self, _node: &mut ForInOfLhs) {
     self.pop_pending();
+  }
+
+  fn enter_switch_stmt_node(&mut self, node: &mut SwitchStmtNode) {
+    let current = self.scope_stack.last().copied();
+    let scope = scope_id(&node.assoc).filter(|scope| Some(*scope) != current);
+    self.switch_scope_stack.push((scope, false));
+  }
+
+  fn enter_switch_branch_node(&mut self, _node: &mut SwitchBranchNode) {
+    let Some((scope, active)) = self.switch_scope_stack.last_mut() else {
+      return;
+    };
+    if *active {
+      return;
+    }
+    let Some(scope) = *scope else {
+      return;
+    };
+    self.scope_stack.push(scope);
+    self.tdz_stack.push(TdzFrame::new(scope, self.sem));
+    *active = true;
+  }
+
+  fn exit_switch_stmt_node(&mut self, _node: &mut SwitchStmtNode) {
+    let Some((scope, active)) = self.switch_scope_stack.pop() else {
+      return;
+    };
+    if !active {
+      return;
+    }
+    let Some(scope) = scope else {
+      return;
+    };
+    let popped = self.scope_stack.pop();
+    self.tdz_stack.pop();
+    debug_assert_eq!(popped, Some(scope));
   }
 
   fn enter_func_expr_node(&mut self, node: &mut FuncExprNode) {
