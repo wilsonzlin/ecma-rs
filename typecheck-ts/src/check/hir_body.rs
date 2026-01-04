@@ -147,6 +147,8 @@ struct FunctionInfo {
 struct ClassStaticBlockInfo {
   span: TextRange,
   block: *const Node<ClassStaticBlock>,
+  class_index: usize,
+  member_index: usize,
 }
 
 impl AstIndex {
@@ -753,6 +755,8 @@ impl AstIndex {
         self.class_static_blocks.push(ClassStaticBlockInfo {
           span,
           block: block as *const _,
+          class_index,
+          member_index,
         });
         self.index_stmt_list(&block.stx.body, file, cancelled);
       }
@@ -1352,7 +1356,14 @@ impl<'a> Checker<'a> {
     for block in matched_blocks.iter() {
       self.check_cancelled();
       let block_node = unsafe { &*block.block };
+      let prev_ctx = self.class_field_initializer;
+      self.class_field_initializer = Some(ClassFieldInitializerContext {
+        class_index: block.class_index,
+        member_index: block.member_index,
+        is_static: true,
+      });
       self.check_block_body(&block_node.stx.body);
+      self.class_field_initializer = prev_ctx;
     }
 
     // Class bodies can contain additional evaluation expressions (e.g. decorators,

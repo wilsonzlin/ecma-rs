@@ -211,3 +211,29 @@ class Derived extends Base {
     "expected diagnostics to include PROPERTY_USED_BEFORE_INITIALIZATION when use_define_for_class_fields is false; got {diagnostics_set:#?}"
   );
 }
+
+#[test]
+fn static_block_reports_used_before_initialization() {
+  let source = r#"
+class C {
+  static { this.x; }
+  static x = 1;
+}
+"#;
+
+  let key = FileKey::new("main.ts");
+
+  let mut opts = CompilerOptions::default();
+  opts.target = ScriptTarget::Es2020;
+  opts.use_define_for_class_fields = false;
+  let mut host = MemoryHost::with_options(opts);
+  host.insert(key.clone(), source);
+  let program = Program::new(host, vec![key]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics
+      .iter()
+      .any(|diag| diag.code.as_str() == codes::PROPERTY_USED_BEFORE_INITIALIZATION.as_str()),
+    "expected diagnostics to include PROPERTY_USED_BEFORE_INITIALIZATION; got {diagnostics:#?}"
+  );
+}
