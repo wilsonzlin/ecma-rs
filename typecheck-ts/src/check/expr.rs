@@ -4,7 +4,7 @@ use diagnostics::Span;
 use types_ts_interned::{RelateCtx, RelateTypeExpander, TypeId, TypeStore};
 
 use super::instantiate::InstantiationCache;
-use super::overload::{resolve_construct_overloads, resolve_overloads, CallResolution};
+use super::overload::{resolve_construct_overloads, resolve_overloads, CallArgType, CallResolution};
 
 /// Resolve a call expression against a callable type.
 pub fn resolve_call(
@@ -12,7 +12,7 @@ pub fn resolve_call(
   relate: &RelateCtx<'_>,
   instantiation: &InstantiationCache,
   callee: TypeId,
-  args: &[TypeId],
+  args: &[CallArgType],
   const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
@@ -39,7 +39,7 @@ pub fn resolve_construct(
   relate: &RelateCtx<'_>,
   instantiation: &InstantiationCache,
   callee: TypeId,
-  args: &[TypeId],
+  args: &[CallArgType],
   const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,

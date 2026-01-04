@@ -19,6 +19,23 @@ type SignatureShapeKey = (
   Option<TypeId>,
 );
 
+/// Argument type information used during overload resolution and inference.
+#[derive(Clone, Copy, Debug)]
+pub struct CallArgType {
+  pub ty: TypeId,
+  pub spread: bool,
+}
+
+impl CallArgType {
+  pub fn new(ty: TypeId) -> Self {
+    Self { ty, spread: false }
+  }
+
+  pub fn spread(ty: TypeId) -> Self {
+    Self { ty, spread: true }
+  }
+}
+
 /// Result of resolving a call expression against a callable type.
 #[derive(Debug)]
 pub struct CallResolution {
@@ -78,7 +95,7 @@ pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
 /// this position.
 pub fn expected_arg_type_at(store: &TypeStore, sig: &Signature, index: usize) -> Option<TypeId> {
   let arity = analyze_arity(store, sig);
-  expected_arg_type(sig, &arity, index).map(|p| p.ty)
+  expected_arg_type(store, sig, &arity, index).map(|p| p.ty)
 }
 
 /// Whether the signature can accept the given number of call arguments,
@@ -111,6 +128,12 @@ struct ArityInfo {
   fixed_len: usize,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct CallArityInfo {
+  min: usize,
+  max: Option<usize>,
+}
+
 impl ArityInfo {
   fn allows(&self, args: usize) -> bool {
     if args < self.min {
@@ -123,6 +146,105 @@ impl ArityInfo {
     }
     true
   }
+
+  fn allows_call(&self, call: &CallArityInfo) -> bool {
+    if call.min < self.min {
+      return false;
+    }
+    match (self.max, call.max) {
+      (Some(sig_max), Some(call_max)) => call_max <= sig_max,
+      (Some(_), None) => false,
+      (None, Some(_)) => true,
+      (None, None) => true,
+    }
+  }
+}
+
+fn analyze_call_arity(
+  store: &TypeStore,
+  args: &[CallArgType],
+  expander: Option<&dyn RelateTypeExpander>,
+) -> CallArityInfo {
+  fn combine(a: Option<usize>, b: Option<usize>) -> Option<usize> {
+    match (a, b) {
+      (Some(left), Some(right)) => left.checked_add(right),
+      _ => None,
+    }
+  }
+
+  fn spread_arity(
+    store: &TypeStore,
+    ty: TypeId,
+    expander: Option<&dyn RelateTypeExpander>,
+    seen: &mut HashSet<TypeId>,
+  ) -> (usize, Option<usize>) {
+    if !seen.insert(ty) {
+      // Recursive tuple aliases are treated conservatively.
+      return (0, None);
+    }
+    match store.type_kind(ty) {
+      TypeKind::Tuple(elems) => {
+        let mut min = 0usize;
+        let mut max = Some(0usize);
+        for elem in elems {
+          if elem.rest {
+            let (rest_min, rest_max) = spread_arity(store, elem.ty, expander, seen);
+            min += rest_min;
+            max = combine(max, rest_max);
+          } else {
+            if !elem.optional {
+              min += 1;
+            }
+            if let Some(max) = max.as_mut() {
+              *max += 1;
+            }
+          }
+        }
+        (min, max)
+      }
+      // Arrays and unknown spreads can contribute any number of arguments.
+      TypeKind::Array { .. } | TypeKind::Any | TypeKind::Unknown => (0, None),
+      TypeKind::Union(members) => {
+        let mut min: Option<usize> = None;
+        let mut max = Some(0usize);
+        for member in members {
+          let (member_min, member_max) = spread_arity(store, member, expander, seen);
+          min = Some(match min {
+            Some(existing) => existing.min(member_min),
+            None => member_min,
+          });
+          match (max, member_max) {
+            (Some(existing), Some(member_max)) => max = Some(existing.max(member_max)),
+            _ => max = None,
+          }
+        }
+        (min.unwrap_or(0), max)
+      }
+      TypeKind::Ref { def, args } => match expander.and_then(|e| e.expand_ref(store, def, &args)) {
+        Some(expanded) => spread_arity(store, expanded, expander, seen),
+        None => (0, None),
+      },
+      _ => (0, None),
+    }
+  }
+
+  let mut min = 0usize;
+  let mut max = Some(0usize);
+  for arg in args {
+    if !arg.spread {
+      min += 1;
+      if let Some(max) = max.as_mut() {
+        *max += 1;
+      }
+      continue;
+    }
+    let (spread_min, spread_max) =
+      spread_arity(store, arg.ty, expander, &mut HashSet::new());
+    min += spread_min;
+    max = combine(max, spread_max);
+  }
+
+  CallArityInfo { min, max }
 }
 
 #[derive(Debug, Clone)]
@@ -130,7 +252,8 @@ enum CandidateRejection {
   Arity {
     min: usize,
     max: Option<usize>,
-    actual: usize,
+    actual_min: usize,
+    actual_max: Option<usize>,
   },
   Inference(Vec<String>),
   ArgumentType {
@@ -189,7 +312,7 @@ pub fn resolve_overloads(
   relate: &RelateCtx<'_>,
   instantiation: &InstantiationCache,
   callee: TypeId,
-  args: &[TypeId],
+  args: &[CallArgType],
   const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
@@ -218,7 +341,7 @@ pub fn resolve_construct_overloads(
   relate: &RelateCtx<'_>,
   instantiation: &InstantiationCache,
   callee: TypeId,
-  args: &[TypeId],
+  args: &[CallArgType],
   const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
@@ -246,7 +369,7 @@ fn resolve_overload_set(
   relate: &RelateCtx<'_>,
   instantiation: &InstantiationCache,
   callee: TypeId,
-  args: &[TypeId],
+  args: &[CallArgType],
   const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
@@ -264,7 +387,12 @@ fn resolve_overload_set(
     };
   }
 
-  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
+  let has_spread = args.iter().any(|arg| arg.spread);
+  let const_args = if has_spread {
+    None
+  } else {
+    const_args.filter(|const_args| const_args.len() == args.len())
+  };
 
   let mut candidates = Vec::new();
   match callee_kind {
@@ -311,6 +439,9 @@ fn resolve_overload_set(
     };
   }
 
+  let call_arity = analyze_call_arity(store.as_ref(), args, expander);
+  let base_expanded_args = expand_call_args(store.as_ref(), args, expander);
+
   let mut outcomes = Vec::with_capacity(candidates.len());
   for (order, sig_id) in candidates.into_iter().enumerate() {
     let original_sig = store.signature(sig_id);
@@ -327,11 +458,12 @@ fn resolve_overload_set(
     };
 
     let arity = analyze_arity(store.as_ref(), &outcome.instantiated_sig);
-    if !arity.allows(args.len()) {
+    if !arity.allows_call(&call_arity) {
       outcome.rejection = Some(CandidateRejection::Arity {
         min: arity.min,
         max: arity.max,
-        actual: args.len(),
+        actual_min: call_arity.min,
+        actual_max: call_arity.max,
       });
       outcomes.push(outcome);
       continue;
@@ -342,18 +474,18 @@ fn resolve_overload_set(
       for idx in 0..args.len() {
         if uses_const_arg(store.as_ref(), &outcome.instantiated_sig, &arity, idx) {
           if effective_args.is_none() {
-            effective_args = Some(args.to_vec());
+            effective_args = Some(base_expanded_args.clone());
           }
           if let Some(slot) = effective_args.as_mut().and_then(|a| a.get_mut(idx)) {
-            *slot = const_args[idx];
+            slot.ty = const_args[idx];
           }
         }
       }
     }
-    let args = effective_args.as_deref().unwrap_or(args);
+    let expanded_args = effective_args.as_deref().unwrap_or(&base_expanded_args);
 
     let inference =
-      infer_type_arguments_for_call(store, &outcome.instantiated_sig, args, contextual_return);
+      infer_type_arguments_for_call(store, relate, &outcome.instantiated_sig, expanded_args, contextual_return);
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
@@ -384,11 +516,12 @@ fn resolve_overload_set(
     outcome.return_rank = return_rank(store.as_ref(), outcome.instantiated_sig.ret);
 
     let arity = analyze_arity(store.as_ref(), &outcome.instantiated_sig);
-    if !arity.allows(args.len()) {
+    if !arity.allows_call(&call_arity) {
       outcome.rejection = Some(CandidateRejection::Arity {
         min: arity.min,
         max: arity.max,
-        actual: args.len(),
+        actual_min: call_arity.min,
+        actual_max: call_arity.max,
       });
       outcomes.push(outcome);
       continue;
@@ -415,7 +548,8 @@ fn resolve_overload_set(
       relate,
       &outcome.instantiated_sig,
       &arity,
-      args,
+      expanded_args,
+      &call_arity,
     );
     outcome.match_score = score;
     outcome.subtype = subtype;
@@ -766,8 +900,8 @@ fn intersect_signatures(
   match max {
     Some(max) => {
       for idx in 0..max {
-        let lhs = expected_arg_type(lhs, lhs_arity, idx)?;
-        let rhs = expected_arg_type(rhs, rhs_arity, idx)?;
+        let lhs = expected_arg_type(store, lhs, lhs_arity, idx)?;
+        let rhs = expected_arg_type(store, rhs, rhs_arity, idx)?;
         let combined = store.intersection(vec![lhs.ty, rhs.ty]);
         if is_obviously_empty_intersection(store, combined) {
           return None;
@@ -782,8 +916,8 @@ fn intersect_signatures(
     }
     None => {
       for idx in 0..min {
-        let lhs = expected_arg_type(lhs, lhs_arity, idx)?;
-        let rhs = expected_arg_type(rhs, rhs_arity, idx)?;
+        let lhs = expected_arg_type(store, lhs, lhs_arity, idx)?;
+        let rhs = expected_arg_type(store, rhs, rhs_arity, idx)?;
         let combined = store.intersection(vec![lhs.ty, rhs.ty]);
         if is_obviously_empty_intersection(store, combined) {
           return None;
@@ -796,8 +930,8 @@ fn intersect_signatures(
         });
       }
 
-      let lhs_rest = expected_arg_type(lhs, lhs_arity, min)?;
-      let rhs_rest = expected_arg_type(rhs, rhs_arity, min)?;
+      let lhs_rest = expected_arg_type(store, lhs, lhs_arity, min)?;
+      let rhs_rest = expected_arg_type(store, rhs, rhs_arity, min)?;
       let combined = store.intersection(vec![lhs_rest.ty, rhs_rest.ty]);
       if is_obviously_empty_intersection(store, combined) {
         return None;
@@ -1035,7 +1169,11 @@ fn rest_style(store: &TypeStore, param: &Param) -> RestStyle {
   match store.type_kind(param.ty) {
     TypeKind::Array { ty, .. } => RestStyle::Array(ty),
     TypeKind::Tuple(elems) => {
-      let rest = elems.iter().rev().find(|e| e.rest).map(|e| e.ty);
+      let rest = elems
+        .iter()
+        .rev()
+        .find(|e| e.rest)
+        .map(|e| spread_element_type(store, e.ty));
       RestStyle::Tuple { elems, rest }
     }
     _ => RestStyle::Plain(param.ty),
@@ -1064,17 +1202,65 @@ fn combine_max(a: Option<usize>, b: Option<usize>) -> Option<usize> {
   }
 }
 
+fn spread_element_type(store: &TypeStore, ty: TypeId) -> TypeId {
+  let prim = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Any => prim.any,
+    TypeKind::Unknown => prim.unknown,
+    TypeKind::Array { ty, .. } => ty,
+    TypeKind::Tuple(elems) => {
+      let mut out = Vec::new();
+      for elem in elems {
+        if elem.rest {
+          out.push(spread_element_type(store, elem.ty));
+        } else {
+          out.push(elem.ty);
+        }
+      }
+      if out.is_empty() {
+        prim.unknown
+      } else if out.len() == 1 {
+        out[0]
+      } else {
+        store.union(out)
+      }
+    }
+    TypeKind::Union(members) => {
+      let elems: Vec<_> = members
+        .into_iter()
+        .map(|member| spread_element_type(store, member))
+        .collect();
+      store.union(elems)
+    }
+    TypeKind::Intersection(members) => {
+      let elems: Vec<_> = members
+        .into_iter()
+        .map(|member| spread_element_type(store, member))
+        .collect();
+      store.intersection(elems)
+    }
+    _ => prim.unknown,
+  }
+}
+
 #[derive(Clone, Copy)]
 struct ExpectedParam {
   ty: TypeId,
   from_rest: bool,
+  optional: bool,
 }
 
-fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option<ExpectedParam> {
+fn expected_arg_type(
+  store: &TypeStore,
+  sig: &Signature,
+  arity: &ArityInfo,
+  index: usize,
+) -> Option<ExpectedParam> {
   if index < arity.fixed_len {
     return sig.params.get(index).map(|p| ExpectedParam {
       ty: p.ty,
       from_rest: false,
+      optional: p.optional,
     });
   }
   let rest = arity.rest.as_ref()?;
@@ -1083,21 +1269,37 @@ fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option
     RestStyle::Array(elem) => Some(ExpectedParam {
       ty: *elem,
       from_rest: true,
+      optional: sig
+        .params
+        .get(rest.start)
+        .map(|p| p.optional)
+        .unwrap_or(false),
     }),
     RestStyle::Plain(ty) => Some(ExpectedParam {
       ty: *ty,
       from_rest: true,
+      optional: sig
+        .params
+        .get(rest.start)
+        .map(|p| p.optional)
+        .unwrap_or(false),
     }),
     RestStyle::Tuple { elems, rest } => {
       if let Some(elem) = elems.get(offset) {
         Some(ExpectedParam {
-          ty: elem.ty,
+          ty: if elem.rest {
+            spread_element_type(store, elem.ty)
+          } else {
+            elem.ty
+          },
           from_rest: true,
+          optional: elem.optional,
         })
       } else {
         rest.map(|ty| ExpectedParam {
           ty,
           from_rest: true,
+          optional: false,
         })
       }
     }
@@ -1105,7 +1307,7 @@ fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option
 }
 
 fn uses_const_arg(store: &TypeStore, sig: &Signature, arity: &ArityInfo, index: usize) -> bool {
-  let Some(expected) = expected_arg_type(sig, arity, index) else {
+  let Some(expected) = expected_arg_type(store, sig, arity, index) else {
     return false;
   };
   let TypeKind::TypeParam(param_id) = store.type_kind(expected.ty) else {
@@ -1122,8 +1324,10 @@ fn check_arguments(
   relate: &RelateCtx<'_>,
   sig: &Signature,
   arity: &ArityInfo,
-  args: &[TypeId],
+  args: &[CallArgType],
+  call_arity: &CallArityInfo,
 ) -> (MatchScore, bool, Option<CandidateRejection>) {
+  let primitives = store.primitive_ids();
   let mut score = MatchScore {
     widen: 0,
     any_like: 0,
@@ -1133,7 +1337,7 @@ fn check_arguments(
   let mut subtype = true;
 
   for (idx, arg) in args.iter().enumerate() {
-    let expected = match expected_arg_type(sig, arity, idx) {
+    let expected = match expected_arg_type(store, sig, arity, idx) {
       Some(param) => param,
       None => {
         return (
@@ -1142,7 +1346,8 @@ fn check_arguments(
           Some(CandidateRejection::Arity {
             min: arity.min,
             max: arity.max,
-            actual: args.len(),
+            actual_min: call_arity.min,
+            actual_max: call_arity.max,
           }),
         )
       }
@@ -1156,29 +1361,99 @@ fn check_arguments(
       _ => {}
     }
 
-    if !relate.is_assignable(*arg, expected.ty) {
+    let actual_ty = if arg.spread {
+      relate.spread_element_type(arg.ty)
+    } else {
+      arg.ty
+    };
+    let expected_ty = if expected.optional {
+      store.union(vec![expected.ty, primitives.undefined])
+    } else {
+      expected.ty
+    };
+
+    if !relate.is_assignable(actual_ty, expected_ty) {
       return (
         score,
         false,
         Some(CandidateRejection::ArgumentType {
           index: idx,
-          arg: *arg,
-          param: expected.ty,
+          arg: actual_ty,
+          param: expected_ty,
         }),
       );
     }
 
-    let param_assignable = relate.is_assignable(expected.ty, *arg);
-    if !param_assignable {
+    if !relate.is_assignable(expected_ty, actual_ty) {
       score.widen += 1;
     }
 
-    if *arg != expected.ty && param_assignable {
+    if actual_ty != expected_ty && !relate.is_strict_subtype(actual_ty, expected_ty) {
       subtype = false;
     }
   }
 
   (score, subtype, None)
+}
+
+fn expand_call_args(
+  store: &TypeStore,
+  args: &[CallArgType],
+  expander: Option<&dyn RelateTypeExpander>,
+) -> Vec<CallArgType> {
+  fn optional_type(store: &TypeStore, ty: TypeId, optional: bool) -> TypeId {
+    if optional {
+      store.union(vec![ty, store.primitive_ids().undefined])
+    } else {
+      ty
+    }
+  }
+
+  fn expand_tuple(
+    store: &TypeStore,
+    ty: TypeId,
+    expander: Option<&dyn RelateTypeExpander>,
+    seen: &mut HashSet<TypeId>,
+  ) -> Option<Vec<TupleElem>> {
+    if !seen.insert(ty) {
+      return None;
+    }
+    match store.type_kind(ty) {
+      TypeKind::Tuple(elems) => Some(elems),
+      TypeKind::Ref { def, args } => expander
+        .and_then(|e| e.expand_ref(store, def, &args))
+        .and_then(|expanded| expand_tuple(store, expanded, expander, seen)),
+      _ => None,
+    }
+  }
+
+  let mut out = Vec::new();
+  for arg in args {
+    if !arg.spread {
+      out.push(*arg);
+      continue;
+    }
+
+    if let Some(tuple) = expand_tuple(store, arg.ty, expander, &mut HashSet::new()) {
+      for elem in tuple {
+        if elem.rest {
+          out.push(CallArgType {
+            ty: elem.ty,
+            spread: true,
+          });
+        } else {
+          out.push(CallArgType {
+            ty: optional_type(store, elem.ty, elem.optional),
+            spread: false,
+          });
+        }
+      }
+      continue;
+    }
+
+    out.push(*arg);
+  }
+  out
 }
 
 fn count_unknown(
@@ -1283,10 +1558,25 @@ fn describe_rejection(
   reason: &CandidateRejection,
 ) -> String {
   match reason {
-    CandidateRejection::Arity { min, max, actual } => match max {
-      Some(max) if min == max => format!("expected {min} arguments but got {actual}"),
-      Some(max) => format!("expected between {min} and {max} arguments but got {actual}"),
-      None => format!("expected at least {min} arguments but got {actual}"),
+    CandidateRejection::Arity {
+      min,
+      max,
+      actual_min,
+      actual_max,
+    } => match (max, actual_max) {
+      (Some(max), Some(actual_max)) if min == max && actual_min == actual_max => {
+        format!("expected {min} arguments but got {actual_min}")
+      }
+      (Some(max), Some(actual_max)) => format!(
+        "expected between {min} and {max} arguments but got between {actual_min} and {actual_max}"
+      ),
+      (Some(max), None) => format!(
+        "expected between {min} and {max} arguments but got at least {actual_min}"
+      ),
+      (None, Some(actual_max)) => {
+        format!("expected at least {min} arguments but got at most {actual_max}")
+      }
+      (None, None) => format!("expected at least {min} arguments but got at least {actual_min}"),
     },
     CandidateRejection::Inference(diags) => diags
       .first()

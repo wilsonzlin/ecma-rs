@@ -6,9 +6,11 @@ use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
+use typecheck_ts::check::overload::CallArgType;
 use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
-  CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  CacheConfig, DefId, Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl,
+  TypeParamId, TypeStore,
 };
 
 fn param(name: &str, ty: TypeId, store: &Arc<TypeStore>) -> Param {
@@ -24,6 +26,7 @@ fn param(name: &str, ty: TypeId, store: &Arc<TypeStore>) -> Param {
 fn infers_identity_function() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -34,7 +37,8 @@ fn infers_identity_function() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.number], None);
+  let args = [CallArgType::new(primitives.number)];
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -49,6 +53,7 @@ fn infers_identity_function() {
 fn infers_union_from_multiple_arguments() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -59,8 +64,8 @@ fn infers_union_from_multiple_arguments() {
     this_param: None,
   };
 
-  let args = [primitives.string, primitives.number];
-  let result = infer_type_arguments_for_call(&store, &sig, &args, None);
+  let args = [CallArgType::new(primitives.string), CallArgType::new(primitives.number)];
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
   assert!(result.diagnostics.is_empty());
   let expected_union = store.union(vec![primitives.string, primitives.number]);
   assert_eq!(result.substitutions.get(&t_param), Some(&expected_union));
@@ -75,6 +80,7 @@ fn infers_union_from_multiple_arguments() {
 fn uses_default_type_argument_when_not_inferred() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -91,7 +97,7 @@ fn uses_default_type_argument_when_not_inferred() {
     type_params: vec![decl.clone()],
     this_param: None,
   };
-  let result = infer_type_arguments_for_call(&store, &sig, &[], None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &[], None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
@@ -100,6 +106,7 @@ fn uses_default_type_argument_when_not_inferred() {
 fn reports_constraint_violation() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -118,7 +125,8 @@ fn reports_constraint_violation() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.string], None);
+  let args = [CallArgType::new(primitives.string)];
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -133,6 +141,7 @@ fn reports_constraint_violation() {
 fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
   let empty_object = store.intern_type(TypeKind::EmptyObject);
@@ -150,11 +159,13 @@ fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
     this_param: None,
   };
 
-  let ok = infer_type_arguments_for_call(&store, &sig, &[primitives.number], None);
+  let ok_args = [CallArgType::new(primitives.number)];
+  let ok = infer_type_arguments_for_call(&store, &relate, &sig, &ok_args, None);
   assert!(ok.diagnostics.is_empty());
   assert_eq!(ok.substitutions.get(&t_param), Some(&primitives.number));
 
-  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.null], None);
+  let bad_args = [CallArgType::new(primitives.null)];
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &bad_args, None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -169,6 +180,7 @@ fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
 fn infers_from_function_argument_structure() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let u_param = TypeParamId(1);
 
@@ -222,7 +234,8 @@ fn infers_from_function_argument_structure() {
     inferred_callback,
   ];
 
-  let result = infer_type_arguments_for_call(&store, &generic_sig, &args, None);
+  let call_args = [CallArgType::new(args[0]), CallArgType::new(args[1])];
+  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &call_args, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
   assert_eq!(result.substitutions.get(&u_param), Some(&primitives.string));
@@ -232,6 +245,7 @@ fn infers_from_function_argument_structure() {
 fn infers_from_contravariant_function_parameter() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -262,7 +276,8 @@ fn infers_from_contravariant_function_parameter() {
     overloads: vec![store.intern_signature(actual_cb_sig)],
   });
 
-  let result = infer_type_arguments_for_call(&store, &generic_sig, &[actual_cb], None);
+  let args = [CallArgType::new(actual_cb)];
+  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &args, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -340,6 +355,7 @@ fn instantiation_cache_evictions_are_bounded_and_deterministic() {
 fn infers_from_contextual_signature_return_type() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -361,6 +377,7 @@ fn infers_from_contextual_signature_return_type() {
 
   let result = infer_type_arguments_from_contextual_signature(
     &store,
+    &relate,
     &contextual_sig.type_params,
     &contextual_sig,
     &actual_sig,
@@ -373,6 +390,7 @@ fn infers_from_contextual_signature_return_type() {
 fn infers_from_contextual_signature_parameter() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -392,6 +410,7 @@ fn infers_from_contextual_signature_parameter() {
 
   let result = infer_type_arguments_from_contextual_signature(
     &store,
+    &relate,
     &contextual_sig.type_params,
     &contextual_sig,
     &actual_sig,
@@ -404,6 +423,7 @@ fn infers_from_contextual_signature_parameter() {
 fn infers_from_contextual_return_in_call() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
@@ -414,8 +434,8 @@ fn infers_from_contextual_return_in_call() {
     this_param: None,
   };
 
-  let result =
-    infer_type_arguments_for_call(&store, &sig, &[primitives.unknown], Some(primitives.string));
+  let args = [CallArgType::new(primitives.unknown)];
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, Some(primitives.string));
 
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));

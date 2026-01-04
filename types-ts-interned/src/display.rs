@@ -437,6 +437,20 @@ impl<'a> TypeDisplay<'a> {
   fn union_member_cmp(&self, a: TypeId, b: TypeId) -> Ordering {
     let a_kind = self.store.type_kind(a);
     let b_kind = self.store.type_kind(b);
+    // Match TypeScript's user-facing union ordering more closely. In particular,
+    // `tsc` prefers string-like constituents before number-like ones in nested
+    // unions such as `(string | number)[]`, even though internal canonicalization
+    // may order them differently.
+    let a_string_like = matches!(a_kind, TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_));
+    let b_string_like = matches!(b_kind, TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_));
+    let a_number_like = matches!(a_kind, TypeKind::Number | TypeKind::NumberLiteral(_));
+    let b_number_like = matches!(b_kind, TypeKind::Number | TypeKind::NumberLiteral(_));
+    if a_string_like && b_number_like {
+      return Ordering::Less;
+    }
+    if a_number_like && b_string_like {
+      return Ordering::Greater;
+    }
     let a_ref = matches!(a_kind, TypeKind::Ref { .. });
     let b_ref = matches!(b_kind, TypeKind::Ref { .. });
     let a_nullish = matches!(a_kind, TypeKind::Null | TypeKind::Undefined);

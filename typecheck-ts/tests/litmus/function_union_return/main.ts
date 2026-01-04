@@ -3,4 +3,4 @@ function maybe() {
   return "no";
 }
 
-// expect-def-type: maybe = () => number | string
+// expect-def-type: maybe = () => string | number

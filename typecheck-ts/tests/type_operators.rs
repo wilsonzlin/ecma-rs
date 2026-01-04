@@ -106,7 +106,7 @@ fn eval_indexed_access_with_union_key() {
   let evaluated = store.evaluate(ty);
   assert_eq!(
     store.display(evaluated).to_string(),
-    "undefined | number | string"
+    "undefined | string | number"
   );
 }
 

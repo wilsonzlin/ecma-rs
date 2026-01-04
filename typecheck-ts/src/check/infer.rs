@@ -1,10 +1,11 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use super::overload::expected_arg_type_at;
 use super::instantiate::Substituter;
+use super::overload::{expected_arg_type_at, CallArgType};
 use types_ts_interned::{
-  PropKey, Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  RelateCtx, Shape, Signature, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamDecl, TypeParamId,
+  TypeStore,
 };
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
@@ -24,13 +25,15 @@ pub struct InferenceResult {
 }
 
 /// Infer type arguments for a call to a generic function signature.
+///
 /// Inference proceeds by relating the declared parameter types against the
 /// provided argument types, collecting lower and upper bounds for each type
 /// parameter depending on variance.
 pub fn infer_type_arguments_for_call(
   store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
   sig: &Signature,
-  args: &[TypeId],
+  args: &[CallArgType],
   contextual_return: Option<TypeId>,
 ) -> InferenceResult {
   let decls: HashMap<TypeParamId, TypeParamDecl> = sig
@@ -39,12 +42,35 @@ pub fn infer_type_arguments_for_call(
     .map(|decl| (decl.id, decl.clone()))
     .collect();
 
-  let mut ctx = InferenceContext::new(Arc::clone(store), decls);
+  let mut ctx = InferenceContext::new(Arc::clone(store), relate, decls);
+
+  // Variadic tuple inference: `...args: T` where `T extends any[]`.
+  let rest_index = sig.params.iter().position(|p| p.rest);
+  let mut skip_from_index = None;
+  if let Some(rest_index) = rest_index {
+    if let TypeKind::TypeParam(tp) = store.type_kind(sig.params[rest_index].ty) {
+      if ctx.decls.contains_key(&tp) {
+        let rest_args = args.get(rest_index..).unwrap_or(&[]);
+        let inferred = infer_variadic_rest_tuple(store.as_ref(), rest_args);
+        ctx.add_bound(tp, Variance::Covariant, inferred);
+        skip_from_index = Some(rest_index);
+      }
+    }
+  }
 
   for (idx, arg) in args.iter().enumerate() {
-    if let Some(param_ty) = expected_arg_type_at(store.as_ref(), sig, idx) {
-      ctx.constrain(param_ty, *arg, Variance::Covariant);
+    if skip_from_index.is_some_and(|skip| idx >= skip) {
+      break;
     }
+    let Some(expected) = expected_arg_type_at(store.as_ref(), sig, idx) else {
+      continue;
+    };
+    let actual = if arg.spread {
+      relate.spread_element_type(arg.ty)
+    } else {
+      arg.ty
+    };
+    ctx.constrain(expected, actual, Variance::Covariant);
   }
 
   if let Some(ret) = contextual_return {
@@ -55,10 +81,38 @@ pub fn infer_type_arguments_for_call(
   ctx.solve(&order)
 }
 
+fn infer_variadic_rest_tuple(store: &TypeStore, rest_args: &[CallArgType]) -> TypeId {
+  if let [only] = rest_args {
+    if only.spread {
+      match store.type_kind(only.ty) {
+        // For `f<T extends any[]>(...args: T)` and `f(...arr)` where `arr` is a
+        // non-tuple array, `tsc` infers `T` as the array type (not `[...T]`).
+        TypeKind::Array { .. }
+        // Tuple spreads are expanded by the caller (overload checker) when the
+        // tuple type is known; but if a raw spread tuple arrives, preserve it.
+        | TypeKind::Tuple(_) => return only.ty,
+        _ => {}
+      }
+    }
+  }
+
+  let elems: Vec<TupleElem> = rest_args
+    .iter()
+    .map(|arg| TupleElem {
+      ty: arg.ty,
+      optional: false,
+      rest: arg.spread,
+      readonly: false,
+    })
+    .collect();
+  store.intern_type(TypeKind::Tuple(elems))
+}
+
 /// Infer type arguments using a contextual function type (e.g. arrow function
 /// assignment) paired with the actual inferred signature of the expression.
 pub fn infer_type_arguments_from_contextual_signature(
   store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
   type_params: &[TypeParamDecl],
   contextual_sig: &Signature,
   actual_sig: &Signature,
@@ -68,13 +122,13 @@ pub fn infer_type_arguments_from_contextual_signature(
     .map(|decl| (decl.id, decl.clone()))
     .collect();
 
-  let mut ctx = InferenceContext::new(Arc::clone(store), decls);
+  let mut ctx = InferenceContext::new(Arc::clone(store), relate, decls);
   ctx.constrain_signature(contextual_sig, actual_sig, Variance::Covariant);
   let order: Vec<TypeParamId> = type_params.iter().map(|tp| tp.id).collect();
   ctx.solve(&order)
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Variance {
   Covariant,
   Contravariant,
@@ -95,16 +149,22 @@ struct Bounds {
   upper: Vec<TypeId>,
 }
 
-struct InferenceContext {
+struct InferenceContext<'a, 'h> {
   store: Arc<TypeStore>,
+  relate: &'a RelateCtx<'h>,
   bounds: HashMap<TypeParamId, Bounds>,
   decls: HashMap<TypeParamId, TypeParamDecl>,
 }
 
-impl InferenceContext {
-  fn new(store: Arc<TypeStore>, decls: HashMap<TypeParamId, TypeParamDecl>) -> Self {
+impl<'a, 'h> InferenceContext<'a, 'h> {
+  fn new(
+    store: Arc<TypeStore>,
+    relate: &'a RelateCtx<'h>,
+    decls: HashMap<TypeParamId, TypeParamDecl>,
+  ) -> Self {
     Self {
       store,
+      relate,
       bounds: HashMap::new(),
       decls,
     }
@@ -115,21 +175,33 @@ impl InferenceContext {
       return;
     }
 
-    match self.store.type_kind(arg_ty) {
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+    // Covariant inference distributes unions to gather candidates.
+    if variance == Variance::Covariant {
+      if let TypeKind::Union(members) = self.store.type_kind(arg_ty) {
         for member in members {
           self.constrain(param_ty, member, variance);
         }
         return;
       }
-      _ => {}
     }
 
     match self.store.type_kind(param_ty) {
       TypeKind::TypeParam(id) => {
-        self.add_bound(id, variance, arg_ty);
+        if self.decls.contains_key(&id) {
+          self.add_bound(id, variance, arg_ty);
+        }
       }
-      TypeKind::Union(options) => {
+      TypeKind::Union(mut options) => {
+        // When some union constituents participate in inference, avoid
+        // inferring from "naked" type parameters that would otherwise match any
+        // argument and swamp the candidates.
+        let has_structured = options.iter().any(|opt| {
+          !matches!(self.store.type_kind(*opt), TypeKind::TypeParam(_))
+            && self.contains_inferable_type_param(*opt, &mut HashSet::new())
+        });
+        if has_structured {
+          options.retain(|opt| !matches!(self.store.type_kind(*opt), TypeKind::TypeParam(_)));
+        }
         for opt in options {
           self.constrain(opt, arg_ty, variance);
         }
@@ -143,7 +215,12 @@ impl InferenceContext {
         TypeKind::Array { ty: arg_inner, .. } => self.constrain(ty, arg_inner, variance),
         TypeKind::Tuple(elems) => {
           for elem in elems {
-            self.constrain(ty, elem.ty, variance);
+            let elem_ty = if elem.rest {
+              self.relate.spread_element_type(elem.ty)
+            } else {
+              elem.ty
+            };
+            self.constrain(ty, elem_ty, variance);
           }
         }
         _ => {}
@@ -153,8 +230,9 @@ impl InferenceContext {
           let mut arg_iter = arg_elems.into_iter();
           for param_elem in param_elems {
             if param_elem.rest {
+              let expected_elem_ty = self.relate.spread_element_type(param_elem.ty);
               for arg_elem in arg_iter {
-                self.constrain(param_elem.ty, arg_elem.ty, variance);
+                self.constrain(expected_elem_ty, arg_elem.ty, variance);
               }
               break;
             }
@@ -227,6 +305,57 @@ impl InferenceContext {
     self.constrain(expected.ret, actual.ret, variance);
   }
 
+  fn contains_inferable_type_param(
+    &self,
+    ty: TypeId,
+    visited: &mut HashSet<TypeId>,
+  ) -> bool {
+    if !visited.insert(ty) {
+      return false;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::TypeParam(id) => self.decls.contains_key(&id),
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .into_iter()
+        .any(|member| self.contains_inferable_type_param(member, visited)),
+      TypeKind::Array { ty, .. } => self.contains_inferable_type_param(ty, visited),
+      TypeKind::Tuple(elems) => elems
+        .into_iter()
+        .any(|elem| self.contains_inferable_type_param(elem.ty, visited)),
+      TypeKind::Callable { overloads } => overloads.into_iter().any(|sig| {
+        let sig = self.store.signature(sig);
+        sig
+          .params
+          .into_iter()
+          .any(|param| self.contains_inferable_type_param(param.ty, visited))
+          || self.contains_inferable_type_param(sig.ret, visited)
+      }),
+      TypeKind::Ref { args, .. } => args
+        .into_iter()
+        .any(|arg| self.contains_inferable_type_param(arg, visited)),
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        shape
+          .properties
+          .into_iter()
+          .any(|prop| self.contains_inferable_type_param(prop.data.ty, visited))
+          || shape
+            .call_signatures
+            .into_iter()
+            .any(|sig| self.contains_inferable_type_param(self.store.signature(sig).ret, visited))
+          || shape.construct_signatures.into_iter().any(|sig| {
+            let sig = self.store.signature(sig);
+            sig
+              .params
+              .into_iter()
+              .any(|param| self.contains_inferable_type_param(param.ty, visited))
+              || self.contains_inferable_type_param(sig.ret, visited)
+          })
+      }
+      _ => false,
+    }
+  }
+
   fn add_bound(&mut self, id: TypeParamId, variance: Variance, ty: TypeId) {
     let entry = self.bounds.entry(id).or_default();
     match variance {
@@ -246,16 +375,36 @@ impl InferenceContext {
         .cloned()
         .unwrap_or_else(|| TypeParamDecl::new(*tp));
       let bounds = self.bounds.get(tp).cloned().unwrap_or_default();
+
+      let mut substituter = Substituter::new(Arc::clone(&self.store), result.substitutions.clone());
+      let mut lowers: Vec<TypeId> = bounds
+        .lower
+        .into_iter()
+        .map(|ty| substituter.substitute_type(ty))
+        .collect();
+      let mut uppers: Vec<TypeId> = bounds
+        .upper
+        .into_iter()
+        .map(|ty| substituter.substitute_type(ty))
+        .collect();
+
+      lowers.sort_unstable();
+      lowers.dedup();
+      uppers.sort_unstable();
+      uppers.dedup();
+
+      let constraint = decl.constraint.map(|c| substituter.substitute_type(c));
+      let default = decl.default.map(|d| substituter.substitute_type(d));
+
       let mut candidate: Option<TypeId> = None;
-      if !bounds.lower.is_empty() {
-        let mut lowers = bounds.lower.clone();
+      if !lowers.is_empty() {
+        let mut lowers = lowers;
         if lowers.len() > 1 {
           let has_specific = lowers
             .iter()
             .any(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
           if has_specific {
-            lowers
-              .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
+            lowers.retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
           }
         }
         candidate = Some(if lowers.len() == 1 {
@@ -264,43 +413,44 @@ impl InferenceContext {
           self.store.union(lowers)
         });
       }
-      if candidate.is_none() && !bounds.upper.is_empty() {
-        candidate = Some(if bounds.upper.len() == 1 {
-          bounds.upper[0]
+      if candidate.is_none() && !uppers.is_empty() {
+        candidate = Some(if uppers.len() == 1 {
+          uppers[0]
         } else {
-          self.store.intersection(bounds.upper.clone())
+          self.store.intersection(uppers.clone())
         });
       }
       if candidate.is_none() {
-        if let Some(default) = decl.default {
-          let mut substituter =
-            Substituter::new(Arc::clone(&self.store), result.substitutions.clone());
-          candidate = Some(substituter.substitute_type(default));
-        }
+        candidate = default;
       }
       let mut candidate = candidate.unwrap_or(primitives.unknown);
       if !decl.const_ {
         candidate = widen_inferred_candidate(self.store.as_ref(), candidate);
       }
 
-      if !bounds.upper.is_empty() {
-        let upper = if bounds.upper.len() == 1 {
-          bounds.upper[0]
+      if !uppers.is_empty() {
+        let upper = if uppers.len() == 1 {
+          uppers[0]
         } else {
-          self.store.intersection(bounds.upper.clone())
+          self.store.intersection(uppers.clone())
         };
-        if !is_assignable(self.store.as_ref(), candidate, upper) {
+        if !self.relate.is_assignable(candidate, upper) {
           candidate = self.store.intersection(vec![candidate, upper]);
         }
       }
 
-      if let Some(constraint) = decl.constraint {
-        if !is_assignable(self.store.as_ref(), candidate, constraint) {
+      if let Some(constraint) = constraint {
+        if !self.relate.is_assignable(candidate, constraint) {
           result.diagnostics.push(InferenceDiagnostic {
             param: *tp,
             constraint,
             actual: candidate,
-            message: format!("type argument for {:?} does not satisfy constraint", tp),
+            message: format!(
+              "inferred type argument T{} = {} is not assignable to constraint {}",
+              tp.0,
+              TypeDisplay::new(self.store.as_ref(), candidate),
+              TypeDisplay::new(self.store.as_ref(), constraint)
+            ),
           });
           candidate = self.store.intersection(vec![candidate, constraint]);
         }
@@ -310,217 +460,6 @@ impl InferenceContext {
     }
 
     result
-  }
-}
-
-fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
-  if src == dst {
-    return true;
-  }
-  let primitives = store.primitive_ids();
-  let src_kind = store.type_kind(src);
-  let dst_kind = store.type_kind(dst);
-
-  match dst_kind {
-    TypeKind::Any | TypeKind::Unknown => return true,
-    _ => {}
-  }
-  match src_kind {
-    TypeKind::Never => return true,
-    TypeKind::Any => return true,
-    _ => {}
-  }
-
-  match (&src_kind, &dst_kind) {
-    (TypeKind::NumberLiteral(_), TypeKind::Number)
-    | (TypeKind::StringLiteral(_), TypeKind::String)
-    | (TypeKind::BooleanLiteral(_), TypeKind::Boolean)
-    | (TypeKind::BigIntLiteral(_), TypeKind::BigInt)
-    | (TypeKind::UniqueSymbol, TypeKind::Symbol) => return true,
-    _ => {}
-  }
-
-  if let TypeKind::Union(members) = &src_kind {
-    return members
-      .iter()
-      .all(|member| is_assignable(store, *member, dst));
-  }
-  if let TypeKind::Union(options) = &dst_kind {
-    return options
-      .iter()
-      .any(|member| is_assignable(store, src, *member));
-  }
-
-  if let TypeKind::Intersection(parts) = &dst_kind {
-    return parts
-      .iter()
-      .all(|member| is_assignable(store, src, *member));
-  }
-  if let TypeKind::Intersection(parts) = &src_kind {
-    return parts
-      .iter()
-      .all(|member| is_assignable(store, *member, dst));
-  }
-
-  if matches!(dst_kind, TypeKind::EmptyObject) {
-    if !store.options().strict_null_checks {
-      return true;
-    }
-    return !matches!(
-      src_kind,
-      TypeKind::Null | TypeKind::Undefined | TypeKind::Void
-    );
-  }
-  if matches!(src_kind, TypeKind::EmptyObject) {
-    return false;
-  }
-
-  match (&src_kind, &dst_kind) {
-    (TypeKind::Number, TypeKind::Number)
-    | (TypeKind::String, TypeKind::String)
-    | (TypeKind::Boolean, TypeKind::Boolean)
-    | (TypeKind::Null, TypeKind::Null)
-    | (TypeKind::Undefined, TypeKind::Undefined) => return true,
-    (TypeKind::Array { ty: src_ty, .. }, TypeKind::Array { ty: dst_ty, .. }) => {
-      return is_assignable(store, *src_ty, *dst_ty)
-    }
-    (TypeKind::Array { ty: src_ty, .. }, TypeKind::Object(dst_obj)) => {
-      let dst_shape = store.shape(store.object(*dst_obj).shape);
-      let dummy_name = store.intern_name("");
-      let is_number_like_indexer = |idx: &types_ts_interned::Indexer| {
-        crate::type_queries::indexer_accepts_key(&PropKey::Number(0), idx.key_type, store)
-          && !crate::type_queries::indexer_accepts_key(
-            &PropKey::String(dummy_name),
-            idx.key_type,
-            store,
-          )
-          && !crate::type_queries::indexer_accepts_key(
-            &PropKey::Symbol(dummy_name),
-            idx.key_type,
-            store,
-          )
-      };
-      if dst_shape.properties.is_empty()
-        && dst_shape.call_signatures.is_empty()
-        && dst_shape.construct_signatures.is_empty()
-        && dst_shape.indexers.is_empty()
-      {
-        return true;
-      }
-      if let Some(idx) = dst_shape
-        .indexers
-        .iter()
-        .find(|idx| is_number_like_indexer(idx))
-      {
-        return is_assignable(store, *src_ty, idx.value_type);
-      }
-    }
-    (TypeKind::Tuple(src_elems), TypeKind::Tuple(dst_elems)) => {
-      if src_elems.len() != dst_elems.len() {
-        return false;
-      }
-      for (src_elem, dst_elem) in src_elems.iter().zip(dst_elems.iter()) {
-        if !is_assignable(store, src_elem.ty, dst_elem.ty) {
-          return false;
-        }
-      }
-      return true;
-    }
-    (TypeKind::Tuple(_), TypeKind::Object(dst_obj)) => {
-      let dst_shape = store.shape(store.object(*dst_obj).shape);
-      return dst_shape.properties.is_empty()
-        && dst_shape.call_signatures.is_empty()
-        && dst_shape.construct_signatures.is_empty()
-        && dst_shape.indexers.is_empty();
-    }
-    (
-      TypeKind::Callable {
-        overloads: src_overloads,
-      },
-      TypeKind::Callable {
-        overloads: dst_overloads,
-      },
-    ) => {
-      if let (Some(src_sig), Some(dst_sig)) = (src_overloads.first(), dst_overloads.first()) {
-        let src_sig = store.signature(*src_sig);
-        let dst_sig = store.signature(*dst_sig);
-        return is_signature_assignable(store, &src_sig, &dst_sig);
-      }
-    }
-    (TypeKind::Callable { .. }, TypeKind::Object(dst_obj)) => {
-      let dst_shape = store.shape(store.object(*dst_obj).shape);
-      return dst_shape.properties.is_empty()
-        && dst_shape.call_signatures.is_empty()
-        && dst_shape.construct_signatures.is_empty()
-        && dst_shape.indexers.is_empty();
-    }
-    (
-      TypeKind::Ref {
-        def: a_def,
-        args: a_args,
-      },
-      TypeKind::Ref {
-        def: b_def,
-        args: b_args,
-      },
-    ) => {
-      if a_def == b_def && a_args.len() == b_args.len() {
-        return a_args
-          .iter()
-          .zip(b_args.iter())
-          .all(|(a, b)| is_assignable(store, *a, *b));
-      }
-    }
-    (TypeKind::Object(a_obj), TypeKind::Object(b_obj)) => {
-      let a_shape = store.shape(store.object(*a_obj).shape);
-      let b_shape = store.shape(store.object(*b_obj).shape);
-      return is_shape_assignable(store, &a_shape, &b_shape);
-    }
-    (TypeKind::TypeParam(_), _) | (_, TypeKind::TypeParam(_)) => return true,
-    _ => {}
-  }
-
-  // Fallback: only exact match or `unknown`/`any` handled above.
-  if dst == primitives.unknown {
-    return true;
-  }
-
-  false
-}
-
-#[cfg(test)]
-mod tests {
-  use super::is_assignable;
-  use types_ts_interned::{Indexer, ObjectType, Shape, TypeKind, TypeStore};
-
-  #[test]
-  fn is_assignable_array_to_number_like_intersection_indexer() {
-    let store = TypeStore::new();
-    let primitives = store.primitive_ids();
-
-    let array = store.intern_type(TypeKind::Array {
-      ty: primitives.string,
-      readonly: false,
-    });
-
-    // key_type: (string | number) & number behaves like `number`.
-    let key_type = store.intersection(vec![
-      store.union(vec![primitives.string, primitives.number]),
-      primitives.number,
-    ]);
-    let shape = store.intern_shape(Shape {
-      properties: Vec::new(),
-      call_signatures: Vec::new(),
-      construct_signatures: Vec::new(),
-      indexers: vec![Indexer {
-        key_type,
-        value_type: primitives.string,
-        readonly: false,
-      }],
-    });
-    let obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType { shape })));
-
-    assert!(is_assignable(&store, array, obj));
   }
 }
 
@@ -564,32 +503,4 @@ fn widen_inferred_candidate(store: &TypeStore, ty: TypeId) -> TypeId {
     }
     _ => ty,
   }
-}
-
-fn is_shape_assignable(store: &TypeStore, src: &Shape, dst: &Shape) -> bool {
-  for prop in dst.properties.iter() {
-    if let Some(src_prop) = src.properties.iter().find(|p| p.key == prop.key) {
-      if !is_assignable(store, src_prop.data.ty, prop.data.ty) {
-        return false;
-      }
-    } else {
-      return false;
-    }
-  }
-
-  true
-}
-
-fn is_signature_assignable(store: &TypeStore, src: &Signature, dst: &Signature) -> bool {
-  if src.params.len() != dst.params.len() {
-    return false;
-  }
-
-  for (src_param, dst_param) in src.params.iter().zip(dst.params.iter()) {
-    if !is_assignable(store, dst_param.ty, src_param.ty) {
-      return false;
-    }
-  }
-
-  is_assignable(store, src.ret, dst.ret)
 }

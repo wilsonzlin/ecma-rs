@@ -543,10 +543,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .remove(&module.name)
       .unwrap_or_else(|| ModuleState::new(owner.clone(), file_id, file_kind, false));
 
-    let implicit_export = !module
-      .exports
-      .iter()
-      .any(|export| matches!(export, Export::ExportAssignment { .. }));
     self.bind_module_items(
       &mut state,
       &owner,
@@ -554,7 +550,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       file_kind,
       ModuleKind::Module,
       false,
-      implicit_export,
+      true,
       &module.decls,
       &module.type_imports,
       &module.imports,

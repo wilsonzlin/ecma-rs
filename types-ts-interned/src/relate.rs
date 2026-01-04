@@ -1604,7 +1604,17 @@ impl<'a> RelateCtx<'a> {
     }
   }
 
-  fn spread_element_type(&self, ty: TypeId) -> TypeId {
+  /// Extract the element type produced by spreading `ty`.
+  ///
+  /// This mirrors TypeScript's behavior for spreads in rest-parameter positions:
+  /// - arrays contribute their element type
+  /// - tuples contribute the union of their element types (including nested spreads)
+  /// - unions/intersections are distributed
+  /// - `TypeKind::Ref` is expanded via the configured [`RelateTypeExpander`] hook
+  ///
+  /// The result is intended for inference/call-checking helpers that need to
+  /// reason about `...expr` without re-implementing spread flattening logic.
+  pub fn spread_element_type(&self, ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
     let mut queue = vec![ty];
     let mut seen = HashSet::new();

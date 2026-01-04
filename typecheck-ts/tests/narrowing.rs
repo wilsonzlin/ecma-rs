@@ -1367,7 +1367,7 @@ fn equality_between_refs_narrows_to_common_types() {
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
-  assert_eq!(else_ty, "number | string");
+  assert_eq!(else_ty, "string | number");
 }
 
 #[test]
@@ -2748,7 +2748,7 @@ fn member_access_on_union_unions_property_types() {
     &initial,
   );
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
-  assert_eq!(ty, "number | string");
+  assert_eq!(ty, "string | number");
 }
 
 #[test]

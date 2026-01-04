@@ -58,7 +58,7 @@ fn explain_assignability_output_is_stable_for_a_known_mismatch() {
   assert_eq!(rendered, render_tree(&program, &second));
 
   let expected = concat!(
-    "Assignable (fail): true -> number | string [union target]\n",
+    "Assignable (fail): true -> string | number [union target]\n",
     "  Assignable (fail): true -> number [structural]\n",
     "  Assignable (fail): true -> string [structural]\n",
   );

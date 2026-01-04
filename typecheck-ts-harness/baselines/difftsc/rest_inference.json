@@ -1,0 +1,49 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "rest_inference.ts",
+        "name": "collected",
+        "type": "(string | number)[]"
+      },
+      {
+        "file": "rest_inference.ts",
+        "name": "fromArray",
+        "type": "number[]"
+      },
+      {
+        "file": "rest_inference.ts",
+        "name": "fromTuple",
+        "type": "[number, string]"
+      },
+      {
+        "file": "rest_inference.ts",
+        "name": "paired",
+        "type": "{ a: number; b: string; }"
+      },
+      {
+        "file": "rest_inference.ts",
+        "name": "tuple",
+        "type": "[number, string]"
+      }
+    ],
+    "markers": []
+  }
+}

@@ -45,7 +45,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::flow_bindings::FlowBindings;
 use self::check::relate_hooks;
 use crate::check::expr::{resolve_call, resolve_construct};
-use crate::check::overload::callable_signatures;
+use crate::check::overload::{callable_signatures, CallArgType};
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
@@ -11934,10 +11934,17 @@ impl ProgramState {
           .iter()
           .find(|(callee, _)| *callee == call.callee)
         {
-          let arg_tys: Vec<_> = call
+          let arg_tys: Vec<CallArgType> = call
             .args
             .iter()
-            .map(|arg| result.expr_types[arg.expr.0 as usize])
+            .map(|arg| {
+              let ty = result.expr_types[arg.expr.0 as usize];
+              if arg.spread {
+                CallArgType::spread(ty)
+              } else {
+                CallArgType::new(ty)
+              }
+            })
             .collect();
           let this_arg = match &body.exprs[call.callee.0 as usize].kind {
             hir_js::ExprKind::Member(mem) => Some(result.expr_types[mem.object.0 as usize]),

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::{codes, FileId, FileKey, MemoryHost, Program};
+use typecheck_ts::check::overload::CallArgType;
 use types_ts_interned::{
   Param, RelateCtx, Signature, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
 };
@@ -80,7 +81,7 @@ fn conflicting_type_arguments_still_error() {
     &relate,
     &instantiation,
     callable,
-    &[primitives.number, primitives.string],
+    &[CallArgType::new(primitives.number), CallArgType::new(primitives.string)],
     None,
     None,
     None,
