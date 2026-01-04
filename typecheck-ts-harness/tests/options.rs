@@ -12,7 +12,10 @@ fn conformance_options(compare: CompareMode) -> ConformanceOptions {
 
   let mut options = ConformanceOptions::new(root);
   options.compare = compare;
-  options.timeout = Duration::from_secs(5);
+  // Parsing and binding the bundled standard library can be relatively expensive
+  // in debug builds. Keep the harness timeout high enough that the option
+  // plumbing tests are robust on slower CI runners.
+  options.timeout = Duration::from_secs(15);
   options.allow_mismatches = true;
   options
 }
