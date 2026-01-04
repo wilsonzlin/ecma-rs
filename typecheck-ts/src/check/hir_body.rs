@@ -37,7 +37,7 @@ use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
 use super::flow::{BindingKey, Env, FlowKey, InitState, PathSegment};
 use super::flow_bindings::{FlowBindingId, FlowBindings};
 use super::flow_narrow::{
-  and_facts, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
+  and_facts, narrow_by_assignability, narrow_by_discriminant_path, narrow_by_in_check,
   narrow_by_instanceof_rhs, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
   narrow_non_nullish, or_facts, truthy_falsy_types, Facts, LiteralValue,
 };
@@ -5547,7 +5547,7 @@ enum SwitchDiscriminant {
   },
   Member {
     name: FlowBindingId,
-    prop: String,
+    path: Vec<PathSegment>,
     ty: TypeId,
   },
   Typeof {
@@ -7155,82 +7155,98 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
-    if let Some((target, prop, object_expr)) = self.discriminant_member(left) {
+    if let Some((target, path, object_expr)) = self.discriminant_member(left) {
       if let Some(lit) = self.literal_value(right) {
         let target_ty = env
           .get(target)
           .or_else(|| self.initial.get(&target).copied())
           .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
-        if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
+        if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
               narrow_by_nullish_equality(prop_ty, op, &lit, &self.store)
             }
             _ => narrow_by_literal(prop_ty, &lit, &self.store),
           };
-          let path = FlowKey::root(target).with_segment(PathSegment::String(prop.clone()));
+          let mut flow_key = FlowKey::root(target);
+          for seg in path.iter() {
+            flow_key = flow_key.with_segment(seg.clone());
+          }
           if negate {
-            out.truthy.insert(path.clone(), prop_no);
-            out.falsy.insert(path, prop_yes);
+            out.truthy.insert(flow_key.clone(), prop_no);
+            out.falsy.insert(flow_key, prop_yes);
           } else {
-            out.truthy.insert(path.clone(), prop_yes);
-            out.falsy.insert(path, prop_no);
+            out.truthy.insert(flow_key.clone(), prop_yes);
+            out.falsy.insert(flow_key, prop_no);
           }
         }
         match lit {
           LiteralValue::Null | LiteralValue::Undefined => {
-            if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
+            if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
               let (yes_prop, no_prop) = narrow_by_nullish_equality(prop_ty, op, &lit, &self.store);
-              let yes = self.narrow_object_by_prop_assignability(target_ty, &prop, yes_prop);
-              let no = self.narrow_object_by_prop_assignability(target_ty, &prop, no_prop);
+              let yes = self.narrow_object_by_path_assignability(target_ty, &path, yes_prop);
+              let no = self.narrow_object_by_path_assignability(target_ty, &path, no_prop);
               apply_narrowing(out, negate, target, yes, no);
               return;
             }
           }
           _ => {
-            let (yes, no) =
-              narrow_by_discriminant(target_ty, &prop, &lit, &self.store, self.ref_expander);
+            let (yes, no) = narrow_by_discriminant_path(
+              target_ty,
+              &path,
+              &lit,
+              &self.store,
+              self.ref_expander,
+            );
             apply_narrowing(out, negate, target, yes, no);
             return;
           }
         }
       }
     }
-    if let Some((target, prop, object_expr)) = self.discriminant_member(right) {
+    if let Some((target, path, object_expr)) = self.discriminant_member(right) {
       if let Some(lit) = self.literal_value(left) {
         let target_ty = env
           .get(target)
           .or_else(|| self.initial.get(&target).copied())
           .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
-        if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
+        if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
               narrow_by_nullish_equality(prop_ty, op, &lit, &self.store)
             }
             _ => narrow_by_literal(prop_ty, &lit, &self.store),
           };
-          let path = FlowKey::root(target).with_segment(PathSegment::String(prop.clone()));
+          let mut flow_key = FlowKey::root(target);
+          for seg in path.iter() {
+            flow_key = flow_key.with_segment(seg.clone());
+          }
           if negate {
-            out.truthy.insert(path.clone(), prop_no);
-            out.falsy.insert(path, prop_yes);
+            out.truthy.insert(flow_key.clone(), prop_no);
+            out.falsy.insert(flow_key, prop_yes);
           } else {
-            out.truthy.insert(path.clone(), prop_yes);
-            out.falsy.insert(path, prop_no);
+            out.truthy.insert(flow_key.clone(), prop_yes);
+            out.falsy.insert(flow_key, prop_no);
           }
         }
         match lit {
           LiteralValue::Null | LiteralValue::Undefined => {
-            if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
+            if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
               let (yes_prop, no_prop) = narrow_by_nullish_equality(prop_ty, op, &lit, &self.store);
-              let yes = self.narrow_object_by_prop_assignability(target_ty, &prop, yes_prop);
-              let no = self.narrow_object_by_prop_assignability(target_ty, &prop, no_prop);
+              let yes = self.narrow_object_by_path_assignability(target_ty, &path, yes_prop);
+              let no = self.narrow_object_by_path_assignability(target_ty, &path, no_prop);
               apply_narrowing(out, negate, target, yes, no);
               return;
             }
           }
           _ => {
-            let (yes, no) =
-              narrow_by_discriminant(target_ty, &prop, &lit, &self.store, self.ref_expander);
+            let (yes, no) = narrow_by_discriminant_path(
+              target_ty,
+              &path,
+              &lit,
+              &self.store,
+              self.ref_expander,
+            );
             apply_narrowing(out, negate, target, yes, no);
             return;
           }
@@ -7707,15 +7723,94 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn discriminant_member(&self, expr_id: ExprId) -> Option<(FlowBindingId, String, ExprId)> {
+  fn member_path_segment(&self, property: &ObjectKey) -> Option<PathSegment> {
+    match property {
+      ObjectKey::Ident(id) => Some(PathSegment::String(self.hir_name(*id))),
+      ObjectKey::String(s) => Some(PathSegment::String(s.clone())),
+      ObjectKey::Number(n) => Some(PathSegment::Number(n.clone())),
+      ObjectKey::Computed(expr) => self.literal_value(*expr).and_then(|lit| match lit {
+        LiteralValue::String(s) => Some(PathSegment::String(s)),
+        LiteralValue::Number(s) => Some(PathSegment::Number(s)),
+        _ => None,
+      }),
+    }
+  }
+
+  fn member_path_target(
+    &self,
+    object: ExprId,
+    property: &ObjectKey,
+  ) -> Option<(FlowBindingId, Vec<PathSegment>, ExprId)> {
+    let segment = self.member_path_segment(property)?;
+    if let Some(binding) = self.ident_binding(object) {
+      return Some((binding, vec![segment], object));
+    }
+    if let ExprKind::Member(MemberExpr { object, property, .. }) =
+      &self.body.exprs[object.0 as usize].kind
+    {
+      let (binding, mut segments, root_expr) = self.member_path_target(*object, property)?;
+      segments.push(segment);
+      return Some((binding, segments, root_expr));
+    }
+    None
+  }
+
+  fn object_prop_type_path(&self, obj: TypeId, path: &[PathSegment]) -> Option<TypeId> {
+    let mut ty = obj;
+    for seg in path {
+      let key = match seg {
+        PathSegment::String(s) | PathSegment::Number(s) => s.as_str(),
+      };
+      ty = self.object_prop_type(ty, key)?;
+    }
+    Some(ty)
+  }
+
+  fn narrow_object_by_path_assignability(
+    &self,
+    obj_ty: TypeId,
+    path: &[PathSegment],
+    required_prop_ty: TypeId,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    if required_prop_ty == prim.never {
+      return prim.never;
+    }
+    match self.store.type_kind(obj_ty) {
+      TypeKind::Union(members) => {
+        let mut narrowed = Vec::new();
+        for member in members {
+          let filtered =
+            self.narrow_object_by_path_assignability(member, path, required_prop_ty);
+          if filtered != prim.never {
+            narrowed.push(filtered);
+          }
+        }
+        self.store.union(narrowed)
+      }
+      _ => {
+        if let Some(prop_ty) = self.object_prop_type_path(obj_ty, path) {
+          let (overlap, _) =
+            narrow_by_assignability(prop_ty, required_prop_ty, &self.store, &self.relate);
+          if overlap != prim.never {
+            return obj_ty;
+          }
+          return prim.never;
+        }
+        obj_ty
+      }
+    }
+  }
+
+  fn discriminant_member(
+    &self,
+    expr_id: ExprId,
+  ) -> Option<(FlowBindingId, Vec<PathSegment>, ExprId)> {
     if let ExprKind::Member(MemberExpr {
       object, property, ..
     }) = &self.body.exprs[expr_id.0 as usize].kind
     {
-      if let Some(binding) = self.ident_binding(*object) {
-        let prop = self.member_property_name(property)?;
-        return Some((binding, prop, *object));
-      }
+      return self.member_path_target(*object, property);
     }
     None
   }
@@ -8655,11 +8750,11 @@ impl<'a> FlowBodyChecker<'a> {
         let lit = self.literal_value(test)?;
         Some(narrow_by_literal(ty, &lit, &self.store))
       }
-      SwitchDiscriminant::Member { prop, .. } => {
+      SwitchDiscriminant::Member { path, .. } => {
         let lit = self.literal_value(test)?;
-        Some(narrow_by_discriminant(
+        Some(narrow_by_discriminant_path(
           ty,
-          prop,
+          path,
           &lit,
           &self.store,
           self.ref_expander,
@@ -8708,14 +8803,13 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn switch_member_target(&self, mem: &MemberExpr, env: &Env) -> Option<SwitchDiscriminant> {
-    let binding = self.ident_binding(mem.object)?;
-    let prop = self.member_property_name(&mem.property)?;
+    let (binding, path, root_expr) = self.member_path_target(mem.object, &mem.property)?;
     let obj_ty = env
       .get(binding)
-      .unwrap_or_else(|| self.expr_types[mem.object.0 as usize]);
+      .unwrap_or_else(|| self.expr_types[root_expr.0 as usize]);
     Some(SwitchDiscriminant::Member {
       name: binding,
-      prop,
+      path,
       ty: obj_ty,
     })
   }

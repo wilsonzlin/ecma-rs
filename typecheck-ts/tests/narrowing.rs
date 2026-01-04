@@ -437,6 +437,53 @@ fn narrows_discriminants() {
 }
 
 #[test]
+fn nested_discriminant_narrows() {
+  let src = r#"
+function f(x) {
+  if (x.meta.kind === "foo") {
+    return x.meta.value;
+  } else {
+    return x.meta.value;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+
+  let meta_foo = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let meta_bar = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
+
+  let foo_obj = obj_type(&store, &[("meta", meta_foo)]);
+  let bar_obj = obj_type(&store, &[("meta", meta_bar)]);
+
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
 fn discriminant_narrowing_expands_refs() {
   let src = r#"
 function pick(val) {
@@ -864,6 +911,50 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "number");
   assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn switch_nested_discriminant_narrows() {
+  let src = r#"
+function pick(x) {
+  switch (x.meta.kind) {
+    case "foo":
+      return x.meta.value;
+    case "bar":
+      return x.meta.value;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+  let meta_foo = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let meta_bar = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
+  let foo_obj = obj_type(&store, &[("meta", meta_foo)]);
+  let bar_obj = obj_type(&store, &[("meta", meta_bar)]);
+
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "number");
 }
 
 #[test]
