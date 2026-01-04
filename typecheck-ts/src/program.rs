@@ -5155,6 +5155,27 @@ impl ProgramState {
       Some(format!("@types/{mapped}"))
     }
 
+    fn record_type_package_resolution(
+      state: &mut ProgramState,
+      from: FileId,
+      specifier: &str,
+      host: &Arc<dyn Host>,
+    ) -> Option<FileId> {
+      if let Some(target) = state.record_module_resolution(from, specifier, host) {
+        return Some(target);
+      }
+      let fallback = type_package_fallback_specifier(specifier)?;
+      let Some(target) = state.record_module_resolution(from, &fallback, host) else {
+        return None;
+      };
+      // Treat the resolved `@types/*` package as satisfying the original
+      // specifier so downstream module graph queries see the dependency.
+      state
+        .typecheck_db
+        .set_module_resolution_ref(from, specifier, Some(target));
+      Some(target)
+    }
+
     let mut root_keys: Vec<FileKey> = roots.to_vec();
     let mut root_ids: Vec<FileId> = roots
       .iter()
@@ -5218,7 +5239,9 @@ impl ProgramState {
         self.check_cancelled()?;
         let mut resolved_any = false;
         for root in root_ids.iter().copied() {
-          if let Some(target) = self.record_module_resolution(root, name.as_str(), host) {
+          if let Some(target) =
+            record_type_package_resolution(self, root, name.as_str(), host)
+          {
             resolved_any = true;
             queue.push_back(target);
           }
@@ -5288,7 +5311,7 @@ impl ProgramState {
             }
           }
           TripleSlashReferenceKind::Types => {
-            if let Some(target) = self.record_module_resolution(file, value, host) {
+            if let Some(target) = record_type_package_resolution(self, file, value, host) {
               queue.push_back(target);
             } else {
               self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
