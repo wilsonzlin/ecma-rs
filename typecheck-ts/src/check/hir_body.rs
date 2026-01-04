@@ -2119,7 +2119,16 @@ impl<'a> Checker<'a> {
               continue;
             };
             let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
-            self.check_assignable(&arg.stx.value, arg_ty, param_ty, None);
+            let expected = match self.store.type_kind(param_ty) {
+              TypeKind::TypeParam(id) => sig
+                .type_params
+                .iter()
+                .find(|tp| tp.id == id)
+                .and_then(|tp| tp.constraint)
+                .unwrap_or(param_ty),
+              _ => param_ty,
+            };
+            self.check_assignable(&arg.stx.value, arg_ty, expected, None);
           }
           reported_assignability = self.diagnostics.len() > before;
         }
