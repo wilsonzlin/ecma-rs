@@ -307,6 +307,10 @@ impl<'p> HirSourceToInst<'p> {
     let right_expr = &self.body.exprs[right.0 as usize];
     let is_nullish = |expr_id: ExprId, expr: &hir_js::Expr| match expr.kind {
       ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined) => true,
+      ExprKind::Unary {
+        op: UnaryOp::Void,
+        ..
+      } => true,
       ExprKind::Ident(name) => {
         self.symbol_for_expr(expr_id).is_none() && self.program.names.resolve(name) == Some("undefined")
       }
