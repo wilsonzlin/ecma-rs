@@ -2373,11 +2373,13 @@ impl<'a> Checker<'a> {
     // to. Spread arguments (and arguments after an unknown-length spread) have no
     // stable mapping.
     let mut param_index_map = Vec::with_capacity(call.stx.arguments.len());
+    let mut spread_param_index_map = Vec::with_capacity(call.stx.arguments.len());
     let mut mapping_known = true;
     let mut next_param_index = 0usize;
 
     for arg in call.stx.arguments.iter() {
       if arg.stx.spread {
+        spread_param_index_map.push(mapping_known.then_some(next_param_index));
         let ty = if mapping_known {
           match arg.stx.value.stx.as_ref() {
             AstExpr::LitArr(arr) => {
@@ -2443,6 +2445,7 @@ impl<'a> Checker<'a> {
 
       let param_index = mapping_known.then_some(next_param_index);
       param_index_map.push(param_index);
+      spread_param_index_map.push(None);
 
       let ty = if let Some(param_index) = param_index {
         let mut expected_tys = Vec::new();
@@ -2504,6 +2507,55 @@ impl<'a> Checker<'a> {
         let sig = self.store.signature(sig_id);
         let mut refined = false;
         for (idx, arg) in call.stx.arguments.iter().enumerate() {
+          if arg.stx.spread {
+            let Some(param_index) = spread_param_index_map.get(idx).and_then(|idx| *idx) else {
+              continue;
+            };
+            let AstExpr::LitArr(arr) = arg.stx.value.stx.as_ref() else {
+              continue;
+            };
+            use parse_js::ast::expr::lit::LitArrElem;
+            if arr
+              .stx
+              .elements
+              .iter()
+              .any(|elem| !matches!(elem, LitArrElem::Single(_)))
+            {
+              continue;
+            }
+
+            let arity = arr.stx.elements.len();
+            let mut expected_elems = Vec::with_capacity(arity);
+            for offset in 0..arity {
+              let Some(param_ty) =
+                expected_arg_type_at(self.store.as_ref(), &sig, param_index.saturating_add(offset))
+              else {
+                expected_elems.clear();
+                break;
+              };
+              expected_elems.push(types_ts_interned::TupleElem {
+                ty: param_ty,
+                optional: false,
+                rest: false,
+                readonly: false,
+              });
+            }
+            if expected_elems.len() != arity {
+              continue;
+            }
+
+            let expected_tuple = self.store.intern_type(TypeKind::Tuple(expected_elems));
+            let spread_ty = self.check_expr_with_expected(&arg.stx.value, expected_tuple);
+            if let Some(slot) = arg_types.get_mut(idx) {
+              slot.ty = spread_ty;
+              refined = true;
+            }
+            if let Some(slot) = const_arg_types.get_mut(idx) {
+              *slot = spread_ty;
+            }
+            continue;
+          }
+
           let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
             continue;
           };
