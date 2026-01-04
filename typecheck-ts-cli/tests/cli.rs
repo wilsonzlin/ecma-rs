@@ -9,6 +9,10 @@ use tempfile::{tempdir, NamedTempFile};
 
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
+fn typecheck_cli() -> Command {
+  assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-cli")
+}
+
 fn fixture(name: &str) -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("tests")
@@ -34,8 +38,7 @@ fn write_file(path: &Path, content: &str) {
 #[test]
 fn typecheck_succeeds_on_basic_fixture() {
   let path = fixture("basic.ts");
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -55,8 +58,7 @@ fn type_at_reports_number() {
     .expect("offset for a + b");
   let query = format!("{}:{}", path.display(), offset);
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -81,8 +83,7 @@ fn type_at_reports_number() {
 #[test]
 fn resolves_relative_modules_and_index_files() {
   let path = fixture("resolution/entry.ts");
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -104,8 +105,7 @@ fn node_modules_resolution_is_opt_in() {
     "export const value: number = 21;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -113,8 +113,7 @@ fn node_modules_resolution_is_opt_in() {
     .failure()
     .stdout(contains("unresolved module specifier"));
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -137,8 +136,7 @@ fn resolves_mjs_modules_without_internal_error() {
     "export const value = 21;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -177,8 +175,7 @@ fn node_resolve_prefers_node_modules_over_cwd_for_package_subpaths() {
     .join(format!("node_modules/{package_name}/index.d.ts"));
   let wrong = tmp.path().join(format!("{package_name}/index.js"));
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .current_dir(tmp.path())
     .args(["typecheck"])
@@ -227,8 +224,7 @@ fn resolves_package_json_types_entry() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -255,8 +251,7 @@ fn resolves_package_json_exports_types() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -283,8 +278,7 @@ fn resolves_package_json_exports_types_without_dot_key() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -311,8 +305,7 @@ fn resolves_package_json_typings_entry() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -335,8 +328,7 @@ fn resolves_node_modules_from_ancestor_directories() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -363,8 +355,7 @@ fn resolves_imports_specifiers_from_package_json() {
     "import { value } from \"#answer\";\n\nexport const doubled = value * 2;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -391,8 +382,7 @@ fn resolves_imports_star_patterns_from_package_json() {
     "import { value } from \"#answer\";\n\nexport const doubled = value * 2;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -419,8 +409,7 @@ fn resolves_exports_subpath_patterns_with_types_condition() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -443,8 +432,7 @@ fn resolves_at_types_fallback_packages() {
     "export const value: number;\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(entry.as_os_str())
@@ -475,8 +463,7 @@ fn tsconfig_paths_patterns_prefer_most_specific_match() {
     "export const value: string = \"oops\";\n",
   );
 
-  Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -490,8 +477,7 @@ fn tsconfig_paths_patterns_prefer_most_specific_match() {
 fn json_output_is_stable_and_parseable() {
   let path = fixture("error.ts");
   let run = || {
-    Command::cargo_bin("typecheck-ts-cli")
-      .unwrap()
+    typecheck_cli()
       .timeout(CLI_TIMEOUT)
       .args(["typecheck"])
       .arg(path.as_os_str())
@@ -541,8 +527,7 @@ fn rejects_invalid_utf8_sources() {
     .expect("write invalid utf-8 to temp file");
   let path = file.path().to_path_buf();
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg(path.as_os_str())
@@ -563,8 +548,7 @@ fn rejects_invalid_utf8_sources() {
 fn timeout_secs_cancels_typecheck() {
   let path = fixture("basic.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--timeout-secs")
@@ -600,8 +584,7 @@ fn project_mode_discovers_files_and_resolves_paths() {
   let unused = fixture("project_mode/basic/src/unused.ts");
   let ignored = fixture("project_mode/basic/bower_components/ignored/index.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -670,8 +653,7 @@ fn project_mode_exports_and_type_at_queries_work() {
     .expect("offset for answer * 2");
   let query = format!("{}:{}", index.display(), offset);
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -743,8 +725,7 @@ fn project_mode_honors_include_exclude_patterns() {
   let excluded = fixture("project_mode/file_discovery/src/excluded.ts");
   let outside = fixture("project_mode/file_discovery/other/outside.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -786,8 +767,7 @@ fn project_mode_honors_files_list_over_include() {
   let only = fixture("project_mode/file_discovery/src/only.ts");
   let extra = fixture("project_mode/file_discovery/src/extra.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -821,8 +801,7 @@ fn project_mode_merges_compiler_options_from_extends() {
   let inherit = fixture("project_mode/extends_merge/tsconfig.inherit.json");
   let override_config = fixture("project_mode/extends_merge/tsconfig.override.json");
 
-  let inherit_out = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let inherit_out = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -852,8 +831,7 @@ fn project_mode_merges_compiler_options_from_extends() {
     "expected strictNullChecks assignment error from strict base config, got {inherit_diags:?}"
   );
 
-  let override_out = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let override_out = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -880,8 +858,7 @@ fn project_mode_merges_compiler_options_from_extends() {
 fn project_mode_uses_module_resolution_from_tsconfig() {
   let tsconfig = fixture("project_mode/module_resolution/tsconfig.json");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -910,8 +887,7 @@ fn project_mode_resolves_types_and_type_roots() {
   let foo = fixture("project_mode/types/node_modules/@types/foo/index.d.ts");
   let bar = fixture("project_mode/types/node_modules/@types/bar/index.d.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -966,8 +942,7 @@ fn project_mode_accepts_full_ts_lib_names() {
   let tsconfig = fixture("project_mode/lib_names/tsconfig.json");
   let main = fixture("project_mode/lib_names/src/main.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -999,8 +974,7 @@ fn project_mode_resolves_scoped_types_packages() {
   let main = fixture("project_mode/types_scoped/src/main.ts");
   let dts = fixture("project_mode/types_scoped/node_modules/@types/scope__pkg/index.d.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -1043,8 +1017,7 @@ fn project_mode_applies_jsx_import_source_types() {
   let main = fixture("project_mode/jsx_import_source/src/main.tsx");
   let dts = fixture("project_mode/jsx_import_source/node_modules/@types/foo/index.d.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -1088,8 +1061,7 @@ fn project_mode_discovers_mts_files() {
   let tsconfig = fixture("project_mode/mts_files/tsconfig.json");
   let main = fixture("project_mode/mts_files/src/main.mts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -1120,8 +1092,7 @@ fn project_mode_discovers_mts_files() {
 fn project_mode_resolves_paths_relative_to_extended_config() {
   let tsconfig = fixture("project_mode/extends_basedir/tsconfig.json");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
@@ -1151,8 +1122,7 @@ fn project_mode_uses_include_from_extended_config() {
   let tsconfig = fixture("project_mode/extends_include/tsconfig.json");
   let main = fixture("project_mode/extends_include/src/main.ts");
 
-  let output = Command::cargo_bin("typecheck-ts-cli")
-    .unwrap()
+  let output = typecheck_cli()
     .timeout(CLI_TIMEOUT)
     .args(["typecheck"])
     .arg("--project")
