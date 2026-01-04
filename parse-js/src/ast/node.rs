@@ -56,6 +56,15 @@ pub struct LeadingZeroDecimalLiteral;
 #[derive(Clone, Copy, Debug)]
 pub struct LegacyOctalEscapeSequence(pub Loc);
 
+/// Marker attached to an untagged template literal node when its raw source
+/// contains an escape sequence that is invalid in template strings (e.g.
+/// `` `\1` `` or `` `\8` ``).
+///
+/// Tagged templates allow these escapes (the cooked value becomes undefined),
+/// so this marker is only recorded for untagged template literals.
+#[derive(Clone, Copy, Debug)]
+pub struct InvalidTemplateEscapeSequence(pub Loc);
+
 impl NodeAssocData {
   pub fn is_empty(&self) -> bool {
     self.items.is_empty()

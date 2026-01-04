@@ -19,6 +19,7 @@ use crate::ast::expr::lit::LitTemplateExpr;
 use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
+use crate::ast::node::InvalidTemplateEscapeSequence;
 use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
 use crate::ast::node::LegacyOctalNumberLiteral;
@@ -893,10 +894,14 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {
-    self.with_loc(|p| {
-      let parts = p.lit_template_parts(ctx, false)?;
-      Ok(LitTemplateExpr { parts })
-    })
+    let start = self.checkpoint();
+    let (parts, invalid_escape) = self.lit_template_parts_with_invalid_escape(ctx, false)?;
+    let loc = self.since_checkpoint(&start);
+    let mut node = Node::new(loc, LitTemplateExpr { parts });
+    if let Some(invalid_escape) = invalid_escape {
+      node.assoc.set(InvalidTemplateEscapeSequence(invalid_escape));
+    }
+    Ok(node)
   }
 
   // NOTE: The next token must definitely be LiteralTemplatePartString{,End}.
@@ -905,8 +910,18 @@ impl<'a> Parser<'a> {
   pub fn lit_template_parts(
     &mut self,
     ctx: ParseCtx,
-    _tagged: bool,
+    tagged: bool,
   ) -> SyntaxResult<Vec<LitTemplatePart>> {
+    self
+      .lit_template_parts_with_invalid_escape(ctx, tagged)
+      .map(|(parts, _)| parts)
+  }
+
+  fn lit_template_parts_with_invalid_escape(
+    &mut self,
+    ctx: ParseCtx,
+    tagged: bool,
+  ) -> SyntaxResult<(Vec<LitTemplatePart>, Option<Loc>)> {
     let t = self.consume();
     let is_end = match t.typ {
       TT::LiteralTemplatePartString => false,
@@ -916,12 +931,21 @@ impl<'a> Parser<'a> {
     };
 
     let mut parts = Vec::new();
+    let mut invalid_escape = None;
     let raw = self.bytes(t.loc);
     let (content_offset, first_content) =
       template_content(raw, is_end).ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?;
+    if !tagged {
+      if let Some((rel, len)) = find_legacy_escape_sequence(first_content) {
+        invalid_escape = Some(Loc(
+          t.loc.0 + content_offset + rel,
+          t.loc.0 + content_offset + rel + len,
+        ));
+      }
+    }
     let first_str = match decode_literal(first_content, true) {
       Ok(val) => val,
-      Err(_err) if _tagged => String::new(),
+      Err(_err) if tagged => String::new(),
       Err(err) => {
         return Err(literal_error_to_syntax(
           err,
@@ -954,9 +978,17 @@ impl<'a> Parser<'a> {
         let raw = self.bytes(string.loc);
         let (offset, content) = template_content(raw, string_is_end)
           .ok_or_else(|| string.error(SyntaxErrorType::UnexpectedEnd))?;
+        if !tagged && invalid_escape.is_none() {
+          if let Some((rel, len)) = find_legacy_escape_sequence(content) {
+            invalid_escape = Some(Loc(
+              string.loc.0 + offset + rel,
+              string.loc.0 + offset + rel + len,
+            ));
+          }
+        }
         let part_str = match decode_literal(content, true) {
           Ok(val) => val,
-          Err(_err) if _tagged => String::new(),
+          Err(_err) if tagged => String::new(),
           Err(err) => {
             return Err(literal_error_to_syntax(
               err,
@@ -973,6 +1005,6 @@ impl<'a> Parser<'a> {
       }
     };
 
-    Ok(parts)
+    Ok((parts, invalid_escape))
   }
 }

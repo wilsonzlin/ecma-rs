@@ -26,6 +26,7 @@ use parse_js::ast::expr::UnaryExpr;
 use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
+use parse_js::ast::node::InvalidTemplateEscapeSequence;
 use parse_js::ast::node::LeadingZeroDecimalLiteral;
 use parse_js::ast::node::LegacyOctalEscapeSequence;
 use parse_js::ast::node::LegacyOctalNumberLiteral;
@@ -894,6 +895,14 @@ impl DeclareVisitor {
     ));
   }
 
+  fn report_invalid_template_escape_sequence(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0012",
+      "Invalid escape sequence in template strings.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
   fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
     let disallow_duplicates =
       strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
@@ -1084,6 +1093,10 @@ impl DeclareVisitor {
   }
 
   fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
+    if let Some(escape) = assoc.get::<InvalidTemplateEscapeSequence>() {
+      let range = TextRange::new(escape.0.0 as u32, escape.0.1 as u32);
+      self.report_invalid_template_escape_sequence(range);
+    }
     if self.is_strict() {
       if let Some(escape) = assoc.get::<LegacyOctalEscapeSequence>() {
         let range = TextRange::new(escape.0.0 as u32, escape.0.1 as u32);

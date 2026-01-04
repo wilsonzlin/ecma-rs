@@ -1624,6 +1624,37 @@ fn strict_octal_escape_in_property_key_is_reported() {
 }
 
 #[test]
+fn template_literal_octal_escape_is_reported() {
+  let source = "`\\1`;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(111));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0012");
+  assert_eq!(slice_range(source, &diagnostics[0]), "\\1");
+}
+
+#[test]
+fn template_literal_escape_8_is_reported() {
+  let source = "`\\8`;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(112));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0012");
+  assert_eq!(slice_range(source, &diagnostics[0]), "\\8");
+}
+
+#[test]
+fn tagged_templates_allow_octal_escapes() {
+  let source = "String.raw`\\1`;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(113));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
 fn duplicate_parameters_in_strict_functions_are_reported() {
   let source = "'use strict'; function f(a,a){}";
   let mut ast = parse(source).unwrap();
