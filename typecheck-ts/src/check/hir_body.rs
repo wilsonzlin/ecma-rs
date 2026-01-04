@@ -8440,6 +8440,19 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
         let chain_short_circuit = self.optional_chain_short_circuits(expr_id, env);
+        if !mem.optional && !chain_short_circuit {
+          let obj_exec_ty = self.expand_ref(obj_ty);
+          if self.type_contains_undefined(obj_exec_ty) {
+            let span = *self
+              .expr_spans
+              .get(mem.object.0 as usize)
+              .unwrap_or(&TextRange::new(0, 0));
+            self.diagnostics.push(codes::POSSIBLY_UNDEFINED.error(
+              "identifier is possibly undefined",
+              Span::new(self.file, span),
+            ));
+          }
+        }
         let obj_exec_ty = if chain_short_circuit {
           self.optional_chain_exec_type_for(mem.object, obj_ty)
         } else {
@@ -8673,7 +8686,7 @@ impl<'a> FlowBodyChecker<'a> {
     env: &mut Env,
     out: &mut Facts,
   ) -> TypeId {
-    let (left_ty, left_facts) = self.eval_expr(left, env);
+    let (left_ty, mut left_facts) = self.eval_expr(left, env);
     match op {
       BinaryOp::LogicalAnd => {
         let mut right_env = env.clone();
@@ -8703,6 +8716,16 @@ impl<'a> FlowBodyChecker<'a> {
       BinaryOp::NullishCoalescing => {
         let prim = self.store.primitive_ids();
         let (nonnullish, nullish) = narrow_non_nullish(left_ty, &self.store);
+
+        // `tsc` currently does not propagate narrowing derived from optional chaining across
+        // nullish coalescing (`x?.y ?? z`). This keeps our flow facts aligned with the baseline
+        // diagnostics (notably TS18048 for `x?.y ?? false`).
+        let mut optional_bases = Vec::new();
+        self.optional_chain_base_keys(left, &mut optional_bases);
+        for base in optional_bases {
+          left_facts.truthy.remove(&base);
+          left_facts.falsy.remove(&base);
+        }
 
         let mut right_env = env.clone();
         right_env.apply_map(&left_facts.assertions);
@@ -9387,6 +9410,28 @@ impl<'a> FlowBodyChecker<'a> {
     let prim = self.store.primitive_ids();
     let (non_nullish, nullish) = narrow_non_nullish(ty, &self.store);
     non_nullish == prim.never && nullish != prim.never
+  }
+
+  fn type_contains_undefined(&self, ty: TypeId) -> bool {
+    fn inner(checker: &FlowBodyChecker<'_>, ty: TypeId, seen: &mut HashSet<TypeId>) -> bool {
+      let ty = checker.store.canon(ty);
+      if !seen.insert(ty) {
+        return false;
+      }
+      let ty = checker.expand_ref(ty);
+      match checker.store.type_kind(ty) {
+        TypeKind::Any | TypeKind::Unknown => false,
+        TypeKind::Undefined => true,
+        TypeKind::Union(members) | TypeKind::Intersection(members) => members
+          .iter()
+          .copied()
+          .any(|member| inner(checker, member, seen)),
+        _ => false,
+      }
+    }
+
+    let mut seen = HashSet::new();
+    inner(self, ty, &mut seen)
   }
 
   fn ident_binding(&self, expr_id: ExprId) -> Option<FlowBindingId> {

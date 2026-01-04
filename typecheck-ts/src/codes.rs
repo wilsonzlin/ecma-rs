@@ -188,6 +188,23 @@ pub const TYPE_MISMATCH: Code = Code::new(
   &[],
 );
 
+/// TS18048: Identifier is possibly `undefined`.
+///
+/// TypeScript emits this diagnostic when an identifier is used without
+/// optional chaining / a non-null assertion but its flow type still includes
+/// `undefined`.
+///
+/// - Primary span: the identifier expression being accessed.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const POSSIBLY_UNDEFINED: Code = Code::new(
+  "TS18048",
+  "possibly undefined",
+  "identifier expression that might still be undefined",
+  &["primary: identifier expression"],
+  &[],
+);
+
 /// TS2345: Argument of type is not assignable to parameter of type.
 ///
 /// `typecheck-ts` reports the more specific TS2345 code for call/new argument

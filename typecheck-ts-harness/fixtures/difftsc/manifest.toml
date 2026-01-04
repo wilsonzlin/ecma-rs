@@ -14,14 +14,9 @@ status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
-id = "difftsc/narrowing"
-status = "xfail"
-reason = "tsc emits TS18048 for optional chaining + nullish coalescing narrowing; Rust checker currently does not report this diagnostic."
-
-[[expectations]]
 id = "difftsc/narrowing_types"
 status = "xfail"
-reason = "tsc emits TS18048 for optional chaining + nullish coalescing narrowing and reports different type query results; Rust checker currently differs."
+reason = "Type marker queries for optional-call expressions differ: tsc reports `any` at `x?.a.b()` / `x?.()` markers (token-based), Rust reports `number | undefined`."
 
 [[expectations]]
 id = "difftsc/rest_inference"
