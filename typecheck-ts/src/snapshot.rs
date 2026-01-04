@@ -91,6 +91,15 @@ pub struct DefSnapshot {
   pub data: DefData,
 }
 
+/// Serialized view of synthetic local symbol metadata.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalSymbolInfoSnapshot {
+  pub symbol: semantic_js::SymbolId,
+  pub file: FileId,
+  pub name: String,
+  pub span: Option<TextRange>,
+}
+
 /// Stable, deterministic snapshot of a checked program suitable for caching and
 /// offline queries. Snapshots capture the file registry (including host-chosen
 /// keys), compiler options, and cached query results so callers can restore
@@ -111,6 +120,8 @@ pub struct ProgramSnapshot {
   pub namespace_types: Vec<(DefId, TypeId)>,
   pub body_results: Vec<BodyCheckResult>,
   pub symbol_occurrences: Vec<(FileId, Vec<SymbolOccurrence>)>,
+  #[serde(default)]
+  pub local_symbol_info: Vec<LocalSymbolInfoSnapshot>,
   pub symbol_to_def: Vec<(semantic_js::SymbolId, DefId)>,
   pub global_bindings: Vec<(String, SymbolBinding)>,
   pub diagnostics: Vec<Diagnostic>,

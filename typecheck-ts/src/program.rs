@@ -59,8 +59,8 @@ use crate::profile::{
 };
 #[cfg(feature = "serde")]
 use crate::snapshot::{
-  DefSnapshot, FileSnapshot, FileStateSnapshot, ModuleResolutionSnapshot, ProgramSnapshot,
-  PROGRAM_SNAPSHOT_VERSION,
+  DefSnapshot, FileSnapshot, FileStateSnapshot, LocalSymbolInfoSnapshot, ModuleResolutionSnapshot,
+  ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
 };
 use crate::triple_slash::{
   normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
@@ -2537,10 +2537,24 @@ impl Program {
     let mut symbol_occurrences = Vec::new();
     let mut symbol_files: Vec<_> = state.file_kinds.keys().copied().collect();
     symbol_files.sort_by_key(|file| file.0);
-    for file in symbol_files {
+    for file in symbol_files.iter().copied() {
       let occs = crate::db::symbol_occurrences(&state.typecheck_db, file);
       symbol_occurrences.push((file, occs.iter().cloned().collect()));
     }
+
+    let mut local_symbol_info = Vec::new();
+    for file in symbol_files.iter().copied() {
+      let locals = crate::db::local_symbol_info(&state.typecheck_db, file);
+      for (symbol, info) in locals.iter() {
+        local_symbol_info.push(LocalSymbolInfoSnapshot {
+          symbol: *symbol,
+          file: info.file,
+          name: info.name.clone(),
+          span: info.span,
+        });
+      }
+    }
+    local_symbol_info.sort_by_key(|info| (info.file.0, info.symbol.0));
 
     let mut symbol_to_def: Vec<_> = state
       .symbol_to_def
@@ -2652,6 +2666,7 @@ impl Program {
       namespace_types,
       body_results,
       symbol_occurrences,
+      local_symbol_info,
       symbol_to_def,
       global_bindings,
       diagnostics,
@@ -2787,6 +2802,20 @@ impl Program {
           occs.sort_by_key(|occ| (occ.range.start, occ.range.end, occ.symbol.0));
           occs.dedup_by(|a, b| a.range == b.range && a.symbol == b.symbol);
           (file, occs)
+        })
+        .collect();
+      state.local_symbol_info = snapshot
+        .local_symbol_info
+        .into_iter()
+        .map(|info| {
+          (
+            info.symbol,
+            crate::db::symbols::LocalSymbolInfo {
+              file: info.file,
+              name: info.name,
+              span: info.span,
+            },
+          )
         })
         .collect();
       state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
@@ -4526,6 +4555,7 @@ struct ProgramState {
   checking_bodies: HashSet<BodyId>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
+  local_symbol_info: BTreeMap<semantic_js::SymbolId, crate::db::symbols::LocalSymbolInfo>,
   file_registry: FileRegistry,
   file_kinds: HashMap<FileId, FileKind>,
   lib_file_ids: HashSet<FileId>,
@@ -4642,6 +4672,7 @@ impl ProgramState {
       checking_bodies: HashSet::new(),
       symbol_to_def: HashMap::new(),
       symbol_occurrences: HashMap::new(),
+      local_symbol_info: BTreeMap::new(),
       file_registry: FileRegistry::new(),
       file_kinds: HashMap::new(),
       lib_file_ids: HashSet::new(),
@@ -15241,6 +15272,18 @@ impl ProgramState {
     }
 
     if def.is_none() && type_id.is_none() && name.is_none() && file.is_none() {
+      if self.snapshot_loaded {
+        if let Some(local) = self.local_symbol_info.get(&symbol) {
+          return Some(SymbolInfo {
+            symbol,
+            def: None,
+            file: Some(local.file),
+            type_id: None,
+            name: Some(local.name.clone()),
+            span: local.span,
+          });
+        }
+      }
       let mut files: Vec<_> = self.file_kinds.keys().copied().collect();
       files.sort_by_key(|file| file.0);
       for file in files {

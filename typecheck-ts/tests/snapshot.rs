@@ -312,6 +312,54 @@ fn snapshot_restoration_supports_symbol_queries_without_source_text() {
 }
 
 #[test]
+fn snapshot_restoration_supports_local_symbol_info_without_source_text() {
+  let mut host = MemoryHost::default();
+  let source = "export function outer() { let x = 1; return x; }";
+  host.insert(FileId(0), source);
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&key(FileId(0))).expect("file id");
+  let x_offset = source.find("return x").unwrap() as u32 + "return ".len() as u32;
+  let symbol = program.symbol_at(file_id, x_offset).expect("symbol at x");
+  let info = program.symbol_info(symbol).expect("symbol info");
+  assert_eq!(info.name.as_deref(), Some("x"));
+  assert_eq!(info.file, Some(file_id));
+
+  let mut snapshot = program.snapshot();
+  for file in snapshot.files.iter_mut() {
+    if !file.is_lib {
+      file.text = None;
+    }
+  }
+
+  let mut missing_text_host = host.clone();
+  missing_text_host.files.clear();
+
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(missing_text_host, snapshot);
+
+  let restored_file = restored.file_id(&key(FileId(0))).expect("restored file id");
+  assert_eq!(restored_file, file_id);
+  let restored_symbol = restored.symbol_at(restored_file, x_offset);
+  assert_eq!(restored_symbol, Some(symbol));
+
+  let parses_before = parse_call_count();
+  assert_eq!(restored.symbol_info(symbol), Some(info));
+  let parses_after = parse_call_count();
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "local symbol_info should not trigger salsa parsing when source text is missing"
+  );
+}
+
+#[test]
 fn snapshot_restoration_span_queries_do_not_reparse() {
   let mut host = MemoryHost::default();
   let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
