@@ -3516,7 +3516,6 @@ impl<'a> Checker<'a> {
       _ => {}
     }
 
-    let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
       TypeKind::Union(members) => {
         let mut collected = Vec::new();
