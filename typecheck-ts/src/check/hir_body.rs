@@ -5579,6 +5579,7 @@ struct FlowBodyChecker<'a> {
   relate: RelateCtx<'a>,
   instantiation_cache: InstantiationCache,
   expr_types: Vec<TypeId>,
+  optional_chain_exec_types: Vec<Option<TypeId>>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
   pat_spans: Vec<TextRange>,
@@ -6233,6 +6234,7 @@ impl<'a> FlowBodyChecker<'a> {
   ) -> Self {
     let prim = store.primitive_ids();
     let expr_types = vec![prim.unknown; body.exprs.len()];
+    let optional_chain_exec_types = vec![None; body.exprs.len()];
     let mut bindings = BindingCollector::collect(body, flow_bindings);
     let mut pat_types = vec![prim.unknown; body.pats.len()];
     for binding in bindings.param_bindings.iter() {
@@ -6287,6 +6289,7 @@ impl<'a> FlowBodyChecker<'a> {
       relate,
       instantiation_cache: InstantiationCache::default(),
       expr_types,
+      optional_chain_exec_types,
       pat_types,
       expr_spans,
       pat_spans,
@@ -6927,15 +6930,11 @@ impl<'a> FlowBodyChecker<'a> {
         }
       }
       ExprKind::Call(call) => {
-        let ret_ty = self.eval_call(expr_id, call, env, &mut facts);
-        if call.optional {
-          if let Some(key) = self.flow_key_for_expr(call.callee) {
-            let (non_nullish, _) =
-              narrow_non_nullish(self.expr_types[call.callee.0 as usize], &self.store);
-            if non_nullish != prim.never {
-              facts.truthy.insert(key, non_nullish);
-            }
-          }
+        let (ret_ty, chain_short_circuit) = self.eval_call(expr_id, call, env, &mut facts);
+        if call.optional || chain_short_circuit {
+          self.record_optional_chain_exec_type(expr_id, ret_ty);
+        }
+        if chain_short_circuit {
           self.store.union(vec![ret_ty, prim.undefined])
         } else {
           ret_ty
@@ -6944,23 +6943,35 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
         let chain_short_circuit = self.optional_chain_short_circuits(expr_id, env);
-        let (obj_non_nullish, obj_nullish) = if mem.optional || chain_short_circuit {
-          narrow_non_nullish(obj_ty, &self.store)
+        let obj_exec_ty = if chain_short_circuit {
+          self.optional_chain_exec_type_for(mem.object, obj_ty)
         } else {
-          (obj_ty, prim.never)
+          obj_ty
         };
 
-        if (mem.optional || chain_short_circuit) && obj_non_nullish == prim.never {
+        let (obj_non_nullish, obj_nullish) = if mem.optional {
+          narrow_non_nullish(obj_ty, &self.store)
+        } else {
+          (obj_exec_ty, prim.never)
+        };
+
+        if mem.optional && obj_non_nullish == prim.never {
+          self.record_optional_chain_exec_type(expr_id, prim.never);
           // Optional chaining (`x?.y`) short-circuits on a nullish base; if
           // the base is always nullish, the whole expression is `undefined`
           // and the property expression is not evaluated.
+          prim.undefined
+        } else if chain_short_circuit && !mem.optional && obj_exec_ty == prim.never {
+          self.record_optional_chain_exec_type(expr_id, prim.never);
           prim.undefined
         } else {
           if let ObjectKey::Computed(expr) = &mem.property {
             let _ = self.eval_expr(*expr, env);
           }
-          let obj_ty_for_member = if mem.optional || chain_short_circuit {
+          let obj_ty_for_member = if mem.optional {
             obj_non_nullish
+          } else if chain_short_circuit {
+            obj_exec_ty
           } else {
             obj_ty
           };
@@ -6986,22 +6997,27 @@ impl<'a> FlowBodyChecker<'a> {
             }
             _ => self.member_type(obj_ty_for_member, mem),
           };
+
+          if mem.optional || chain_short_circuit {
+            self.record_optional_chain_exec_type(expr_id, prop_ty);
+          }
           if chain_short_circuit {
             self.insert_optional_chain_truthy_facts(expr_id, env, &mut facts);
           }
-          if mem.optional || chain_short_circuit {
-            if mem.optional {
-              if let Some(key) = self.flow_key_for_expr(mem.object) {
-                if obj_non_nullish != prim.never {
-                  facts.truthy.insert(key, obj_non_nullish);
-                }
+
+          if mem.optional {
+            if let Some(key) = self.flow_key_for_expr(mem.object) {
+              if obj_non_nullish != prim.never {
+                facts.truthy.insert(key, obj_non_nullish);
               }
             }
-            if chain_short_circuit || obj_nullish != prim.never {
+            if obj_nullish != prim.never {
               self.store.union(vec![prop_ty, prim.undefined])
             } else {
               prop_ty
             }
+          } else if chain_short_circuit {
+            self.store.union(vec![prop_ty, prim.undefined])
           } else {
             prop_ty
           }
@@ -7426,37 +7442,60 @@ impl<'a> FlowBodyChecker<'a> {
     call: &hir_js::CallExpr,
     env: &mut Env,
     out: &mut Facts,
-  ) -> TypeId {
+  ) -> (TypeId, bool) {
     let prim = self.store.primitive_ids();
-    let _ = self.eval_expr(call.callee, env);
-    let callee_base = self.expand_ref(self.expr_types[call.callee.0 as usize]);
-    self.expr_types[call.callee.0 as usize] = callee_base;
-    let (callee_non_nullish, _) = if call.optional {
-      narrow_non_nullish(callee_base, &self.store)
-    } else {
-      (callee_base, prim.never)
-    };
-    let mut arg_bases = Vec::new();
-    for arg in call.args.iter() {
-      let _ = self.eval_expr(arg.expr, env);
-      let expanded = self.expand_ref(self.expr_types[arg.expr.0 as usize]);
-      self.expr_types[arg.expr.0 as usize] = expanded;
-      arg_bases.push(expanded);
-    }
+    let callee_ty = self.eval_expr(call.callee, env).0;
+    let callee_base = self.expand_ref(callee_ty);
+    let callee_expanded = self.expand_ref(self.expr_types[call.callee.0 as usize]);
+    self.expr_types[call.callee.0 as usize] = callee_expanded;
 
-    if call.optional && callee_non_nullish == prim.never {
-      return prim.never;
-    }
-
-    let mut this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
-      ExprKind::Member(MemberExpr { object, .. }) => Some(self.expr_types[object.0 as usize]),
-      _ => None,
-    };
-    if call.optional {
-      if let Some(this_arg_ty) = this_arg.as_mut() {
-        *this_arg_ty = narrow_non_nullish(*this_arg_ty, &self.store).0;
+    let chain_short_circuit = self.optional_chain_short_circuits(expr_id, env);
+    if chain_short_circuit {
+      self.insert_optional_chain_truthy_facts(expr_id, env, out);
+    } else if call.optional {
+      if let Some(key) = self.flow_key_for_expr(call.callee) {
+        let (non_nullish, _) = narrow_non_nullish(self.flow_key_type(env, &key), &self.store);
+        if non_nullish != prim.never {
+          out.truthy.insert(key, non_nullish);
+        }
       }
     }
+    let callee_exec_ty = if chain_short_circuit {
+      self.optional_chain_exec_type_for(call.callee, callee_base)
+    } else {
+      callee_base
+    };
+    if chain_short_circuit && callee_exec_ty == prim.never {
+      return (prim.never, chain_short_circuit);
+    }
+
+    let (callee_non_nullish, _) = if call.optional {
+      narrow_non_nullish(callee_exec_ty, &self.store)
+    } else {
+      (callee_exec_ty, prim.never)
+    };
+    if call.optional && callee_non_nullish == prim.never {
+      return (prim.never, chain_short_circuit);
+    }
+
+    let mut arg_bases = Vec::new();
+    for arg in call.args.iter() {
+      let arg_ty = self.eval_expr(arg.expr, env).0;
+      arg_bases.push(self.expand_ref(arg_ty));
+      let expanded = self.expand_ref(self.expr_types[arg.expr.0 as usize]);
+      self.expr_types[arg.expr.0 as usize] = expanded;
+    }
+
+    let this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
+      ExprKind::Member(MemberExpr { object, .. }) => {
+        let mut ty = self.expr_types[object.0 as usize];
+        if chain_short_circuit {
+          ty = self.optional_chain_exec_type_for(*object, ty);
+        }
+        Some(ty)
+      }
+      _ => None,
+    };
 
     let span = Span::new(
       self.file,
@@ -7559,7 +7598,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
-    ret_ty
+    (ret_ty, chain_short_circuit)
   }
 
   fn optional_chain_equality_facts(
@@ -7649,6 +7688,64 @@ impl<'a> FlowBodyChecker<'a> {
     None
   }
 
+  fn optional_chain_exec_type(&self, expr_id: ExprId) -> Option<TypeId> {
+    self
+      .optional_chain_exec_types
+      .get(expr_id.0 as usize)
+      .copied()
+      .flatten()
+  }
+
+  fn optional_chain_exec_type_for(&self, expr_id: ExprId, fallback: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let Some(exec) = self.optional_chain_exec_type(expr_id) else {
+      return fallback;
+    };
+    let (overlap, _) = narrow_by_assignability(exec, fallback, &self.store, &self.relate);
+    if overlap != prim.never {
+      overlap
+    } else {
+      fallback
+    }
+  }
+
+  fn record_optional_chain_exec_type(&mut self, expr_id: ExprId, ty: TypeId) {
+    let prim = self.store.primitive_ids();
+    let slot = self
+      .optional_chain_exec_types
+      .get_mut(expr_id.0 as usize)
+      .unwrap();
+    let merged = match slot {
+      None => ty,
+      Some(prev) if *prev == prim.unknown => ty,
+      Some(prev) => self.store.union(vec![*prev, ty]),
+    };
+    *slot = Some(merged);
+  }
+
+  fn optional_chain_base_exprs(&self, expr_id: ExprId, out: &mut Vec<ExprId>) {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Member(mem) => {
+        self.optional_chain_base_exprs(mem.object, out);
+        if mem.optional {
+          out.push(mem.object);
+        }
+      }
+      ExprKind::Call(call) => {
+        self.optional_chain_base_exprs(call.callee, out);
+        if call.optional {
+          out.push(call.callee);
+        }
+      }
+      ExprKind::TypeAssertion { expr, .. }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr, .. } => {
+        self.optional_chain_base_exprs(*expr, out);
+      }
+      _ => {}
+    }
+  }
+
   fn optional_chain_base_keys(&self, expr_id: ExprId, out: &mut Vec<FlowKey>) {
     match &self.body.exprs[expr_id.0 as usize].kind {
       ExprKind::Member(mem) => {
@@ -7696,9 +7793,17 @@ impl<'a> FlowBodyChecker<'a> {
   fn optional_chain_short_circuits(&self, expr_id: ExprId, env: &Env) -> bool {
     let prim = self.store.primitive_ids();
     let mut bases = Vec::new();
-    self.optional_chain_base_keys(expr_id, &mut bases);
+    self.optional_chain_base_exprs(expr_id, &mut bases);
     for base in bases {
-      let base_ty = self.flow_key_type(env, &base);
+      let base_ty = if let Some(key) = self.flow_key_for_expr(base) {
+        self.flow_key_type(env, &key)
+      } else {
+        self
+          .expr_types
+          .get(base.0 as usize)
+          .copied()
+          .unwrap_or(prim.unknown)
+      };
       let (_, nullish) = narrow_non_nullish(base_ty, &self.store);
       if nullish != prim.never {
         return true;
