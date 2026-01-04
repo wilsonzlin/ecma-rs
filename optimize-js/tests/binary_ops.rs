@@ -4,7 +4,7 @@ mod common;
 use common::compile_source;
 use optimize_js::decompile::{lower_program, LoweredArg, LoweredInst};
 use optimize_js::il::inst::{BinOp, Const, UnOp};
-use optimize_js::TopLevelMode;
+use optimize_js::{program_to_js, DecompileOptions, TopLevelMode};
 
 fn call_block_label_with_str_arg(
   lowered: &optimize_js::decompile::LoweredProgram,
@@ -219,4 +219,35 @@ fn unary_bitnot_is_lowered() {
   }
 
   assert!(saw_bitnot, "expected UnOp::BitNot for `~x`");
+}
+
+#[test]
+fn in_and_instanceof_are_lowered_without_internal_helpers() {
+  let src = r#""prototype" in Object; unknownVar instanceof Object;"#;
+  let program = compile_source(src, TopLevelMode::Module, false);
+
+  let bytes = program_to_js(
+    &program,
+    &DecompileOptions::default(),
+    emit_js::EmitOptions::minified(),
+  )
+  .expect("emit JS");
+  let js = std::str::from_utf8(&bytes).expect("UTF-8 output");
+
+  assert!(
+    !js.contains("__optimize_js_in"),
+    "internal `in` helper leaked into output: {js}"
+  );
+  assert!(
+    !js.contains("__optimize_js_instanceof"),
+    "internal `instanceof` helper leaked into output: {js}"
+  );
+  assert!(
+    js.contains("\"prototype\"in"),
+    "expected `in` operator in output: {js}"
+  );
+  assert!(
+    js.contains("instanceof"),
+    "expected `instanceof` operator in output: {js}"
+  );
 }

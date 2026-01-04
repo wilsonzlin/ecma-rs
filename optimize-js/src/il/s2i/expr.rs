@@ -17,6 +17,9 @@ pub struct CompiledMemberExpr {
 }
 
 impl<'p> HirSourceToInst<'p> {
+  const INTERNAL_IN_CALLEE: &'static str = "__optimize_js_in";
+  const INTERNAL_INSTANCEOF_CALLEE: &'static str = "__optimize_js_instanceof";
+
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
     self.out.push(f(tgt));
@@ -363,6 +366,24 @@ impl<'p> HirSourceToInst<'p> {
     }
     if operator == BinaryOp::Comma {
       return self.compile_comma_expr(left, right);
+    }
+    if matches!(operator, BinaryOp::In | BinaryOp::Instanceof) {
+      let left = self.compile_expr(left)?;
+      let right = self.compile_expr(right)?;
+      let res_tmp_var = self.c_temp.bump();
+      let callee = match operator {
+        BinaryOp::In => Self::INTERNAL_IN_CALLEE,
+        BinaryOp::Instanceof => Self::INTERNAL_INSTANCEOF_CALLEE,
+        _ => unreachable!(),
+      };
+      self.out.push(Inst::call(
+        res_tmp_var,
+        Arg::Builtin(callee.to_string()),
+        Arg::Const(Const::Undefined),
+        vec![left, right],
+        Vec::new(),
+      ));
+      return Ok(Arg::Var(res_tmp_var));
     }
 
     let left_expr = &self.body.exprs[left.0 as usize];

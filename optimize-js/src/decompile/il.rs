@@ -394,10 +394,37 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   arg_exprs: Option<Vec<Node<Expr>>>,
   target_init: VarInit,
 ) -> Option<Node<Stmt>> {
+  const INTERNAL_IN_CALLEE: &str = "__optimize_js_in";
+  const INTERNAL_INSTANCEOF_CALLEE: &str = "__optimize_js_instanceof";
+
   if inst.t != InstTyp::Call {
     return None;
   }
   let (tgt, callee_arg, this_arg, args, spreads) = inst.as_call();
+
+  if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 2 {
+    if let Arg::Builtin(path) = callee_arg {
+      let op = if path == INTERNAL_IN_CALLEE {
+        Some(OperatorName::In)
+      } else if path == INTERNAL_INSTANCEOF_CALLEE {
+        Some(OperatorName::Instanceof)
+      } else {
+        None
+      };
+      if let Some(op) = op {
+        let expr = node(Expr::Binary(node(BinaryExpr {
+          operator: op,
+          left: lower_arg(var_namer, fn_emitter, &args[0]),
+          right: lower_arg(var_namer, fn_emitter, &args[1]),
+        })));
+        return match tgt {
+          Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+          None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+        };
+      }
+    }
+  }
+
   let callee_expr = callee_expr.unwrap_or_else(|| lower_arg(var_namer, fn_emitter, callee_arg));
   let this_expr = this_expr.unwrap_or_else(|| lower_arg(var_namer, fn_emitter, this_arg));
   let args_exprs = arg_exprs.unwrap_or_else(|| {
