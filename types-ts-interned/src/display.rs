@@ -10,6 +10,8 @@ use std::fmt;
 use std::sync::Arc;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
+const TYPE_PARAM_DISPLAY_NAMES: [&str; 7] = ["T", "U", "V", "W", "X", "Y", "Z"];
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
   Union,
@@ -126,9 +128,9 @@ impl<'a> TypeDisplay<'a> {
     // TypeScript uses stable, user-friendly type parameter names in error
     // messages and type stringification. Internally we represent type
     // parameters by a numeric id, so mirror the common TS convention where the
-    // first type parameter is just `T` (instead of `T0`).
-    if id.0 == 0 {
-      write!(f, "T")
+    // first few type parameters use `T`, `U`, `V`, ... rather than `T0`/`T1`.
+    if let Some(name) = TYPE_PARAM_DISPLAY_NAMES.get(id.0 as usize) {
+      f.write_str(name)
     } else {
       write!(f, "T{}", id.0)
     }
@@ -463,7 +465,7 @@ impl<'a> TypeDisplay<'a> {
     }
     self.store.type_cmp(a, b)
   }
-
+ 
   fn fmt_call_signature(
     &self,
     sig: &crate::signature::Signature,
@@ -521,6 +523,7 @@ impl<'a> TypeDisplay<'a> {
     write!(f, ") => ")?;
     self.fmt_type(sig.ret, f)
   }
+
 }
 
 impl<'a> fmt::Debug for TypeDisplay<'a> {

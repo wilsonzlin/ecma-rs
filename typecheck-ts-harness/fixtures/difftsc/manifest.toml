@@ -4,16 +4,6 @@ status = "xfail"
 reason = "Rust checker does not yet support `const` type parameter inference (literal preservation), so inferred types and assignability diagnostics diverge."
 
 [[expectations]]
-id = "difftsc/default_type_args"
-status = "xfail"
-reason = "Rust checker renders synthesized type parameter names (`T0`) while tsc keeps source names (`T`)."
-
-[[expectations]]
-id = "difftsc/generic_constraints"
-status = "xfail"
-reason = "Rust checker spans differ from tsc for constraint violations and exported generic type parameter names (`T0`) differ from tsc (`T`)."
-
-[[expectations]]
 id = "difftsc/function_namespace_export"
 status = "xfail"
 reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."
@@ -22,11 +12,6 @@ reason = "Rust checker does not yet follow tsc's function+namespace merge rules,
 id = "difftsc/function_namespace_order"
 status = "xfail"
 reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."
-
-[[expectations]]
-id = "difftsc/generic_defaults"
-status = "xfail"
-reason = "Rust checker renders synthesized type parameter names (`T0`) and disagrees with tsc on marker type-at-location behavior."
 
 [[expectations]]
 id = "difftsc/import_equals_require"
@@ -72,11 +57,6 @@ reason = "Type-only export facts differ: tsc reports `any` for exported interfac
 id = "difftsc/await_using_valid"
 status = "xfail"
 reason = "Rust checker does not yet match tsc's `AsyncDisposable` validation; tsc reports TS2416/TS2851 diagnostics."
-
-[[expectations]]
-id = "difftsc/contextual_overload_return"
-status = "xfail"
-reason = "Overload resolution differs: tsc selects the first identical overload return type (number) and reports TS2322; Rust currently selects the string signature."
 
 [[expectations]]
 id = "difftsc/export_assignment_mixed_exports"

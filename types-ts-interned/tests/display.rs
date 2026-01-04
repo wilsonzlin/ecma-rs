@@ -264,7 +264,7 @@ fn formats_new_type_variants() {
     param: TypeParamId(3),
     constraint: None,
   });
-  assert_eq!(format!("{}", store.display(infer_ty)), "infer T3");
+  assert_eq!(format!("{}", store.display(infer_ty)), "infer W");
 
   let array = store.intern_type(TypeKind::Array {
     ty: primitives.boolean,
