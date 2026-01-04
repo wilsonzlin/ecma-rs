@@ -1548,16 +1548,11 @@ fn expr_prec(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> Result<Prec,
     ExprKind::Literal(Literal::Undefined) => Prec::new(OPERATORS[&OperatorName::Void].precedence),
     ExprKind::Literal(_) => PRIMARY_PRECEDENCE,
     ExprKind::ImportCall { .. } => CALL_MEMBER_PRECEDENCE,
-    ExprKind::This | ExprKind::Super | ExprKind::ImportMeta | ExprKind::NewTarget => {
-      PRIMARY_PRECEDENCE
-    }
-    ExprKind::Ident(name) => {
-      if ctx.name(*name) == "undefined" {
-        Prec::new(OPERATORS[&OperatorName::Void].precedence)
-      } else {
-        PRIMARY_PRECEDENCE
-      }
-    }
+    ExprKind::This
+    | ExprKind::Super
+    | ExprKind::Ident(_)
+    | ExprKind::ImportMeta
+    | ExprKind::NewTarget => PRIMARY_PRECEDENCE,
     ExprKind::Jsx(_) => PRIMARY_PRECEDENCE,
     ExprKind::TypeAssertion { expr, .. }
     | ExprKind::NonNull { expr }
@@ -1576,14 +1571,7 @@ fn emit_expr_no_parens(
   let expr = ctx.expr(body, expr_id);
   match &expr.kind {
     ExprKind::Missing => return Err(EmitError::unsupported("missing expression")),
-    ExprKind::Ident(id) => {
-      let name = ctx.name(*id);
-      if name == "undefined" {
-        emit_void_0(em);
-      } else {
-        em.write_identifier(name);
-      }
-    }
+    ExprKind::Ident(id) => em.write_identifier(ctx.name(*id)),
     ExprKind::This => em.write_keyword("this"),
     ExprKind::Super => em.write_keyword("super"),
     ExprKind::Literal(lit) => emit_literal(em, lit)?,

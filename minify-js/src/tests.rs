@@ -880,6 +880,13 @@ fn test_with_statement_disables_renaming() {
 }
 
 #[test]
+fn with_statement_does_not_rewrite_undefined_property() {
+  let src = "with({undefined:1}){undefined}";
+  let result = minified(TopLevelMode::Global, src);
+  assert_eq!(result, "with({undefined:1}){undefined;}");
+}
+
+#[test]
 fn test_direct_eval_disables_renaming() {
   let src = "function f(){let x;eval(\"x\");}";
   let result = minified(TopLevelMode::Global, src);

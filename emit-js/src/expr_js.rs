@@ -64,19 +64,9 @@ fn emit_expr_with_min_prec(
 
 fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
   match expr.stx.as_ref() {
-    Expr::Id(id) => {
-      if id.stx.name == "undefined" {
-        Ok(
-          OPERATORS
-            .get(&OperatorName::Void)
-            .map(|op| op.precedence)
-            .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
-        )
-      } else {
-        Ok(PRIMARY_PRECEDENCE)
-      }
+    Expr::Id(_) | Expr::This(_) | Expr::Super(_) | Expr::NewTarget(_) | Expr::ImportMeta(_) => {
+      Ok(PRIMARY_PRECEDENCE)
     }
-    Expr::This(_) | Expr::Super(_) | Expr::NewTarget(_) | Expr::ImportMeta(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitNum(_)
     | Expr::LitBool(_)
     | Expr::LitNull(_)
@@ -126,13 +116,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
 
 fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> EmitResult {
   match expr.stx.as_ref() {
-    Expr::Id(id) => {
-      if id.stx.name == "undefined" {
-        emit_void_0(em);
-      } else {
-        em.write_identifier(&id.stx.name);
-      }
-    }
+    Expr::Id(id) => em.write_identifier(&id.stx.name),
     Expr::This(_) => em.write_keyword("this"),
     Expr::Super(_) => em.write_keyword("super"),
     Expr::NewTarget(_) => em.write_str("new.target"),
@@ -175,11 +159,6 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     _ => return Err(EmitError::unsupported("expression kind not supported")),
   }
   Ok(())
-}
-
-fn emit_void_0(em: &mut Emitter) {
-  em.write_keyword("void");
-  em.write_number("0");
 }
 
 fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> EmitResult {
