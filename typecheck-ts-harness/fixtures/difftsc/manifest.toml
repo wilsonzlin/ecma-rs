@@ -9,71 +9,11 @@ status = "xfail"
 reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."
 
 [[expectations]]
-id = "difftsc/import_equals_require"
-status = "xfail"
-reason = "Rust checker does not match tsc's `import = require()` restrictions/flow diagnostics."
-
-[[expectations]]
 id = "difftsc/merged_function_namespace"
 status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
-id = "difftsc/module_types"
-status = "xfail"
-reason = "Type-only export type facts differ from tsc baseline (tsc reports `any` for interface exports)."
-
-[[expectations]]
-id = "difftsc/multi"
-status = "xfail"
-reason = "Type-only export type facts differ from tsc baseline (tsc reports `any` for interface exports)."
-
-[[expectations]]
-id = "difftsc/namespace_reexport"
-status = "xfail"
-reason = "Rust checker marker typing differs for namespace re-exports."
-
-[[expectations]]
 id = "difftsc/variance_annotations"
 status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
-
-[[expectations]]
-id = "difftsc/add_event_listener"
-status = "xfail"
-reason = "Type-only export facts differ: tsc reports `any` for exported interfaces while Rust returns the interface shape."
-
-[[expectations]]
-id = "difftsc/array_reduce"
-status = "xfail"
-reason = "Type-only export facts differ: tsc reports `any` for exported interfaces while Rust returns the interface shape."
-
-[[expectations]]
-id = "difftsc/await_using_valid"
-status = "xfail"
-reason = "Rust checker does not yet match tsc's `AsyncDisposable` validation; tsc reports TS2416/TS2851 diagnostics."
-
-[[expectations]]
-id = "difftsc/export_assignment_mixed_exports"
-status = "xfail"
-reason = "tsc reports TS1203 (export assignment disallowed under ECMAScript modules) in addition to TS2309; Rust only reports TS2309."
-
-[[expectations]]
-id = "difftsc/export_assignment_qualified"
-status = "xfail"
-reason = "tsc disallows `export =`/`import = require()` when targeting ECMAScript modules (TS1203/TS1202); Rust does not yet enforce these restrictions."
-
-[[expectations]]
-id = "difftsc/export_assignment_require"
-status = "xfail"
-reason = "tsc disallows `export =`/`import = require()` when targeting ECMAScript modules (TS1203/TS1202); Rust does not yet enforce these restrictions."
-
-[[expectations]]
-id = "difftsc/module_augmentation_interface"
-status = "xfail"
-reason = "Type-only export facts differ: tsc reports `any` for exported interfaces while Rust returns the interface shape."
-
-[[expectations]]
-id = "difftsc/using_valid"
-status = "xfail"
-reason = "tsc rejects binding patterns in `using` declarations (TS1492); Rust currently allows destructuring patterns."
