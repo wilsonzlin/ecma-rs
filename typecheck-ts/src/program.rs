@@ -4795,17 +4795,74 @@ impl ProgramState {
     self.check_cancelled()?;
     let mut lib_queue = VecDeque::new();
     self.process_libs(&libs, host, &mut lib_queue)?;
+
+    fn type_package_fallback_specifier(name: &str) -> Option<String> {
+      if name.starts_with("@types/") {
+        return None;
+      }
+
+      // Match TypeScript's scoped package mapping for `@types`:
+      // `@scope/pkg` -> `@types/scope__pkg`.
+      let mapped = if let Some(stripped) = name.strip_prefix('@') {
+        stripped.replace('/', "__")
+      } else {
+        name.to_string()
+      };
+      Some(format!("@types/{mapped}"))
+    }
+
+    let mut root_keys: Vec<FileKey> = roots.to_vec();
     let mut root_ids: Vec<FileId> = roots
       .iter()
       .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
       .collect();
+
+    let mut type_packages = self.compiler_options.types.clone();
+    type_packages.sort();
+    type_packages.dedup();
+
+    if !type_packages.is_empty() {
+      let primary = if let Some(base_root) = roots.first() {
+        let file_id = self.intern_file_key(base_root.clone(), FileOrigin::Source);
+        Span::new(file_id, TextRange::new(0, 0))
+      } else {
+        Span::new(FileId(u32::MAX), TextRange::new(0, 0))
+      };
+
+      if let Some(base_root) = roots.first() {
+        for name in type_packages.iter() {
+          self.check_cancelled()?;
+          let resolved = host
+            .resolve(base_root, name)
+            .or_else(|| {
+              type_package_fallback_specifier(name).and_then(|spec| host.resolve(base_root, &spec))
+            });
+          if let Some(key) = resolved {
+            root_keys.push(key.clone());
+            root_ids.push(self.intern_file_key(key, FileOrigin::Source));
+          } else {
+            self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+              format!("cannot resolve type package \"{name}\""),
+              primary,
+            ));
+          }
+        }
+      } else {
+        for name in type_packages.iter() {
+          self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+            format!("cannot resolve type package \"{name}\""),
+            primary,
+          ));
+        }
+      }
+    }
+
+    root_keys.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+    root_keys.dedup_by(|a, b| a.as_str() == b.as_str());
     root_ids.sort_unstable_by_key(|id| id.0);
+    root_ids.dedup();
     self.root_ids = root_ids;
-    // `roots` is already sorted and deduplicated by `Program::with_lib_manager`, so avoid an
-    // extra sort during analysis and only update the salsa input once per reset.
-    self
-      .typecheck_db
-      .set_roots(Arc::<[FileKey]>::from(roots.to_vec()));
+    self.typecheck_db.set_roots(Arc::<[FileKey]>::from(root_keys));
     let mut queue: VecDeque<FileId> = self.root_ids.iter().copied().collect();
     queue.extend(lib_queue);
     let mut seen: AHashSet<FileId> = AHashSet::new();

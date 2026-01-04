@@ -450,9 +450,14 @@ impl HarnessFileSet {
       name_to_index.insert(normalized_arc, idx);
     }
 
+    let is_node_modules = |name: &str| {
+      name.starts_with("node_modules/")
+        || name.contains("/node_modules/")
+        || name.contains("\\node_modules\\")
+    };
     let mut roots: Vec<_> = stored
       .iter()
-      .filter(|file| is_source_root(file.key.as_str()))
+      .filter(|file| is_source_root(file.key.as_str()) && !is_node_modules(file.key.as_str()))
       .map(|file| file.key.clone())
       .collect();
     roots.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
