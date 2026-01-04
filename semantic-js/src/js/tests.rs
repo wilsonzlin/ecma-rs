@@ -1594,6 +1594,26 @@ fn strict_decimal_literal_with_leading_zero_is_reported() {
 }
 
 #[test]
+fn strict_decimal_literal_with_leading_zero_exponent_is_reported() {
+  let source = "'use strict'; 08e1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(114));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0010");
+  assert_eq!(slice_range(source, &diagnostics[0]), "08e1");
+}
+
+#[test]
+fn strict_decimal_literal_with_leading_zero_fraction_is_reported() {
+  let source = "'use strict'; 08.1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(115));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0010");
+  assert_eq!(slice_range(source, &diagnostics[0]), "08.1");
+}
+
+#[test]
 fn strict_octal_literal_property_key_is_reported() {
   let source = "'use strict'; ({010: 1});";
   let mut ast = parse(source).unwrap();
@@ -1601,6 +1621,16 @@ fn strict_octal_literal_property_key_is_reported() {
   assert_eq!(diagnostics.len(), 1);
   assert_eq!(diagnostics[0].code.as_str(), "BIND0009");
   assert_eq!(slice_range(source, &diagnostics[0]), "010");
+}
+
+#[test]
+fn strict_decimal_literal_property_key_with_exponent_is_reported() {
+  let source = "'use strict'; ({08e1: 1});";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(116));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0010");
+  assert_eq!(slice_range(source, &diagnostics[0]), "08e1");
 }
 
 #[test]

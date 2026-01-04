@@ -762,13 +762,24 @@ fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
     });
   }
 
-  // Fractional part
-  if lexer.peek_or_eof(0) == Some('.') && !is_legacy_octal {
-    lexer.consume(lexer.if_char('.'));
-    let (digits, ok) = consume_digits_with_separators(lexer, &DIGIT);
-    valid &= ok;
-    if !has_integer && !digits {
-      valid = false;
+  // Fractional part.
+  if lexer.peek_or_eof(0) == Some('.') {
+    if is_legacy_octal {
+      // Legacy octal integer literals cannot have fractional parts (e.g. `010.1`).
+      // When a `.` is followed by a digit, treat the whole sequence as a malformed
+      // number literal instead of tokenising it as `010` followed by `.1`.
+      if lexer.peek_or_eof(1).is_some_and(|c| DIGIT.has(c)) {
+        lexer.consume(lexer.if_char('.'));
+        let _ = consume_digits_with_separators(lexer, &DIGIT);
+        valid = false;
+      }
+    } else {
+      lexer.consume(lexer.if_char('.'));
+      let (digits, ok) = consume_digits_with_separators(lexer, &DIGIT);
+      valid &= ok;
+      if !has_integer && !digits {
+        valid = false;
+      }
     }
   }
 

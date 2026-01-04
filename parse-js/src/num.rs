@@ -133,11 +133,14 @@ pub(crate) fn is_legacy_octal_literal(raw: &str) -> bool {
   if raw.contains(['.', 'e', 'E']) {
     return false;
   }
+  if raw.contains('_') {
+    // Numeric separators are not permitted in legacy octal integer literals.
+    return false;
+  }
 
   let mut saw_octal = false;
   for ch in raw.chars().skip(1) {
     match ch {
-      '_' => {}
       '0'..='7' => saw_octal = true,
       _ => return false,
     }
@@ -148,9 +151,6 @@ pub(crate) fn is_legacy_octal_literal(raw: &str) -> bool {
 
 pub(crate) fn is_leading_zero_decimal_literal(raw: &str) -> bool {
   if !raw.starts_with('0') || raw.len() <= 1 {
-    return false;
-  }
-  if raw.contains(['.', 'e', 'E']) {
     return false;
   }
   if raw
@@ -169,6 +169,7 @@ pub(crate) fn is_leading_zero_decimal_literal(raw: &str) -> bool {
   let mut saw_decimal = false;
   for ch in raw.chars().skip(1) {
     match ch {
+      '.' | 'e' | 'E' => break,
       '_' => {}
       '0'..='7' => saw_digit = true,
       '8' | '9' => {
@@ -192,8 +193,56 @@ fn parse_number_literal(raw: &str) -> Option<f64> {
   if let Some(rest) = raw.strip_prefix("0x").or_else(|| raw.strip_prefix("0X")) {
     return parse_integer_literal(rest, 16);
   }
-  if is_legacy_octal_literal(raw) {
-    return parse_integer_literal(raw, 8);
+
+  // Legacy leading-zero literals are special-cased for both value parsing and
+  // numeric separator validation.
+  if raw.starts_with('0') && raw.len() > 1 {
+    let mut int_end = raw.len();
+    for (idx, ch) in raw.char_indices().skip(1) {
+      if matches!(ch, '.' | 'e' | 'E') {
+        int_end = idx;
+        break;
+      }
+    }
+    let int_part = &raw[..int_end];
+
+    // Numeric separators are not permitted in legacy leading-zero literals
+    // (e.g. `0_0`, `08_1`, `010_7`).
+    if int_part.contains('_') {
+      return None;
+    }
+
+    let mut saw_digit = false;
+    let mut saw_decimal_digit = false;
+    for ch in int_part.chars().skip(1) {
+      match ch {
+        '0'..='7' => saw_digit = true,
+        '8' | '9' => {
+          saw_digit = true;
+          saw_decimal_digit = true;
+        }
+        _ => return None,
+      }
+    }
+
+    if saw_digit {
+      if int_end != raw.len() {
+        // `010e1` and `010.1` are invalid in JS; treat them as malformed.
+        if !saw_decimal_digit {
+          return None;
+        }
+        // `08.1`, `08e1`, etc are still decimal literals; parse normally.
+        return parse_decimal_literal(raw);
+      }
+
+      if saw_decimal_digit {
+        // `08`, `09`, etc are decimal (not octal) in non-strict code.
+        return parse_decimal_literal(raw);
+      }
+
+      // All remaining digits are octal digits; parse as a legacy octal literal.
+      return parse_integer_literal(raw, 8);
+    }
   }
   parse_decimal_literal(raw)
 }
