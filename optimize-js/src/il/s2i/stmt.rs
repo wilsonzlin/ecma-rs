@@ -1,4 +1,4 @@
-use super::{HirSourceToInst, LabeledLoopTarget, VarType, DUMMY_LABEL};
+use super::{HirSourceToInst, LabeledTarget, VarType, DUMMY_LABEL};
 use crate::il::inst::{Arg, BinOp, Const, Inst};
 use crate::unsupported_syntax_range;
 use crate::util::counter::Counter;
@@ -331,10 +331,10 @@ impl<'p> HirSourceToInst<'p> {
     self.break_stack.push(after_loop_label);
     self.continue_stack.push(loop_entry_label);
     if let Some(label) = label {
-      self.label_stack.push(LabeledLoopTarget {
+      self.label_stack.push(LabeledTarget {
         label,
         break_target: after_loop_label,
-        continue_target: loop_entry_label,
+        continue_target: Some(loop_entry_label),
       });
     }
     let res = self.compile_stmt(body);
@@ -381,10 +381,10 @@ impl<'p> HirSourceToInst<'p> {
     self.break_stack.push(after_loop_label);
     self.continue_stack.push(loop_continue_label);
     if let Some(label) = label {
-      self.label_stack.push(LabeledLoopTarget {
+      self.label_stack.push(LabeledTarget {
         label,
         break_target: after_loop_label,
-        continue_target: loop_continue_label,
+        continue_target: Some(loop_continue_label),
       });
     }
     let res = self.compile_stmt(body);
@@ -536,10 +536,10 @@ impl<'p> HirSourceToInst<'p> {
     self.break_stack.push(after_loop_label);
     self.continue_stack.push(loop_continue_label);
     if let Some(label) = label {
-      self.label_stack.push(LabeledLoopTarget {
+      self.label_stack.push(LabeledTarget {
         label,
         break_target: after_loop_label,
-        continue_target: loop_continue_label,
+        continue_target: Some(loop_continue_label),
       });
     }
     let res = self.compile_stmt(body);
@@ -575,10 +575,10 @@ impl<'p> HirSourceToInst<'p> {
     self.break_stack.push(after_loop_label);
     self.continue_stack.push(before_test_label);
     if let Some(label) = label {
-      self.label_stack.push(LabeledLoopTarget {
+      self.label_stack.push(LabeledTarget {
         label,
         break_target: after_loop_label,
-        continue_target: before_test_label,
+        continue_target: Some(before_test_label),
       });
     }
     let res = self.compile_stmt(body);
@@ -614,7 +614,7 @@ impl<'p> HirSourceToInst<'p> {
             .ok_or_else(|| {
               unsupported_syntax_range(
                 stmt.span,
-                format!("break to unknown loop label {}", self.name_for(*label)),
+                format!("break to unknown label {}", self.name_for(*label)),
               )
             })?
         } else {
@@ -629,18 +629,23 @@ impl<'p> HirSourceToInst<'p> {
       }
       StmtKind::Continue(label) => {
         let target = if let Some(label) = label {
-          self
+          let entry = self
             .label_stack
             .iter()
             .rev()
             .find(|entry| entry.label == *label)
-            .map(|entry| entry.continue_target)
             .ok_or_else(|| {
               unsupported_syntax_range(
                 stmt.span,
-                format!("continue to unknown loop label {}", self.name_for(*label)),
+                format!("continue to unknown label {}", self.name_for(*label)),
               )
-            })?
+            })?;
+          entry.continue_target.ok_or_else(|| {
+            unsupported_syntax_range(
+              stmt.span,
+              format!("continue to non-loop label {}", self.name_for(*label)),
+            )
+          })?
         } else {
           self.continue_stack.last().copied().ok_or_else(|| {
             unsupported_syntax_range(stmt.span, "continue statement outside loop")
@@ -677,10 +682,19 @@ impl<'p> HirSourceToInst<'p> {
             await_,
             Some(*label),
           ),
-          _ => Err(unsupported_syntax_range(
-            stmt.span,
-            "labeled statements are only supported for loops",
-          )),
+          _ => {
+            let after_label = self.c_label.bump();
+            self.label_stack.push(LabeledTarget {
+              label: *label,
+              break_target: after_label,
+              continue_target: None,
+            });
+            let res = self.compile_stmt(*body);
+            self.label_stack.pop();
+            res?;
+            self.out.push(Inst::label(after_label));
+            Ok(())
+          }
         }
       }
       StmtKind::Return(value) => {

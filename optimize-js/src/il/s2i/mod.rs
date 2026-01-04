@@ -41,15 +41,15 @@ pub struct HirSourceToInst<'p> {
   pub symbol_to_temp: HashMap<SymbolId, u32>,
   pub break_stack: Vec<u32>,
   pub continue_stack: Vec<u32>,
-  pub label_stack: Vec<LabeledLoopTarget>,
+  pub label_stack: Vec<LabeledTarget>,
   pub return_label: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct LabeledLoopTarget {
+pub struct LabeledTarget {
   pub label: NameId,
   pub break_target: u32,
-  pub continue_target: u32,
+  pub continue_target: Option<u32>,
 }
 
 impl<'p> HirSourceToInst<'p> {
