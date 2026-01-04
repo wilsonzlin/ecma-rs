@@ -1825,6 +1825,64 @@ impl Program {
           }
           evaluated
         }
+        tti::TypeKind::Ref { def, .. } if can_evaluate => {
+          let should_expand = state
+            .def_data
+            .get(&DefId(def.0))
+            .is_some_and(|data| matches!(data.kind, DefKind::TypeAlias(_)));
+          if !should_expand {
+            ty
+          } else {
+            fn is_simple_display_type(store: &tti::TypeStore, ty: tti::TypeId) -> bool {
+              match store.type_kind(ty) {
+                tti::TypeKind::Any
+                | tti::TypeKind::Unknown
+                | tti::TypeKind::Never
+                | tti::TypeKind::Void
+                | tti::TypeKind::Null
+                | tti::TypeKind::Undefined
+                | tti::TypeKind::Boolean
+                | tti::TypeKind::Number
+                | tti::TypeKind::String
+                | tti::TypeKind::BigInt
+                | tti::TypeKind::Symbol
+                | tti::TypeKind::UniqueSymbol
+                | tti::TypeKind::BooleanLiteral(_)
+                | tti::TypeKind::NumberLiteral(_)
+                | tti::TypeKind::StringLiteral(_)
+                | tti::TypeKind::BigIntLiteral(_)
+                | tti::TypeKind::TemplateLiteral(_) => true,
+                tti::TypeKind::Union(members) => {
+                  const MAX_SIMPLE_UNION_MEMBERS: usize = 32;
+                  members.len() <= MAX_SIMPLE_UNION_MEMBERS
+                    && members
+                      .iter()
+                      .all(|member| is_simple_display_type(store, *member))
+                }
+                _ => false,
+              }
+            }
+
+            let caches = state.checker_caches.for_body();
+            let expander = ProgramTypeExpander {
+              def_types: &state.interned_def_types,
+              type_params: &state.interned_type_params,
+              intrinsics: &state.interned_intrinsics,
+            };
+            let queries =
+              TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
+            let evaluated = queries.evaluate(ty);
+            let evaluated = state.prefer_named_refs_in_store(&store, evaluated);
+            if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+              state.cache_stats.merge(&caches.stats());
+            }
+            if evaluated != ty && is_simple_display_type(&store, evaluated) {
+              evaluated
+            } else {
+              ty
+            }
+          }
+        }
         _ => ty,
       };
       let ty = state.prefer_named_class_refs_in_store(&store, ty);

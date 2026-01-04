@@ -66,6 +66,14 @@ const bad4: Uncapital = "Hello";
   let loud_ty = program.type_of_def(loud_def);
   assert_eq!(program.display_type(loud_ty).to_string(), "\"HELLO\"");
 
+  let loud_value_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("ok"))
+    .expect("var ok def");
+  let loud_value_ty = program.type_of_def(loud_value_def);
+  assert_eq!(program.display_type(loud_value_ty).to_string(), "\"HELLO\"");
+
   let mixed_def = program
     .definitions_in_file(file_id)
     .into_iter()
@@ -73,5 +81,15 @@ const bad4: Uncapital = "Hello";
     .expect("type alias Mixed def");
   let mixed_ty = program.type_of_def(mixed_def);
   assert_eq!(program.display_type(mixed_ty).to_string(), "\"A\" | \"B\"");
-}
 
+  let mixed_value_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("ok2"))
+    .expect("var ok2 def");
+  let mixed_value_ty = program.type_of_def(mixed_value_def);
+  assert_eq!(
+    program.display_type(mixed_value_ty).to_string(),
+    "\"A\" | \"B\""
+  );
+}
