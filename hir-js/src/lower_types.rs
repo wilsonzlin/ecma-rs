@@ -773,10 +773,32 @@ impl<'a> TypeLowerer<'a> {
         _ => PropertyName::Ident(self.names.intern(&direct.stx.key)),
       },
       ClassOrObjKey::Computed(expr) => match &*expr.stx {
+        Expr::LitStr(lit) => PropertyName::String(lit.stx.value.clone()),
+        Expr::LitNum(lit) => PropertyName::Number(lit.stx.value.to_string()),
+        Expr::LitTemplate(tmpl) => {
+          let mut out = String::new();
+          for part in tmpl.stx.parts.iter() {
+            match part {
+              LitTemplatePart::String(s) => out.push_str(s),
+              LitTemplatePart::Substitution(_) => return PropertyName::Computed,
+            }
+          }
+          PropertyName::String(out)
+        }
         Expr::Member(member)
-          if matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+          if !member.stx.optional_chaining
+            && matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
         {
           PropertyName::Symbol(self.names.intern(&member.stx.right))
+        }
+        Expr::ComputedMember(member)
+          if !member.stx.optional_chaining
+            && matches!(member.stx.object.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+        {
+          match member.stx.member.stx.as_ref() {
+            Expr::LitStr(lit) => PropertyName::Symbol(self.names.intern(&lit.stx.value)),
+            _ => PropertyName::Computed,
+          }
         }
         _ => PropertyName::Computed,
       },
@@ -1074,9 +1096,19 @@ impl<'a> TypeLowerer<'a> {
           PropertyName::String(out)
         }
         Expr::Member(member)
-          if matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+          if !member.stx.optional_chaining
+            && matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
         {
           PropertyName::Symbol(self.names.intern(&member.stx.right))
+        }
+        Expr::ComputedMember(member)
+          if !member.stx.optional_chaining
+            && matches!(member.stx.object.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+        {
+          match member.stx.member.stx.as_ref() {
+            Expr::LitStr(lit) => PropertyName::Symbol(self.names.intern(&lit.stx.value)),
+            _ => PropertyName::Computed,
+          }
         }
         _ => PropertyName::Computed,
       },

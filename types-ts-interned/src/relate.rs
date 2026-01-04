@@ -1326,6 +1326,16 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::Void, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::Undefined) | (TypeKind::Undefined, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::EmptyObject) => Some(!opts.strict_null_checks),
+      (
+        TypeKind::Void,
+        TypeKind::Union(_)
+        | TypeKind::Intersection(_)
+        | TypeKind::Ref { .. }
+        | TypeKind::IndexedAccess { .. }
+        | TypeKind::Conditional { .. }
+        | TypeKind::Mapped(_)
+        | TypeKind::KeyOf(_),
+      ) => None,
       (TypeKind::Void, _) => Some(false),
       (_, TypeKind::EmptyObject) => {
         if !opts.strict_null_checks {

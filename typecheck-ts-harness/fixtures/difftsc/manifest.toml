@@ -84,11 +84,6 @@ status = "xfail"
 reason = "Rust checker processes triple-slash directives, but still diverges from tsc diagnostics for unresolved `<reference path/types>` directives."
 
 [[expectations]]
-id = "difftsc/using_declarations"
-status = "xfail"
-reason = "Rust checker does not yet support `using`/`await using` resource management semantics."
-
-[[expectations]]
 id = "difftsc/variance_annotations"
 status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."

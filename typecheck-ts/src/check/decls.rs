@@ -494,9 +494,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     names: &hir_js::NameInterner,
   ) -> Option<PropKey> {
     match name {
-      hir_js::PropertyName::Ident(id) => Some(PropKey::String(
-        self.store.intern_name(names.resolve(*id)?.to_string()),
-      )),
+      hir_js::PropertyName::Ident(id) => {
+        let name = names.resolve(*id)?;
+        let interned = self.store.intern_name(name.to_string());
+        if name.starts_with("Symbol.") {
+          Some(PropKey::Symbol(interned))
+        } else {
+          Some(PropKey::String(interned))
+        }
+      }
       hir_js::PropertyName::String(s) => Some(PropKey::String(self.store.intern_name(s.clone()))),
       hir_js::PropertyName::Number(n) => Some(PropKey::Number(n.parse::<i64>().ok()?)),
       hir_js::PropertyName::Symbol(id) => Some(PropKey::Symbol(
@@ -1239,20 +1245,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     names: &hir_js::NameInterner,
   ) -> Option<(PropKey, PropData)> {
     let trace = std::env::var("TRACE_TYPEOF").is_ok();
-    let key = match &prop.name {
-      hir_js::PropertyName::Ident(id) => {
-        PropKey::String(self.store.intern_name(names.resolve(*id)?.to_string()))
-      }
-      hir_js::PropertyName::String(s) => PropKey::String(self.store.intern_name(s.clone())),
-      hir_js::PropertyName::Number(n) => {
-        let parsed = n.parse::<i64>().ok()?;
-        PropKey::Number(parsed)
-      }
-      hir_js::PropertyName::Symbol(id) => {
-        PropKey::Symbol(self.store.intern_name(names.resolve(*id)?.to_string()))
-      }
-      hir_js::PropertyName::Computed => return None,
-    };
+    let key = self.prop_key_from_name(&prop.name, names)?;
     let ty = prop
       .type_annotation
       .map(|t| self.lower_type_expr(t, names))
@@ -1289,20 +1282,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     method: &hir_js::TypeMethodSignature,
     names: &hir_js::NameInterner,
   ) -> Option<(PropKey, TypeId)> {
-    let key = match &method.name {
-      hir_js::PropertyName::Ident(id) => {
-        PropKey::String(self.store.intern_name(names.resolve(*id)?.to_string()))
-      }
-      hir_js::PropertyName::String(s) => PropKey::String(self.store.intern_name(s.clone())),
-      hir_js::PropertyName::Number(n) => {
-        let parsed = n.parse::<i64>().ok()?;
-        PropKey::Number(parsed)
-      }
-      hir_js::PropertyName::Symbol(id) => {
-        PropKey::Symbol(self.store.intern_name(names.resolve(*id)?.to_string()))
-      }
-      hir_js::PropertyName::Computed => return None,
-    };
+    let key = self.prop_key_from_name(&method.name, names)?;
     let prev_params = self.type_params.clone();
     let prev_names = self.type_param_names.clone();
     let type_params = self.lower_type_param_decls(&method.type_params, names);

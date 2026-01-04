@@ -706,6 +706,7 @@ pub fn check_body_with_expander(
     scopes: vec![Scope::default()],
     namespace_scopes: HashMap::new(),
     expected_return: None,
+    body_kind: body.kind,
     in_async_function: false,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
@@ -819,6 +820,7 @@ struct Checker<'a> {
   scopes: Vec<Scope>,
   namespace_scopes: HashMap<String, Scope>,
   expected_return: Option<TypeId>,
+  body_kind: BodyKind,
   in_async_function: bool,
   check_var_assignments: bool,
   widen_object_literals: bool,
@@ -1503,6 +1505,19 @@ impl<'a> Checker<'a> {
 
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
+    if self.check_var_assignments
+      && matches!(decl.stx.mode, VarDeclMode::AwaitUsing)
+      && !self.in_async_function
+      && !matches!(self.body_kind, BodyKind::TopLevel)
+    {
+      let range = loc_to_range(self.file, decl.loc);
+      let start = range.start;
+      let end = start.saturating_add("await".len() as u32);
+      self.diagnostics.push(codes::AWAIT_USING_REQUIRES_ASYNC_CONTEXT.error(
+        "'await using' statements are only allowed within async functions and at the top levels of modules.",
+        Span::new(self.file, TextRange::new(start, end)),
+      ));
+    }
     for declarator in decl.stx.declarators.iter() {
       let annot_ty = declarator.type_annotation.as_ref().map(|ann| {
         self

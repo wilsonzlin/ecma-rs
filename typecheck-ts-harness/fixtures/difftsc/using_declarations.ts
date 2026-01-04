@@ -1,3 +1,5 @@
+/// <reference lib="esnext.disposable" />
+
 type Resource = { tag: "res" };
 
 export function useResource() {

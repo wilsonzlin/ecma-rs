@@ -414,6 +414,22 @@ pub const INVALID_USING_INITIALIZER: Code = Code::new(
   &[],
 );
 
+/// TS2852: `await using` statements are only allowed in async contexts.
+///
+/// This aligns with the TypeScript compiler diagnostic emitted when an `await using`
+/// declaration appears outside an async function and outside the top level of a module.
+///
+/// - Primary span: the `await` keyword of the `await using` declaration.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const AWAIT_USING_REQUIRES_ASYNC_CONTEXT: Code = Code::new(
+  "TS2852",
+  "await using requires async context",
+  "`await` keyword of the `await using` declaration",
+  &["primary: await keyword"],
+  &[],
+);
+
 /// TC3000: Implicit `any` type (TypeScript `--noImplicitAny`).
 ///
 /// This diagnostic is emitted when the checker would otherwise fall back to

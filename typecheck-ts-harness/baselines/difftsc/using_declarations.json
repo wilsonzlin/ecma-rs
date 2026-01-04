@@ -17,26 +17,10 @@
   },
   "diagnostics": [
     {
-      "code": 2318,
-      "file": null,
-      "start": 0,
-      "end": 0,
-      "category": "error",
-      "message": "Cannot find global type 'AsyncDisposable'."
-    },
-    {
-      "code": 2318,
-      "file": null,
-      "start": 0,
-      "end": 0,
-      "category": "error",
-      "message": "Cannot find global type 'Disposable'."
-    },
-    {
       "code": 2852,
       "file": "using_declarations.ts",
-      "start": 311,
-      "end": 316,
+      "start": 354,
+      "end": 359,
       "category": "error",
       "message": "'await using' statements are only allowed within async functions and at the top levels of modules."
     }
@@ -62,8 +46,8 @@
     "markers": [
       {
         "file": "using_declarations.ts",
-        "offset": 155,
-        "line": 7,
+        "offset": 198,
+        "line": 9,
         "column": 16,
         "type": "Resource"
       }
