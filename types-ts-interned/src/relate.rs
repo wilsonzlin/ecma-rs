@@ -684,50 +684,54 @@ impl<'a> RelateCtx<'a> {
 
     if let TypeKind::Ref { def, args } = &src_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
-        let record = record && self.take_reason_slot();
-        let related = self.relate_internal(
-          expanded,
-          dst,
-          RelationKind::Assignable,
-          mode,
-          record,
-          depth + 1,
-        );
-        return RelationResult {
-          result: related.result,
-          reason: self.join_reasons(
+        if expanded != src {
+          let record = record && self.take_reason_slot();
+          let related = self.relate_internal(
+            expanded,
+            dst,
+            RelationKind::Assignable,
+            mode,
             record,
-            key,
-            vec![related.reason],
-            related.result,
-            Some("expand src".into()),
-            depth,
-          ),
-        };
+            depth + 1,
+          );
+          return RelationResult {
+            result: related.result,
+            reason: self.join_reasons(
+              record,
+              key,
+              vec![related.reason],
+              related.result,
+              Some("expand src".into()),
+              depth,
+            ),
+          };
+        }
       }
     }
     if let TypeKind::Ref { def, args } = &dst_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
-        let record = record && self.take_reason_slot();
-        let related = self.relate_internal(
-          src,
-          expanded,
-          RelationKind::Assignable,
-          mode,
-          record,
-          depth + 1,
-        );
-        return RelationResult {
-          result: related.result,
-          reason: self.join_reasons(
+        if expanded != dst {
+          let record = record && self.take_reason_slot();
+          let related = self.relate_internal(
+            src,
+            expanded,
+            RelationKind::Assignable,
+            mode,
             record,
-            key,
-            vec![related.reason],
-            related.result,
-            Some("expand dst".into()),
-            depth,
-          ),
-        };
+            depth + 1,
+          );
+          return RelationResult {
+            result: related.result,
+            reason: self.join_reasons(
+              record,
+              key,
+              vec![related.reason],
+              related.result,
+              Some("expand dst".into()),
+              depth,
+            ),
+          };
+        }
       }
     }
 
