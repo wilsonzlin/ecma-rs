@@ -4,9 +4,12 @@ use crate::symbol::semantics::SymbolId;
 use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
 use num_bigint::BigInt;
+use parse_js::ast::class_or_object::{
+  ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
+};
 use parse_js::ast::expr::lit::{
-  LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitRegexExpr,
-  LitStrExpr,
+  LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitObjExpr,
+  LitRegexExpr, LitStrExpr,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
@@ -19,6 +22,7 @@ use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
+use parse_js::token::TT;
 use std::collections::{BTreeMap, BTreeSet};
 
 const DEFAULT_LOC: Loc = Loc(0, 0);
@@ -404,6 +408,10 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_REGEX_CALLEE: &str = "__optimize_js_regex";
   const INTERNAL_ARRAY_CALLEE: &str = "__optimize_js_array";
   const INTERNAL_ARRAY_HOLE: &str = "__optimize_js_array_hole";
+  const INTERNAL_OBJECT_CALLEE: &str = "__optimize_js_object";
+  const INTERNAL_OBJECT_PROP_MARKER: &str = "__optimize_js_object_prop";
+  const INTERNAL_OBJECT_COMPUTED_MARKER: &str = "__optimize_js_object_prop_computed";
+  const INTERNAL_OBJECT_SPREAD_MARKER: &str = "__optimize_js_object_spread";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -450,6 +458,67 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
       }
     }
     let expr = node(Expr::LitArr(node(LitArrExpr { elements })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
+  }
+
+  if matches!(callee_arg, Arg::Builtin(path) if path == INTERNAL_OBJECT_CALLEE)
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+    && spreads.is_empty()
+  {
+    assert!(
+      args.len() % 3 == 0,
+      "object literal marker call must have arg count divisible by 3"
+    );
+    let mut members = Vec::with_capacity(args.len() / 3);
+    for chunk in args.chunks(3) {
+      let marker = &chunk[0];
+      let key_or_value = &chunk[1];
+      let value = &chunk[2];
+
+      let Arg::Builtin(marker) = marker else {
+        panic!("object literal marker call expects builtin markers, got {marker:?}");
+      };
+      match marker.as_str() {
+        INTERNAL_OBJECT_PROP_MARKER => {
+          let Arg::Const(Const::Str(key)) = key_or_value else {
+            panic!("object literal prop marker expects string key, got {key_or_value:?}");
+          };
+          let tt = if is_valid_identifier(key) {
+            TT::Identifier
+          } else {
+            TT::LiteralString
+          };
+          let key = ClassOrObjKey::Direct(node(ClassOrObjMemberDirectKey {
+            key: key.clone(),
+            tt,
+          }));
+          let val = ClassOrObjVal::Prop(Some(lower_arg(var_namer, fn_emitter, value)));
+          members.push(node(ObjMember {
+            typ: ObjMemberType::Valued { key, val },
+          }));
+        }
+        INTERNAL_OBJECT_COMPUTED_MARKER => {
+          let key = ClassOrObjKey::Computed(lower_arg(var_namer, fn_emitter, key_or_value));
+          let val = ClassOrObjVal::Prop(Some(lower_arg(var_namer, fn_emitter, value)));
+          members.push(node(ObjMember {
+            typ: ObjMemberType::Valued { key, val },
+          }));
+        }
+        INTERNAL_OBJECT_SPREAD_MARKER => {
+          members.push(node(ObjMember {
+            typ: ObjMemberType::Rest {
+              val: lower_arg(var_namer, fn_emitter, key_or_value),
+            },
+          }));
+        }
+        other => panic!("unknown object literal marker {other:?}"),
+      }
+    }
+
+    let expr = node(Expr::LitObj(node(LitObjExpr { members })));
     return match tgt {
       Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
       None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),

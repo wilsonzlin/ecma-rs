@@ -2234,21 +2234,54 @@ fn lower_arr_pat(
   PatKind::Array(ArrayPat { elements, rest })
 }
 
+fn is_valid_identifier_name(name: &str) -> bool {
+  let mut chars = name.chars();
+  let Some(first) = chars.next() else {
+    return false;
+  };
+
+  if !(first == '$' || first == '_' || first.is_ascii_alphabetic()) {
+    return false;
+  }
+
+  chars.all(|c| c == '$' || c == '_' || c.is_ascii_alphanumeric())
+}
+
+fn lower_object_key(
+  key: &parse_js::ast::class_or_object::ClassOrObjKey,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> ObjectKey {
+  use parse_js::ast::class_or_object::ClassOrObjKey;
+  use parse_js::token::TT;
+
+  match key {
+    ClassOrObjKey::Direct(direct) => match direct.stx.tt {
+      TT::LiteralString => {
+        if is_valid_identifier_name(&direct.stx.key) {
+          ObjectKey::Ident(builder.intern_name(&direct.stx.key))
+        } else {
+          ObjectKey::String(direct.stx.key.clone())
+        }
+      }
+      TT::LiteralNumber | TT::LiteralBigInt => ObjectKey::Number(direct.stx.key.clone()),
+      _ => ObjectKey::Ident(builder.intern_name(&direct.stx.key)),
+    },
+    ClassOrObjKey::Computed(expr) => {
+      let expr_id = lower_expr(expr, builder, ctx);
+      ObjectKey::Computed(expr_id)
+    }
+  }
+}
+
 fn lower_obj_pat(
   obj: &Node<ObjPat>,
   builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
 ) -> PatKind {
-  use parse_js::ast::class_or_object::ClassOrObjKey;
   let mut props = Vec::new();
   for prop in obj.stx.properties.iter() {
-    let key = match &prop.stx.key {
-      ClassOrObjKey::Direct(direct) => ObjectKey::Ident(builder.intern_name(&direct.stx.key)),
-      ClassOrObjKey::Computed(expr) => {
-        let expr_id = lower_expr(expr, builder, ctx);
-        ObjectKey::Computed(expr_id)
-      }
-    };
+    let key = lower_object_key(&prop.stx.key, builder, ctx);
     let value = lower_pat(&prop.stx.target, builder, ctx);
     let default_value = prop
       .stx
@@ -2271,18 +2304,12 @@ fn lower_object_literal(
   builder: &mut BodyBuilder<'_>,
   ctx: &mut LoweringContext,
 ) -> ObjectLiteral {
-  use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+  use parse_js::ast::class_or_object::{ClassOrObjVal, ObjMemberType};
   let mut properties = Vec::new();
   for member in obj.stx.members.iter() {
     match &member.stx.typ {
       ObjMemberType::Valued { key, val } => {
-        let key = match key {
-          ClassOrObjKey::Direct(direct) => ObjectKey::Ident(builder.intern_name(&direct.stx.key)),
-          ClassOrObjKey::Computed(expr) => {
-            let expr_id = lower_expr(expr, builder, ctx);
-            ObjectKey::Computed(expr_id)
-          }
-        };
+        let key = lower_object_key(key, builder, ctx);
         match val {
           ClassOrObjVal::Prop(Some(expr)) => {
             let value = lower_expr(expr, builder, ctx);

@@ -25,6 +25,10 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_REGEX_CALLEE: &'static str = "__optimize_js_regex";
   const INTERNAL_ARRAY_CALLEE: &'static str = "__optimize_js_array";
   const INTERNAL_ARRAY_HOLE: &'static str = "__optimize_js_array_hole";
+  const INTERNAL_OBJECT_CALLEE: &'static str = "__optimize_js_object";
+  const INTERNAL_OBJECT_PROP_MARKER: &'static str = "__optimize_js_object_prop";
+  const INTERNAL_OBJECT_COMPUTED_MARKER: &'static str = "__optimize_js_object_prop_computed";
+  const INTERNAL_OBJECT_SPREAD_MARKER: &'static str = "__optimize_js_object_spread";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -949,6 +953,62 @@ impl<'p> HirSourceToInst<'p> {
           Arg::Const(Const::Undefined),
           args,
           spreads,
+        ));
+        Ok(Arg::Var(tmp))
+      }
+      ExprKind::Object(obj) => {
+        let mut args = Vec::new();
+        for property in obj.properties.iter() {
+          match property {
+            hir_js::ObjectProperty::KeyValue {
+              key,
+              value,
+              method,
+              shorthand: _,
+            } => {
+              if *method {
+                return Err(unsupported_syntax(span, "object method literals are not supported"));
+              }
+              match key {
+                hir_js::ObjectKey::Computed(expr) => {
+                  args.push(Arg::Builtin(Self::INTERNAL_OBJECT_COMPUTED_MARKER.to_string()));
+                  args.push(self.compile_expr(*expr)?);
+                }
+                hir_js::ObjectKey::Ident(name) => {
+                  args.push(Arg::Builtin(Self::INTERNAL_OBJECT_PROP_MARKER.to_string()));
+                  args.push(Arg::Const(Const::Str(self.name_for(*name))));
+                }
+                hir_js::ObjectKey::String(value) => {
+                  args.push(Arg::Builtin(Self::INTERNAL_OBJECT_PROP_MARKER.to_string()));
+                  args.push(Arg::Const(Const::Str(value.clone())));
+                }
+                hir_js::ObjectKey::Number(value) => {
+                  args.push(Arg::Builtin(Self::INTERNAL_OBJECT_PROP_MARKER.to_string()));
+                  args.push(Arg::Const(Const::Str(value.clone())));
+                }
+              }
+              args.push(self.compile_expr(*value)?);
+            }
+            hir_js::ObjectProperty::Spread(expr) => {
+              args.push(Arg::Builtin(Self::INTERNAL_OBJECT_SPREAD_MARKER.to_string()));
+              args.push(self.compile_expr(*expr)?);
+              args.push(Arg::Const(Const::Undefined));
+            }
+            hir_js::ObjectProperty::Getter { .. } | hir_js::ObjectProperty::Setter { .. } => {
+              return Err(unsupported_syntax(
+                span,
+                "object accessor literals are not supported",
+              ));
+            }
+          }
+        }
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_OBJECT_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          args,
+          Vec::new(),
         ));
         Ok(Arg::Var(tmp))
       }
