@@ -31,7 +31,6 @@ use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind};
-use typecheck_ts::triple_slash::{scan_triple_slash_directives, TripleSlashReferenceKind};
 use typecheck_ts::{FileKey, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
@@ -1823,59 +1822,7 @@ pub(crate) fn build_tsc_request(
     files.insert(Arc::clone(&file.key.0), Arc::clone(&file.content));
   }
 
-  let mut options = options.clone();
-  let mut referenced_types: Vec<String> = Vec::new();
-  let mut referenced_libs: Vec<String> = Vec::new();
-  for root in file_set.inner.roots.iter() {
-    let Some(content) = file_set.content(root) else {
-      continue;
-    };
-    let directives = scan_triple_slash_directives(content.as_ref());
-    for reference in directives.references.iter() {
-      let value = reference.value(content.as_ref());
-      if value.is_empty() {
-        continue;
-      }
-      match reference.kind {
-        TripleSlashReferenceKind::Types => referenced_types.push(value.to_string()),
-        TripleSlashReferenceKind::Lib => referenced_libs.push(value.to_string()),
-        TripleSlashReferenceKind::Path => {}
-      }
-    }
-  }
-  referenced_types.sort();
-  referenced_types.dedup();
-  referenced_libs.sort();
-  referenced_libs.dedup();
-
-  if !referenced_types.is_empty() {
-    let entry = options
-      .entry("types".to_string())
-      .or_insert_with(|| Value::Array(Vec::new()));
-    if let Value::Array(array) = entry {
-      let mut merged: Vec<String> = array
-        .iter()
-        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-        .collect();
-      merged.extend(referenced_types);
-      merged.sort();
-      merged.dedup();
-      *array = merged.into_iter().map(Value::String).collect();
-    }
-  }
-
-  if !referenced_libs.is_empty() {
-    if let Some(Value::Array(array)) = options.get_mut("lib") {
-      let mut merged: Vec<String> = array
-        .iter()
-        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-        .collect();
-      merged.extend(referenced_libs);
-      merged.sort();
-      merged.dedup();
-      *array = merged.into_iter().map(Value::String).collect();
-    }
-  }
+  let options = options.clone();
 
   // `HarnessFileSet::root_keys` already returns a deterministic, de-duplicated
   // list of roots. Use the cached root slice directly so we don't allocate an
@@ -2287,6 +2234,22 @@ mod tests {
     let roots = file_set.root_keys();
     let root_names: Vec<&str> = roots.iter().map(|k| k.as_str()).collect();
     assert_eq!(root_names, vec!["/a.ts", "/b.ts"]);
+  }
+
+  #[test]
+  fn build_tsc_request_does_not_inject_triple_slash_directives_into_compiler_options() {
+    let files = vec![VirtualFile {
+      name: "main.ts".to_string(),
+      content: "/// <reference types=\"node\" />\n".into(),
+    }];
+    let file_set = HarnessFileSet::new(&files);
+    let options = HarnessOptions::default().to_tsc_options_map();
+
+    let request = build_tsc_request(&file_set, &options, true);
+    assert!(
+      !request.options.contains_key("types"),
+      "build_tsc_request should not translate triple-slash directives into compiler options"
+    );
   }
 
   #[test]
