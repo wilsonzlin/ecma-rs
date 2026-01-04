@@ -483,16 +483,6 @@ pub(crate) fn compile_hir_body(
   Ok(build_program_function(program, insts, c_label, c_temp))
 }
 
-#[cfg(feature = "legacy-ast-lowering")]
-fn compile_js_ast_statements(
-  program: &ProgramCompiler,
-  statements: Vec<Node<Stmt>>,
-) -> OptimizeResult<ProgramFunction> {
-  let (insts, c_label, c_temp) =
-    crate::il::s2i::legacy::translate_source_to_inst(program, statements)?;
-  Ok(build_program_function(program, insts, c_label, c_temp))
-}
-
 pub type FnId = usize;
 
 pub use decompile::structurer::{structure_cfg, BreakTarget, ControlTree, LoopLabel};
@@ -597,88 +587,6 @@ pub fn compile_source_typed(source: &str, mode: TopLevelMode, debug: bool) -> Op
     .file_id(&file)
     .expect("typecheck program should know the inserted file");
   compile_source_with_typecheck(source, mode, debug, type_program, type_file)
-}
-
-#[cfg(feature = "legacy-ast-lowering")]
-pub fn compile_source_ast(
-  source: &str,
-  mode: TopLevelMode,
-  debug: bool,
-) -> OptimizeResult<Program> {
-  let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
-  let lower = lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
-  let (semantics, diagnostics) = JsSymbols::bind(&mut top_level_node, mode, SOURCE_FILE);
-  if !diagnostics.is_empty() {
-    return Err(diagnostics);
-  }
-  let VarAnalysis {
-    foreign,
-    use_before_decl,
-    dynamic_scope,
-    ..
-  } = VarAnalysis::analyze(&mut top_level_node, &semantics);
-  if let Some(loc) = dynamic_scope {
-    return Err(unsupported_syntax(
-      loc,
-      "with statements introduce dynamic scope and are not supported",
-    ));
-  }
-  if !use_before_decl.is_empty() {
-    let mut diagnostics: Vec<_> = use_before_decl
-      .into_iter()
-      .map(|(_, (name, loc))| use_before_declaration(&name, loc))
-      .collect();
-    sort_diagnostics(&mut diagnostics);
-    return Err(diagnostics);
-  };
-  let mut symbol_table = collect_symbol_table(&semantics, &foreign);
-  let bindings = collect_hir_symbol_bindings(&mut top_level_node, &lower);
-  let lower = Arc::new(lower);
-  let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
-    foreign_vars: foreign.clone(),
-    functions: DashMap::new(),
-    next_fn_id: AtomicUsize::new(0),
-    debug,
-    lower: Arc::clone(&lower),
-    bindings,
-    names: Arc::clone(&lower.names),
-    types: Default::default(),
-  }));
-
-  let TopLevel { body } = *top_level_node.stx;
-  let top_level = crate::il::s2i::legacy::compile_js_statements(&program, body)?;
-  let ProgramCompilerInner {
-    functions,
-    next_fn_id,
-    ..
-  } = Arc::try_unwrap(program.0).unwrap();
-  let fn_count = next_fn_id.load(Ordering::Relaxed);
-  let functions: Vec<_> = (0..fn_count)
-    .map(|i| functions.remove(&i).unwrap().1)
-    .collect();
-
-  let free_symbols = ProgramFreeSymbols {
-    top_level: collect_free_symbols(&top_level),
-    functions: functions.iter().map(collect_free_symbols).collect(),
-  };
-
-  let has_any_symbols = !symbol_table.symbols.is_empty()
-    || !free_symbols.top_level.is_empty()
-    || free_symbols.functions.iter().any(|f| !f.is_empty());
-
-  let symbols = if has_any_symbols {
-    symbol_table.free_symbols = Some(free_symbols);
-    Some(symbol_table)
-  } else {
-    None
-  };
-
-  Ok(Program {
-    functions,
-    top_level,
-    top_level_mode: mode,
-    symbols,
-  })
 }
 
 fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> ProgramSymbols {
