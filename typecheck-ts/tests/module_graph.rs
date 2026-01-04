@@ -60,3 +60,29 @@ type Bar = typeof import("./file1").Foo;
     "module graph should include deps introduced only via import() types"
   );
 }
+
+#[test]
+fn check_is_cycle_safe_for_value_imports() {
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    include_dom: false,
+    no_default_lib: true,
+    ..Default::default()
+  });
+  let entry = FileKey::new("file0.ts");
+  let dep = FileKey::new("file1.ts");
+
+  host.insert(entry.clone(), "import \"./file1\"; export const x = 1;");
+  host.insert(dep.clone(), "import \"./file0\"; export const y = 2;");
+
+  host.link(entry.clone(), "./file1", dep.clone());
+  host.link(dep, "./file0", entry.clone());
+
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics
+      .iter()
+      .all(|diag| !diag.code.as_str().starts_with("ICE")),
+    "cycle import produced ICE diagnostics: {diagnostics:?}"
+  );
+}
