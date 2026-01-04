@@ -550,3 +550,45 @@ fn avoids_synthetic_enum_object_collisions_with_top_level_identifier_references(
     "expected the `__minify_ts_enum_obj_static` identifier reference to remain in output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_namespace_binding_collisions_with_export_list_locals() {
+  // The export list local name `__minify_ts_namespace_static` is stored as a string (not IdExpr),
+  // so TS erasure must still treat it as reserved when generating synthetic bindings.
+  let src = r#"
+    eval("x");
+    export namespace static { export const x = 1; }
+    export { __minify_ts_namespace_static as leaked };
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid colliding with export-list locals. output: {code}"
+  );
+  assert!(
+    local.starts_with("__minify_ts_namespace_static_"),
+    "expected TS erasure to disambiguate the namespace binding with a suffix, got `{local}`. output: {code}"
+  );
+}
+
+#[test]
+fn avoids_synthetic_enum_object_collisions_with_export_list_locals() {
+  let src = r#"
+    eval("x");
+    export enum static { A = 1, B }
+    export { __minify_ts_enum_obj_static as leaked };
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime enum");
+  assert_ne!(
+    local, "__minify_ts_enum_obj_static",
+    "expected TS erasure to avoid colliding with export-list locals. output: {code}"
+  );
+  assert!(
+    local.starts_with("__minify_ts_enum_obj_static_"),
+    "expected TS erasure to disambiguate the enum object binding with a suffix, got `{local}`. output: {code}"
+  );
+}
