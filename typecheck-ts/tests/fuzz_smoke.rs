@@ -196,7 +196,36 @@ fn run_with_timeout(
 
   let program = Arc::new(Program::new(host, project.roots.clone()));
   let runner = Arc::clone(&program);
-  let handle = thread::spawn(move || runner.check());
+  let handle = thread::spawn(move || {
+    let diagnostics = runner.check();
+
+    // Exercise a handful of query entry points after checking to ensure they
+    // are also total, deterministic, and cycle-safe for the generated inputs.
+    let reachable = runner.reachable_files();
+    let _ = runner.files();
+    let _ = runner.global_bindings();
+    for file in reachable {
+      let _ = runner.exports_of(file);
+      let defs = runner.definitions_in_file(file);
+      for def in defs.into_iter().take(16) {
+        let _ = runner.def_name(def);
+        let _ = runner.span_of_def(def);
+        let _ = runner.type_of_def(def);
+        if let Some(body) = runner.body_of_def(def) {
+          let _ = runner.check_body(body);
+        }
+      }
+      let bodies = runner.bodies_in_file(file);
+      for body in bodies.into_iter().take(8) {
+        let _ = runner.check_body(body);
+      }
+      if let Some(body) = runner.file_body(file) {
+        let _ = runner.check_body(body);
+      }
+    }
+
+    diagnostics
+  });
 
   let started_at = Instant::now();
   let deadline = started_at + timeout;
