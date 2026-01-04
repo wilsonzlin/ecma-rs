@@ -3,13 +3,30 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{codes, FileKey, MemoryHost, Program};
+use typecheck_ts::{codes, semantic_js, BodyId, ExprId, FileId, FileKey, MemoryHost, Program, TypeId};
 
 #[derive(Clone, Debug)]
 struct Project {
   roots: Vec<FileKey>,
   files: Vec<(FileKey, Arc<str>)>,
   links: Vec<(FileKey, String, FileKey)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OffsetQuerySnapshot {
+  file: FileId,
+  offset: u32,
+  symbol: Option<semantic_js::SymbolId>,
+  expr: Option<(BodyId, ExprId)>,
+  ty: Option<TypeId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SmokeSnapshot {
+  diagnostics: Vec<typecheck_ts::Diagnostic>,
+  reachable_files: Vec<FileId>,
+  exports: Vec<(FileId, Vec<String>)>,
+  offsets: Vec<OffsetQuerySnapshot>,
 }
 
 #[derive(Clone, Debug)]
@@ -181,7 +198,7 @@ fn run_with_timeout(
   case: usize,
   project: &Project,
   timeout: Duration,
-) -> Vec<typecheck_ts::Diagnostic> {
+) -> SmokeSnapshot {
   let options = CompilerOptions {
     no_default_lib: true,
     ..CompilerOptions::default()
@@ -197,15 +214,22 @@ fn run_with_timeout(
   let program = Arc::new(Program::new(host, project.roots.clone()));
   let runner = Arc::clone(&program);
   let handle = thread::spawn(move || {
-    let diagnostics = runner.check();
+    let mut diagnostics = runner.check();
+    codes::normalize_diagnostics(&mut diagnostics);
 
     // Exercise a handful of query entry points after checking to ensure they
     // are also total, deterministic, and cycle-safe for the generated inputs.
     let reachable = runner.reachable_files();
     let _ = runner.files();
     let _ = runner.global_bindings();
-    for file in reachable {
-      let _ = runner.exports_of(file);
+
+    let mut exports = Vec::new();
+    let mut offsets = Vec::new();
+
+    for file in reachable.iter().copied() {
+      let export_map = runner.exports_of(file);
+      exports.push((file, export_map.keys().cloned().collect::<Vec<_>>()));
+
       let defs = runner.definitions_in_file(file);
       for def in defs.into_iter().take(16) {
         let _ = runner.def_name(def);
@@ -222,9 +246,37 @@ fn run_with_timeout(
       if let Some(body) = runner.file_body(file) {
         let _ = runner.check_body(body);
       }
+
+      if let Some(text) = runner.file_text(file) {
+        let len = text.len();
+        let mut probe_offsets = vec![0usize, len / 2, len.saturating_sub(1)];
+        probe_offsets.sort_unstable();
+        probe_offsets.dedup();
+        for offset in probe_offsets {
+          let Ok(offset_u32) = offset.try_into() else {
+            continue;
+          };
+          let symbol = runner.symbol_at(file, offset_u32);
+          if let Some(symbol) = symbol {
+            let _ = runner.symbol_info(symbol);
+          }
+          offsets.push(OffsetQuerySnapshot {
+            file,
+            offset: offset_u32,
+            symbol,
+            expr: runner.expr_at(file, offset_u32),
+            ty: runner.type_at(file, offset_u32),
+          });
+        }
+      }
     }
 
-    diagnostics
+    SmokeSnapshot {
+      diagnostics,
+      reachable_files: reachable,
+      exports,
+      offsets,
+    }
   });
 
   let started_at = Instant::now();
@@ -275,21 +327,21 @@ fn fuzz_smoke_program_check_is_total_and_fast() {
   for case in 0..CASES {
     let project = generate_project(&mut rng, case);
     let src = project_debug_source(&project);
-    let mut diagnostics_first = run_with_timeout(case, &project, TIMEOUT);
-    codes::normalize_diagnostics(&mut diagnostics_first);
+    let first = run_with_timeout(case, &project, TIMEOUT);
 
-    let mut diagnostics_second = run_with_timeout(case, &project, TIMEOUT);
-    codes::normalize_diagnostics(&mut diagnostics_second);
+    let second = run_with_timeout(case, &project, TIMEOUT);
 
     assert!(
-      diagnostics_first
+      first
+        .diagnostics
         .iter()
         .all(|diag| !diag.code.as_str().starts_with("ICE")),
-      "case {case}: checker emitted ICE diagnostics\nsource:\n{src}\n\ndiagnostics:\n{diagnostics_first:#?}",
+      "case {case}: checker emitted ICE diagnostics\nsource:\n{src}\n\ndiagnostics:\n{:#?}",
+      first.diagnostics,
     );
 
     assert_eq!(
-      diagnostics_first, diagnostics_second,
+      first, second,
       "case {case}: checker output was not deterministic\nsource:\n{src}"
     );
   }
