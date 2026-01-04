@@ -11,7 +11,7 @@ use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{BlockStmt, CatchBlock, ForBody, ForInOfLhs};
 use parse_js::ast::stx::TopLevel;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Default)]
 pub struct JsResolution {
@@ -121,6 +121,7 @@ struct ResolveVisitor<'a> {
   class_name_stack: Vec<Option<SymbolId>>,
   in_param_list: Vec<bool>,
   func_scope_stack: Vec<ScopeId>,
+  closure_cache: HashMap<ScopeId, ScopeId>,
 }
 
 impl ResolveVisitor<'_> {
@@ -144,6 +145,7 @@ impl ResolveVisitor<'_> {
       class_name_stack: Vec::new(),
       in_param_list: Vec::new(),
       func_scope_stack: Vec::new(),
+      closure_cache: HashMap::new(),
     }
   }
 
@@ -165,11 +167,38 @@ impl ResolveVisitor<'_> {
     }
   }
 
-  fn symbol_in_tdz(&self, symbol: SymbolId) -> bool {
+  fn closure_of(&mut self, scope: ScopeId) -> ScopeId {
+    if let Some(cached) = self.closure_cache.get(&scope).copied() {
+      return cached;
+    }
+
+    let mut current = Some(scope);
+    let mut last = scope;
+    while let Some(scope_id) = current {
+      let scope_data = self.sem.scope(scope_id);
+      last = scope_id;
+      if scope_data.kind.is_closure() || scope_data.parent.is_none() {
+        break;
+      }
+      current = scope_data.parent;
+    }
+
+    self.closure_cache.insert(scope, last);
+    last
+  }
+
+  fn symbol_in_tdz(&mut self, use_scope: ScopeId, symbol: SymbolId) -> bool {
     if self.tdz_overrides.iter().any(|sym| *sym == symbol) {
       return false;
     }
     let decl_scope = self.sem.symbol(symbol).decl_scope;
+
+    // Uses inside a nested function can execute after the outer scope is fully
+    // initialized, so we only consider TDZ within the same closure.
+    if self.closure_of(use_scope) != self.closure_of(decl_scope) {
+      return false;
+    }
+
     self
       .tdz_stack
       .iter()
@@ -232,7 +261,7 @@ impl ResolveVisitor<'_> {
   fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str, range: TextRange) {
     if let Some(scope) = scope_id(assoc) {
       let symbol = self.resolve_name_for_use(scope, name);
-      let in_tdz = symbol.map_or(false, |sym| self.symbol_in_tdz(sym));
+      let in_tdz = symbol.map_or(false, |sym| self.symbol_in_tdz(scope, sym));
       let should_report_tdz = self.file.is_some() && in_tdz && symbol.is_some();
       self.mark(assoc, symbol, in_tdz);
       if should_report_tdz {
@@ -460,7 +489,8 @@ impl ResolveVisitor<'_> {
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     if let Some(declared) = declared_symbol(&node.assoc) {
-      let in_tdz = self.symbol_in_tdz(declared);
+      let scope = scope_id(&node.assoc).unwrap_or_else(|| self.sem.symbol(declared).decl_scope);
+      let in_tdz = self.symbol_in_tdz(scope, declared);
       self.mark(&mut node.assoc, Some(declared), in_tdz);
       if self.is_lexical_symbol(declared) {
         self.record_pending(declared);

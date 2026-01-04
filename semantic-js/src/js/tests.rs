@@ -657,3 +657,25 @@ fn destructuring_default_initializer_later_binding_is_in_tdz() {
   assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
   assert_eq!(slice_range(source, &diagnostics[0]), "b");
 }
+
+#[test]
+fn closure_uses_of_outer_bindings_are_not_reported_as_tdz() {
+  let source = "const f = () => f; f();";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(53));
+  assert!(
+    diagnostics.is_empty(),
+    "expected recursive closure reference to be allowed, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn class_method_body_does_not_trigger_outer_tdz_diagnostics() {
+  let source = "class C { m() { return x; } } let x = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(54));
+  assert!(
+    diagnostics.is_empty(),
+    "expected method bodies to be deferred and not report outer TDZ, got {diagnostics:?}"
+  );
+}
