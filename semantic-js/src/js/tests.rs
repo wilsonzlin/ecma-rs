@@ -1574,6 +1574,44 @@ fn strict_delete_identifier_is_reported() {
 }
 
 #[test]
+fn strict_reserved_word_in_var_decl_is_reported() {
+  let source = "var implements = 1;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(117));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0013");
+  assert_eq!(slice_range(source, &diagnostics[0]), "implements");
+}
+
+#[test]
+fn strict_reserved_word_in_identifier_reference_is_reported() {
+  let source = "implements;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(118));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0013");
+  assert_eq!(slice_range(source, &diagnostics[0]), "implements");
+}
+
+#[test]
+fn strict_reserved_word_in_label_is_reported() {
+  let source = "implements: for(;;) break;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(119));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0013");
+  assert_eq!(slice_range(source, &diagnostics[0]), "implements");
+}
+
+#[test]
+fn sloppy_mode_allows_strict_reserved_words() {
+  let source = "var implements = 1; implements;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(120));
+  assert!(diagnostics.is_empty());
+}
+
+#[test]
 fn strict_octal_literal_is_reported() {
   let source = "'use strict'; 010;";
   let mut ast = parse(source).unwrap();

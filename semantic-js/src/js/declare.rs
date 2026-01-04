@@ -22,6 +22,7 @@ use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
+use parse_js::ast::expr::IdExpr;
 use parse_js::ast::expr::UnaryExpr;
 use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
@@ -39,7 +40,9 @@ use parse_js::ast::stmt::decl::PatDecl;
 use parse_js::ast::stmt::decl::VarDecl;
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::BlockStmt;
+use parse_js::ast::stmt::BreakStmt;
 use parse_js::ast::stmt::CatchBlock;
+use parse_js::ast::stmt::ContinueStmt;
 use parse_js::ast::stmt::DoWhileStmt;
 use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
@@ -67,12 +70,15 @@ type ClassOrObjMemberDirectKeyNode = Node<ClassOrObjMemberDirectKey>;
 type ClassStaticBlockNode = Node<ClassStaticBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
+type BreakStmtNode = Node<BreakStmt>;
+type ContinueStmtNode = Node<ContinueStmt>;
 type FuncDeclNode = Node<FuncDecl>;
 type FuncExprNode = Node<FuncExpr>;
 type FuncNode = Node<Func>;
 type ForBodyNode = Node<ForBody>;
 type ForInStmtNode = Node<ForInStmt>;
 type IfStmtNode = Node<IfStmt>;
+type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type ForOfStmtNode = Node<ForOfStmt>;
@@ -159,6 +165,21 @@ fn func_has_simple_parameter_list(func: &Func) -> bool {
       && param.stx.default_value.is_none()
       && matches!(param.stx.pattern.stx.pat.stx.as_ref(), Pat::Id(_))
   })
+}
+
+fn is_strict_mode_reserved_word(name: &str) -> bool {
+  matches!(
+    name,
+    "implements"
+      | "interface"
+      | "let"
+      | "package"
+      | "private"
+      | "protected"
+      | "public"
+      | "static"
+      | "yield"
+  )
 }
 
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode, file: FileId) -> JsSemantics {
@@ -588,11 +609,13 @@ enum StmtContext {
 #[visitor(
   BinaryExprNode(enter),
   BlockStmtNode,
+  BreakStmtNode(enter),
   CatchBlockNode,
   ClassOrObjMemberDirectKeyNode(enter),
   ClassDeclNode,
   ClassExprNode,
   ClassStaticBlockNode(enter, exit),
+  ContinueStmtNode(enter),
   DoWhileStmtNode(enter, exit),
   ForBodyNode,
   ForInStmtNode(enter, exit),
@@ -603,6 +626,7 @@ enum StmtContext {
   FuncDeclNode(enter),
   FuncExprNode,
   FuncNode,
+  IdExprNode(enter),
   IdPatNode(enter),
   IfStmtNode(enter, exit),
   ImportStmtNode,
@@ -855,6 +879,14 @@ impl DeclareVisitor {
     ));
   }
 
+  fn report_strict_reserved_word(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0013",
+      "Unexpected strict mode reserved word".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
   fn report_strict_with_statement(&mut self, range: TextRange) {
     self.builder.diagnostics.push(Diagnostic::error(
       "BIND0007",
@@ -1018,6 +1050,9 @@ impl DeclareVisitor {
     ctx: DeclContext,
     span: TextRange,
   ) -> Option<(SymbolId, ScopeId)> {
+    if self.is_strict() && is_strict_mode_reserved_word(name) {
+      self.report_strict_reserved_word(span);
+    }
     if self.is_strict() && (name == "eval" || name == "arguments") {
       self.report_strict_eval_or_arguments(span);
     }
@@ -1108,6 +1143,30 @@ impl DeclareVisitor {
 }
 
 impl DeclareVisitor {
+  fn enter_break_stmt_node(&mut self, node: &mut BreakStmtNode) {
+    let Some(label) = node.stx.label.as_deref() else {
+      return;
+    };
+    if !self.is_strict() || !is_strict_mode_reserved_word(label) {
+      return;
+    }
+    let end = node.loc.end_u32();
+    let start = end.saturating_sub(label.len() as u32);
+    self.report_strict_reserved_word(TextRange::new(start, end));
+  }
+
+  fn enter_continue_stmt_node(&mut self, node: &mut ContinueStmtNode) {
+    let Some(label) = node.stx.label.as_deref() else {
+      return;
+    };
+    if !self.is_strict() || !is_strict_mode_reserved_word(label) {
+      return;
+    }
+    let end = node.loc.end_u32();
+    let start = end.saturating_sub(label.len() as u32);
+    self.report_strict_reserved_word(TextRange::new(start, end));
+  }
+
   fn enter_binary_expr_node(&mut self, node: &mut BinaryExprNode) {
     if !self.is_strict() || !node.stx.operator.is_assignment() {
       return;
@@ -1171,7 +1230,9 @@ impl DeclareVisitor {
     match node.stx.operator {
       OperatorName::Delete => {
         if let Expr::Id(id) = node.stx.argument.stx.as_ref() {
-          self.report_strict_delete_identifier(ident_range(id.loc, &id.stx.name));
+          if !is_strict_mode_reserved_word(&id.stx.name) {
+            self.report_strict_delete_identifier(ident_range(id.loc, &id.stx.name));
+          }
         }
       }
       OperatorName::PrefixIncrement | OperatorName::PrefixDecrement => {
@@ -1182,6 +1243,15 @@ impl DeclareVisitor {
         }
       }
       _ => {}
+    }
+  }
+
+  fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    if !self.is_strict() {
+      return;
+    }
+    if is_strict_mode_reserved_word(&node.stx.name) {
+      self.report_strict_reserved_word(ident_range(node.loc, &node.stx.name));
     }
   }
 
@@ -1245,7 +1315,10 @@ impl DeclareVisitor {
     self.pop_stmt_context();
   }
 
-  fn enter_label_stmt_node(&mut self, _node: &mut LabelStmtNode) {
+  fn enter_label_stmt_node(&mut self, node: &mut LabelStmtNode) {
+    if self.is_strict() && is_strict_mode_reserved_word(&node.stx.name) {
+      self.report_strict_reserved_word(ident_range(node.loc, &node.stx.name));
+    }
     let allow_regular_function = !self.is_strict() && self.in_statement_list();
     self.push_stmt_context(StmtContext::SingleStatement {
       allow_regular_function,
