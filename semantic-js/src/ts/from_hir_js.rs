@@ -329,12 +329,11 @@ fn lower_block(
       }
       Stmt::ExportAssignmentDecl(assign) => {
         result.has_module_syntax = true;
-        let expr = match assign.stx.expression.stx.as_ref() {
-          Expr::Id(id) => id.stx.name.clone(),
-          _ => String::new(),
-        };
+        let expr_span = to_range(assign.stx.expression.loc);
+        let path = entity_name_path(&assign.stx.expression);
         result.exports.push(Export::ExportAssignment {
-          expr,
+          path,
+          expr_span,
           span: stmt_range,
         });
       }
@@ -870,6 +869,18 @@ fn mark_defs_in_span(
 fn pat_name(pat: &Node<Pat>) -> Option<String> {
   match pat.stx.as_ref() {
     Pat::Id(id) => Some(id.stx.name.clone()),
+    _ => None,
+  }
+}
+
+fn entity_name_path(expr: &Node<Expr>) -> Option<Vec<String>> {
+  match expr.stx.as_ref() {
+    Expr::Id(id) => Some(vec![id.stx.name.clone()]),
+    Expr::Member(member) if !member.stx.optional_chaining => {
+      let mut path = entity_name_path(&member.stx.left)?;
+      path.push(member.stx.right.clone());
+      Some(path)
+    }
     _ => None,
   }
 }

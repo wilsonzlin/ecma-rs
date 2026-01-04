@@ -2666,6 +2666,30 @@ pub(crate) struct ProgramTypeResolver {
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
 }
 
+fn export_assignment_path_for_file(
+  semantics: &sem_ts::TsProgramSemantics,
+  file: sem_ts::FileId,
+) -> Option<Vec<String>> {
+  let exports = semantics.exports_of_opt(file)?;
+  let group = exports.get("export=")?;
+  let symbols = semantics.symbols();
+  for ns in [
+    sem_ts::Namespace::VALUE,
+    sem_ts::Namespace::NAMESPACE,
+    sem_ts::Namespace::TYPE,
+  ] {
+    let Some(sym) = group.symbol_for(ns, symbols) else {
+      continue;
+    };
+    if let Some(sem_ts::AliasTarget::ExportAssignment { path, .. }) =
+      semantics.symbol_alias_target(sym, ns)
+    {
+      return Some(path.clone());
+    }
+  }
+  None
+}
+
 impl ProgramTypeResolver {
   pub(crate) fn new(
     host: Arc<dyn Host>,
@@ -2873,6 +2897,67 @@ impl ProgramTypeResolver {
     self.pick_best_def(candidates, final_ns)
   }
 
+  fn resolve_namespace_symbol_defs_in_file(
+    &self,
+    file: sem_ts::FileId,
+    name: &str,
+  ) -> Option<Vec<DefId>> {
+    let symbol = self
+      .semantics
+      .resolve_in_module(file, name, sem_ts::Namespace::NAMESPACE)
+      .or_else(|| self.global_symbol(name, sem_ts::Namespace::NAMESPACE))?;
+    let defs = self.collect_symbol_decls(symbol, sem_ts::Namespace::NAMESPACE);
+    (!defs.is_empty()).then_some(defs)
+  }
+
+  fn resolve_namespace_member_path_in_file(
+    &self,
+    file: sem_ts::FileId,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    if path.len() < 2 {
+      return None;
+    }
+    let mut parents = self.resolve_namespace_symbol_defs_in_file(file, &path[0])?;
+    for segment in path.iter().take(path.len() - 1).skip(1) {
+      let mut next: Vec<DefId> = Vec::new();
+      let mut seen: HashSet<DefId> = HashSet::new();
+      for parent in parents.iter().copied() {
+        if let Some(members) = self
+          .namespace_members
+          .members(parent, sem_ts::Namespace::NAMESPACE, segment)
+        {
+          for member in members.iter().copied() {
+            if seen.insert(member) {
+              next.push(member);
+            }
+          }
+        }
+      }
+      if next.is_empty() {
+        return None;
+      }
+      next.sort_by_key(|id| id.0);
+      next.dedup();
+      parents = next;
+    }
+
+    let final_segment = path.last()?;
+    let mut candidates: Vec<DefId> = Vec::new();
+    let mut seen: HashSet<DefId> = HashSet::new();
+    for parent in parents.iter().copied() {
+      if let Some(members) = self.namespace_members.members(parent, final_ns, final_segment) {
+        for member in members.iter().copied() {
+          if seen.insert(member) {
+            candidates.push(member);
+          }
+        }
+      }
+    }
+    self.pick_best_def(candidates, final_ns)
+  }
+
   fn global_symbol(&self, name: &str, ns: sem_ts::Namespace) -> Option<sem_ts::SymbolId> {
     self
       .semantics
@@ -2984,6 +3069,17 @@ impl ProgramTypeResolver {
       return None;
     };
     if imported_name == "*" {
+      if let Some(export_assignment) =
+        export_assignment_path_for_file(self.semantics.as_ref(), origin)
+      {
+        let mut combined = export_assignment;
+        combined.extend_from_slice(&path[1..]);
+        if let Some(def) =
+          self.resolve_namespace_member_path_in_file(origin, &combined, final_ns)
+        {
+          return Some(def);
+        }
+      }
       return None;
     }
     let mut segments = Vec::with_capacity(path.len());
@@ -12450,7 +12546,15 @@ impl ProgramState {
         DefKind::Import(import) => {
           if import.original == "*" {
             match import.target {
-              ImportTarget::File(file) => self.module_namespace_type(file)?,
+              ImportTarget::File(file) => {
+                if let Some(target) = self.export_assignment_target_def(file) {
+                  self
+                    .export_type_for_def(target)?
+                    .unwrap_or(self.type_of_def(target)?)
+                } else {
+                  self.module_namespace_type(file)?
+                }
+              }
               ImportTarget::Unresolved { .. } => self.builtin.unknown,
             }
           } else {
@@ -12928,6 +13032,12 @@ impl ProgramState {
       ImportTarget::File(file) => self.exports_of_file(*file),
       ImportTarget::Unresolved { specifier } => self.exports_of_ambient_module(specifier),
     }
+  }
+
+  fn export_assignment_target_def(&self, file: FileId) -> Option<DefId> {
+    let semantics = self.semantics.as_ref()?;
+    let path = export_assignment_path_for_file(semantics.as_ref(), sem_ts::FileId(file.0))?;
+    self.resolve_import_alias_target(file, &path)
   }
 
   fn module_namespace_type(&mut self, file: FileId) -> Result<TypeId, FatalError> {

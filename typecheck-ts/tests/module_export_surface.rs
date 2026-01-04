@@ -4,7 +4,7 @@ use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
-fn export_assignment_synthesizes_default_export() {
+fn export_assignment_creates_export_equals_entry() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let mut host = MemoryHost::with_options(options);
@@ -33,16 +33,16 @@ fn export_assignment_synthesizes_default_export() {
 
   let module_id = program.file_id(&module).expect("module file id");
   let exports = program.exports_of(module_id);
-  let default_entry = exports.get("default").expect("default export");
-  let default_ty = default_entry.type_id.expect("type for default export");
-  let rendered = program.display_type(default_ty).to_string();
+  let export_eq_entry = exports.get("export=").expect("export= entry");
+  let export_eq_ty = export_eq_entry.type_id.expect("type for export= entry");
+  let rendered = program.display_type(export_eq_ty).to_string();
   assert_ne!(
     rendered, "unknown",
-    "default export type should not be unknown"
+    "export= type should not be unknown"
   );
   assert!(
     rendered.contains("=>"),
-    "expected callable default export type, got {rendered}"
+    "expected callable export= type, got {rendered}"
   );
 }
 

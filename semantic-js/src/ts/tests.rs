@@ -1221,6 +1221,7 @@ fn import_equals_entity_name_records_alias_target() {
       assert_eq!(path, &vec!["Bar".to_string(), "Baz".to_string()]);
       assert_eq!(*alias_span, span(2));
     }
+    other => panic!("expected entity name alias, got {:?}", other),
   }
 }
 
@@ -1268,6 +1269,7 @@ fn export_import_equals_entity_name_preserves_alias_target() {
       assert_eq!(path, &vec!["Bar".to_string(), "Baz".to_string()]);
       assert_eq!(*alias_span, span(2));
     }
+    other => panic!("expected entity name alias, got {:?}", other),
   }
 }
 
@@ -2084,7 +2086,8 @@ fn export_assignment_reports_span() {
   let file = FileId(94);
   let mut hir = HirFile::module(file);
   hir.exports.push(Export::ExportAssignment {
-    expr: "foo".to_string(),
+    path: Some(vec!["foo".to_string()]),
+    expr_span: span(11),
     span: span(10),
   });
 
@@ -2096,7 +2099,7 @@ fn export_assignment_reports_span() {
   let diag = &diags[0];
   assert_eq!(diag.code, "BIND1002");
   assert_eq!(diag.primary.file, file);
-  assert_eq!(diag.primary.range, span(10));
+  assert_eq!(diag.primary.range, span(11));
 }
 
 #[test]

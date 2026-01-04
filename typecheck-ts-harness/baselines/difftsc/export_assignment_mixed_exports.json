@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2309,
+      "file": "export_assignment_mixed_exports.ts",
+      "start": 15,
+      "end": 28,
+      "category": "error",
+      "message": "An export assignment cannot be used in a module with other exported elements."
+    }
+  ]
+}
+

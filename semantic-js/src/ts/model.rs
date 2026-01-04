@@ -23,15 +23,13 @@
 //!
 //! The binder currently focuses on module graph semantics and declaration
 //! merging. It does not model statement-level scopes, contextual type-only
-//! exports beyond the supplied `is_type_only` flags, or non-identifier `export =`
-//! expressions (which are reported as diagnostics). Cross-file ambient
-//! augmentations are only represented through re-exports/imports rather than
-//! global name injection. Simple `export = Identifier` assignments synthesize a
-//! default export entry for tooling parity. Ambient module declarations
-//! (`declare module "foo" { }`) are bound into their own export/symbol maps;
-//! unimplemented features such as non-identifier `export =` forms are reported
-//! deterministically via diagnostics. `export as namespace` in `.d.ts` modules
-//! is supported for UMD-style globals; other contexts emit diagnostics.
+//! exports beyond the supplied `is_type_only` flags, or general `export =`
+//! expressions beyond entity-name style references (identifier/property access
+//! chains). Unsupported `export =` expressions are reported deterministically
+//! via diagnostics. Export assignments synthesize an `export=` entry (matching
+//! TypeScript's internal export name) and are represented as synthetic alias
+//! declarations so downstream consumers can distinguish them from
+//! `export default`.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
@@ -281,7 +279,12 @@ pub enum Export {
   All(ExportAll),
   /// `export =` assignments are tracked for diagnostics.
   ExportAssignment {
-    expr: String,
+    /// Entity name path of the RHS expression, if it is an identifier or dotted
+    /// property access chain.
+    path: Option<Vec<String>>,
+    /// Span covering the RHS expression.
+    expr_span: TextRange,
+    /// Span covering the full `export =` statement.
     span: TextRange,
   },
 }
@@ -373,6 +376,8 @@ pub struct DeclData {
 pub enum AliasTarget {
   /// TypeScript `import Foo = Bar.Baz` / `export import Foo = Bar.Baz`.
   EntityName { path: Vec<String>, span: TextRange },
+  /// TypeScript `export = Foo` / `export = Foo.Bar` assignments.
+  ExportAssignment { path: Vec<String>, span: TextRange },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

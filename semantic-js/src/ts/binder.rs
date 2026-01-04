@@ -76,8 +76,9 @@ enum ExportSpec {
     span: Span,
   },
   ExportAssignment {
-    target: String,
+    path: Vec<String>,
     span: Span,
+    expr_span: Span,
   },
 }
 
@@ -519,10 +520,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let mut has_exports = false;
     let mut first_export_span: Option<Span> = None;
     let mut has_export_assignment = false;
-    let mut has_other_exports = false;
+    let mut has_non_assignment_exports = false;
     let mut export_assignment_span: Option<Span> = None;
-    let mut export_assignment_target: Option<String> = None;
-    let mut exported_decl_names: BTreeSet<String> = BTreeSet::new();
     let mut import_def_ids = HashMap::new();
 
     for decl in decls {
@@ -569,6 +568,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         Exported::No => {
           if implicit_export {
             has_exports = true;
+            has_non_assignment_exports = true;
             let span = Span::new(file_id, decl.span);
             first_export_span.get_or_insert(span);
             state.export_specs.push(ExportSpec::Local {
@@ -577,11 +577,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               type_only: false,
               span,
             });
-            exported_decl_names.insert(decl.name.clone());
           }
         }
         Exported::Named => {
           has_exports = true;
+          has_non_assignment_exports = true;
           let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
@@ -590,10 +590,10 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             type_only: false,
             span,
           });
-          exported_decl_names.insert(decl.name.clone());
         }
         Exported::Default => {
           has_exports = true;
+          has_non_assignment_exports = true;
           let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
@@ -602,7 +602,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             type_only: false,
             span,
           });
-          exported_decl_names.insert("default".to_string());
         }
       }
     }
@@ -740,6 +739,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
       if import.is_exported {
         has_exports = true;
+        has_non_assignment_exports = true;
         let span = Span::new(file_id, import.local_span);
         first_export_span.get_or_insert(span);
         state.export_specs.push(ExportSpec::Local {
@@ -748,7 +748,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           type_only: false,
           span,
         });
-        exported_decl_names.insert(import.local.clone());
       }
     }
 
@@ -793,7 +792,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             }
           }
           has_exports |= !named.items.is_empty();
-          has_other_exports |= !named.items.is_empty();
+          has_non_assignment_exports |= !named.items.is_empty();
         }
         Export::All(all) => {
           let spec_span = Span::new(file_id, all.specifier_span);
@@ -822,32 +821,36 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             });
           }
           has_exports = true;
-          has_other_exports = true;
+          has_non_assignment_exports = true;
         }
-        Export::ExportAssignment { expr, span } => {
+        Export::ExportAssignment {
+          path,
+          expr_span,
+          span,
+        } => {
           let span = Span::new(file_id, *span);
+          let expr_span = Span::new(file_id, *expr_span);
           first_export_span.get_or_insert(span);
           if has_export_assignment {
-            has_other_exports = true;
+            // TypeScript only allows a single `export =` assignment. Report it
+            // via the same conflict diagnostic used for mixing it with other
+            // exports.
+            has_non_assignment_exports = true;
           }
           has_export_assignment = true;
           export_assignment_span.get_or_insert(span);
-          if export_assignment_target.is_none() && !expr.is_empty() {
-            export_assignment_target = Some(expr.clone());
-          }
-          if expr.is_empty() {
-            if !is_script {
-              self.diagnostics.push(Diagnostic::error(
-                "BIND1003",
-                "export assignment expressions other than identifiers are not supported yet",
-                span,
-              ));
-            }
-          } else {
+          if let Some(path) = path.as_ref() {
             state.export_specs.push(ExportSpec::ExportAssignment {
-              target: expr.clone(),
+              path: path.clone(),
               span,
+              expr_span,
             });
+          } else if !is_script {
+            self.diagnostics.push(Diagnostic::error(
+              "BIND1003",
+              "unsupported export assignment expression",
+              expr_span,
+            ));
           }
           has_exports = true;
         }
@@ -870,16 +873,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       has_exports = true;
     }
 
-    let has_export_assignment_conflict = if has_export_assignment && !is_script {
-      let mut conflict = has_other_exports;
-      conflict |= match export_assignment_target.as_ref() {
-        Some(target) => exported_decl_names.iter().any(|name| name != target),
-        None => !exported_decl_names.is_empty(),
-      };
-      conflict
-    } else {
-      false
-    };
+    let has_export_assignment_conflict =
+      has_export_assignment && has_non_assignment_exports && !is_script;
 
     if has_export_assignment_conflict {
       let span = export_assignment_span
@@ -1302,8 +1297,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               &mut export_spans,
             );
           }
-          ExportSpec::ExportAssignment { target, span } => {
-            self.add_export_assignment(&module, target, *span, &mut map, &mut export_spans);
+          ExportSpec::ExportAssignment {
+            path,
+            span,
+            expr_span,
+          } => {
+            self.add_export_assignment(&module, path, *span, *expr_span, &mut map, &mut export_spans);
           }
         }
         self
@@ -1415,8 +1414,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               &mut export_spans,
             );
           }
-          ExportSpec::ExportAssignment { target, span } => {
-            self.add_export_assignment(&module, target, *span, &mut map, &mut export_spans);
+          ExportSpec::ExportAssignment {
+            path,
+            span,
+            expr_span,
+          } => {
+            self.add_export_assignment(&module, path, *span, *expr_span, &mut map, &mut export_spans);
           }
         }
         self
@@ -1613,7 +1616,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   ) {
     if let Some(target_exports) = self.exports_for_ref(from) {
       for (name, entry) in target_exports.iter() {
-        if name == "default" {
+        if name == "default" || name == "export=" {
           continue;
         }
         if let Some(group) = filter_group(
@@ -1682,41 +1685,68 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn add_export_assignment(
     &mut self,
     module: &ModuleState,
-    target: &str,
-    origin_span: Span,
+    path: &[String],
+    stmt_span: Span,
+    expr_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
-    if let Some(group) = module.symbols.get(target) {
-      let type_only = module
-        .imports
-        .get(target)
-        .map(|import| import.type_only)
-        .unwrap_or(false);
-      let mask = if type_only {
-        Namespace::TYPE
-      } else {
-        Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-      };
-      if let Some(filtered) = filter_group(group.clone(), mask, &self.symbols) {
-        insert_export(
-          map,
-          export_spans,
-          "default",
-          origin_span,
-          filtered,
-          &mut self.symbols,
-          &mut self.diagnostics,
-        );
-        return;
-      }
+    let Some(base) = path.first() else {
+      return;
+    };
+
+    if module.symbols.get(base).is_none() {
+      self.diagnostics.push(Diagnostic::error(
+        "BIND1002",
+        format!("cannot find export assignment target '{}'", path.join(".")),
+        expr_span,
+      ));
+      return;
     }
 
-    self.diagnostics.push(Diagnostic::error(
-      "BIND1002",
-      format!("cannot find export assignment target '{}'", target),
-      origin_span,
-    ));
+    let type_only = module
+      .imports
+      .get(base)
+      .map(|import| import.type_only)
+      .unwrap_or(false);
+    let namespaces = if type_only {
+      Namespace::TYPE | Namespace::NAMESPACE
+    } else {
+      Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+    };
+
+    let synthetic_name = format!("<export_assignment@{}>", expr_span.range.start);
+    let decl_id = self.symbols.alloc_decl(
+      stmt_span.file,
+      synthetic_name.clone(),
+      DeclKind::ImportBinding,
+      namespaces,
+      false,
+      false,
+      expr_span.range.start,
+      None,
+      Some(AliasTarget::ExportAssignment {
+        path: path.to_vec(),
+        span: expr_span.range,
+      }),
+    );
+    let sym = self.symbols.alloc_symbol(
+      &module.owner,
+      &synthetic_name,
+      namespaces,
+      SymbolOrigin::Local,
+    );
+    self.symbols.add_decl_to_symbol(sym, decl_id, namespaces);
+
+    insert_export(
+      map,
+      export_spans,
+      "export=",
+      stmt_span,
+      SymbolGroup::merged(sym),
+      &mut self.symbols,
+      &mut self.diagnostics,
+    );
   }
 }
 

@@ -102,3 +102,8 @@ reason = "Rust checker uses internal `TC0007` for assignability errors; tsc repo
 id = "difftsc/variance"
 status = "xfail"
 reason = "Rust checker uses internal `TC3004` for variance annotation errors; tsc reports `TS2636`"
+
+[[expectations]]
+id = "difftsc/export_assignment_mixed_exports"
+status = "xfail"
+reason = "Rust binder reports `BIND1005` for mixed export assignment; tsc reports `TS2309`"
