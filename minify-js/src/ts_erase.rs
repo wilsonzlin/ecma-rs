@@ -5,8 +5,7 @@ use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::jsx::*;
-use parse_js::ast::expr::lit::LitNullExpr;
-use parse_js::ast::expr::lit::{LitArrElem, LitStrExpr, LitTemplatePart};
+use parse_js::ast::expr::lit::{LitArrElem, LitBoolExpr, LitNullExpr, LitObjExpr, LitStrExpr, LitTemplatePart};
 use parse_js::ast::expr::pat::{ArrPat, IdPat, ObjPat, Pat};
 use parse_js::ast::expr::*;
 use parse_js::ast::func::{Func, FuncBody};
@@ -44,12 +43,28 @@ impl RewriteIdExprName<'_> {
   }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct TsEraseOptions {
+  pub lower_class_fields: bool,
+  pub use_define_for_class_fields: bool,
+}
+
+impl Default for TsEraseOptions {
+  fn default() -> Self {
+    Self {
+      lower_class_fields: false,
+      use_define_for_class_fields: true,
+    }
+  }
+}
+
 struct StripContext {
   file: FileId,
   top_level_mode: TopLevelMode,
   value_bindings_stack: Vec<HashSet<String>>,
   top_level_module_exports: HashSet<String>,
   emitted_export_var: HashSet<String>,
+  ts_erase_options: TsEraseOptions,
   diagnostics: Vec<Diagnostic>,
 }
 
@@ -194,11 +209,22 @@ fn take_jsx_elem(elem: &mut Node<JsxElem>) -> Node<JsxElem> {
   std::mem::replace(elem, dummy_jsx_elem())
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
 pub fn erase_types(
+  file: FileId,
+  top_level_mode: TopLevelMode,
+  source: &str,
+  top_level: &mut Node<TopLevel>,
+) -> Result<(), Vec<Diagnostic>> {
+  erase_types_with_options(file, top_level_mode, source, top_level, TsEraseOptions::default())
+}
+
+pub fn erase_types_with_options(
   file: FileId,
   top_level_mode: TopLevelMode,
   _source: &str,
   top_level: &mut Node<TopLevel>,
+  ts_erase_options: TsEraseOptions,
 ) -> Result<(), Vec<Diagnostic>> {
   let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
   let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
@@ -212,6 +238,7 @@ pub fn erase_types(
     value_bindings_stack: vec![top_level_value_bindings],
     top_level_module_exports,
     emitted_export_var: HashSet::new(),
+    ts_erase_options,
     diagnostics: Vec::new(),
   };
   strip_stmts(&mut ctx, &mut top_level.stx.body, true);
@@ -2697,15 +2724,388 @@ fn strip_class_expr(ctx: &mut StripContext, class: Node<ClassExpr>) -> Node<Clas
   class
 }
 
+fn void_0_expr(loc: Loc) -> Node<Expr> {
+  Node::new(
+    loc,
+    Expr::Unary(Node::new(
+      loc,
+      UnaryExpr {
+        operator: OperatorName::Void,
+        argument: ts_lower::number(loc, 0.0),
+      },
+    )),
+  )
+}
+
+fn boolean_expr(loc: Loc, value: bool) -> Node<Expr> {
+  Node::new(
+    loc,
+    Expr::LitBool(Node::new(
+      loc,
+      LitBoolExpr {
+        value,
+      },
+    )),
+  )
+}
+
+fn is_super_call(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Call(call) if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_))
+  )
+}
+
+enum SuperCallInsert {
+  After(usize),
+  AfterWithReturnThis { insert_at: usize, loc: Loc },
+}
+
+fn super_call_insert_after(stmts: &mut Vec<Node<Stmt>>) -> Option<SuperCallInsert> {
+  for idx in 0..stmts.len() {
+    let stmt = &mut stmts[idx];
+    match stmt.stx.as_mut() {
+      Stmt::Expr(expr_stmt) if is_super_call(&expr_stmt.stx.expr) => {
+        return Some(SuperCallInsert::After(idx + 1));
+      }
+      Stmt::VarDecl(decl)
+        if decl
+          .stx
+          .declarators
+          .iter()
+          .any(|declarator| declarator.initializer.as_ref().is_some_and(is_super_call)) =>
+      {
+        return Some(SuperCallInsert::After(idx + 1));
+      }
+      Stmt::Return(ret_stmt) => {
+        let Some(value) = ret_stmt.stx.value.take() else {
+          continue;
+        };
+        if is_super_call(&value) {
+          let loc = stmt.loc;
+          let assoc = std::mem::take(&mut stmt.assoc);
+          let mut expr_stmt = ts_lower::expr_stmt(loc, value);
+          expr_stmt.assoc = assoc;
+          *stmt = expr_stmt;
+          return Some(SuperCallInsert::AfterWithReturnThis {
+            insert_at: idx + 1,
+            loc,
+          });
+        }
+        ret_stmt.stx.value = Some(value);
+      }
+      _ => {}
+    }
+  }
+  None
+}
+
+fn directive_prologue_len(stmts: &[Node<Stmt>]) -> usize {
+  let mut len = 0;
+  for stmt in stmts {
+    match stmt.stx.as_ref() {
+      Stmt::Expr(expr_stmt) if matches!(expr_stmt.stx.expr.stx.as_ref(), Expr::LitStr(_)) => {
+        len += 1;
+      }
+      _ => break,
+    }
+  }
+  len
+}
+
+fn define_property_descriptor(loc: Loc, value: Node<Expr>) -> Node<Expr> {
+  fn direct_key(loc: Loc, name: &str) -> ClassOrObjKey {
+    ClassOrObjKey::Direct(Node::new(
+      loc,
+      ClassOrObjMemberDirectKey {
+        key: name.to_string(),
+        tt: TT::Identifier,
+      },
+    ))
+  }
+
+  fn prop_member(loc: Loc, name: &str, value: Node<Expr>) -> Node<ObjMember> {
+    Node::new(
+      loc,
+      ObjMember {
+        typ: ObjMemberType::Valued {
+          key: direct_key(loc, name),
+          val: ClassOrObjVal::Prop(Some(value)),
+        },
+      },
+    )
+  }
+
+  Node::new(
+    loc,
+    Expr::LitObj(Node::new(
+      loc,
+      LitObjExpr {
+        members: vec![
+          prop_member(loc, "value", value),
+          prop_member(loc, "enumerable", boolean_expr(loc, true)),
+          prop_member(loc, "configurable", boolean_expr(loc, true)),
+          prop_member(loc, "writable", boolean_expr(loc, true)),
+        ],
+      },
+    )),
+  )
+}
+
+fn define_property_stmt(loc: Loc, key: Node<Expr>, value: Node<Expr>) -> Node<Stmt> {
+  let callee = Node::new(
+    loc,
+    Expr::Member(Node::new(
+      loc,
+      MemberExpr {
+        optional_chaining: false,
+        left: ts_lower::id(loc, "Object"),
+        right: "defineProperty".to_string(),
+      },
+    )),
+  );
+  let call = Node::new(
+    loc,
+    Expr::Call(Node::new(
+      loc,
+      CallExpr {
+        optional_chaining: false,
+        callee,
+        arguments: vec![
+          Node::new(
+            loc,
+            CallArg {
+              spread: false,
+              value: Node::new(loc, Expr::This(Node::new(loc, ThisExpr {}))),
+            },
+          ),
+          Node::new(loc, CallArg { spread: false, value: key }),
+          Node::new(
+            loc,
+            CallArg {
+              spread: false,
+              value: define_property_descriptor(loc, value),
+            },
+          ),
+        ],
+      },
+    )),
+  );
+  ts_lower::expr_stmt(loc, call)
+}
+
+fn class_field_init_stmt(
+  ctx: &StripContext,
+  loc: Loc,
+  key: ClassOrObjKey,
+  init: Option<Node<Expr>>,
+) -> Node<Stmt> {
+  let value = init.unwrap_or_else(|| void_0_expr(loc));
+  if ctx.ts_erase_options.use_define_for_class_fields {
+    let key_expr = match key {
+      ClassOrObjKey::Direct(key) => ts_lower::string(loc, key.stx.key),
+      ClassOrObjKey::Computed(expr) => expr,
+    };
+    define_property_stmt(loc, key_expr, value)
+  } else {
+    let member_key = match key {
+      ClassOrObjKey::Direct(key) => ts_lower::MemberKey::Name(key.stx.key),
+      ClassOrObjKey::Computed(expr) => ts_lower::MemberKey::Expr(expr),
+    };
+    ts_lower::member_assignment_stmt(
+      loc,
+      Node::new(loc, Expr::This(Node::new(loc, ThisExpr {}))),
+      member_key,
+      value,
+    )
+  }
+}
+
 fn strip_class_members(
   ctx: &mut StripContext,
   members: &mut Vec<Node<ClassMember>>,
   is_derived: bool,
 ) {
+  fn return_this_stmt(loc: Loc) -> Node<Stmt> {
+    let this_expr = Node::new(loc, Expr::This(Node::new(loc, ThisExpr {})));
+    Node::new(
+      loc,
+      Stmt::Return(Node::new(
+        loc,
+        ReturnStmt {
+          value: Some(this_expr),
+        },
+      )),
+    )
+  }
+
+  fn is_param_prop_assignment(stmt: &Node<Stmt>) -> bool {
+    let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+      return false;
+    };
+    let Expr::Binary(bin) = expr_stmt.stx.expr.stx.as_ref() else {
+      return false;
+    };
+    if bin.stx.operator != OperatorName::Assignment {
+      return false;
+    }
+    let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
+      return false;
+    };
+    if member.stx.optional_chaining {
+      return false;
+    }
+    if !matches!(member.stx.object.stx.as_ref(), Expr::This(_)) {
+      return false;
+    }
+    let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
+      return false;
+    };
+    let Expr::Id(id) = bin.stx.right.stx.as_ref() else {
+      return false;
+    };
+    key.stx.value == id.stx.name
+  }
+
+  fn count_param_prop_assignments(stmts: &[Node<Stmt>], start: usize) -> usize {
+    let mut count = 0usize;
+    for stmt in stmts.iter().skip(start) {
+      if is_param_prop_assignment(stmt) {
+        count += 1;
+      } else {
+        break;
+      }
+    }
+    count
+  }
+
   let mut new_members = Vec::with_capacity(members.len());
+  let mut field_inits: Vec<Node<Stmt>> = Vec::new();
   for member in members.drain(..) {
     if let Some(stripped) = strip_class_member(ctx, member, is_derived) {
+      if ctx.ts_erase_options.lower_class_fields
+        && !stripped.stx.static_
+        && stripped.stx.decorators.is_empty()
+        && matches!(&stripped.stx.val, ClassOrObjVal::Prop(_))
+      {
+        let Node { loc, stx, .. } = stripped;
+        let member = *stx;
+        let ClassOrObjVal::Prop(init) = member.val else {
+          unreachable!("matches! guard ensures ClassOrObjVal::Prop");
+        };
+        field_inits.push(class_field_init_stmt(ctx, loc, member.key, init));
+        continue;
+      }
       new_members.push(stripped);
+    }
+  }
+
+  if ctx.ts_erase_options.lower_class_fields && !field_inits.is_empty() {
+    let ctor_idx = new_members.iter().position(|member| {
+      !member.stx.static_
+        && matches!(
+          &member.stx.key,
+          ClassOrObjKey::Direct(key) if key.stx.key == "constructor"
+        )
+    });
+
+    if let Some(idx) = ctor_idx {
+      let member = new_members
+        .get_mut(idx)
+        .expect("constructor index should be valid");
+      let ctor_loc = member.loc;
+      if let ClassOrObjVal::Method(method) = &mut member.stx.val {
+        if let Some(FuncBody::Block(stmts)) = method.stx.func.stx.body.as_mut() {
+          let base_insert_at = if is_derived {
+            match super_call_insert_after(stmts) {
+              Some(SuperCallInsert::After(insert_at)) => insert_at,
+              Some(SuperCallInsert::AfterWithReturnThis { insert_at, loc }) => {
+                field_inits.push(return_this_stmt(loc));
+                insert_at
+              }
+              None => {
+                unsupported_ts(
+                  ctx,
+                  ctor_loc,
+                  "instance class fields in derived constructors require a top-level `super(...)` call",
+                );
+                // Still insert at the end to keep lowering deterministic, even though we emit an
+                // error diagnostic and the pipeline will abort.
+                stmts.len()
+              }
+            }
+          } else {
+            directive_prologue_len(stmts)
+          };
+          let insert_at = if ctx.ts_erase_options.use_define_for_class_fields {
+            base_insert_at
+          } else {
+            base_insert_at + count_param_prop_assignments(stmts, base_insert_at)
+          };
+          stmts.splice(insert_at..insert_at, field_inits);
+        }
+      }
+    } else {
+      let loc = field_inits.first().map(|stmt| stmt.loc).unwrap_or(Loc(0, 0));
+      let mut body = Vec::new();
+      if is_derived {
+        body.push(ts_lower::expr_stmt(
+          loc,
+          Node::new(
+            loc,
+            Expr::Call(Node::new(
+              loc,
+              CallExpr {
+                optional_chaining: false,
+                callee: Node::new(loc, Expr::Super(Node::new(loc, SuperExpr {}))),
+                arguments: vec![Node::new(
+                  loc,
+                  CallArg {
+                    spread: true,
+                    value: ts_lower::id(loc, "arguments"),
+                  },
+                )],
+              },
+            )),
+          ),
+        ));
+      }
+      body.extend(field_inits);
+      let func = Func {
+        arrow: false,
+        async_: false,
+        generator: false,
+        type_parameters: None,
+        parameters: Vec::new(),
+        return_type: None,
+        body: Some(FuncBody::Block(body)),
+      };
+      let ctor = ClassMember {
+        decorators: Vec::new(),
+        key: ClassOrObjKey::Direct(Node::new(
+          loc,
+          ClassOrObjMemberDirectKey {
+            key: "constructor".to_string(),
+            tt: TT::KeywordConstructor,
+          },
+        )),
+        static_: false,
+        abstract_: false,
+        readonly: false,
+        accessor: false,
+        optional: false,
+        override_: false,
+        definite_assignment: false,
+        accessibility: None,
+        type_annotation: None,
+        val: ClassOrObjVal::Method(Node::new(
+          loc,
+          parse_js::ast::class_or_object::ClassOrObjMethod {
+            func: Node::new(loc, func),
+          },
+        )),
+      };
+      new_members.insert(0, Node::new(loc, ctor));
     }
   }
   *members = new_members;
@@ -2726,70 +3126,6 @@ fn strip_class_member(
       }
     }
     out
-  }
-
-  fn is_super_call(expr: &Node<Expr>) -> bool {
-    matches!(
-      expr.stx.as_ref(),
-      Expr::Call(call) if matches!(call.stx.callee.stx.as_ref(), Expr::Super(_))
-    )
-  }
-
-  enum SuperCallInsert {
-    After(usize),
-    AfterWithReturnThis { insert_at: usize, loc: Loc },
-  }
-
-  fn super_call_insert_after(stmts: &mut Vec<Node<Stmt>>) -> Option<SuperCallInsert> {
-    for idx in 0..stmts.len() {
-      let stmt = &mut stmts[idx];
-      match stmt.stx.as_mut() {
-        Stmt::Expr(expr_stmt) if is_super_call(&expr_stmt.stx.expr) => {
-          return Some(SuperCallInsert::After(idx + 1));
-        }
-        Stmt::VarDecl(decl)
-          if decl
-            .stx
-            .declarators
-            .iter()
-            .any(|declarator| declarator.initializer.as_ref().is_some_and(is_super_call)) =>
-        {
-          return Some(SuperCallInsert::After(idx + 1));
-        }
-        Stmt::Return(ret_stmt) => {
-          let Some(value) = ret_stmt.stx.value.take() else {
-            continue;
-          };
-          if is_super_call(&value) {
-            let loc = stmt.loc;
-            let assoc = std::mem::take(&mut stmt.assoc);
-            let mut expr_stmt = ts_lower::expr_stmt(loc, value);
-            expr_stmt.assoc = assoc;
-            *stmt = expr_stmt;
-            return Some(SuperCallInsert::AfterWithReturnThis {
-              insert_at: idx + 1,
-              loc,
-            });
-          }
-          ret_stmt.stx.value = Some(value);
-        }
-        _ => {}
-      }
-    }
-    None
-  }
-
-  fn directive_prologue_len(stmts: &[Node<Stmt>]) -> usize {
-    let mut len = 0;
-    for stmt in stmts {
-      match stmt.stx.as_ref() {
-        Stmt::Expr(expr_stmt) if matches!(expr_stmt.stx.expr.stx.as_ref(), Expr::LitStr(_)) => {
-          len += 1;
-        }
-        _ => break,
-      }
-    }
-    len
   }
 
   fn constructor_param_property_assignments(props: Vec<(String, Loc)>) -> Vec<Node<Stmt>> {

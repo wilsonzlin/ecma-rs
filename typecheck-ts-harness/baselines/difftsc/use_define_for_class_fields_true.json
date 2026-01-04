@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 99,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2729,
+      "file": "use_define_for_class_fields_true.ts",
+      "start": 76,
+      "end": 79,
+      "category": "error",
+      "message": "Property 'bar' is used before its initialization."
+    }
+  ]
+}
+

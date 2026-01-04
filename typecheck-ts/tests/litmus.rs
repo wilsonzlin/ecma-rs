@@ -390,7 +390,7 @@ fn run_fixture(path: &Path) {
       );
     }
   }
-  if path.ends_with("narrowing_patterns") {
+  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("narrowing_patterns") {
     let snap = program.snapshot();
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {

@@ -4539,7 +4539,9 @@ impl ProgramState {
       .unwrap_or_else(|| Arc::new(NamespaceMemberIndex::default()));
     BodyCheckContext {
       store: Arc::clone(&store),
+      target: self.compiler_options.target,
       no_implicit_any: self.compiler_options.no_implicit_any,
+      use_define_for_class_fields: self.compiler_options.use_define_for_class_fields,
       interned_def_types: self.interned_def_types.clone(),
       interned_type_params: self.interned_type_params.clone(),
       interned_intrinsics: self.interned_intrinsics.clone(),
@@ -11393,6 +11395,8 @@ impl ProgramState {
         file,
         ast_index.as_ref(),
         Arc::clone(&store),
+        self.compiler_options.target,
+        self.compiler_options.use_define_for_class_fields,
         &caches,
         &bindings,
         resolver,

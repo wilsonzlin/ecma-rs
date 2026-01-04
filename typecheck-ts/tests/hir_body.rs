@@ -7,6 +7,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::check::hir_body::AstIndex;
+use typecheck_ts::lib_support::ScriptTarget;
 use typecheck_ts::{
   parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, Program, TypeKindSummary,
 };
@@ -64,6 +65,8 @@ fn infers_basic_literals_and_identifiers() {
     FileId(0),
     &ast_index,
     Arc::clone(&store),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &bindings,
     None,
@@ -110,6 +113,8 @@ fn local_variable_widening_respects_decl_mode() {
     FileId(0),
     &ast_index,
     Arc::clone(&store),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &bindings,
     None,
@@ -179,6 +184,8 @@ fn expression_spans_match_body_indices() {
     FileId(0),
     &ast_index,
     store.clone(),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &bindings,
     None,
@@ -224,6 +231,8 @@ fn expr_at_returns_innermost_type() {
     FileId(0),
     &ast_index,
     store.clone(),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &bindings,
     None,
@@ -322,6 +331,8 @@ fn diagnostics_are_stably_sorted() {
     FileId(0),
     &ast_index,
     store.clone(),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &bindings,
     None,
@@ -367,6 +378,8 @@ fn call_with_missing_arguments_types_arguments_once() {
     FileId(0),
     &ast_index,
     Arc::clone(&store),
+    ScriptTarget::Es2015,
+    true,
     &caches,
     &HashMap::new(),
     None,

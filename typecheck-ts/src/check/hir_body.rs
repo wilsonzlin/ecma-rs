@@ -48,7 +48,7 @@ use super::infer::infer_type_arguments_for_call;
 use super::instantiate::{InstantiationCache, Substituter};
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
-use crate::lib_support::JsxMode;
+use crate::lib_support::{JsxMode, ScriptTarget};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
 
@@ -93,6 +93,7 @@ pub struct AstIndex {
   vars: HashMap<TextRange, VarInfo>,
   functions: Vec<FunctionInfo>,
   class_static_blocks: Vec<ClassStaticBlockInfo>,
+  class_field_param_props: HashMap<TextRange, Vec<String>>,
 }
 
 // Safety: `AstIndex` stores immutable pointers into an `Arc`-owned AST.
@@ -133,6 +134,7 @@ impl AstIndex {
       vars: HashMap::new(),
       functions: Vec::new(),
       class_static_blocks: Vec::new(),
+      class_field_param_props: HashMap::new(),
     };
     index.index_top_level(file, cancelled);
     index
@@ -266,9 +268,7 @@ impl AstIndex {
         for implements in class_decl.stx.implements.iter() {
           self.index_expr(implements, file, cancelled);
         }
-        for member in class_decl.stx.members.iter() {
-          self.index_class_member(member, file, cancelled);
-        }
+        self.index_class_members_in_class(&class_decl.stx.members, file, cancelled);
       }
       Stmt::NamespaceDecl(ns) => self.index_namespace(ns, file, cancelled),
       Stmt::ModuleDecl(module) => {
@@ -514,9 +514,7 @@ impl AstIndex {
         if let Some(extends) = class_expr.stx.extends.as_ref() {
           self.index_expr(extends, file, cancelled);
         }
-        for member in class_expr.stx.members.iter() {
-          self.index_class_member(member, file, cancelled);
-        }
+        self.index_class_members_in_class(&class_expr.stx.members, file, cancelled);
       }
       AstExpr::Func(func) => self.index_function(&func.stx.func, file, cancelled),
       AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file, cancelled),
@@ -551,6 +549,60 @@ impl AstIndex {
       | AstExpr::JsxText(..)
       | AstExpr::LitRegex(..)
       | AstExpr::NewTarget(..) => {}
+    }
+  }
+
+  fn index_class_members_in_class(
+    &mut self,
+    members: &[Node<ClassMember>],
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
+    let mut param_props: Vec<String> = Vec::new();
+    for (idx, member) in members.iter().enumerate() {
+      if idx % 128 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      if member.stx.static_ {
+        continue;
+      }
+      let is_constructor = matches!(
+        &member.stx.key,
+        ClassOrObjKey::Direct(key) if key.stx.key == "constructor"
+      );
+      if !is_constructor {
+        continue;
+      }
+      let ClassOrObjVal::Method(method) = &member.stx.val else {
+        continue;
+      };
+      for param in method.stx.func.stx.parameters.iter() {
+        if param.stx.accessibility.is_some() || param.stx.readonly {
+          if let AstPat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref() {
+            param_props.push(id.stx.name.clone());
+          }
+        }
+      }
+    }
+    if !param_props.is_empty() {
+      param_props.sort();
+      param_props.dedup();
+    }
+
+    for (idx, member) in members.iter().enumerate() {
+      if idx % 128 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      self.index_class_member(member, file, cancelled);
+      if param_props.is_empty() || member.stx.static_ {
+        continue;
+      }
+      if let ClassOrObjVal::Prop(Some(init)) = &member.stx.val {
+        let init_range = loc_to_range(file, init.loc);
+        self
+          .class_field_param_props
+          .insert(init_range, param_props.clone());
+      }
     }
   }
 
@@ -625,13 +677,29 @@ pub fn check_body(
   file: FileId,
   ast_index: &AstIndex,
   store: Arc<TypeStore>,
+  target: ScriptTarget,
+  use_define_for_class_fields: bool,
   caches: &BodyCaches,
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, false,
-    None, None,
+    body_id,
+    body,
+    names,
+    file,
+    ast_index,
+    store,
+    target,
+    use_define_for_class_fields,
+    caches,
+    bindings,
+    resolver,
+    None,
+    None,
+    false,
+    None,
+    None,
   )
 }
 
@@ -645,6 +713,8 @@ pub fn check_body_with_expander(
   file: FileId,
   ast_index: &AstIndex,
   store: Arc<TypeStore>,
+  target: ScriptTarget,
+  use_define_for_class_fields: bool,
   caches: &BodyCaches,
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
@@ -700,6 +770,8 @@ pub fn check_body_with_expander(
     && body.exprs.is_empty()
     && body.stmts.is_empty()
     && body.pats.is_empty();
+  let esnext_define_class_fields =
+    use_define_for_class_fields && matches!(target, ScriptTarget::EsNext);
   let mut checker = Checker {
     store,
     relate,
@@ -735,6 +807,8 @@ pub fn check_body_with_expander(
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
     no_implicit_any,
+    esnext_define_class_fields,
+    current_class_field_param_props: None,
     file,
     ref_expander: relate_expander,
     contextual_fn_ty,
@@ -849,6 +923,8 @@ struct Checker<'a> {
   check_var_assignments: bool,
   widen_object_literals: bool,
   no_implicit_any: bool,
+  esnext_define_class_fields: bool,
+  current_class_field_param_props: Option<&'a [String]>,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
@@ -1113,12 +1189,12 @@ impl<'a> Checker<'a> {
     }
 
     // Fallback for initializer bodies that are not var declarators (e.g. class
-    // field initializers). Match the tightest expression overlapping the body
+    // field initializers). Match the tightest expression containing the body
     // range and type-check it.
     let mut best_expr: Option<(u32, TextRange, *const Node<AstExpr>)> = None;
     for (span, expr) in self.index.exprs.iter() {
       let span = *span;
-      if !ranges_overlap(span, body_range) && !contains_range(body_range, span) {
+      if !contains_range(span, body_range) {
         continue;
       }
       let len = span.end.saturating_sub(span.start);
@@ -1135,7 +1211,14 @@ impl<'a> Checker<'a> {
     if let Some((_len, _span, expr)) = best_expr {
       self.check_cancelled();
       let expr = unsafe { &*expr };
+      let prev_props = self.current_class_field_param_props;
+      self.current_class_field_param_props = self
+        .index
+        .class_field_param_props
+        .get(&body_range)
+        .map(|props| props.as_slice());
       let _ = self.check_expr(expr);
+      self.current_class_field_param_props = prev_props;
       return true;
     }
     false
@@ -1736,6 +1819,26 @@ impl<'a> Checker<'a> {
         } else {
           self.member_type(base_obj_ty, &mem.stx.right)
         };
+        if self.esnext_define_class_fields {
+          if let Some(props) = self.current_class_field_param_props {
+            if matches!(mem.stx.left.stx.as_ref(), AstExpr::This(_))
+              && props.iter().any(|name| name == &mem.stx.right)
+            {
+              let full_range = loc_to_range(self.file, mem.loc);
+              let name_len = mem.stx.right.len() as u32;
+              let start = full_range.end.saturating_sub(name_len);
+              let range = TextRange::new(start, full_range.end);
+              self.diagnostics.push(Diagnostic::error(
+                "TS2729",
+                format!(
+                  "Property '{}' is used before its initialization.",
+                  mem.stx.right
+                ),
+                Span::new(self.file, range),
+              ));
+            }
+          }
+        }
         if mem.stx.optional_chaining {
           self.store.union(vec![prop_ty, prim.undefined])
         } else {

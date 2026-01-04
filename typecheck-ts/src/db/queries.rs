@@ -501,7 +501,7 @@ pub mod body_check {
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::files::FileRegistry;
-  use crate::lib_support::{CacheMode, CacheOptions, JsxMode};
+  use crate::lib_support::{CacheMode, CacheOptions, JsxMode, ScriptTarget};
   use crate::profile::{QueryKind, QueryStatsCollector};
   use crate::program::check::relate_hooks;
   use crate::program::{NamespaceMemberIndex, ProgramTypeResolver};
@@ -560,7 +560,9 @@ pub mod body_check {
   #[derive(Clone)]
   pub struct BodyCheckContext {
     pub store: Arc<TypeStore>,
+    pub target: ScriptTarget,
     pub no_implicit_any: bool,
+    pub use_define_for_class_fields: bool,
     pub interned_def_types: HashMap<DefId, InternedTypeId>,
     pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
     pub interned_intrinsics: HashMap<DefId, IntrinsicKind>,
@@ -947,6 +949,8 @@ pub mod body_check {
         meta.file,
         ast_index.as_ref(),
         Arc::clone(&ctx.store),
+        ctx.target,
+        ctx.use_define_for_class_fields,
         &caches,
         &bindings,
         resolver,

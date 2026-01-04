@@ -5,6 +5,7 @@ use crate::{
 };
 use crate::{
   minify, minify_with_options, Diagnostic, Dialect, FileId, MinifyOptions, Severity, TopLevelMode,
+  TsEraseOptions,
 };
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
@@ -2578,6 +2579,104 @@ fn constructor_parameter_properties_preserve_directive_prologue() {
     }
     other => panic!("expected computed member assignment, got {other:?}"),
   };
+}
+
+#[test]
+fn lowers_class_fields_with_define_for_class_fields_semantics() {
+  let src = r#"
+    class C {
+      foo = 1;
+    }
+    new C();
+  "#;
+  let mode = TopLevelMode::Global;
+
+  let emit = |use_define_for_class_fields: bool| -> (String, Node<TopLevel>) {
+    let mut out = Vec::new();
+    minify_with_options(
+      MinifyOptions::new(mode).with_ts_erase_options(TsEraseOptions {
+        lower_class_fields: true,
+        use_define_for_class_fields,
+      }),
+      src,
+      &mut out,
+    )
+    .unwrap();
+    let output = String::from_utf8(out).unwrap();
+    let parsed = parse_with_options(
+      &output,
+      ParseOptions {
+        dialect: Dialect::Js,
+        source_type: SourceType::Script,
+      },
+    )
+    .expect("output should parse as JavaScript");
+    (output, parsed)
+  };
+
+  let (define_output, define_parsed) = emit(true);
+  let (assign_output, assign_parsed) = emit(false);
+  assert_ne!(define_output, assign_output);
+
+  fn ctor_body(top_level: &Node<TopLevel>) -> &Vec<Node<Stmt>> {
+    let class_decl = match top_level.stx.body.first().map(|stmt| stmt.stx.as_ref()) {
+      Some(Stmt::ClassDecl(decl)) => decl,
+      other => panic!("expected class decl, got {other:?}"),
+    };
+    let ctor = class_decl
+      .stx
+      .members
+      .iter()
+      .find(|member| match &member.stx.key {
+        ClassOrObjKey::Direct(key) => key.stx.key == "constructor",
+        _ => false,
+      })
+      .expect("constructor member");
+    let method = match &ctor.stx.val {
+      ClassOrObjVal::Method(method) => method,
+      other => panic!("expected constructor method, got {other:?}"),
+    };
+    match method.stx.func.stx.body.as_ref() {
+      Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+      other => panic!("expected constructor body block, got {other:?}"),
+    }
+  }
+
+  let define_body = ctor_body(&define_parsed);
+  let assign_body = ctor_body(&assign_parsed);
+
+  let define_stmt = define_body.first().expect("define mode constructor stmt");
+  match define_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => match expr.stx.expr.stx.as_ref() {
+      Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+        Expr::Member(member) => {
+          assert!(matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Object"));
+          assert_eq!(member.stx.right, "defineProperty");
+        }
+        other => panic!("expected Object.defineProperty callee, got {other:?}"),
+      },
+      other => panic!("expected call expression, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  }
+
+  let assign_stmt = assign_body.first().expect("assign mode constructor stmt");
+  match assign_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => match expr.stx.expr.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => {
+        let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
+          panic!("expected this[\"foo\"]=... assignment, got {:?}", bin.stx.left);
+        };
+        assert!(matches!(member.stx.object.stx.as_ref(), Expr::This(_)));
+        match member.stx.member.stx.as_ref() {
+          Expr::LitStr(key) => assert_eq!(key.stx.value, "foo"),
+          other => panic!("expected string literal member key, got {other:?}"),
+        }
+      }
+      other => panic!("expected assignment expression, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  }
 }
 
 #[test]

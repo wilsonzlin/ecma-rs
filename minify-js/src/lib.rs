@@ -15,7 +15,8 @@ use semantic_js::js::bind_js;
 pub use semantic_js::js::TopLevelMode;
 #[cfg(all(test, feature = "emit-minify"))]
 use std::cell::Cell;
-use ts_erase::erase_types;
+pub use ts_erase::TsEraseOptions;
+use ts_erase::erase_types_with_options;
 
 pub use parse_js::Dialect;
 #[cfg(feature = "fuzzing")]
@@ -135,6 +136,8 @@ pub struct MinifyOptions {
   /// Explicit parser dialect. When omitted, TypeScript is attempted first with
   /// a TSX fallback for JSX-heavy inputs.
   pub dialect: Option<Dialect>,
+  /// Options affecting TypeScript erasure/lowering before minification.
+  pub ts_erase_options: TsEraseOptions,
 }
 
 impl MinifyOptions {
@@ -142,11 +145,17 @@ impl MinifyOptions {
     Self {
       top_level_mode,
       dialect: None,
+      ts_erase_options: TsEraseOptions::default(),
     }
   }
 
   pub fn with_dialect(mut self, dialect: Dialect) -> Self {
     self.dialect = Some(dialect);
+    self
+  }
+
+  pub fn with_ts_erase_options(mut self, ts_erase_options: TsEraseOptions) -> Self {
+    self.ts_erase_options = ts_erase_options;
     self
   }
 }
@@ -205,7 +214,13 @@ pub fn minify_with_options(
   #[cfg(feature = "emit-minify")]
   let used_dialect = used_dialect.expect("successful parse must set dialect");
 
-  erase_types(file, options.top_level_mode, source, &mut top_level_node)?;
+  erase_types_with_options(
+    file,
+    options.top_level_mode,
+    source,
+    &mut top_level_node,
+    options.ts_erase_options,
+  )?;
 
   let sem = {
     #[cfg(feature = "emit-minify")]
