@@ -10,6 +10,7 @@ pub(super) mod flow_narrow;
 pub mod hir_body;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
+#[allow(dead_code)]
 pub(super) mod legacy_narrow;
 pub(super) mod modules;
 pub(crate) mod overload;
