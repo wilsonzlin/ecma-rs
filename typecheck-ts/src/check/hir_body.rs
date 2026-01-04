@@ -3129,12 +3129,12 @@ impl<'a> Checker<'a> {
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
     let prim = self.store.primitive_ids();
+    let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.member_type(expanded, prop))
-        .unwrap_or(prim.unknown),
+      // `expand_ref` above already followed any resolvable references; if we
+      // still have a `Ref`, treat it as unknown to avoid infinitely recursing
+      // on self-referential expansions (e.g. during in-progress type computation).
+      TypeKind::Ref { .. } => prim.unknown,
       TypeKind::Callable { .. } if prop == "call" => {
         let sigs = callable_signatures(self.store.as_ref(), obj);
         if sigs.is_empty() {
@@ -3251,11 +3251,10 @@ impl<'a> Checker<'a> {
         .iter()
         .copied()
         .any(|member| self.type_has_prop(member, prop)),
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.type_has_prop(expanded, prop))
-        .unwrap_or(false),
+      TypeKind::Ref { .. } => {
+        let expanded = self.expand_ref(ty);
+        expanded != ty && self.type_has_prop(expanded, prop)
+      }
       TypeKind::Mapped(_) => true,
       _ => false,
     }
@@ -3264,6 +3263,7 @@ impl<'a> Checker<'a> {
   fn member_type_for_index_key(&mut self, obj: TypeId, key_ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
     let key_ty = self.store.canon(key_ty);
+    let obj = self.expand_ref(obj);
 
     match self.store.type_kind(key_ty) {
       TypeKind::Union(members) => {
@@ -3299,11 +3299,7 @@ impl<'a> Checker<'a> {
         }
         self.store.intersection(collected)
       }
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.member_type_for_index_key(expanded, key_ty))
-        .unwrap_or(prim.unknown),
+      TypeKind::Ref { .. } => prim.unknown,
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         let mut matches = Vec::new();
@@ -3531,6 +3527,7 @@ impl<'a> Checker<'a> {
 
   fn spread_element_type(&self, ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
+    let ty = self.expand_ref(ty);
     match self.store.type_kind(ty) {
       TypeKind::Any => prim.any,
       TypeKind::Unknown => prim.unknown,
@@ -3557,11 +3554,7 @@ impl<'a> Checker<'a> {
           self.store.union(members)
         }
       }
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.spread_element_type(expanded))
-        .unwrap_or(prim.unknown),
+      TypeKind::Ref { .. } => prim.unknown,
       _ => prim.unknown,
     }
   }
@@ -4258,6 +4251,7 @@ impl<'a> Checker<'a> {
   }
 
   fn first_callable_signature(&self, ty: TypeId) -> Option<Signature> {
+    let ty = self.expand_ref(ty);
     match self.store.type_kind(ty) {
       TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
       TypeKind::Object(obj) => {
@@ -4271,10 +4265,7 @@ impl<'a> Checker<'a> {
         .iter()
         .copied()
         .find_map(|member| self.first_callable_signature(member)),
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
-        .and_then(|expanded| self.first_callable_signature(expanded)),
+      TypeKind::Ref { .. } => None,
       _ => None,
     }
   }
@@ -4606,6 +4597,27 @@ impl<'a> Checker<'a> {
     }
   }
 
+  fn expand_ref(&self, ty: TypeId) -> TypeId {
+    let mut current = self.store.canon(ty);
+    let Some(expander) = self.ref_expander else {
+      return current;
+    };
+    let mut seen = HashSet::new();
+    while seen.insert(current) {
+      match self.store.type_kind(current) {
+        TypeKind::Ref { def, args } => {
+          if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+            current = self.store.canon(expanded);
+            continue;
+          }
+        }
+        _ => {}
+      }
+      break;
+    }
+    current
+  }
+
   fn expand_for_props(&self, ty: TypeId) -> TypeId {
     let Some(expander) = self.ref_expander else {
       return ty;
@@ -4683,14 +4695,15 @@ impl<'a> Checker<'a> {
               }
             }
             TypeKind::Ref { def, args } => {
-              if let Some(expanded) = self
+              let expanded = self
                 .ref_expander
-                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-              {
-                saw_object = true;
-                if self.type_accepts_props(expanded, props) {
-                  return true;
-                }
+                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args));
+              let Some(expanded) = expanded.filter(|expanded| *expanded != member) else {
+                continue;
+              };
+              saw_object = true;
+              if self.type_accepts_props(expanded, props) {
+                return true;
               }
             }
             _ => {}
@@ -4741,12 +4754,13 @@ impl<'a> Checker<'a> {
               object_members.push(member);
             }
             TypeKind::Ref { def, args } => {
-              if let Some(expanded) = self
+              let expanded = self
                 .ref_expander
-                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-              {
-                object_members.push(expanded);
-              }
+                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args));
+              let Some(expanded) = expanded.filter(|expanded| *expanded != member) else {
+                continue;
+              };
+              object_members.push(expanded);
             }
             _ => {}
           }
@@ -4789,23 +4803,21 @@ impl<'a> Checker<'a> {
         props.iter().all(|p| allowed.contains(p))
       }
       TypeKind::Mapped(_) => true,
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.type_accepts_props(expanded, props))
-        .unwrap_or(true),
+      TypeKind::Ref { .. } => {
+        // If we cannot expand (or expansion makes no progress), accept all props
+        // to keep excess property checks conservative.
+        let expanded = self.expand_ref(target);
+        expanded == target || self.type_accepts_props(expanded, props)
+      }
       _ => true,
     }
   }
 
   fn is_mapped_type(&self, ty: TypeId) -> bool {
+    let ty = self.expand_ref(ty);
     match self.store.type_kind(ty) {
       TypeKind::Mapped(_) => true,
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.is_mapped_type(expanded))
-        .unwrap_or(false),
+      TypeKind::Ref { .. } => false,
       TypeKind::Union(members) | TypeKind::Intersection(members) => members
         .iter()
         .copied()
@@ -8009,6 +8021,7 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn member_type_for_known_key(&self, obj: TypeId, key: &str) -> TypeId {
     let prim = self.store.primitive_ids();
+    let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
       TypeKind::Union(members) => {
         let mut collected = Vec::new();
@@ -8024,11 +8037,7 @@ impl<'a> FlowBodyChecker<'a> {
         }
         self.store.intersection(collected)
       }
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.member_type_for_known_key(expanded, key))
-        .unwrap_or(prim.unknown),
+      TypeKind::Ref { .. } => prim.unknown,
       TypeKind::Tuple(elems) => match key.parse::<usize>() {
         Ok(idx) => {
           let options = self.relate.options;
@@ -8069,6 +8078,7 @@ impl<'a> FlowBodyChecker<'a> {
   fn member_type_for_index_key(&self, obj: TypeId, key_ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
     let key_ty = self.store.canon(key_ty);
+    let obj = self.expand_ref(obj);
 
     match self.store.type_kind(key_ty) {
       TypeKind::Union(members) => {
@@ -8104,11 +8114,7 @@ impl<'a> FlowBodyChecker<'a> {
         }
         self.store.intersection(collected)
       }
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .map(|expanded| self.member_type_for_index_key(expanded, key_ty))
-        .unwrap_or(prim.unknown),
+      TypeKind::Ref { .. } => prim.unknown,
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         let mut matches = Vec::new();
@@ -8222,6 +8228,7 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
+    let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
       TypeKind::Union(members) => {
         let mut tys = Vec::new();
@@ -8249,10 +8256,7 @@ impl<'a> FlowBodyChecker<'a> {
           Some(self.store.intersection(tys))
         }
       }
-      TypeKind::Ref { def, args } => self
-        .ref_expander
-        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
-        .and_then(|expanded| self.object_prop_type(expanded, key)),
+      TypeKind::Ref { .. } => None,
       TypeKind::Callable { .. } => self.callable_prop_type(obj, key),
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);

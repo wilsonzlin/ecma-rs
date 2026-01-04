@@ -230,6 +230,10 @@ cargo run -p typecheck-ts-harness --release -- triage --input report.json --top 
 
 # Show regressions/fixes vs a previous JSON report
 cargo run -p typecheck-ts-harness --release -- triage --input report.json --baseline previous.json
+
+# Pipe a JSON report directly into triage (use `--input -` for stdin)
+cargo run -p typecheck-ts-harness --release -- conformance --json --allow-mismatches \
+  | cargo run -p typecheck-ts-harness --release -- triage --input - --json > triage.json
 ```
 
 ### Expectations manifests

@@ -2,6 +2,7 @@ use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
 use num_cpus;
+use std::io::Read;
 use std::io::Write;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -269,29 +270,61 @@ fn main() -> ExitCode {
       json,
       top,
     } => {
-      match triage::analyze_report_paths(&input, baseline.as_deref(), top) {
-        Ok(report) => {
-          let stderr = std::io::stderr();
-          let mut stderr_handle = stderr.lock();
-          if let Err(err) = triage::print_human_summary(&report, &mut stderr_handle) {
+      let input_raw = if input.as_os_str() == "-" {
+        let mut raw = String::new();
+        if let Err(err) = std::io::stdin().read_to_string(&mut raw) {
+          return print_error(err);
+        }
+        raw
+      } else {
+        match std::fs::read_to_string(&input) {
+          Ok(raw) => raw,
+          Err(err) => return print_error(err),
+        }
+      };
+
+      let baseline_raw = match baseline.as_deref() {
+        Some(path) if path.as_os_str() == "-" => {
+          if input.as_os_str() == "-" {
+            return print_error("triage: cannot read both --input - and --baseline - from stdin");
+          }
+          let mut raw = String::new();
+          if let Err(err) = std::io::stdin().read_to_string(&mut raw) {
             return print_error(err);
           }
-
-          if json {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            if let Err(err) = serde_json::to_writer_pretty(&mut handle, &report) {
-              return print_error(err);
-            }
-            if let Err(err) = writeln!(&mut handle) {
-              return print_error(err);
-            }
-          }
-
-          ExitCode::SUCCESS
+          Some(raw)
         }
-        Err(err) => print_error(err),
+        Some(path) => match std::fs::read_to_string(path) {
+          Ok(raw) => Some(raw),
+          Err(err) => return print_error(err),
+        },
+        None => None,
+      };
+
+      let report = match triage::analyze_report_json_strs(&input_raw, baseline_raw.as_deref(), top)
+      {
+        Ok(report) => report,
+        Err(err) => return print_error(err),
+      };
+
+      let stderr = std::io::stderr();
+      let mut stderr_handle = stderr.lock();
+      if let Err(err) = triage::print_human_summary(&report, &mut stderr_handle) {
+        return print_error(err);
       }
+
+      if json {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        if let Err(err) = serde_json::to_writer_pretty(&mut handle, &report) {
+          return print_error(err);
+        }
+        if let Err(err) = writeln!(&mut handle) {
+          return print_error(err);
+        }
+      }
+
+      ExitCode::SUCCESS
     }
   }
 }

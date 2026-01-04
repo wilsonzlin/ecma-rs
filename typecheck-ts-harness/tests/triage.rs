@@ -598,6 +598,30 @@ fn triage_conformance_json_output_is_stable() {
 }
 
 #[test]
+fn triage_can_read_report_from_stdin() {
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd.timeout(CLI_TIMEOUT);
+  cmd
+    .arg("triage")
+    .arg("--input")
+    .arg("-")
+    .arg("--top")
+    .arg("5")
+    .arg("--json")
+    .write_stdin(CONFORMANCE_REPORT);
+
+  let assert = cmd.assert().success();
+  let output = assert.get_output();
+  assert!(
+    !output.stderr.is_empty(),
+    "expected human summary on stderr"
+  );
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert_eq!(stdout, EXPECTED_CONFORMANCE_TRIAGE);
+}
+
+#[test]
 fn triage_conformance_baseline_diff_json_output_is_stable() {
   let dir = tempdir().expect("tempdir");
   let path = dir.path().join("report.json");

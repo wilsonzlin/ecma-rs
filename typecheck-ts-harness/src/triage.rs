@@ -208,8 +208,16 @@ impl DifftscTypeMismatchReport {
 }
 
 pub fn analyze_report_json_str(input: &str, top: usize) -> Result<TriageReport> {
+  analyze_report_json_strs(input, None, top)
+}
+
+pub fn analyze_report_json_strs(input: &str, baseline: Option<&str>, top: usize) -> Result<TriageReport> {
   let value: Value = serde_json::from_str(input).context("parse JSON report")?;
-  analyze_report_value(value, top)
+  let baseline_value = match baseline {
+    Some(raw) => Some(serde_json::from_str(raw).context("parse baseline JSON report")?),
+    None => None,
+  };
+  analyze_report_value_with_baseline(value, baseline_value, top)
 }
 
 pub fn analyze_report_path(path: &Path, top: usize) -> Result<TriageReport> {
@@ -330,10 +338,6 @@ fn write_top(out: &mut impl Write, title: &str, groups: &[CountGroup]) -> io::Re
     writeln!(out, "  {}: {}", group.key, group.count)?;
   }
   Ok(())
-}
-
-fn analyze_report_value(value: Value, top: usize) -> Result<TriageReport> {
-  analyze_report_value_with_baseline(value, None, top)
 }
 
 fn analyze_report_value_with_baseline(
