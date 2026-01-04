@@ -111,7 +111,10 @@ fn generate_program(rng: &mut Rng, case: usize) -> String {
 fn generate_project(rng: &mut Rng, case: usize) -> Project {
   // Mix in a small multi-file import cycle to stress module-graph + binder
   // termination and determinism.
-  if rng.gen_usize(4) == 0 {
+  //
+  // Case 0 is always the import-cycle project so regressions reliably surface
+  // even if the RNG distribution changes.
+  if case == 0 || rng.gen_usize(4) == 0 {
     let main = FileKey::new("file0.ts");
     let dep = FileKey::new("file1.ts");
 
