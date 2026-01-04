@@ -465,3 +465,46 @@ fn avoids_synthetic_namespace_binding_collisions_with_top_level_bindings() {
     "expected the user var binding not to be redeclared. output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_enum_alias_collisions_with_top_level_bindings() {
+  // Force enum alias generation by shadowing the enum object identifier inside a member
+  // initializer, while also declaring a top-level binding with the old synthetic alias name.
+  let src = r#"
+    eval("x");
+    var __minify_ts_enum_E = 123;
+    export enum E {
+      A = (eval("x"), 1),
+      B = ((E) => A)(0),
+    }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_top_level_var_binding(&parsed, "__minify_ts_enum_E"),
+    "expected user binding `__minify_ts_enum_E` to remain in output: {code}"
+  );
+
+  let body = find_iife_body_by_outer_name(&parsed, "E").expect("expected E enum IIFE");
+  let alias_name = body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::VarDecl(decl) => decl.stx.declarators.iter().find_map(|declarator| {
+        let Pat::Id(id) = declarator.pattern.stx.pat.stx.as_ref() else {
+          return None;
+        };
+        Some(id.stx.name.clone())
+      }),
+      _ => None,
+    })
+    .expect("expected enum alias var declaration");
+
+  assert_ne!(
+    alias_name, "__minify_ts_enum_E",
+    "expected enum alias name to avoid colliding with user bindings. output: {code}"
+  );
+  assert!(
+    alias_name.starts_with("__minify_ts_enum_E_"),
+    "expected enum alias to use the __minify_ts_enum_E base name with a suffix, got `{alias_name}`. output: {code}"
+  );
+}
