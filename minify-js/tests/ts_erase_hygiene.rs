@@ -467,6 +467,27 @@ fn avoids_synthetic_namespace_binding_collisions_with_top_level_bindings() {
 }
 
 #[test]
+fn avoids_synthetic_namespace_binding_collisions_with_top_level_identifier_references() {
+  let src = r#"
+    eval("x");
+    export namespace static { export const x = 1; }
+    console.log(__minify_ts_namespace_static);
+  "#;
+  let (code, mut parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid shadowing top-level identifier references. output: {code}"
+  );
+  assert!(
+    program_contains_id_expr(&mut parsed, "__minify_ts_namespace_static"),
+    "expected the `__minify_ts_namespace_static` identifier reference to remain in output: {code}"
+  );
+}
+
+#[test]
 fn avoids_synthetic_enum_alias_collisions_with_top_level_bindings() {
   // Force enum alias generation by shadowing the enum object identifier inside a member
   // initializer, while also declaring a top-level binding with the old synthetic alias name.
@@ -506,5 +527,26 @@ fn avoids_synthetic_enum_alias_collisions_with_top_level_bindings() {
   assert!(
     alias_name.starts_with("__minify_ts_enum_E_"),
     "expected enum alias to use the __minify_ts_enum_E base name with a suffix, got `{alias_name}`. output: {code}"
+  );
+}
+
+#[test]
+fn avoids_synthetic_enum_object_collisions_with_top_level_identifier_references() {
+  let src = r#"
+    eval("x");
+    export enum static { A = 1, B }
+    console.log(__minify_ts_enum_obj_static);
+  "#;
+  let (code, mut parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime enum");
+  assert_ne!(
+    local, "__minify_ts_enum_obj_static",
+    "expected TS erasure to avoid shadowing top-level identifier references. output: {code}"
+  );
+  assert!(
+    program_contains_id_expr(&mut parsed, "__minify_ts_enum_obj_static"),
+    "expected the `__minify_ts_enum_obj_static` identifier reference to remain in output: {code}"
   );
 }
