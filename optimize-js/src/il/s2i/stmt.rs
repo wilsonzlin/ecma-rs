@@ -220,12 +220,6 @@ impl<'p> HirSourceToInst<'p> {
     await_: bool,
     label: Option<NameId>,
   ) -> OptimizeResult<()> {
-    if await_ {
-      return Err(unsupported_syntax_range(
-        span,
-        "for-await-of statements are not supported",
-      ));
-    }
     if !is_for_of {
       return Err(unsupported_syntax_range(span, "for-in statements are not supported"));
     }
@@ -241,7 +235,12 @@ impl<'p> HirSourceToInst<'p> {
       iterator_method_tmp_var,
       Arg::Var(iterable_tmp_var),
       BinOp::GetProp,
-      Arg::Builtin("Symbol.iterator".to_string()),
+      Arg::Builtin(if await_ {
+        "Symbol.asyncIterator"
+      } else {
+        "Symbol.iterator"
+      }
+      .to_string()),
     ));
 
     let iterator_tmp_var = self.c_temp.bump();
@@ -273,10 +272,24 @@ impl<'p> HirSourceToInst<'p> {
       Vec::new(),
     ));
 
+    let iter_result_tmp_var = if await_ {
+      let awaited_tmp_var = self.c_temp.bump();
+      self.out.push(Inst::call(
+        awaited_tmp_var,
+        Arg::Builtin("__optimize_js_await".to_string()),
+        Arg::Const(Const::Undefined),
+        vec![Arg::Var(next_result_tmp_var)],
+        Vec::new(),
+      ));
+      awaited_tmp_var
+    } else {
+      next_result_tmp_var
+    };
+
     let done_tmp_var = self.c_temp.bump();
     self.out.push(Inst::bin(
       done_tmp_var,
-      Arg::Var(next_result_tmp_var),
+      Arg::Var(iter_result_tmp_var),
       BinOp::GetProp,
       Arg::Const(Const::Str("done".to_string())),
     ));
@@ -289,7 +302,7 @@ impl<'p> HirSourceToInst<'p> {
     let value_tmp_var = self.c_temp.bump();
     self.out.push(Inst::bin(
       value_tmp_var,
-      Arg::Var(next_result_tmp_var),
+      Arg::Var(iter_result_tmp_var),
       BinOp::GetProp,
       Arg::Const(Const::Str("value".to_string())),
     ));
