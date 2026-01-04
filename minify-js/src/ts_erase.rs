@@ -115,7 +115,8 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
     | TT::KeywordGet
     | TT::KeywordOf
     | TT::KeywordOut
-    | TT::KeywordSet => true,
+    | TT::KeywordSet
+    | TT::KeywordUsing => true,
 
     // `await` is reserved in modules, but allowed as an identifier in scripts.
     TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global),

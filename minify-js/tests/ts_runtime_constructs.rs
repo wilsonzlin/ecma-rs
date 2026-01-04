@@ -684,3 +684,14 @@ fn lowers_dotted_namespaces_with_strict_mode_restricted_identifiers_to_parseable
     "lowering should not introduce a `function(arguments)` parameter (invalid strict mode JS): {code}"
   );
 }
+
+#[test]
+fn lowers_top_level_namespaces_named_using_to_parseable_js() {
+  let src = r#"
+    export namespace using {
+      export const x = 1;
+    }
+    console.log(using.x);
+  "#;
+  let (_code, _parsed) = minify_ts_module(src);
+}
