@@ -1,0 +1,10 @@
+{
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "foo",
+    "types": [],
+    "typeRoots": ["./node_modules/@types"],
+  },
+  "include": ["src/main.tsx"],
+}
+

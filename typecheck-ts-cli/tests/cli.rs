@@ -851,3 +851,93 @@ fn project_mode_accepts_full_ts_lib_names() {
     "expected program to include main.ts, got {files:?}"
   );
 }
+
+#[test]
+fn project_mode_resolves_scoped_types_packages() {
+  let tsconfig = fixture("project_mode/types_scoped/tsconfig.json");
+  let main = fixture("project_mode/types_scoped/src/main.ts");
+  let dts = fixture("project_mode/types_scoped/node_modules/@types/scope__pkg/index.d.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(files.contains(&normalized(&main).as_str()));
+  assert!(
+    files.contains(&normalized(&dts).as_str()),
+    "expected scoped @types package to be loaded, got {files:?}"
+  );
+
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics when scoped types package is resolved, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn project_mode_applies_jsx_import_source_types() {
+  let tsconfig = fixture("project_mode/jsx_import_source/tsconfig.json");
+  let main = fixture("project_mode/jsx_import_source/src/main.tsx");
+  let dts = fixture("project_mode/jsx_import_source/node_modules/@types/foo/index.d.ts");
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let files: Vec<_> = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array")
+    .iter()
+    .filter_map(|v| v.as_str())
+    .collect();
+
+  assert!(files.contains(&normalized(&main).as_str()));
+  assert!(
+    files.contains(&normalized(&dts).as_str()),
+    "expected jsxImportSource package to be loaded as a type library, got {files:?}"
+  );
+
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC3003")),
+    "did not expect missing JSX namespace diagnostics, got {diagnostics:?}"
+  );
+}

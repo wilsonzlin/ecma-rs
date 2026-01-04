@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, JsxMode, LibFile, LibName, ScriptTarget};
 use typecheck_ts::resolve::{canonicalize_path, NodeResolver, ResolveOptions};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
@@ -702,7 +702,21 @@ fn load_type_libs(
     return Ok(ensure_placeholder_libs(libs, options));
   }
 
-  if let Some(types) = cfg.types.as_ref() {
+  let mut types_override = cfg.types.clone();
+  if matches!(
+    options.jsx,
+    Some(JsxMode::React | JsxMode::ReactJsx | JsxMode::ReactJsxdev | JsxMode::Preserve)
+  ) {
+    if let (Some(import_source), Some(types)) = (cfg.jsx_import_source.as_ref(), types_override.as_mut()) {
+      if !types.iter().any(|name| name == import_source) {
+        types.push(import_source.clone());
+        types.sort();
+        types.dedup();
+      }
+    }
+  }
+
+  if let Some(types) = types_override.as_ref() {
     for name in types {
       let Some(dir) = resolve_type_package(&type_roots, name) else {
         return Err(format!(
@@ -795,8 +809,23 @@ fn resolve_type_package(type_roots: &[PathBuf], package: &str) -> Option<PathBuf
     if dir.is_dir() {
       return Some(dir);
     }
+    if let Some(encoded) = encode_types_package_name(package) {
+      let dir = root.join(encoded);
+      if dir.is_dir() {
+        return Some(dir);
+      }
+    }
   }
   None
+}
+
+fn encode_types_package_name(package: &str) -> Option<String> {
+  let (scope, name) = package.split_once('/')?;
+  if !scope.starts_with('@') || name.is_empty() {
+    return None;
+  }
+  let scope = scope.trim_start_matches('@');
+  Some(format!("{scope}__{name}"))
 }
 
 fn lib_file_from_type_package(package: &str, dir: &Path) -> Result<Option<LibFile>, String> {
