@@ -175,6 +175,10 @@ impl Substituter {
         }
         self.store.intern_type(TypeKind::TemplateLiteral(tpl))
       }
+      TypeKind::Intrinsic { kind, ty } => {
+        let ty = self.substitute_type(ty);
+        self.store.intern_type(TypeKind::Intrinsic { kind, ty })
+      }
       TypeKind::IndexedAccess { obj, index } => {
         let obj = self.substitute_type(obj);
         let index = self.substitute_type(index);

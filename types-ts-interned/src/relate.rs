@@ -70,6 +70,15 @@ pub struct ReasonNode {
 
 const MAX_REASON_DEPTH: usize = 12;
 const MAX_REASON_NODES: usize = 256;
+// Defensive recursion cap for the relation engine itself.
+//
+// `RelateCtx` uses recursion for structural type comparisons, and while cycles
+// are handled via `in_progress`, deeply-nested or adversarial graphs (common in
+// proptests) can still build call stacks large enough to overflow.
+//
+// Mirror the existing step-limit behaviour: when this cap is exceeded we
+// assume success and stop descending to preserve termination and determinism.
+const MAX_RELATION_DEPTH: usize = 256;
 const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
 const MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
 const MAX_TEMPLATE_MATCH_STATES: usize = 1024;
@@ -423,6 +432,20 @@ impl<'a> RelateCtx<'a> {
       kind,
       mode,
     };
+    if depth >= MAX_RELATION_DEPTH {
+      let record = record && self.take_reason_slot();
+      return RelationResult {
+        result: true,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          true,
+          Some("depth limit".into()),
+          depth,
+        ),
+      };
+    }
     if let Some(hit) = self.cache.get(&key) {
       let record = record && self.take_reason_slot();
       return RelationResult {

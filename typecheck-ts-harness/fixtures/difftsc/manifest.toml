@@ -34,11 +34,6 @@ status = "xfail"
 reason = "Rust checker does not match tsc's `import = require()` restrictions/flow diagnostics."
 
 [[expectations]]
-id = "difftsc/intrinsic_string_mappings"
-status = "xfail"
-reason = "Rust checker does not yet support intrinsic string mapping types (`Uppercase`, etc.)."
-
-[[expectations]]
 id = "difftsc/merged_function_namespace"
 status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
