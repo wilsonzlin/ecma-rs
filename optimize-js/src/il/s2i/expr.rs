@@ -923,6 +923,7 @@ impl<'p> HirSourceToInst<'p> {
       } => self.compile_cond_expr(*test, *consequent, *alternate),
       ExprKind::Ident(name) => self.compile_id_expr(expr_id, *name),
       ExprKind::Literal(lit) => self.literal_arg(span, lit),
+      ExprKind::This => Ok(Arg::Builtin("this".to_string())),
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
       | ExprKind::Satisfies { expr, .. } => self.compile_expr(*expr),
