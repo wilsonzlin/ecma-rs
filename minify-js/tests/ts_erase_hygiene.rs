@@ -383,3 +383,20 @@ fn avoids_synthetic_namespace_param_collisions_with_import_equals_entity_name_ba
     "expected the import= initializer to continue referring to `__minify_ts_namespace_static`. output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_namespace_binding_collisions_with_ambient_var_decls() {
+  let src = r#"
+    eval("x");
+    declare var __minify_ts_namespace_static: any;
+    export namespace static { export const x = 1; }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid colliding with ambient globals declared in the input. output: {code}"
+  );
+}

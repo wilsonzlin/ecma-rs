@@ -17,7 +17,8 @@ use parse_js::ast::stmt::decl::{
 use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::{
-  EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl,
+  AmbientClassDecl, AmbientFunctionDecl, AmbientVarDecl, EnumDecl, ExportAsNamespaceDecl,
+  ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl,
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
@@ -33,6 +34,10 @@ type EnumDeclNode = Node<EnumDecl>;
 type NamespaceDeclNode = Node<NamespaceDecl>;
 type ModuleDeclNode = Node<ModuleDecl>;
 type ImportEqualsDeclNode = Node<ImportEqualsDecl>;
+type AmbientVarDeclNode = Node<AmbientVarDecl>;
+type AmbientFunctionDeclNode = Node<AmbientFunctionDecl>;
+type AmbientClassDeclNode = Node<AmbientClassDecl>;
+type ExportAsNamespaceDeclNode = Node<ExportAsNamespaceDecl>;
 
 #[derive(Debug)]
 struct FreshInternalNameGenerator {
@@ -67,7 +72,11 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
     EnumDeclNode(enter),
     NamespaceDeclNode(enter),
     ModuleDeclNode(enter),
-    ImportEqualsDeclNode(enter)
+    ImportEqualsDeclNode(enter),
+    AmbientVarDeclNode(enter),
+    AmbientFunctionDeclNode(enter),
+    AmbientClassDeclNode(enter),
+    ExportAsNamespaceDeclNode(enter)
   )]
   struct Collector {
     names: HashSet<String>,
@@ -105,6 +114,22 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
       if let ImportEqualsRhs::EntityName { path } = &node.stx.rhs {
         self.names.extend(path.iter().cloned());
       }
+    }
+
+    fn enter_ambient_var_decl_node(&mut self, node: &mut AmbientVarDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_ambient_function_decl_node(&mut self, node: &mut AmbientFunctionDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_ambient_class_decl_node(&mut self, node: &mut AmbientClassDeclNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_export_as_namespace_decl_node(&mut self, node: &mut ExportAsNamespaceDeclNode) {
+      self.names.insert(node.stx.name.clone());
     }
   }
 
