@@ -738,6 +738,49 @@ fn lowers_dotted_namespaces_with_strict_reserved_identifier_package_to_parseable
 }
 
 #[test]
+fn rewrites_namespace_self_references_for_strict_reserved_names() {
+  let src = r#"
+    export namespace A.package.inner {
+      eval("x");
+      package["x"] = 1;
+      export const y = package["x"];
+    }
+    console.log(A["package"]["inner"].y);
+  "#;
+  let (_code, mut parsed) = minify_ts_module(src);
+
+  use derive_visitor::{DriveMut, VisitorMut};
+  use parse_js::ast::expr::IdExpr;
+  type IdExprNode = Node<IdExpr>;
+
+  #[derive(VisitorMut)]
+  #[visitor(IdExprNode(enter))]
+  struct FindIdExpr<'a> {
+    target: &'a str,
+    found: bool,
+  }
+
+  impl FindIdExpr<'_> {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == self.target {
+        self.found = true;
+      }
+    }
+  }
+
+  let mut visitor = FindIdExpr {
+    target: "package",
+    found: false,
+  };
+  parsed.drive_mut(&mut visitor);
+
+  assert!(
+    !visitor.found,
+    "expected `package` identifier references inside namespace bodies to be rewritten"
+  );
+}
+
+#[test]
 fn lowers_exported_enums_with_strict_reserved_names_inside_namespaces_to_parseable_js() {
   let src = r#"
     export namespace A {

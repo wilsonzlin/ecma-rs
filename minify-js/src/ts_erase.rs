@@ -1,5 +1,5 @@
 use crate::{ts_lower, Diagnostic, TopLevelMode};
-use derive_visitor::{Drive, DriveMut};
+use derive_visitor::{Drive, DriveMut, VisitorMut};
 use diagnostics::{FileId, Span};
 use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
@@ -26,6 +26,23 @@ use parse_js::token::{keyword_from_str, TT};
 use std::collections::{HashMap, HashSet};
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
+
+type IdExprNode = Node<IdExpr>;
+
+#[derive(VisitorMut)]
+#[visitor(IdExprNode(enter))]
+struct RewriteIdExprName<'a> {
+  from: &'a str,
+  to: &'a str,
+}
+
+impl RewriteIdExprName<'_> {
+  fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    if node.stx.name == self.from {
+      node.stx.name = self.to.to_string();
+    }
+  }
+}
 
 struct StripContext {
   file: FileId,
@@ -2298,7 +2315,16 @@ fn strip_namespace_decl(
       .insert(namespace_name.clone());
   }
 
-  let body = strip_namespace_body(ctx, decl.stx.body, &namespace_param_ident);
+  let mut body = strip_namespace_body(ctx, decl.stx.body, &namespace_param_ident);
+  if namespace_param_ident != namespace_name {
+    let mut visitor = RewriteIdExprName {
+      from: &namespace_name,
+      to: &namespace_param_ident,
+    };
+    for stmt in body.iter_mut() {
+      stmt.drive_mut(&mut visitor);
+    }
+  }
   let arg = namespace_iife_arg(
     loc,
     &namespace_param_ident,
