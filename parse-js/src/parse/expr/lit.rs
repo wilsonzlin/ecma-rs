@@ -19,6 +19,8 @@ use crate::ast::expr::lit::LitTemplateExpr;
 use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
+use crate::ast::node::LeadingZeroDecimalLiteral;
+use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::Node;
 use crate::char::is_line_terminator;
 use crate::error::SyntaxError;
@@ -516,10 +518,18 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_num(&mut self) -> SyntaxResult<Node<LitNumExpr>> {
-    self.with_loc(|p| {
-      let value = p.lit_num_val()?;
-      Ok(LitNumExpr { value })
-    })
+    let t = self.require(TT::LiteralNumber)?;
+    let raw = self.str(t.loc);
+    let value = normalise_literal_number(raw)
+      .ok_or_else(|| t.loc.error(SyntaxErrorType::MalformedLiteralNumber, None))?;
+
+    let mut node = Node::new(t.loc, LitNumExpr { value });
+    if crate::num::is_legacy_octal_literal(raw) {
+      node.assoc.set(LegacyOctalNumberLiteral);
+    } else if crate::num::is_leading_zero_decimal_literal(raw) {
+      node.assoc.set(LeadingZeroDecimalLiteral);
+    }
+    Ok(node)
   }
 
   pub fn lit_num_val(&mut self) -> SyntaxResult<JsNumber> {

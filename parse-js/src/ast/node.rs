@@ -28,6 +28,24 @@ pub struct NodeAssocData {
 #[derive(Clone, Copy, Debug)]
 pub struct ParenthesizedExpr;
 
+/// Marker attached to a numeric literal node that originated from a legacy octal
+/// integer literal (e.g. `010`).
+///
+/// Strict mode code may not include these literals; downstream semantic passes
+/// use this marker to report the early error without needing access to the raw
+/// source text.
+#[derive(Clone, Copy, Debug)]
+pub struct LegacyOctalNumberLiteral;
+
+/// Marker attached to a numeric literal node that originated from a decimal
+/// integer literal with a leading zero (e.g. `08`).
+///
+/// Strict mode code may not include these literals; downstream semantic passes
+/// use this marker to report the early error without needing access to the raw
+/// source text.
+#[derive(Clone, Copy, Debug)]
+pub struct LeadingZeroDecimalLiteral;
+
 impl NodeAssocData {
   pub fn is_empty(&self) -> bool {
     self.items.is_empty()

@@ -11,7 +11,9 @@ use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
+use parse_js::ast::class_or_object::ClassOrObjMemberDirectKey;
 use parse_js::ast::class_or_object::ClassStaticBlock;
+use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::pat::Pat;
@@ -24,6 +26,8 @@ use parse_js::ast::expr::UnaryExpr;
 use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
+use parse_js::ast::node::LeadingZeroDecimalLiteral;
+use parse_js::ast::node::LegacyOctalNumberLiteral;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::node::ParenthesizedExpr;
@@ -57,6 +61,7 @@ type BlockStmtNode = Node<BlockStmt>;
 type BinaryExprNode = Node<BinaryExpr>;
 type CallExprNode = Node<CallExpr>;
 type CatchBlockNode = Node<CatchBlock>;
+type ClassOrObjMemberDirectKeyNode = Node<ClassOrObjMemberDirectKey>;
 type ClassStaticBlockNode = Node<ClassStaticBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
@@ -75,6 +80,7 @@ type PatDeclNode = Node<PatDecl>;
 type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
 type DoWhileStmtNode = Node<DoWhileStmt>;
+type LitNumExprNode = Node<LitNumExpr>;
 type UnaryExprNode = Node<UnaryExpr>;
 type UnaryPostfixExprNode = Node<UnaryPostfixExpr>;
 type WhileStmtNode = Node<WhileStmt>;
@@ -581,6 +587,7 @@ enum StmtContext {
   BinaryExprNode(enter),
   BlockStmtNode,
   CatchBlockNode,
+  ClassOrObjMemberDirectKeyNode(enter),
   ClassDeclNode,
   ClassExprNode,
   ClassStaticBlockNode(enter, exit),
@@ -601,6 +608,7 @@ enum StmtContext {
   PatDeclNode,
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
+  LitNumExprNode(enter),
   UnaryExprNode(enter),
   UnaryPostfixExprNode(enter),
   VarDeclNode,
@@ -861,6 +869,22 @@ impl DeclareVisitor {
     ));
   }
 
+  fn report_strict_octal_literal(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0009",
+      "Octal literals are not allowed in strict mode.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn report_strict_decimal_with_leading_zero_literal(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0010",
+      "Decimals with leading zeros are not allowed in strict mode.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
   fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
     let disallow_duplicates =
       strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
@@ -1079,6 +1103,35 @@ impl DeclareVisitor {
     node.stx.left.drive_mut(&mut collector);
     for range in collector.restricted {
       self.report_strict_eval_or_arguments(range);
+    }
+  }
+
+  fn enter_lit_num_expr_node(&mut self, node: &mut LitNumExprNode) {
+    if !self.is_strict() {
+      return;
+    }
+
+    let range = range_of(node);
+    if node.assoc.get::<LegacyOctalNumberLiteral>().is_some() {
+      self.report_strict_octal_literal(range);
+    } else if node.assoc.get::<LeadingZeroDecimalLiteral>().is_some() {
+      self.report_strict_decimal_with_leading_zero_literal(range);
+    }
+  }
+
+  fn enter_class_or_obj_member_direct_key_node(
+    &mut self,
+    node: &mut ClassOrObjMemberDirectKeyNode,
+  ) {
+    if !self.is_strict() {
+      return;
+    }
+
+    let range = range_of(node);
+    if node.assoc.get::<LegacyOctalNumberLiteral>().is_some() {
+      self.report_strict_octal_literal(range);
+    } else if node.assoc.get::<LeadingZeroDecimalLiteral>().is_some() {
+      self.report_strict_decimal_with_leading_zero_literal(range);
     }
   }
 

@@ -13,6 +13,8 @@ use crate::ast::class_or_object::ClassOrObjVal;
 use crate::ast::expr::pat::IdPat;
 use crate::ast::expr::Expr;
 use crate::ast::func::Func;
+use crate::ast::node::LeadingZeroDecimalLiteral;
+use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
@@ -396,24 +398,34 @@ impl<'a> Parser<'a> {
       // Template literal as property key: `foo` or `foo${expr}bar`
       ClassOrObjKey::Computed(self.lit_template(ctx)?.into_wrapped())
     } else {
-      ClassOrObjKey::Direct(self.with_loc(|p| {
-        let t = p.peek();
-        let key = match t.typ {
-          TT::LiteralString => p.lit_str_val()?,
-          TT::LiteralNumber => p.lit_num_val()?.to_string(),
-          // There's no trailing `n`.
-          TT::LiteralBigInt => p.lit_bigint_val()?.to_string(),
-          TT::PrivateMember => p.consume_as_string(),
-          TT::Identifier => p.consume_as_string(),
-          // Any keyword is allowed as a key.
-          t if KEYWORDS_MAPPING.contains_key(&t) => p.consume_as_string(),
-          // TypeScript: Error recovery - allow asterisk as property key (malformed generator)
-          // Example: `class C { *() {} }` or `class C { * }`
-          TT::Asterisk => p.consume_as_string(),
-          _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("keyword or identifier"))),
-        };
-        Ok(ClassOrObjMemberDirectKey { key, tt: t.typ })
-      })?)
+      let t = self.peek();
+      let loc = t.loc;
+      let tt = t.typ;
+      let key = match tt {
+        TT::LiteralString => self.lit_str_val()?,
+        TT::LiteralNumber => self.lit_num_val()?.to_string(),
+        // There's no trailing `n`.
+        TT::LiteralBigInt => self.lit_bigint_val()?.to_string(),
+        TT::PrivateMember => self.consume_as_string(),
+        TT::Identifier => self.consume_as_string(),
+        // Any keyword is allowed as a key.
+        t if KEYWORDS_MAPPING.contains_key(&t) => self.consume_as_string(),
+        // TypeScript: Error recovery - allow asterisk as property key (malformed generator)
+        // Example: `class C { *() {} }` or `class C { * }`
+        TT::Asterisk => self.consume_as_string(),
+        _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("keyword or identifier"))),
+      };
+
+      let mut direct = Node::new(loc, ClassOrObjMemberDirectKey { key, tt });
+      if tt == TT::LiteralNumber {
+        let raw = self.str(loc);
+        if crate::num::is_legacy_octal_literal(raw) {
+          direct.assoc.set(LegacyOctalNumberLiteral);
+        } else if crate::num::is_leading_zero_decimal_literal(raw) {
+          direct.assoc.set(LeadingZeroDecimalLiteral);
+        }
+      }
+      ClassOrObjKey::Direct(direct)
     })
   }
 

@@ -1574,6 +1574,36 @@ fn strict_delete_identifier_is_reported() {
 }
 
 #[test]
+fn strict_octal_literal_is_reported() {
+  let source = "'use strict'; 010;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(106));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0009");
+  assert_eq!(slice_range(source, &diagnostics[0]), "010");
+}
+
+#[test]
+fn strict_decimal_literal_with_leading_zero_is_reported() {
+  let source = "'use strict'; 08;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(107));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0010");
+  assert_eq!(slice_range(source, &diagnostics[0]), "08");
+}
+
+#[test]
+fn strict_octal_literal_property_key_is_reported() {
+  let source = "'use strict'; ({010: 1});";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(108));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0009");
+  assert_eq!(slice_range(source, &diagnostics[0]), "010");
+}
+
+#[test]
 fn duplicate_parameters_in_strict_functions_are_reported() {
   let source = "'use strict'; function f(a,a){}";
   let mut ast = parse(source).unwrap();

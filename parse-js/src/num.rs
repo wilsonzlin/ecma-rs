@@ -126,7 +126,7 @@ fn parse_integer_literal(raw_digits: &str, radix: u32) -> Option<f64> {
   parse_decimal(&decimal)
 }
 
-fn is_legacy_octal_literal(raw: &str) -> bool {
+pub(crate) fn is_legacy_octal_literal(raw: &str) -> bool {
   if !raw.starts_with('0') || raw.len() <= 1 {
     return false;
   }
@@ -144,6 +144,42 @@ fn is_legacy_octal_literal(raw: &str) -> bool {
   }
 
   saw_octal
+}
+
+pub(crate) fn is_leading_zero_decimal_literal(raw: &str) -> bool {
+  if !raw.starts_with('0') || raw.len() <= 1 {
+    return false;
+  }
+  if raw.contains(['.', 'e', 'E']) {
+    return false;
+  }
+  if raw
+    .strip_prefix("0x")
+    .or_else(|| raw.strip_prefix("0X"))
+    .or_else(|| raw.strip_prefix("0o"))
+    .or_else(|| raw.strip_prefix("0O"))
+    .or_else(|| raw.strip_prefix("0b"))
+    .or_else(|| raw.strip_prefix("0B"))
+    .is_some()
+  {
+    return false;
+  }
+
+  let mut saw_digit = false;
+  let mut saw_decimal = false;
+  for ch in raw.chars().skip(1) {
+    match ch {
+      '_' => {}
+      '0'..='7' => saw_digit = true,
+      '8' | '9' => {
+        saw_digit = true;
+        saw_decimal = true;
+      }
+      _ => return false,
+    }
+  }
+
+  saw_digit && saw_decimal
 }
 
 fn parse_number_literal(raw: &str) -> Option<f64> {
