@@ -29,6 +29,8 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_OBJECT_PROP_MARKER: &'static str = "__optimize_js_object_prop";
   const INTERNAL_OBJECT_COMPUTED_MARKER: &'static str = "__optimize_js_object_prop_computed";
   const INTERNAL_OBJECT_SPREAD_MARKER: &'static str = "__optimize_js_object_spread";
+  const INTERNAL_TEMPLATE_CALLEE: &'static str = "__optimize_js_template";
+  const INTERNAL_TAGGED_TEMPLATE_CALLEE: &'static str = "__optimize_js_tagged_template";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -1013,6 +1015,41 @@ impl<'p> HirSourceToInst<'p> {
         self.out.push(Inst::call(
           tmp,
           Arg::Builtin(Self::INTERNAL_OBJECT_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          args,
+          Vec::new(),
+        ));
+        Ok(Arg::Var(tmp))
+      }
+      ExprKind::Template(template) => {
+        let mut args = Vec::new();
+        args.push(Arg::Const(Const::Str(template.head.clone())));
+        for span in template.spans.iter() {
+          args.push(self.compile_expr(span.expr)?);
+          args.push(Arg::Const(Const::Str(span.literal.clone())));
+        }
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_TEMPLATE_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          args,
+          Vec::new(),
+        ));
+        Ok(Arg::Var(tmp))
+      }
+      ExprKind::TaggedTemplate { tag, template } => {
+        let mut args = Vec::new();
+        args.push(self.compile_expr(*tag)?);
+        args.push(Arg::Const(Const::Str(template.head.clone())));
+        for span in template.spans.iter() {
+          args.push(self.compile_expr(span.expr)?);
+          args.push(Arg::Const(Const::Str(span.literal.clone())));
+        }
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_TAGGED_TEMPLATE_CALLEE.to_string()),
           Arg::Const(Const::Undefined),
           args,
           Vec::new(),

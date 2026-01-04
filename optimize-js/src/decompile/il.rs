@@ -9,11 +9,12 @@ use parse_js::ast::class_or_object::{
 };
 use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitObjExpr,
-  LitRegexExpr, LitStrExpr,
+  LitRegexExpr, LitStrExpr, LitTemplateExpr, LitTemplatePart,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
-  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr, UnaryExpr,
+  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr, TaggedTemplateExpr,
+  UnaryExpr,
 };
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
@@ -412,6 +413,8 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_OBJECT_PROP_MARKER: &str = "__optimize_js_object_prop";
   const INTERNAL_OBJECT_COMPUTED_MARKER: &str = "__optimize_js_object_prop_computed";
   const INTERNAL_OBJECT_SPREAD_MARKER: &str = "__optimize_js_object_spread";
+  const INTERNAL_TEMPLATE_CALLEE: &str = "__optimize_js_template";
+  const INTERNAL_TAGGED_TEMPLATE_CALLEE: &str = "__optimize_js_tagged_template";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -519,6 +522,69 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
     }
 
     let expr = node(Expr::LitObj(node(LitObjExpr { members })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
+  }
+
+  if matches!(callee_arg, Arg::Builtin(path) if path == INTERNAL_TEMPLATE_CALLEE)
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+    && spreads.is_empty()
+  {
+    assert!(
+      args.len() % 2 == 1,
+      "template literal marker call must have odd arg count"
+    );
+    let mut parts = Vec::with_capacity(args.len());
+    for (idx, arg) in args.iter().enumerate() {
+      if idx % 2 == 0 {
+        let Arg::Const(Const::Str(segment)) = arg else {
+          panic!("template literal expects string segments, got {arg:?}");
+        };
+        parts.push(LitTemplatePart::String(segment.clone()));
+      } else {
+        parts.push(LitTemplatePart::Substitution(lower_arg(
+          var_namer, fn_emitter, arg,
+        )));
+      }
+    }
+
+    let expr = node(Expr::LitTemplate(node(LitTemplateExpr { parts })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
+  }
+
+  if matches!(callee_arg, Arg::Builtin(path) if path == INTERNAL_TAGGED_TEMPLATE_CALLEE)
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+    && spreads.is_empty()
+  {
+    assert!(
+      args.len() >= 2 && args.len() % 2 == 0,
+      "tagged template marker call must have even arg count >= 2"
+    );
+    let tag_expr = lower_arg(var_namer, fn_emitter, &args[0]);
+
+    let mut parts = Vec::with_capacity(args.len() - 1);
+    for (idx, arg) in args[1..].iter().enumerate() {
+      if idx % 2 == 0 {
+        let Arg::Const(Const::Str(segment)) = arg else {
+          panic!("tagged template expects string segments, got {arg:?}");
+        };
+        parts.push(LitTemplatePart::String(segment.clone()));
+      } else {
+        parts.push(LitTemplatePart::Substitution(lower_arg(
+          var_namer, fn_emitter, arg,
+        )));
+      }
+    }
+
+    let expr = node(Expr::TaggedTemplate(node(TaggedTemplateExpr {
+      function: tag_expr,
+      parts,
+    })));
     return match tgt {
       Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
       None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
