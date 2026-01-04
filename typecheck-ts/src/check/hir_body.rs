@@ -1179,7 +1179,7 @@ impl<'a> Checker<'a> {
   fn report_implicit_any_in_pat(&mut self, pat: &Node<AstPat>) {
     match pat.stx.as_ref() {
       AstPat::Id(id) => {
-        let range = loc_to_range(self.file, pat.loc);
+        let range = self.binding_name_range(pat);
         self.report_implicit_any(range, Some(&id.stx.name));
       }
       AstPat::Arr(arr) => {

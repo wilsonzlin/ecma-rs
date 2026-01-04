@@ -1584,34 +1584,6 @@ fn build_no_match_diagnostic(
   diag
 }
 
-fn build_ambiguous_diagnostic(
-  store: &TypeStore,
-  span: Span,
-  best_candidates: &[&CandidateOutcome],
-) -> Diagnostic {
-  let mut diag = codes::AMBIGUOUS_OVERLOAD.error("call is ambiguous", span);
-  let mut candidates: Vec<&CandidateOutcome> = best_candidates.iter().copied().collect();
-  candidates.sort_by_key(|candidate| candidate.sig_id);
-
-  let width = candidates.len().max(1).to_string().len();
-  let shown = candidates.len().min(MAX_NOTES);
-  for (idx, outcome) in candidates.iter().take(shown).enumerate() {
-    let sig = store.signature(outcome.sig_id);
-    diag.push_note(format!(
-      "overload {index:0width$}: {sig}",
-      index = idx + 1,
-      width = width,
-      sig = format_signature(store, &sig),
-    ));
-  }
-
-  let hidden = candidates.len().saturating_sub(shown);
-  if hidden > 0 {
-    diag.push_note(format!("~ {hidden} overload(s) not shown"));
-  }
-  diag
-}
-
 fn first_reason_note(node: &ReasonNode) -> Option<String> {
   if node.outcome {
     return None;
