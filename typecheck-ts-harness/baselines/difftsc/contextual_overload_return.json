@@ -15,7 +15,16 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 2322,
+      "file": "contextual_overload_return.ts",
+      "start": 92,
+      "end": 98,
+      "category": "error",
+      "message": "Type 'number' is not assignable to type 'string'."
+    }
+  ],
   "type_facts": {
     "exports": [
       {

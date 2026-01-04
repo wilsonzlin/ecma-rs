@@ -15,7 +15,24 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 1203,
+      "file": "dep.ts",
+      "start": 50,
+      "end": 71,
+      "category": "error",
+      "message": "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead."
+    },
+    {
+      "code": 1202,
+      "file": "main.ts",
+      "start": 0,
+      "end": 28,
+      "category": "error",
+      "message": "Import assignment cannot be used when targeting ECMAScript modules. Consider using 'import * as ns from \"mod\"', 'import {a} from \"mod\"', 'import d from \"mod\"', or another module format instead."
+    }
+  ],
   "type_facts": {
     "exports": [
       {
@@ -31,4 +48,3 @@
     ]
   }
 }
-

@@ -340,6 +340,16 @@ impl HarnessOptions {
     }
     if let Some(value) = self.module_resolution.as_ref() {
       map.insert("moduleResolution".to_string(), Value::String(value.clone()));
+    } else if compiler.module.is_none() {
+      // When `--target` is ES2015+ and `--moduleResolution` is not specified,
+      // TypeScript defaults to Classic module resolution (which does not search
+      // `node_modules` for bare specifiers). The harness host resolves imports
+      // using Node's resolution rules, so opt into `node` to keep tsc runs
+      // comparable by default.
+      map.insert(
+        "moduleResolution".to_string(),
+        Value::String("node".to_string()),
+      );
     }
     if !self.types.is_empty() {
       map.insert(
@@ -611,6 +621,10 @@ mod tests {
     assert_eq!(
       tsc.get("target"),
       Some(&Value::String("ES2015".to_string()))
+    );
+    assert_eq!(
+      tsc.get("moduleResolution"),
+      Some(&Value::String("node".to_string()))
     );
   }
 

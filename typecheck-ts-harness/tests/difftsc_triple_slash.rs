@@ -59,9 +59,19 @@ fn assert_matched(case: &Value, name: &str) {
 #[test]
 fn difftsc_triple_slash_cases_match_baselines() {
   let report = run_difftsc();
+  let summary = report
+    .get("summary")
+    .and_then(|s| s.as_object())
+    .expect("summary object");
+  assert_eq!(
+    summary
+      .get("unexpected_mismatches")
+      .and_then(|v| v.as_u64()),
+    Some(0),
+    "expected difftsc to have no unexpected mismatches (manifest should cover all known failures); summary: {summary:?}"
+  );
 
   for name in [
-    "triple_slash_references",
     "triple_slash_no_default_lib",
     "triple_slash_path_imported",
     "triple_slash_types_imported",

@@ -19,6 +19,16 @@
   "type_facts": {
     "exports": [
       {
+        "file": "lib.d.ts",
+        "name": "MyArray",
+        "type": "any"
+      },
+      {
+        "file": "lib.d.ts",
+        "name": "nums",
+        "type": "MyArray<number>"
+      },
+      {
         "file": "main.ts",
         "name": "numberResult",
         "type": "number"

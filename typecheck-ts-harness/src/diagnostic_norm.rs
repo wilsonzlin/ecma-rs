@@ -412,7 +412,12 @@ pub fn normalize_type_string(raw: &str) -> String {
         '[' => depth_bracket += 1,
         ']' => depth_bracket -= 1,
         '<' => depth_angle += 1,
-        '>' => depth_angle -= 1,
+        '>' => {
+          // Ignore `>` characters that are not closing a `<...>` pair (e.g. the `>` in `=>`).
+          if depth_angle > 0 {
+            depth_angle -= 1;
+          }
+        }
         _ => {}
       }
       if ch == delim
@@ -450,7 +455,11 @@ pub fn normalize_type_string(raw: &str) -> String {
           '[' => depth_bracket += 1,
           ']' => depth_bracket -= 1,
           '<' => depth_angle += 1,
-          '>' => depth_angle -= 1,
+          '>' => {
+            if depth_angle > 0 {
+              depth_angle -= 1;
+            }
+          }
           ',' => {
             if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
               parts.push(raw[start..idx].trim());
@@ -478,7 +487,11 @@ pub fn normalize_type_string(raw: &str) -> String {
           '[' => depth_bracket += 1,
           ']' => depth_bracket -= 1,
           '<' => depth_angle += 1,
-          '>' => depth_angle -= 1,
+          '>' => {
+            if depth_angle > 0 {
+              depth_angle -= 1;
+            }
+          }
           ':' => {
             if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
               let rest = raw[idx + ch.len_utf8()..].trim();
@@ -529,10 +542,50 @@ pub fn normalize_type_string(raw: &str) -> String {
     out
   }
 
+  fn find_top_level_arrow(raw: &str) -> Option<usize> {
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut depth_angle = 0i32;
+    let bytes = raw.as_bytes();
+    for (idx, ch) in raw.char_indices() {
+      match ch {
+        '(' => depth_paren += 1,
+        ')' => depth_paren -= 1,
+        '{' => depth_brace += 1,
+        '}' => depth_brace -= 1,
+        '[' => depth_bracket += 1,
+        ']' => depth_bracket -= 1,
+        '<' => depth_angle += 1,
+        '>' => {
+          if depth_angle > 0 {
+            depth_angle -= 1;
+          }
+        }
+        '=' => {
+          if depth_paren == 0
+            && depth_brace == 0
+            && depth_bracket == 0
+            && depth_angle == 0
+            && bytes.get(idx..idx + 2) == Some(&b"=>"[..])
+          {
+            return Some(idx);
+          }
+        }
+        _ => {}
+      }
+    }
+    None
+  }
+
   fn normalize_object_member(raw: &str) -> String {
     let member = raw.trim();
     if member.is_empty() {
       return String::new();
+    }
+
+    if (member.starts_with('(') || member.starts_with('<')) && find_top_level_arrow(member).is_some() {
+      return normalize_type_string(member);
     }
 
     let Some(start_paren) = member.find('(') else {
@@ -568,7 +621,7 @@ pub fn normalize_type_string(raw: &str) -> String {
     let params = &member[start_paren + 1..end_paren];
     let stripped = strip_param_names(params);
     let ret = normalize_type_string(suffix[1..].trim_start());
-    format!("{prefix}({stripped}): {ret}")
+    format!("{prefix}({stripped}) => {ret}")
   }
 
   fn normalize_object_members(raw: &str) -> Option<String> {
@@ -624,6 +677,25 @@ pub fn normalize_type_string(raw: &str) -> String {
   let collapsed = collapse_whitespace(raw);
   let normalized = strip_trailing_object_semicolons(collapsed);
 
+  if let Some(arrow_idx) = find_top_level_arrow(&normalized) {
+    let params_part = normalized[..arrow_idx].trim_end();
+    let ret_part = normalized[arrow_idx + 2..].trim_start();
+    if let Some(start_paren) = params_part.rfind('(') {
+      if params_part.ends_with(')') && start_paren < params_part.len() {
+        let params = &params_part[start_paren + 1..params_part.len() - 1];
+        let before = params_part[..start_paren].trim();
+        let stripped = strip_param_names(params);
+        let before = if before.is_empty() {
+          String::new()
+        } else {
+          format!("{before}")
+        };
+        let ret = normalize_type_string(ret_part);
+        return tighten(format!("{before}({stripped}) => {ret}"));
+      }
+    }
+  }
+
   if let Some(parts) = split_top_level(&normalized, '|') {
     let mut normalized_parts: Vec<_> = parts
       .into_iter()
@@ -648,25 +720,6 @@ pub fn normalize_type_string(raw: &str) -> String {
 
   if let Some(obj) = normalize_object_members(&normalized) {
     return tighten(obj);
-  }
-
-  if let Some(arrow_idx) = normalized.find("=>") {
-    let params_part = normalized[..arrow_idx].trim_end();
-    let ret_part = normalized[arrow_idx + 2..].trim_start();
-    if let Some(start_paren) = params_part.rfind('(') {
-      if params_part.ends_with(')') && start_paren < params_part.len() {
-        let params = &params_part[start_paren + 1..params_part.len() - 1];
-        let before = params_part[..start_paren].trim();
-        let stripped = strip_param_names(params);
-        let before = if before.is_empty() {
-          String::new()
-        } else {
-          format!("{before}")
-        };
-        let ret = normalize_type_string(ret_part);
-        return tighten(format!("{before}({stripped}) => {ret}"));
-      }
-    }
   }
 
   tighten(normalized)
@@ -770,12 +823,24 @@ mod tests {
       "(number | string) => number | string".to_string()
     );
     assert_eq!(
+      normalize_type_string("(number | string) => string | number"),
+      "(number | string) => number | string".to_string()
+    );
+    assert_eq!(
       normalize_type_string("{ a: number; b: string; }"),
       "{ a: number; b: string }".to_string()
     );
     assert_eq!(
       normalize_type_string("Promise< string | number >"),
       "Promise<string | number>".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("{ (x: string): 1; (x: number): 2 }"),
+      "{ (number) => 2; (string) => 1 }".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("{(string) => 1;(number) => 2 }"),
+      "{ (number) => 2; (string) => 1 }".to_string()
     );
   }
 

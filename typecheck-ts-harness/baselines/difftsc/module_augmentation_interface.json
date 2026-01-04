@@ -15,6 +15,14 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "pkg.ts",
+        "name": "Foo",
+        "type": "any"
+      }
+    ]
+  }
 }
-

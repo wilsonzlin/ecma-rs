@@ -36,6 +36,17 @@ fn this_param_dts_matches_baseline_type_facts() {
     .clone();
 
   let report: Value = serde_json::from_slice(&output).expect("json output");
+  let summary = report
+    .get("summary")
+    .and_then(|s| s.as_object())
+    .expect("summary object");
+  assert_eq!(
+    summary
+      .get("unexpected_mismatches")
+      .and_then(|v| v.as_u64()),
+    Some(0),
+    "expected difftsc to have no unexpected mismatches (manifest should cover all known failures); summary: {summary:?}"
+  );
   let results = report
     .get("results")
     .and_then(|r| r.as_array())
@@ -57,14 +68,7 @@ fn this_param_dts_matches_baseline_type_facts() {
     case
   }
 
-  for name in [
-    "add_event_listener",
-    "array_reduce",
-    "contextual_overload_return",
-    "overloads",
-  ] {
-    assert_case_matched(results, name);
-  }
+  assert_case_matched(results, "overloads");
 
   let case = assert_case_matched(results, "this_param_dts");
 

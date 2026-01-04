@@ -19,6 +19,16 @@
   "type_facts": {
     "exports": [
       {
+        "file": "lib.d.ts",
+        "name": "Target",
+        "type": "any"
+      },
+      {
+        "file": "lib.d.ts",
+        "name": "target",
+        "type": "Target"
+      },
+      {
         "file": "main.ts",
         "name": "result",
         "type": "\"click\""

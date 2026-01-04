@@ -17,6 +17,14 @@
   },
   "diagnostics": [
     {
+      "code": 1203,
+      "file": "export_assignment_mixed_exports.ts",
+      "start": 15,
+      "end": 28,
+      "category": "error",
+      "message": "Export assignment cannot be used when targeting ECMAScript modules. Consider using 'export default' or another module format instead."
+    },
+    {
       "code": 2309,
       "file": "export_assignment_mixed_exports.ts",
       "start": 15,
@@ -26,4 +34,3 @@
     }
   ]
 }
-

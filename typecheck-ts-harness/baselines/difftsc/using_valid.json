@@ -15,7 +15,16 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 1492,
+      "file": "using_valid.ts",
+      "start": 233,
+      "end": 242,
+      "category": "error",
+      "message": "'using' declarations may not have binding patterns."
+    }
+  ],
   "type_facts": {
     "exports": [],
     "markers": [
@@ -36,4 +45,3 @@
     ]
   }
 }
-

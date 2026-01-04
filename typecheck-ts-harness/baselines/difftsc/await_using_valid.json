@@ -15,7 +15,24 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 2416,
+      "file": "await_using_valid.ts",
+      "start": 86,
+      "end": 107,
+      "category": "error",
+      "message": "Property '[Symbol.asyncDispose]' in type 'AsyncD' is not assignable to the same property in base type 'AsyncDisposable'.\n  Type '() => void' is not assignable to type '() => PromiseLike<void>'.\n    Type 'void' is not assignable to type 'PromiseLike<void>'."
+    },
+    {
+      "code": 2851,
+      "file": "await_using_valid.ts",
+      "start": 164,
+      "end": 176,
+      "category": "error",
+      "message": "The initializer of an 'await using' declaration must be either an object with a '[Symbol.asyncDispose]()' or '[Symbol.dispose]()' method, or be 'null' or 'undefined'.\n  Type 'AsyncD' is not assignable to type 'AsyncDisposable'.\n    The types returned by '[Symbol.asyncDispose]()' are incompatible between these types.\n      Type 'void' is not assignable to type 'PromiseLike<void>'."
+    }
+  ],
   "type_facts": {
     "exports": [],
     "markers": [
@@ -29,4 +46,3 @@
     ]
   }
 }
-
