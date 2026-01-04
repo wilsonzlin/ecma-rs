@@ -1,5 +1,6 @@
 use super::{HirSourceToInst, LabeledTarget, VarType, DUMMY_LABEL};
 use crate::il::inst::{Arg, BinOp, Const, Inst};
+use crate::symbol::semantics::SymbolId;
 use crate::unsupported_syntax_range;
 use crate::util::counter::Counter;
 use crate::OptimizeResult;
@@ -83,6 +84,95 @@ fn root_statements(body: &Body) -> Vec<StmtId> {
 }
 
 impl<'p> HirSourceToInst<'p> {
+  fn collect_pat_binding_symbols(&self, pat: PatId, out: &mut Vec<SymbolId>) {
+    match &self.body.pats[pat.0 as usize].kind {
+      PatKind::Ident(_) => {
+        if let Some(sym) = self.symbol_for_pat(pat) {
+          out.push(sym);
+        }
+      }
+      PatKind::Array(arr) => {
+        for element in arr.elements.iter().flatten() {
+          self.collect_pat_binding_symbols(element.pat, out);
+        }
+        if let Some(rest) = arr.rest {
+          self.collect_pat_binding_symbols(rest, out);
+        }
+      }
+      PatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          self.collect_pat_binding_symbols(prop.value, out);
+        }
+        if let Some(rest) = obj.rest {
+          self.collect_pat_binding_symbols(rest, out);
+        }
+      }
+      PatKind::Rest(inner) => self.collect_pat_binding_symbols(**inner, out),
+      PatKind::Assign { target, .. } => self.collect_pat_binding_symbols(*target, out),
+      PatKind::AssignTarget(_) => {}
+    }
+  }
+
+  fn hoist_var_decls(&mut self) {
+    let mut declared = Vec::<SymbolId>::new();
+    for stmt in self.body.stmts.iter() {
+      match &stmt.kind {
+        StmtKind::Var(decl) if decl.kind == VarDeclKind::Var => {
+          for declarator in decl.declarators.iter() {
+            self.collect_pat_binding_symbols(declarator.pat, &mut declared);
+          }
+        }
+        StmtKind::For {
+          init: Some(ForInit::Var(decl)),
+          ..
+        } if decl.kind == VarDeclKind::Var => {
+          for declarator in decl.declarators.iter() {
+            self.collect_pat_binding_symbols(declarator.pat, &mut declared);
+          }
+        }
+        StmtKind::ForIn {
+          left: ForHead::Var(decl),
+          ..
+        } if decl.kind == VarDeclKind::Var => {
+          for declarator in decl.declarators.iter() {
+            self.collect_pat_binding_symbols(declarator.pat, &mut declared);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if declared.is_empty() {
+      return;
+    }
+
+    let mut params = Vec::<SymbolId>::new();
+    if let Some(function) = &self.body.function {
+      for param in function.params.iter() {
+        self.collect_pat_binding_symbols(param.pat, &mut params);
+      }
+    }
+    params.sort_by_key(|sym| sym.raw_id());
+    params.dedup();
+
+    declared.retain(|sym| params.binary_search(sym).is_err());
+    declared.sort_by_key(|sym| sym.raw_id());
+    declared.dedup();
+
+    for sym in declared {
+      if self.program.foreign_vars.contains(&sym) {
+        self
+          .out
+          .push(Inst::foreign_store(sym, Arg::Const(Const::Undefined)));
+      } else {
+        let tmp = self.symbol_to_temp(sym);
+        self
+          .out
+          .push(Inst::var_assign(tmp, Arg::Const(Const::Undefined)));
+      }
+    }
+  }
+
   pub fn compile_destructuring_via_prop(
     &mut self,
     obj: Arg,
@@ -220,7 +310,12 @@ impl<'p> HirSourceToInst<'p> {
     Ok(())
   }
 
-  fn compile_for_head(&mut self, span: TextRange, head: &ForHead, value: Arg) -> OptimizeResult<()> {
+  fn compile_for_head(
+    &mut self,
+    span: TextRange,
+    head: &ForHead,
+    value: Arg,
+  ) -> OptimizeResult<()> {
     match head {
       ForHead::Pat(pat) => self.compile_destructuring(*pat, value),
       ForHead::Var(decl) => {
@@ -280,12 +375,14 @@ impl<'p> HirSourceToInst<'p> {
       iterator_method_tmp_var,
       Arg::Var(iterable_tmp_var),
       BinOp::GetProp,
-      Arg::Builtin(if await_ {
-        "Symbol.asyncIterator"
-      } else {
-        "Symbol.iterator"
-      }
-      .to_string()),
+      Arg::Builtin(
+        if await_ {
+          "Symbol.asyncIterator"
+        } else {
+          "Symbol.iterator"
+        }
+        .to_string(),
+      ),
     ));
 
     let iterator_tmp_var = self.c_temp.bump();
@@ -576,9 +673,11 @@ impl<'p> HirSourceToInst<'p> {
     res?;
     self.out.push(Inst::label(loop_continue_label));
     let test_arg = self.compile_expr(test)?;
-    self
-      .out
-      .push(Inst::cond_goto(test_arg, loop_entry_label, after_loop_label));
+    self.out.push(Inst::cond_goto(
+      test_arg,
+      loop_entry_label,
+      after_loop_label,
+    ));
     self.out.push(Inst::label(after_loop_label));
     Ok(())
   }
@@ -653,29 +752,30 @@ impl<'p> HirSourceToInst<'p> {
         Ok(())
       }
       StmtKind::Continue(label) => {
-        let target = if let Some(label) = label {
-          let entry = self
-            .label_stack
-            .iter()
-            .rev()
-            .find(|entry| entry.label == *label)
-            .ok_or_else(|| {
+        let target =
+          if let Some(label) = label {
+            let entry = self
+              .label_stack
+              .iter()
+              .rev()
+              .find(|entry| entry.label == *label)
+              .ok_or_else(|| {
+                unsupported_syntax_range(
+                  stmt.span,
+                  format!("continue to unknown label {}", self.name_for(*label)),
+                )
+              })?;
+            entry.continue_target.ok_or_else(|| {
               unsupported_syntax_range(
                 stmt.span,
-                format!("continue to unknown label {}", self.name_for(*label)),
+                format!("continue to non-loop label {}", self.name_for(*label)),
               )
-            })?;
-          entry.continue_target.ok_or_else(|| {
-            unsupported_syntax_range(
-              stmt.span,
-              format!("continue to non-loop label {}", self.name_for(*label)),
-            )
-          })?
-        } else {
-          self.continue_stack.last().copied().ok_or_else(|| {
-            unsupported_syntax_range(stmt.span, "continue statement outside loop")
-          })?
-        };
+            })?
+          } else {
+            self.continue_stack.last().copied().ok_or_else(|| {
+              unsupported_syntax_range(stmt.span, "continue statement outside loop")
+            })?
+          };
         self.out.push(Inst::goto(target));
         Ok(())
       }
@@ -726,9 +826,9 @@ impl<'p> HirSourceToInst<'p> {
         if let Some(value) = value {
           let _ = self.compile_expr(*value)?;
         }
-        let target = self
-          .return_label
-          .ok_or_else(|| unsupported_syntax_range(stmt.span, "return statement outside function"))?;
+        let target = self.return_label.ok_or_else(|| {
+          unsupported_syntax_range(stmt.span, "return statement outside function")
+        })?;
         self.out.push(Inst::goto(target));
         Ok(())
       }
@@ -792,6 +892,7 @@ pub fn translate_body(
   if compiler.body.kind == BodyKind::Function {
     compiler.return_label = Some(compiler.c_label.bump());
   }
+  compiler.hoist_var_decls();
   for stmt in root_statements(compiler.body) {
     compiler.compile_stmt(stmt)?;
   }
