@@ -4,11 +4,19 @@ use crate::ids::TypeParamId;
 use serde::Deserialize;
 use serde::Serialize;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum TypeParamVariance {
+  In,
+  Out,
+  InOut,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TypeParamDecl {
   pub id: TypeParamId,
   pub constraint: Option<TypeId>,
   pub default: Option<TypeId>,
+  pub variance: Option<TypeParamVariance>,
 }
 
 impl TypeParamDecl {
@@ -17,6 +25,7 @@ impl TypeParamDecl {
       id,
       constraint: None,
       default: None,
+      variance: None,
     }
   }
 }

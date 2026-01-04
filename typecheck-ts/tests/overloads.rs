@@ -214,6 +214,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     id: t_param,
     constraint: Some(primitives.string),
     default: None,
+    variance: None,
   }];
   let string_sig_id = store.intern_signature(string_sig);
   let string_callable = store.intern_type(TypeKind::Callable {
@@ -225,6 +226,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     id: t_param,
     constraint: Some(primitives.number),
     default: None,
+    variance: None,
   }];
   let number_sig_id = store.intern_signature(number_sig);
   let number_callable = store.intern_type(TypeKind::Callable {
@@ -289,6 +291,7 @@ fn applies_default_type_argument_from_interned_signature() {
     id: t_param,
     constraint: None,
     default: Some(primitives.string),
+    variance: None,
   }];
   let sig_id = store.intern_signature(sig);
   let callable = store.intern_type(TypeKind::Callable {

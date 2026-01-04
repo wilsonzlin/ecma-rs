@@ -97,3 +97,8 @@ reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
 id = "difftsc/win_paths"
 status = "xfail"
 reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2345`"
+
+[[expectations]]
+id = "difftsc/variance"
+status = "xfail"
+reason = "Rust checker uses internal `TC3004` for variance annotation errors; tsc reports `TS2636`"

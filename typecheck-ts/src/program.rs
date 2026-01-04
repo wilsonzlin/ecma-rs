@@ -5214,7 +5214,7 @@ impl ProgramState {
               .unwrap_or(instance);
             def_types.insert(mapped, instance);
             if !params.is_empty() {
-              type_params.insert(mapped, params);
+              type_params.insert(mapped, params.into_iter().map(|param| param.id).collect());
             }
             let value_def = self
               .value_defs
@@ -5265,7 +5265,7 @@ impl ProgramState {
               .unwrap_or(ty);
             def_types.insert(mapped, ty);
             if !params.is_empty() {
-              type_params.insert(mapped, params);
+              type_params.insert(mapped, params.into_iter().map(|param| param.id).collect());
             }
           }
         }

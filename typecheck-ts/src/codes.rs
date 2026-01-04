@@ -431,6 +431,21 @@ pub const JSX_NAMESPACE_MISSING: Code = Code::new(
   &[],
 );
 
+/// TC3004: Variance annotation on a type parameter does not match its usage
+/// within the declaring type.
+///
+/// - Primary span: the type parameter declaration carrying the variance
+///   annotation.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const INVALID_VARIANCE_ANNOTATION: Code = Code::new(
+  "TC3004",
+  "invalid variance annotation",
+  "type parameter declaration with a variance annotation",
+  &["primary: type parameter declaration"],
+  &[],
+);
+
 /// HOST0001: Host environment failed to provide required input.
 ///
 /// - Primary span: zero-length placeholder when no source span is available.

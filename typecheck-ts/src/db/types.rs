@@ -4,7 +4,7 @@ use std::sync::Arc;
 use diagnostics::Diagnostic;
 use hir_js::DefId;
 use salsa::Update;
-use types_ts_interned::{TypeId, TypeParamId, TypeStore};
+use types_ts_interned::{TypeId, TypeParamDecl, TypeStore};
 
 /// Declared type information for a single file.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -13,7 +13,7 @@ pub struct DeclTypes {
   /// canonical [`DefId`].
   pub types: HashMap<DefId, TypeId>,
   /// Explicitly declared type parameters for each definition.
-  pub type_params: HashMap<DefId, Vec<TypeParamId>>,
+  pub type_params: HashMap<DefId, Vec<TypeParamDecl>>,
   /// Namespace members collected from nested definitions.
   pub namespace_members: HashMap<DefId, Vec<String>>,
   /// Diagnostics produced while lowering declarations.

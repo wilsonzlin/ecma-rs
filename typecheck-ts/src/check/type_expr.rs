@@ -18,7 +18,7 @@ use std::sync::Arc;
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
   Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamDecl,
-  TypeParamId, TypeStore,
+  TypeParamId, TypeParamVariance, TypeStore,
 };
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.
@@ -150,6 +150,11 @@ impl TypeLowerer {
           .as_ref()
           .map(|c| self.lower_type_expr(c)),
         default: param.stx.default.as_ref().map(|d| self.lower_type_expr(d)),
+        variance: param.stx.variance.map(|variance| match variance {
+          parse_js::ast::type_expr::Variance::In => TypeParamVariance::In,
+          parse_js::ast::type_expr::Variance::Out => TypeParamVariance::Out,
+          parse_js::ast::type_expr::Variance::InOut => TypeParamVariance::InOut,
+        }),
       })
       .collect()
   }

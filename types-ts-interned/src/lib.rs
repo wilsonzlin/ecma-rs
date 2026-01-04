@@ -72,6 +72,7 @@ pub use shape::Shape;
 pub use signature::Param;
 pub use signature::Signature;
 pub use signature::TypeParamDecl;
+pub use signature::TypeParamVariance;
 pub use store::PrimitiveIds;
 pub use store::TypeStore;
 pub use store::TypeStoreSnapshot;

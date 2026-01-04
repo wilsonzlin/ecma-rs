@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2636,
+      "file": "variance.ts",
+      "start": 283,
+      "end": 288,
+      "category": "error",
+      "message": "Type 'BadOut<sub-T>' is not assignable to type 'BadOut<super-T>' as implied by variance annotation.\n  Types of property 'consume' are incompatible.\n    Type '(value: sub-T) => void' is not assignable to type '(value: super-T) => void'.\n      Types of parameters 'value' and 'value' are incompatible.\n        Type 'super-T' is not assignable to type 'sub-T'."
+    },
+    {
+      "code": 2636,
+      "file": "variance.ts",
+      "start": 342,
+      "end": 346,
+      "category": "error",
+      "message": "Type 'BadIn<super-T>' is not assignable to type 'BadIn<sub-T>' as implied by variance annotation.\n  Types of property 'value' are incompatible.\n    Type 'super-T' is not assignable to type 'sub-T'."
+    }
+  ]
+}

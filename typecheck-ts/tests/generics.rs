@@ -82,6 +82,7 @@ fn uses_default_type_argument_when_not_inferred() {
     id: t_param,
     constraint: None,
     default: Some(primitives.string),
+    variance: None,
   };
   let sig = Signature {
     params: Vec::new(),
@@ -105,6 +106,7 @@ fn reports_constraint_violation() {
     id: t_param,
     constraint: Some(primitives.number),
     default: None,
+    variance: None,
   };
 
   let sig = Signature {
@@ -140,6 +142,7 @@ fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
       id: t_param,
       constraint: Some(empty_object),
       default: None,
+      variance: None,
     }],
     this_param: None,
   };

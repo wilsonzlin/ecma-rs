@@ -13,7 +13,8 @@ use ordered_float::OrderedFloat;
 use semantic_js::ts::{ModuleRef, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance,
+  TypeStore,
 };
 
 /// Lower HIR type expressions and declarations into interned types.
@@ -86,7 +87,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     owner: HirDefId,
     info: &DefTypeInfo,
     names: &hir_js::NameInterner,
-  ) -> (TypeId, Vec<TypeParamId>) {
+  ) -> (TypeId, Vec<TypeParamDecl>) {
     self.type_params.clear();
     self.type_param_names.clear();
     self.current_arenas = self.arenas.get(&owner);
@@ -98,9 +99,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         type_expr,
         type_params,
       } => {
-        self.register_type_params(type_params);
-        let params = self.collect_type_params(type_params);
+        let params = self.lower_type_param_decls(type_params, names);
         let ty = self.lower_type_expr(*type_expr, names);
+        self.validate_variance_annotations(type_params, ty, names);
         (ty, params)
       }
       DefTypeInfo::Interface {
@@ -108,8 +109,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         extends,
         members,
       } => {
-        self.register_type_params(type_params);
-        let params = self.collect_type_params(type_params);
+        let params = self.lower_type_param_decls(type_params, names);
         let mut shape = Shape::new();
 
         for member in members.iter() {
@@ -136,13 +136,14 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           1 => types[0],
           _ => self.store.intersection(types),
         };
+        self.validate_variance_annotations(type_params, ty, names);
         (ty, params)
       }
       DefTypeInfo::Class { type_params, .. } => {
-        self.register_type_params(type_params);
-        let params = self.collect_type_params(type_params);
+        let params = self.lower_type_param_decls(type_params, names);
         let (instance, _value) =
           self.lower_class_instance_and_value(info, names, self.store.primitive_ids().unknown);
+        self.validate_variance_annotations(type_params, instance, names);
         (instance, params)
       }
       DefTypeInfo::Enum { .. } => (self.lower_enum_type(info, names), Vec::new()),
@@ -159,7 +160,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     owner: HirDefId,
     info: &DefTypeInfo,
     names: &hir_js::NameInterner,
-  ) -> Option<(TypeId, TypeId, Vec<TypeParamId>)> {
+  ) -> Option<(TypeId, TypeId, Vec<TypeParamDecl>)> {
     self.type_params.clear();
     self.type_param_names.clear();
     self.current_arenas = self.arenas.get(&owner);
@@ -172,11 +173,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       self.current_arenas = None;
       return None;
     };
-    self.register_type_params(type_params);
-    let params = self.collect_type_params(type_params);
+    let params = self.lower_type_param_decls(type_params, names);
 
     let unknown = self.store.primitive_ids().unknown;
     let (instance, value) = self.lower_class_instance_and_value(info, names, unknown);
+    self.validate_variance_annotations(type_params, instance, names);
 
     self.type_params.clear();
     self.type_param_names.clear();
@@ -509,16 +510,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .unwrap_or(def)
   }
 
-  fn register_type_params(&mut self, params: &[HirTypeParamId]) {
-    for tp in params.iter() {
-      let id = TypeParamId(self.type_params.len() as u32);
-      self.type_params.insert(*tp, id);
-      if let Some(param) = self.arenas().type_params.get(tp.0 as usize) {
-        self.type_param_names.insert(param.name, id);
-      }
-    }
-  }
-
   fn lower_type_expr(&mut self, id: TypeExprId, names: &hir_js::NameInterner) -> TypeId {
     let Some(ty) = self.arenas().type_exprs.get(id.0 as usize).cloned() else {
       return self.store.primitive_ids().unknown;
@@ -831,27 +822,247 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     params
       .iter()
       .filter_map(|id| {
-        let (constraint, default) = {
+        let (constraint, default, variance) = {
           let data = self.arenas().type_params.get(id.0 as usize)?;
-          (data.constraint, data.default)
+          (data.constraint, data.default, data.variance)
         };
         let mapped = *self.type_params.get(id)?;
         let constraint = constraint.map(|c| self.lower_type_expr(c, names));
         let default = default.map(|d| self.lower_type_expr(d, names));
+        let variance = variance.map(|variance| match variance {
+          hir_js::TypeVariance::In => TypeParamVariance::In,
+          hir_js::TypeVariance::Out => TypeParamVariance::Out,
+          hir_js::TypeVariance::InOut => TypeParamVariance::InOut,
+        });
         Some(TypeParamDecl {
           id: mapped,
           constraint,
           default,
+          variance,
         })
       })
       .collect()
   }
 
-  fn collect_type_params(&self, params: &[HirTypeParamId]) -> Vec<TypeParamId> {
-    params
-      .iter()
-      .filter_map(|id| self.type_params.get(id).copied())
-      .collect()
+  fn validate_variance_annotations(
+    &mut self,
+    params: &[HirTypeParamId],
+    ty: TypeId,
+    names: &hir_js::NameInterner,
+  ) {
+    const OUT: u8 = 1;
+    const IN: u8 = 2;
+
+    let mut declared: Vec<(TypeParamId, TypeParamVariance, TextRange, String)> = Vec::new();
+    for hir_id in params.iter() {
+      let Some(data) = self.arenas().type_params.get(hir_id.0 as usize) else {
+        continue;
+      };
+      let Some(variance) = data.variance else {
+        continue;
+      };
+      let Some(mapped) = self.type_params.get(hir_id).copied() else {
+        continue;
+      };
+      let name = names
+        .resolve(data.name)
+        .map(|n| n.to_string())
+        .unwrap_or_default();
+      let mut span = data.span;
+      if let (Some(host), Some(file_key)) = (self.host, self.file_key.as_ref()) {
+        if let Ok(text) = host.file_text(file_key) {
+          let end = span.end as usize;
+          if end > 0 && end <= text.len() {
+            match text.as_bytes()[end - 1] {
+              b'>' | b',' => span.end = span.end.saturating_sub(1),
+              _ => {}
+            }
+          }
+        }
+      }
+      let variance = match variance {
+        hir_js::TypeVariance::In => TypeParamVariance::In,
+        hir_js::TypeVariance::Out => TypeParamVariance::Out,
+        hir_js::TypeVariance::InOut => TypeParamVariance::InOut,
+      };
+      declared.push((mapped, variance, span, name));
+    }
+    if declared.is_empty() {
+      return;
+    }
+
+    let mut usage: HashMap<TypeParamId, u8> = HashMap::new();
+    let mut visited: std::collections::HashSet<(TypeId, u8)> = std::collections::HashSet::new();
+    self.collect_variance_usage(ty, OUT, &mut usage, &mut visited);
+
+    for (param_id, expected, span, name) in declared {
+      let actual = usage.get(&param_id).copied().unwrap_or(0);
+      let ok = match expected {
+        TypeParamVariance::Out => (actual & IN) == 0,
+        TypeParamVariance::In => (actual & OUT) == 0,
+        TypeParamVariance::InOut => true,
+      };
+      if ok {
+        continue;
+      }
+      let expected_str = match expected {
+        TypeParamVariance::Out => "out",
+        TypeParamVariance::In => "in",
+        TypeParamVariance::InOut => "in out",
+      };
+      let actual_str = match actual {
+        0 => "it is never used",
+        OUT => "it is only used covariantly",
+        IN => "it is only used contravariantly",
+        _ => "it is used in both covariant and contravariant positions",
+      };
+      self
+        .diagnostics
+        .push(codes::INVALID_VARIANCE_ANNOTATION.error(
+          format!("Type parameter '{name}' is declared as '{expected_str}', but {actual_str}."),
+          Span::new(self.file, span),
+        ));
+    }
+  }
+
+  fn collect_variance_usage(
+    &self,
+    ty: TypeId,
+    position: u8,
+    usage: &mut HashMap<TypeParamId, u8>,
+    visited: &mut std::collections::HashSet<(TypeId, u8)>,
+  ) {
+    const OUT: u8 = 1;
+    const IN: u8 = 2;
+
+    if !visited.insert((ty, position)) {
+      return;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::TypeParam(id) => {
+        usage
+          .entry(id)
+          .and_modify(|bits| *bits |= position)
+          .or_insert(position);
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        for member in members {
+          self.collect_variance_usage(member, position, usage, visited);
+        }
+      }
+      TypeKind::Array { ty, .. } => self.collect_variance_usage(ty, position, usage, visited),
+      TypeKind::Tuple(elems) => {
+        for elem in elems {
+          self.collect_variance_usage(elem.ty, position, usage, visited);
+        }
+      }
+      TypeKind::Callable { overloads } => {
+        for sig_id in overloads {
+          let sig = self.store.signature(sig_id);
+          self.collect_signature_variance(&sig, position, usage, visited);
+        }
+      }
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        for prop in shape.properties {
+          self.collect_variance_usage(prop.data.ty, position, usage, visited);
+        }
+        for sig_id in shape.call_signatures {
+          let sig = self.store.signature(sig_id);
+          self.collect_signature_variance(&sig, position, usage, visited);
+        }
+        for sig_id in shape.construct_signatures {
+          let sig = self.store.signature(sig_id);
+          self.collect_signature_variance(&sig, position, usage, visited);
+        }
+        for idx in shape.indexers {
+          let flipped = ((position & OUT) << 1) | ((position & IN) >> 1);
+          self.collect_variance_usage(idx.key_type, flipped, usage, visited);
+          self.collect_variance_usage(idx.value_type, position, usage, visited);
+        }
+      }
+      TypeKind::Ref { args, .. } => {
+        for arg in args {
+          self.collect_variance_usage(arg, position, usage, visited);
+        }
+      }
+      TypeKind::Infer { constraint, .. } => {
+        if let Some(constraint) = constraint {
+          self.collect_variance_usage(constraint, position, usage, visited);
+        }
+      }
+      TypeKind::Predicate { asserted, .. } => {
+        if let Some(asserted) = asserted {
+          self.collect_variance_usage(asserted, position, usage, visited);
+        }
+      }
+      TypeKind::Conditional {
+        check,
+        extends,
+        true_ty,
+        false_ty,
+        ..
+      } => {
+        self.collect_variance_usage(check, OUT | IN, usage, visited);
+        self.collect_variance_usage(extends, OUT | IN, usage, visited);
+        self.collect_variance_usage(true_ty, position, usage, visited);
+        self.collect_variance_usage(false_ty, position, usage, visited);
+      }
+      TypeKind::Mapped(mapped) => {
+        self.collect_variance_usage(mapped.source, OUT | IN, usage, visited);
+        self.collect_variance_usage(mapped.value, position, usage, visited);
+        if let Some(name_type) = mapped.name_type {
+          self.collect_variance_usage(name_type, OUT | IN, usage, visited);
+        }
+        if let Some(as_type) = mapped.as_type {
+          self.collect_variance_usage(as_type, OUT | IN, usage, visited);
+        }
+      }
+      TypeKind::IndexedAccess { obj, index } => {
+        self.collect_variance_usage(obj, OUT | IN, usage, visited);
+        self.collect_variance_usage(index, OUT | IN, usage, visited);
+      }
+      TypeKind::KeyOf(inner) => self.collect_variance_usage(inner, OUT | IN, usage, visited),
+      TypeKind::EmptyObject
+      | TypeKind::Any
+      | TypeKind::Unknown
+      | TypeKind::Never
+      | TypeKind::Void
+      | TypeKind::Null
+      | TypeKind::Undefined
+      | TypeKind::Boolean
+      | TypeKind::Number
+      | TypeKind::String
+      | TypeKind::BigInt
+      | TypeKind::Symbol
+      | TypeKind::UniqueSymbol
+      | TypeKind::BooleanLiteral(_)
+      | TypeKind::NumberLiteral(_)
+      | TypeKind::StringLiteral(_)
+      | TypeKind::BigIntLiteral(_)
+      | TypeKind::This
+      | TypeKind::TemplateLiteral(_) => {}
+    }
+  }
+
+  fn collect_signature_variance(
+    &self,
+    sig: &Signature,
+    position: u8,
+    usage: &mut HashMap<TypeParamId, u8>,
+    visited: &mut std::collections::HashSet<(TypeId, u8)>,
+  ) {
+    const OUT: u8 = 1;
+    const IN: u8 = 2;
+
+    let flipped = ((position & OUT) << 1) | ((position & IN) >> 1);
+    if let Some(this) = sig.this_param {
+      self.collect_variance_usage(this, flipped, usage, visited);
+    }
+    for param in sig.params.iter() {
+      self.collect_variance_usage(param.ty, flipped, usage, visited);
+    }
+    self.collect_variance_usage(sig.ret, position, usage, visited);
   }
 
   fn type_name_to_string(&self, name: &hir_js::TypeName, names: &hir_js::NameInterner) -> String {
