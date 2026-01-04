@@ -593,7 +593,11 @@ impl Program {
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
     self
-      .with_analyzed_state(|state| Ok(state.files.keys().copied().collect()))
+      .with_analyzed_state(|state| {
+        let mut files: Vec<FileId> = state.files.keys().copied().collect();
+        files.sort_by_key(|id| id.0);
+        Ok(files)
+      })
       .unwrap_or_default()
   }
 
@@ -1860,13 +1864,13 @@ impl Program {
   /// Bodies belonging to a file.
   pub fn bodies_in_file(&self, file: FileId) -> Vec<BodyId> {
     match self.with_analyzed_state(|state| {
-      Ok(
-        state
-          .body_map
-          .iter()
-          .filter_map(|(id, meta)| (meta.file == file).then_some(*id))
-          .collect(),
-      )
+      let mut bodies: Vec<BodyId> = state
+        .body_map
+        .iter()
+        .filter_map(|(id, meta)| (meta.file == file).then_some(*id))
+        .collect();
+      bodies.sort_by_key(|id| id.0);
+      Ok(bodies)
     }) {
       Ok(bodies) => bodies,
       Err(fatal) => {
