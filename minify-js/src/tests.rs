@@ -3,7 +3,9 @@ use crate::{
   clear_last_emit_backend_for_tests, force_hir_emit_failure_for_tests, last_emit_backend_for_tests,
   EmitBackend,
 };
-use crate::{minify, minify_with_options, Dialect, FileId, MinifyOptions, Severity, TopLevelMode};
+use crate::{
+  minify, minify_with_options, Dialect, Diagnostic, FileId, MinifyOptions, Severity, TopLevelMode,
+};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
 use parse_js::ast::expr::Expr;
@@ -14,8 +16,6 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
 use parse_js::{parse, parse_with_options, ParseOptions, SourceType};
-#[cfg(feature = "emit-minify")]
-use serde_json::to_value;
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
   let mut out = Vec::new();
@@ -61,24 +61,15 @@ fn minified_with_backend_options(options: MinifyOptions, src: &str) -> (String, 
 }
 
 #[cfg(feature = "emit-minify")]
-fn assert_outputs_parse_to_same_ast(
-  mode: TopLevelMode,
-  dialect: Dialect,
-  hir_output: &str,
-  ast_output: &str,
-) {
-  let parse_opts = ParseOptions {
-    dialect,
-    source_type: match mode {
-      TopLevelMode::Global => SourceType::Script,
-      TopLevelMode::Module => SourceType::Module,
-    },
-  };
-  let hir_parsed = parse_with_options(hir_output, parse_opts).expect("HIR output should parse");
-  let ast_parsed = parse_with_options(ast_output, parse_opts).expect("AST output should parse");
-  let hir_json = to_value(&hir_parsed).expect("serialize HIR AST");
-  let ast_json = to_value(&ast_parsed).expect("serialize AST AST");
-  assert_eq!(hir_json, ast_json);
+fn try_minified_with_backend_options(
+  options: MinifyOptions,
+  src: &str,
+) -> Result<(String, EmitBackend), Vec<Diagnostic>> {
+  clear_last_emit_backend_for_tests();
+  let mut out = Vec::new();
+  minify_with_options(options, src, &mut out)?;
+  let backend = last_emit_backend_for_tests().expect("emitter backend should be recorded");
+  Ok((String::from_utf8(out).unwrap(), backend))
 }
 
 #[test]
@@ -707,47 +698,115 @@ fn rewrites_nullish_or_to_loose_equality() {
 #[cfg(feature = "emit-minify")]
 #[test]
 fn hir_emitter_matches_ast_output() {
-  let src =
-    "function wrap(value){return value+1;} const result=wrap(2); const doubled=wrap(result);";
-  let (hir_output, hir_backend) = minified_with_backend_options(
-    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
-    src,
-  );
-  assert_eq!(hir_backend, EmitBackend::Hir);
+  let cases = [
+    (
+      "basic minification",
+      TopLevelMode::Global,
+      Dialect::Js,
+      "function wrap(value){return value+1;} const result=wrap(2); const doubled=wrap(result);",
+    ),
+    (
+      "arrow function expression statement",
+      TopLevelMode::Global,
+      Dialect::Js,
+      "long_parameter_name=>long_parameter_name;",
+    ),
+    (
+      "object literal async/generator methods",
+      TopLevelMode::Global,
+      Dialect::Js,
+      "const obj={async m(){await 1;},*g(){yield 1;},async *ag(){yield 1;}};console.log(obj);",
+    ),
+    (
+      "new expression with optional chaining callee",
+      TopLevelMode::Global,
+      Dialect::Js,
+      "new abc?.def();",
+    ),
+    (
+      "exported class with fields/accessors/static block",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "export class Foo{static x=1;#p=2;get v(){return this.#p}set v(x){this.#p=x}static{Foo.x++}}",
+    ),
+    (
+      "module import/export attributes",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "import * as ns from \"pkg\" with { type: \"json\" };export { a as b } from \"pkg\" with { type: \"json\" };ns;",
+    ),
+    (
+      "jsx element with nested arrow function",
+      TopLevelMode::Module,
+      Dialect::Jsx,
+      "export const list = <ul>{items.map(item => <li>{item}</li>)}</ul>;",
+    ),
+    (
+      "export default arrow expression",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "export default (value => ({computed: value ?? 0}));",
+    ),
+    (
+      "decorated export",
+      TopLevelMode::Module,
+      Dialect::Ts,
+      "@dec export class C {}",
+    ),
+  ];
 
-  force_hir_emit_failure_for_tests();
-  let (ast_output, ast_backend) = minified_with_backend_options(
-    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
-    src,
-  );
-  assert_eq!(ast_backend, EmitBackend::Ast);
-  assert_outputs_parse_to_same_ast(TopLevelMode::Global, Dialect::Js, &hir_output, &ast_output);
-}
+  let mut failures = Vec::new();
 
-#[cfg(feature = "emit-minify")]
-#[test]
-fn hir_emitter_can_differ_from_ast_output() {
-  // Expression statements starting with arrow functions are one example where
-  // the emitters may differ in parentheses without affecting semantics.
-  let src = "long_parameter_name=>long_parameter_name;";
-  let (hir_output, hir_backend) = minified_with_backend_options(
-    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
-    src,
-  );
-  assert_eq!(hir_backend, EmitBackend::Hir);
+  for (name, mode, dialect, src) in cases {
+    let hir = try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
+    let (hir_output, hir_backend) = match hir {
+      Ok(ok) => ok,
+      Err(diags) => {
+        failures.push(format!(
+          "{name}: HIR minify failed\nsrc:\n{src}\ndiagnostics:\n{diags:?}"
+        ));
+        continue;
+      }
+    };
+    if hir_backend != EmitBackend::Hir {
+      failures.push(format!(
+        "{name}: expected HIR backend, got {hir_backend:?}\nsrc:\n{src}\noutput:\n{hir_output}"
+      ));
+      continue;
+    }
 
-  force_hir_emit_failure_for_tests();
-  let (ast_output, ast_backend) = minified_with_backend_options(
-    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
-    src,
-  );
-  assert_eq!(ast_backend, EmitBackend::Ast);
+    force_hir_emit_failure_for_tests();
+    let ast = try_minified_with_backend_options(MinifyOptions::new(mode).with_dialect(dialect), src);
+    let (ast_output, ast_backend) = match ast {
+      Ok(ok) => ok,
+      Err(diags) => {
+        failures.push(format!(
+          "{name}: AST minify failed\nsrc:\n{src}\ndiagnostics:\n{diags:?}"
+        ));
+        continue;
+      }
+    };
+    if ast_backend != EmitBackend::Ast {
+      failures.push(format!(
+        "{name}: expected AST backend, got {ast_backend:?}\nsrc:\n{src}\noutput:\n{ast_output}"
+      ));
+      continue;
+    }
 
-  assert_ne!(
-    hir_output, ast_output,
-    "HIR emission should be accepted even when its formatting differs from the AST emitter"
-  );
-  assert_outputs_parse_to_same_ast(TopLevelMode::Global, Dialect::Js, &hir_output, &ast_output);
+    if hir_output != ast_output {
+      failures.push(format!(
+        "{name}: HIR and AST output differ\nsrc:\n{src}\nhir:\n{hir_output}\nast:\n{ast_output}"
+      ));
+    }
+  }
+
+  if !failures.is_empty() {
+    panic!(
+      "HIR/AST emission parity failures ({}):\n\n{}",
+      failures.len(),
+      failures.join("\n\n")
+    );
+  }
 }
 
 #[cfg(feature = "emit-minify")]

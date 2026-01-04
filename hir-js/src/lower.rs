@@ -3156,6 +3156,15 @@ fn collect_stmt<'a>(
       desc.is_default_export = true;
       desc.parent = parent;
       descriptors.push(desc);
+      collect_expr(
+        &expr.stx.expression,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       if module_item {
         module_items.push(ModuleItem {
           span,
@@ -4729,7 +4738,89 @@ fn collect_expr<'a>(
         ctx,
       );
     }
+    AstExpr::JsxElem(elem) => {
+      collect_jsx_elem(elem, descriptors, module_items, names, ambient, in_global, ctx);
+    }
     _ => {}
+  }
+}
+
+fn collect_jsx_elem<'a>(
+  elem: &'a Node<jsx::JsxElem>,
+  descriptors: &mut Vec<DefDescriptor<'a>>,
+  module_items: &mut Vec<ModuleItem<'a>>,
+  names: &mut NameInterner,
+  ambient: bool,
+  in_global: bool,
+  ctx: &mut LoweringContext,
+) {
+  for attr in elem.stx.attributes.iter() {
+    match attr {
+      jsx::JsxAttr::Named { value, .. } => {
+        if let Some(value) = value {
+          match value {
+            jsx::JsxAttrVal::Text(_) => {}
+            jsx::JsxAttrVal::Expression(container) => {
+              if !is_empty_jsx_expr_placeholder(&container.stx.value) {
+                collect_expr(
+                  &container.stx.value,
+                  descriptors,
+                  module_items,
+                  names,
+                  ambient,
+                  in_global,
+                  ctx,
+                );
+              }
+            }
+            jsx::JsxAttrVal::Element(child) => {
+              collect_jsx_elem(child, descriptors, module_items, names, ambient, in_global, ctx);
+            }
+          }
+        }
+      }
+      jsx::JsxAttr::Spread { value } => {
+        collect_expr(
+          &value.stx.value,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      }
+    }
+  }
+
+  for child in elem.stx.children.iter() {
+    match child {
+      jsx::JsxElemChild::Element(child_elem) => {
+        collect_jsx_elem(
+          child_elem,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      }
+      jsx::JsxElemChild::Expr(container) => {
+        if !is_empty_jsx_expr_placeholder(&container.stx.value) {
+          collect_expr(
+            &container.stx.value,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
+      }
+      jsx::JsxElemChild::Text(_) => {}
+    }
   }
 }
 

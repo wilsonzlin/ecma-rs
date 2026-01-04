@@ -458,7 +458,14 @@ fn emit_export_default(
       let body = ctx
         .body(*body)
         .ok_or_else(|| EmitError::unsupported("export default body missing"))?;
+      let needs_parens = expr_stmt_needs_parens(ctx.expr(body, *expr));
+      if needs_parens {
+        em.write_punct("(");
+      }
       emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+      if needs_parens {
+        em.write_punct(")");
+      }
       em.write_semicolon();
       Ok(())
     }
@@ -1543,9 +1550,9 @@ fn expr_prec(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> Result<Prec,
     | ExprKind::ImportMeta
     | ExprKind::NewTarget => PRIMARY_PRECEDENCE,
     ExprKind::Jsx(_) => PRIMARY_PRECEDENCE,
-    ExprKind::TypeAssertion { .. } | ExprKind::NonNull { .. } | ExprKind::Satisfies { .. } => {
-      CALL_MEMBER_PRECEDENCE
-    }
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => return expr_prec(ctx, body, *expr),
     ExprKind::Missing => return Err(EmitError::unsupported("missing expression")),
   };
   Ok(prec)
@@ -1661,14 +1668,11 @@ fn emit_expr_no_parens(
         )?;
       }
     }
-    ExprKind::TypeAssertion { .. } | ExprKind::Satisfies { .. } => {
-      return Err(EmitError::unsupported(
-        "type assertions are not preserved in HIR emission",
-      ))
-    }
-    ExprKind::NonNull { expr } => {
-      emit_expr_with_min_prec(em, ctx, body, *expr, CALL_MEMBER_PRECEDENCE)?;
-      em.write_punct("!");
+    // TypeScript-only expression wrappers. These are erased when emitting JS.
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => {
+      emit_expr_no_parens(em, ctx, body, *expr)?;
     }
     ExprKind::ImportCall {
       argument,
@@ -1696,10 +1700,17 @@ fn emit_call(
   body: &Body,
   call: &hir_js::CallExpr,
 ) -> EmitResult {
+  let callee_needs_parens = call.is_new && starts_with_optional_chaining(ctx, body, call.callee);
   if call.is_new {
     em.write_keyword("new");
   }
+  if callee_needs_parens {
+    em.write_punct("(");
+  }
   emit_expr_with_min_prec(em, ctx, body, call.callee, CALL_MEMBER_PRECEDENCE)?;
+  if callee_needs_parens {
+    em.write_punct(")");
+  }
   if call.optional {
     em.write_str("?.(");
   } else {
@@ -1806,7 +1817,6 @@ fn emit_object_literal(
         shorthand,
       } => {
         if *method {
-          emit_object_key(em, ctx, body, key)?;
           if let ExprKind::FunctionExpr {
             body: func_body, ..
           } = &ctx.expr(body, *value).kind
@@ -1818,9 +1828,17 @@ fn emit_object_literal(
               .function
               .as_ref()
               .ok_or_else(|| EmitError::unsupported("method metadata missing"))?;
+            if func_data.async_ {
+              em.write_keyword("async");
+            }
+            if func_data.generator {
+              em.write_punct("*");
+            }
+            emit_object_key(em, ctx, body, key)?;
             emit_param_list(em, ctx, func_body, &func_data.params)?;
             emit_function_body(em, ctx, func_body, &func_data.body, true)?;
           } else {
+            emit_object_key(em, ctx, body, key)?;
             em.write_punct(":");
             emit_expr_with_min_prec(em, ctx, body, *value, Prec::LOWEST)?;
           }
@@ -2095,10 +2113,7 @@ fn expr_stmt_needs_parens(expr: &Expr) -> bool {
   matches!(
     expr.kind,
     ExprKind::Object(_)
-      | ExprKind::FunctionExpr {
-        is_arrow: false,
-        ..
-      }
+      | ExprKind::FunctionExpr { .. }
       | ExprKind::ClassExpr { .. }
   )
 }
@@ -2112,6 +2127,20 @@ fn arrow_concise_body_needs_parens(expr: &Expr) -> bool {
         ..
       }
   )
+}
+
+fn starts_with_optional_chaining(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  let expr = ctx.expr(body, expr_id);
+  match &expr.kind {
+    ExprKind::Member(member) => {
+      member.optional || starts_with_optional_chaining(ctx, body, member.object)
+    }
+    ExprKind::Call(call) => call.optional || starts_with_optional_chaining(ctx, body, call.callee),
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => starts_with_optional_chaining(ctx, body, *expr),
+    _ => false,
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

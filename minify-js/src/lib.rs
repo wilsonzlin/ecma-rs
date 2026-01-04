@@ -76,10 +76,11 @@ fn emit_minified(
   let force_failure = false;
 
   // Prefer emitting from HIR. Only fall back to the AST emitter when the HIR
-  // emission path reports an error (typically due to unsupported syntax).
+  // emission path reports an error (typically due to unsupported syntax) AND
+  // the caller explicitly opts into AST emission via the `emit-ast` feature.
   //
-  // Production builds avoid the extra AST emission/parity check cost, while
-  // tests can still compare the two outputs via forced fallback runs.
+  // This keeps production builds deterministic and prevents silently
+  // diverging outputs when the HIR emitter is missing coverage.
   let (emitted, backend) = if force_failure {
     let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
       .map_err(|diag| vec![diag])?;
@@ -89,9 +90,16 @@ fn emit_minified(
     match emit_hir_file_diagnostic(&lowered, emit_opts.clone()) {
       Ok(code) => (code, EmitBackend::Hir),
       Err(hir_diag) => {
-        let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
-          .map_err(|ast_diag| vec![hir_diag, ast_diag])?;
-        (ast_output, EmitBackend::Ast)
+        #[cfg(feature = "emit-ast")]
+        {
+          let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
+            .map_err(|ast_diag| vec![hir_diag, ast_diag])?;
+          (ast_output, EmitBackend::Ast)
+        }
+        #[cfg(not(feature = "emit-ast"))]
+        {
+          return Err(vec![hir_diag]);
+        }
       }
     }
   };
