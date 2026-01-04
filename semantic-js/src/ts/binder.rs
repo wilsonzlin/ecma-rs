@@ -622,15 +622,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         Some(decl.def_id),
         None,
       );
-      let _symbol_id = add_decl_to_groups(
-        &mut state.symbols,
-        &decl.name,
-        decl_id,
-        namespaces,
-        &mut self.symbols,
-        SymbolOrigin::Local,
-        owner,
-      );
+      // `declare global { ... }` introduces declarations into the program's
+      // global scope but does not create module-local bindings. Keep script
+      // files behaving like classic global scripts (their "module" scope is the
+      // global scope), but avoid leaking global-augmentation declarations into
+      // external module symbol tables.
+      if !(decl.is_global && !is_script) {
+        let _symbol_id = add_decl_to_groups(
+          &mut state.symbols,
+          &decl.name,
+          decl_id,
+          namespaces,
+          &mut self.symbols,
+          SymbolOrigin::Local,
+          owner,
+        );
+      }
       if self.decl_participates_in_global_kind(file_kind, decl, is_script) {
         add_decl_to_groups(
           &mut self.global_symbols,

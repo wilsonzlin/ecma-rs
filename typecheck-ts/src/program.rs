@@ -3280,7 +3280,9 @@ impl ProgramTypeResolver {
     segments.push(imported_name);
     segments.extend_from_slice(&path[1..]);
     let mut module = origin;
-    self.resolve_export_path(&segments, &mut module, final_ns)
+    self
+      .resolve_export_path(&segments, &mut module, final_ns)
+      .or_else(|| self.resolve_namespace_member_path_in_file(origin, &segments, final_ns))
   }
 
   fn resolve_export_path(
@@ -6337,6 +6339,62 @@ impl ProgramState {
       def_types.insert(namespace_def, ty);
     }
 
+    // Module/global augmentation in `.d.ts` ecosystems relies heavily on
+    // declaration merging across files. `semantic-js` already merges
+    // declarations into shared symbols, but we also need to merge the computed
+    // declared types so any declaration (base or augmentation) expands to the
+    // same merged type.
+    //
+    // For the high-value 95% case, focus on interface merging (used heavily by
+    // module augmentation and `declare global`). Other merge kinds (functions,
+    // namespaces, value+namespace) are handled by dedicated passes.
+    if let Some(semantics) = self.semantics.as_ref() {
+      let mut interface_groups: BTreeMap<sem_ts::SymbolId, Vec<DefId>> = BTreeMap::new();
+      for (def, data) in self.def_data.iter() {
+        if !matches!(data.kind, DefKind::Interface(_)) {
+          continue;
+        }
+        let Some(symbol) = semantics.symbol_for_def(sem_ts::DefId(def.0), sem_ts::Namespace::TYPE)
+        else {
+          continue;
+        };
+        interface_groups.entry(symbol).or_default().push(*def);
+      }
+
+      for defs in interface_groups.values_mut() {
+        defs.sort_by_key(|def| {
+          self
+            .def_data
+            .get(def)
+            .map(|data| (data.file.0, data.span.start, data.span.end, def.0))
+            .unwrap_or((u32::MAX, u32::MAX, u32::MAX, def.0))
+        });
+        defs.dedup();
+      }
+
+      for defs in interface_groups.values() {
+        if defs.len() <= 1 {
+          continue;
+        }
+        let mut merged: Option<tti::TypeId> = None;
+        for def in defs.iter().copied() {
+          let Some(incoming) = def_types.get(&def).copied() else {
+            continue;
+          };
+          merged = Some(match merged {
+            Some(existing) => ProgramState::merge_interned_decl_types(&store, existing, incoming),
+            None => incoming,
+          });
+        }
+        let Some(merged) = merged else {
+          continue;
+        };
+        for def in defs.iter().copied() {
+          def_types.insert(def, merged);
+        }
+      }
+    }
+
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
@@ -7311,6 +7369,44 @@ impl ProgramState {
     file: FileId,
     lowered: &LowerResult,
   ) -> HashMap<DefId, DefId> {
+    let is_file_level_binding = |def: &hir_js::DefData| -> bool {
+      if def.in_global {
+        // `declare global { ... }` members are injected into the program-wide
+        // global scope but do not create file/module bindings.
+        return false;
+      }
+
+      // `hir-js` models variable declarations as a `VarDeclarator` container
+      // owning the initializer body plus one or more `Var` children for the
+      // bindings. Treat those `Var` defs as top-level when the declarator
+      // itself is top-level.
+      let mut parent = def.parent;
+      while let Some(parent_id) = parent {
+        let Some(parent_def) = lowered.def(parent_id) else {
+          return false;
+        };
+        if matches!(parent_def.path.kind, HirDefKind::VarDeclarator) {
+          parent = parent_def.parent;
+          continue;
+        }
+        return false;
+      }
+
+      matches!(
+        def.path.kind,
+        HirDefKind::Var
+          | HirDefKind::Function
+          | HirDefKind::Class
+          | HirDefKind::Enum
+          | HirDefKind::Namespace
+          | HirDefKind::Module
+          | HirDefKind::ImportBinding
+          | HirDefKind::Interface
+          | HirDefKind::TypeAlias
+          | HirDefKind::ExportAlias
+      )
+    };
+
     let file_def_ids: HashSet<_> = self
       .def_data
       .iter()
@@ -7524,20 +7620,22 @@ impl ProgramState {
       };
 
       if !is_var_declarator {
-        bindings
-          .entry(raw_name.clone())
-          .and_modify(|binding| {
-            binding.symbol = data.symbol;
-            binding.def = Some(def_id);
-          })
-          .or_insert(SymbolBinding {
-            symbol: data.symbol,
-            def: Some(def_id),
-            type_id: None,
-          });
+        if is_file_level_binding(def) {
+          bindings
+            .entry(raw_name.clone())
+            .and_modify(|binding| {
+              binding.symbol = data.symbol;
+              binding.def = Some(def_id);
+            })
+            .or_insert(SymbolBinding {
+              symbol: data.symbol,
+              def: Some(def_id),
+              type_id: None,
+            });
+        }
       }
 
-      if data.export && !is_var_declarator {
+      if data.export && !is_var_declarator && is_file_level_binding(def) {
         let export_name = if def.is_default_export {
           "default".to_string()
         } else {
@@ -9128,15 +9226,14 @@ impl ProgramState {
           }
         }
         Stmt::ModuleDecl(module) => {
-          if matches!(
-            module.stx.name,
-            parse_js::ast::ts_stmt::ModuleName::String(_)
-          ) {
+          if let parse_js::ast::ts_stmt::ModuleName::String(specifier) = &module.stx.name {
             if has_module_syntax {
-              if let parse_js::ast::ts_stmt::ModuleName::String(specifier) = &module.stx.name {
-                if let Some(target) = self.record_module_resolution(file, specifier, host) {
-                  queue.push_back(target);
-                }
+              // `declare module "x" { ... }` can act as an external module augmentation
+              // when the containing file is itself a module. Record the host mapping
+              // so `semantic-js` can resolve the augmentation target and merge it
+              // into the module's exports.
+              if let Some(target) = self.record_module_resolution(file, specifier, host) {
+                queue.push_back(target);
               }
             }
             self.bind_ambient_module(file, module, &mut sem_builder, &mut defs);
