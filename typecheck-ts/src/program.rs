@@ -1480,6 +1480,7 @@ impl Program {
         Arc::clone(&store),
         &state.interned_def_types,
         &state.interned_type_params,
+        &state.interned_intrinsics,
         &state.interned_class_instances,
         caches.eval.clone(),
       );
@@ -5207,6 +5208,7 @@ impl ProgramState {
           hir_js::TypeExprKind::Parenthesized(inner) => {
             type_expr = *inner;
           }
+          hir_js::TypeExprKind::Intrinsic => return true,
           hir_js::TypeExprKind::TypeRef(type_ref) => {
             if !type_ref.type_args.is_empty() {
               return false;
@@ -11244,6 +11246,7 @@ impl ProgramState {
               &arg_tys,
               None,
               None,
+              None,
               span,
               None,
             )
@@ -11254,6 +11257,7 @@ impl ProgramState {
               &caches.instantiation,
               *callee_ty,
               &arg_tys,
+              None,
               this_arg,
               None,
               span,

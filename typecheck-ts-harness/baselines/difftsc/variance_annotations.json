@@ -29,6 +29,11 @@
     "exports": [
       {
         "file": "variance_annotations.ts",
+        "name": "Box",
+        "type": "any"
+      },
+      {
+        "file": "variance_annotations.ts",
         "name": "animalBox",
         "type": "Box<Animal>"
       },

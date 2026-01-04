@@ -20,6 +20,11 @@
     "exports": [
       {
         "file": "m.ts",
+        "name": "Foo",
+        "type": "any"
+      },
+      {
+        "file": "m.ts",
         "name": "v",
         "type": "{ x: number }"
       }

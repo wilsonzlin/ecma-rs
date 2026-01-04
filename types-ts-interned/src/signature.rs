@@ -17,6 +17,7 @@ pub struct TypeParamDecl {
   pub constraint: Option<TypeId>,
   pub default: Option<TypeId>,
   pub variance: Option<TypeParamVariance>,
+  pub const_: bool,
 }
 
 impl TypeParamDecl {
@@ -26,6 +27,7 @@ impl TypeParamDecl {
       constraint: None,
       default: None,
       variance: None,
+      const_: false,
     }
   }
 }

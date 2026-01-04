@@ -153,11 +153,13 @@ pub fn resolve_overloads(
   instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
+  const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
   expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> CallResolution {
+  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
   let mut candidates = Vec::new();
   collect_signatures(
     store.as_ref(),
@@ -217,6 +219,21 @@ pub fn resolve_overloads(
       outcomes.push(outcome);
       continue;
     }
+
+    let mut effective_args = None;
+    if let Some(const_args) = const_args {
+      for idx in 0..args.len() {
+        if uses_const_arg(store.as_ref(), &original_sig, &arity, idx) {
+          if effective_args.is_none() {
+            effective_args = Some(args.to_vec());
+          }
+          if let Some(slot) = effective_args.as_mut().and_then(|a| a.get_mut(idx)) {
+            *slot = const_args[idx];
+          }
+        }
+      }
+    }
+    let args = effective_args.as_deref().unwrap_or(args);
 
     let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
@@ -360,11 +377,13 @@ pub fn resolve_construct_overloads(
   instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
+  const_args: Option<&[TypeId]>,
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
   expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> CallResolution {
+  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
   let mut candidates = Vec::new();
   collect_construct_signatures(
     store.as_ref(),
@@ -424,6 +443,21 @@ pub fn resolve_construct_overloads(
       outcomes.push(outcome);
       continue;
     }
+
+    let mut effective_args = None;
+    if let Some(const_args) = const_args {
+      for idx in 0..args.len() {
+        if uses_const_arg(store.as_ref(), &original_sig, &arity, idx) {
+          if effective_args.is_none() {
+            effective_args = Some(args.to_vec());
+          }
+          if let Some(slot) = effective_args.as_mut().and_then(|a| a.get_mut(idx)) {
+            *slot = const_args[idx];
+          }
+        }
+      }
+    }
+    let args = effective_args.as_deref().unwrap_or(args);
 
     let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
@@ -736,6 +770,19 @@ fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option
       }
     }
   }
+}
+
+fn uses_const_arg(store: &TypeStore, sig: &Signature, arity: &ArityInfo, index: usize) -> bool {
+  let Some(expected) = expected_arg_type(sig, arity, index) else {
+    return false;
+  };
+  let TypeKind::TypeParam(param_id) = store.type_kind(expected.ty) else {
+    return false;
+  };
+  sig
+    .type_params
+    .iter()
+    .any(|decl| decl.id == param_id && decl.const_)
 }
 
 fn check_arguments(

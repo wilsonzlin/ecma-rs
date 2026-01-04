@@ -822,9 +822,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     params
       .iter()
       .filter_map(|id| {
-        let (constraint, default, variance) = {
+        let (constraint, default, variance, const_) = {
           let data = self.arenas().type_params.get(id.0 as usize)?;
-          (data.constraint, data.default, data.variance)
+          (data.constraint, data.default, data.variance, data.const_)
         };
         let mapped = *self.type_params.get(id)?;
         let constraint = constraint.map(|c| self.lower_type_expr(c, names));
@@ -839,6 +839,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           constraint,
           default,
           variance,
+          const_,
         })
       })
       .collect()
@@ -986,6 +987,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           self.collect_variance_usage(arg, position, usage, visited);
         }
       }
+      TypeKind::Intrinsic { ty, .. } => self.collect_variance_usage(ty, position, usage, visited),
       TypeKind::Infer { constraint, .. } => {
         if let Some(constraint) = constraint {
           self.collect_variance_usage(constraint, position, usage, visited);

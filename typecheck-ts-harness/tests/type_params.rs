@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::{codes, FileId, FileKey, MemoryHost, Program};
 use types_ts_interned::{
   Param, RelateCtx, Signature, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
@@ -69,7 +70,7 @@ fn conflicting_type_arguments_still_error() {
     overloads: vec![sig_id],
   });
   let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
-  let instantiation = typecheck_ts::check::instantiate::InstantiationCache::default();
+  let instantiation = InstantiationCache::default();
   let span = diagnostics::Span {
     file: FileId(0),
     range: diagnostics::TextRange::new(0, 0),
@@ -80,6 +81,7 @@ fn conflicting_type_arguments_still_error() {
     &instantiation,
     callable,
     &[primitives.number, primitives.string],
+    None,
     None,
     None,
     span,

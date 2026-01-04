@@ -276,7 +276,9 @@ impl InferenceContext {
         }
       }
       let mut candidate = candidate.unwrap_or(primitives.unknown);
-      candidate = widen_inferred_candidate(self.store.as_ref(), candidate);
+      if !decl.const_ {
+        candidate = widen_inferred_candidate(self.store.as_ref(), candidate);
+      }
 
       if !bounds.upper.is_empty() {
         let upper = if bounds.upper.len() == 1 {

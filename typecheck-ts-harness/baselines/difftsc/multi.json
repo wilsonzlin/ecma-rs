@@ -24,5 +24,14 @@
       "category": "error",
       "message": "Type 'string' is not assignable to type 'number'."
     }
-  ]
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "types.ts",
+        "name": "Person",
+        "type": "any"
+      }
+    ]
+  }
 }

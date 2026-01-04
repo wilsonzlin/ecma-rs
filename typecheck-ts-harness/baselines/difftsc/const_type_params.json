@@ -19,18 +19,18 @@
     {
       "code": 2322,
       "file": "const_type_params.ts",
-      "start": 309,
-      "end": 310,
+      "start": 565,
+      "end": 566,
       "category": "error",
       "message": "Type '2' is not assignable to type '1'."
     },
     {
       "code": 2322,
       "file": "const_type_params.ts",
-      "start": 315,
-      "end": 316,
+      "start": 571,
+      "end": 572,
       "category": "error",
-      "message": "Type '\"no\"' is not assignable to type '\"ok\"'."
+      "message": "Type '\"no\"' is not assignable to type '\"x\"'."
     }
   ],
   "type_facts": {
@@ -38,26 +38,74 @@
       {
         "file": "const_type_params.ts",
         "name": "bad",
-        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+        "type": "{ readonly a: 1; readonly b: \"x\" }"
       },
       {
         "file": "const_type_params.ts",
-        "name": "inferred",
-        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+        "name": "constObj",
+        "type": "{ readonly a: 1; readonly b: \"x\" }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "constTuple",
+        "type": "readonly [1, 2, 3]"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "normalObj",
+        "type": "{ a: number; b: string }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "normalTuple",
+        "type": "number[]"
       },
       {
         "file": "const_type_params.ts",
         "name": "ok",
-        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+        "type": "{ readonly a: 1; readonly b: \"x\" }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "name": "unionTuple",
+        "type": "readonly [1, 2]"
       }
     ],
     "markers": [
       {
         "file": "const_type_params.ts",
-        "offset": 76,
-        "line": 4,
-        "column": 16,
-        "type": "{ readonly a: 1; readonly b: \"ok\" }"
+        "offset": 126,
+        "line": 8,
+        "column": 23,
+        "type": "number[]"
+      },
+      {
+        "file": "const_type_params.ts",
+        "offset": 193,
+        "line": 10,
+        "column": 22,
+        "type": "readonly [1, 2, 3]"
+      },
+      {
+        "file": "const_type_params.ts",
+        "offset": 264,
+        "line": 13,
+        "column": 21,
+        "type": "{ a: number; b: string }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "offset": 334,
+        "line": 15,
+        "column": 20,
+        "type": "{ readonly a: 1; readonly b: \"x\" }"
+      },
+      {
+        "file": "const_type_params.ts",
+        "offset": 707,
+        "line": 27,
+        "column": 22,
+        "type": "readonly [1, 2]"
       }
     ]
   }

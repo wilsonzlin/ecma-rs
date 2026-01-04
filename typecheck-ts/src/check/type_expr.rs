@@ -155,6 +155,7 @@ impl TypeLowerer {
           parse_js::ast::type_expr::Variance::Out => TypeParamVariance::Out,
           parse_js::ast::type_expr::Variance::InOut => TypeParamVariance::InOut,
         }),
+        const_: param.stx.const_,
       })
       .collect()
   }

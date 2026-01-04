@@ -76,6 +76,7 @@ fn selects_literal_overload() {
     &[click, handler],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -113,6 +114,7 @@ fn infers_generic_return_type() {
     &[primitives.number],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -146,6 +148,7 @@ fn reports_no_matching_overload_with_reasons() {
     &instantiation,
     callable,
     &[primitives.string],
+    None,
     None,
     None,
     span(),
@@ -199,6 +202,7 @@ fn selects_first_overload_on_tie() {
     &[primitives.string],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -225,6 +229,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     constraint: Some(primitives.string),
     default: None,
     variance: None,
+    const_: false,
   }];
   let string_sig_id = store.intern_signature(string_sig);
   let string_callable = store.intern_type(TypeKind::Callable {
@@ -237,6 +242,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     constraint: Some(primitives.number),
     default: None,
     variance: None,
+    const_: false,
   }];
   let number_sig_id = store.intern_signature(number_sig);
   let number_callable = store.intern_type(TypeKind::Callable {
@@ -261,6 +267,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     &[primitives.number],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -277,6 +284,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     &instantiation,
     number_callable,
     &[primitives.string],
+    None,
     None,
     None,
     span(),
@@ -305,6 +313,7 @@ fn applies_default_type_argument_from_interned_signature() {
     constraint: None,
     default: Some(primitives.string),
     variance: None,
+    const_: false,
   }];
   let sig_id = store.intern_signature(sig);
   let callable = store.intern_type(TypeKind::Callable {
@@ -322,6 +331,7 @@ fn applies_default_type_argument_from_interned_signature() {
     &instantiation,
     callable,
     &[],
+    None,
     None,
     None,
     span(),
@@ -380,6 +390,7 @@ fn prefers_union_compatible_overload() {
     &instantiation,
     callable,
     &[union],
+    None,
     None,
     None,
     span(),
@@ -441,6 +452,7 @@ fn prefers_fixed_arity_over_rest() {
     &[primitives.string, primitives.string],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -488,6 +500,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
     &[primitives.any],
     None,
     None,
+    None,
     span(),
     None,
   );
@@ -523,6 +536,7 @@ fn uses_contextual_return_for_generic_inference() {
     &instantiation,
     callable,
     &[primitives.any],
+    None,
     None,
     Some(primitives.number),
     span(),

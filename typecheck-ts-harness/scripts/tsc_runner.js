@@ -222,9 +222,6 @@ function collectExportTypes(checker, sourceFile) {
       sym.getFlags() & ts.SymbolFlags.Alias
         ? checker.getAliasedSymbol(sym)
         : sym;
-    if ((target.getFlags() & ts.SymbolFlags.Value) === 0) {
-      continue;
-    }
     const decl =
       target.valueDeclaration ||
       (target.declarations && target.declarations[0]) ||
@@ -247,13 +244,17 @@ function collectMarkerTypes(checker, markers, sourceFiles) {
     const sf = sourceFiles.get(absName);
     if (!sf) continue;
     const offsetUtf16 = utf8ByteOffsetToUtf16(sf.text, marker.offset);
-    // `findPrecedingToken` treats `offsetUtf16` as an exclusive bound (it returns
-    // the token *ending before* the position). For marker offsets that land on
-    // the start of an identifier (the common case for `^?`), this can yield the
-    // previous token (e.g. `=`), producing `any` type facts. Prefer the token at
-    // the position and fall back to `findPrecedingToken` only when needed.
-    const node =
-      ts.getTokenAtPosition(sf, offsetUtf16) ?? ts.findPrecedingToken(offsetUtf16, sf);
+    // Prefer the token at the marker position so `^?` aligned to the start of
+    // an identifier resolves that identifier (as `findPrecedingToken` treats
+    // the position as an exclusive bound). However, `getTokenAtPosition`
+    // returns the next token when the offset lands inside trivia/whitespace, so
+    // fall back to the preceding token in that case.
+    let node = ts.getTokenAtPosition(sf, offsetUtf16);
+    if (!node) {
+      node = ts.findPrecedingToken(offsetUtf16, sf);
+    } else if (node.getStart(sf) > offsetUtf16) {
+      node = ts.findPrecedingToken(offsetUtf16, sf) ?? node;
+    }
     if (!node) continue;
     const type = checker.getTypeAtLocation(node);
     const typeStr = renderType(checker, type, node);

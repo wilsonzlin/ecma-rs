@@ -56,6 +56,7 @@ impl Substituter {
           constraint: tp.constraint.map(|c| self.substitute_type(c)),
           default: tp.default.map(|d| self.substitute_type(d)),
           variance: tp.variance,
+          const_: tp.const_,
         })
       })
       .collect();

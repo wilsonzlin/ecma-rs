@@ -32,5 +32,14 @@
       "category": "error",
       "message": "Variable 'v' is used before being assigned."
     }
-  ]
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "dep.ts",
+        "name": "Foo",
+        "type": "any"
+      }
+    ]
+  }
 }

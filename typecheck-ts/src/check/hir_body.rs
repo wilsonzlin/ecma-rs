@@ -375,6 +375,50 @@ impl AstIndex {
     }
   }
 
+  fn index_jsx_elem(
+    &mut self,
+    elem: &Node<JsxElem>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
+    for (idx, attr) in elem.stx.attributes.iter().enumerate() {
+      if idx % 256 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      match attr {
+        JsxAttr::Named { value, .. } => match value {
+          Some(JsxAttrVal::Expression(container)) => {
+            if !is_empty_jsx_expr_placeholder(&container.stx.value) {
+              self.index_expr(&container.stx.value, file, cancelled);
+            }
+          }
+          Some(JsxAttrVal::Element(child)) => self.index_jsx_elem(child, file, cancelled),
+          Some(JsxAttrVal::Text(_)) | None => {}
+        },
+        JsxAttr::Spread { value } => {
+          if !is_empty_jsx_expr_placeholder(&value.stx.value) {
+            self.index_expr(&value.stx.value, file, cancelled);
+          }
+        }
+      }
+    }
+
+    for (idx, child) in elem.stx.children.iter().enumerate() {
+      if idx % 256 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      match child {
+        JsxElemChild::Element(child_elem) => self.index_jsx_elem(child_elem, file, cancelled),
+        JsxElemChild::Expr(container) => {
+          if !is_empty_jsx_expr_placeholder(&container.stx.value) {
+            self.index_expr(&container.stx.value, file, cancelled);
+          }
+        }
+        JsxElemChild::Text(_) => {}
+      }
+    }
+  }
+
   fn index_expr(
     &mut self,
     expr: &Node<AstExpr>,
@@ -449,47 +493,17 @@ impl AstIndex {
       }
       AstExpr::Func(func) => self.index_function(&func.stx.func, file, cancelled),
       AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file, cancelled),
-      AstExpr::JsxElem(elem) => {
-        fn index_jsx_elem(
-          index: &mut AstIndex,
-          elem: &Node<JsxElem>,
-          file: FileId,
-          cancelled: Option<&Arc<AtomicBool>>,
-        ) {
-          for attr in elem.stx.attributes.iter() {
-            match attr {
-              JsxAttr::Named { value, .. } => {
-                if let Some(val) = value {
-                  match val {
-                    JsxAttrVal::Expression(container) => {
-                      index.index_expr(&container.stx.value, file, cancelled)
-                    }
-                    JsxAttrVal::Text(_) => {}
-                    JsxAttrVal::Element(child) => index_jsx_elem(index, child, file, cancelled),
-                  }
-                }
-              }
-              JsxAttr::Spread { value } => index.index_expr(&value.stx.value, file, cancelled),
-            }
-          }
-
-          for child in elem.stx.children.iter() {
-            match child {
-              JsxElemChild::Element(child) => index_jsx_elem(index, child, file, cancelled),
-              JsxElemChild::Expr(container) => {
-                index.index_expr(&container.stx.value, file, cancelled)
-              }
-              JsxElemChild::Text(_) => {}
-            }
-          }
-        }
-
-        index_jsx_elem(self, elem, file, cancelled);
-      }
+      AstExpr::JsxElem(elem) => self.index_jsx_elem(elem, file, cancelled),
       AstExpr::JsxExprContainer(container) => {
-        self.index_expr(&container.stx.value, file, cancelled)
+        if !is_empty_jsx_expr_placeholder(&container.stx.value) {
+          self.index_expr(&container.stx.value, file, cancelled);
+        }
       }
-      AstExpr::JsxSpreadAttr(attr) => self.index_expr(&attr.stx.value, file, cancelled),
+      AstExpr::JsxSpreadAttr(spread) => {
+        if !is_empty_jsx_expr_placeholder(&spread.stx.value) {
+          self.index_expr(&spread.stx.value, file, cancelled);
+        }
+      }
       AstExpr::Id(..)
       | AstExpr::LitNull(..)
       | AstExpr::LitStr(..)
@@ -1445,10 +1459,11 @@ impl<'a> Checker<'a> {
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
     for declarator in decl.stx.declarators.iter() {
-      let annot_ty = declarator
-        .type_annotation
-        .as_ref()
-        .map(|ann| self.lowerer.lower_type_expr(ann));
+      let annot_ty = declarator.type_annotation.as_ref().map(|ann| {
+        self
+          .lookup_typeof_query_binding(ann)
+          .unwrap_or_else(|| self.lowerer.lower_type_expr(ann))
+      });
       let init_ty = if self.check_var_assignments {
         declarator
           .initializer
@@ -1479,6 +1494,18 @@ impl<'a> Checker<'a> {
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
+    }
+  }
+
+  fn lookup_typeof_query_binding(&self, ty: &Node<parse_js::ast::type_expr::TypeExpr>) -> Option<TypeId> {
+    let parse_js::ast::type_expr::TypeExpr::TypeQuery(query) = ty.stx.as_ref() else {
+      return None;
+    };
+    match &query.stx.expr_name {
+      parse_js::ast::type_expr::TypeEntityName::Identifier(name) => {
+        self.lookup(name.as_str()).map(|binding| binding.ty)
+      }
+      _ => None,
     }
   }
 
@@ -1552,10 +1579,14 @@ impl<'a> Checker<'a> {
             _ => (&un.stx.argument, None, expr.loc),
           };
           let callee_ty = self.check_expr(callee_expr);
+          let arg_exprs = arg_exprs.unwrap_or(&[]);
           let arg_types: Vec<TypeId> = arg_exprs
-            .unwrap_or(&[])
             .iter()
             .map(|arg| self.check_expr(&arg.stx.value))
+            .collect();
+          let const_arg_types: Vec<TypeId> = arg_exprs
+            .iter()
+            .map(|arg| self.const_inference_type(&arg.stx.value))
             .collect();
           let span = Span {
             file: self.file,
@@ -1567,6 +1598,7 @@ impl<'a> Checker<'a> {
             &self.instantiation_cache,
             callee_ty,
             &arg_types,
+            Some(&const_arg_types),
             None,
             None,
             span,
@@ -1578,8 +1610,7 @@ impl<'a> Checker<'a> {
           if resolution.diagnostics.is_empty() {
             if let Some(sig_id) = resolution.signature {
               let sig = self.store.signature(sig_id);
-              if let Some(arg_exprs) = arg_exprs {
-                for (idx, arg) in arg_exprs.iter().enumerate() {
+              for (idx, arg) in arg_exprs.iter().enumerate() {
                   if let Some(param) = sig.params.get(idx) {
                     let arg_expr = &arg.stx.value;
                     let arg_ty = match arg_expr.stx.as_ref() {
@@ -1593,7 +1624,6 @@ impl<'a> Checker<'a> {
                     };
                     self.check_assignable(arg_expr, arg_ty, param.ty);
                   }
-                }
               }
             }
           }
@@ -1629,6 +1659,12 @@ impl<'a> Checker<'a> {
           .iter()
           .map(|arg| self.check_expr(&arg.stx.value))
           .collect();
+        let mut const_arg_types: Vec<TypeId> = call
+          .stx
+          .arguments
+          .iter()
+          .map(|arg| self.const_inference_type(&arg.stx.value))
+          .collect();
         let span = Span {
           file: self.file,
           range: loc_to_range(self.file, call.loc),
@@ -1642,6 +1678,7 @@ impl<'a> Checker<'a> {
             &self.instantiation_cache,
             callee_base,
             &arg_types,
+            Some(&const_arg_types),
             None,
             None,
             span,
@@ -1671,6 +1708,9 @@ impl<'a> Checker<'a> {
                   *slot = refined_ty;
                   refined = true;
                 }
+                if let Some(slot) = const_arg_types.get_mut(idx) {
+                  *slot = refined_ty;
+                }
                 self.record_expr_type(arg.stx.value.loc, refined_ty);
               }
 
@@ -1681,6 +1721,7 @@ impl<'a> Checker<'a> {
                   &self.instantiation_cache,
                   callee_base,
                   &arg_types,
+                  Some(&const_arg_types),
                   None,
                   None,
                   span,
@@ -3005,6 +3046,119 @@ impl<'a> Checker<'a> {
       _ => {}
     }
   }
+
+  fn const_inference_type(&self, expr: &Node<AstExpr>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match expr.stx.as_ref() {
+      AstExpr::LitNum(num) => self
+        .store
+        .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(num.stx.value.0))),
+      AstExpr::LitStr(str_lit) => {
+        let name = self.store.intern_name(str_lit.stx.value.clone());
+        self.store.intern_type(TypeKind::StringLiteral(name))
+      }
+      AstExpr::LitBool(b) => self
+        .store
+        .intern_type(TypeKind::BooleanLiteral(b.stx.value)),
+      AstExpr::LitNull(_) => prim.null,
+      AstExpr::LitBigInt(value) => {
+        let trimmed = value.stx.value.trim_end_matches('n');
+        let parsed = trimmed
+          .parse::<BigInt>()
+          .unwrap_or_else(|_| BigInt::from(0u8));
+        self.store.intern_type(TypeKind::BigIntLiteral(parsed))
+      }
+      AstExpr::LitArr(arr) => {
+        let mut elems = Vec::new();
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(types_ts_interned::TupleElem {
+              ty: self.const_inference_type(v),
+              optional: false,
+              rest: false,
+              readonly: true,
+            }),
+            parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(types_ts_interned::TupleElem {
+              ty: self.const_inference_type(v),
+              optional: false,
+              rest: true,
+              readonly: true,
+            }),
+            parse_js::ast::expr::lit::LitArrElem::Empty => elems.push(types_ts_interned::TupleElem {
+              ty: prim.undefined,
+              optional: true,
+              rest: false,
+              readonly: true,
+            }),
+          }
+        }
+        self.store.intern_type(TypeKind::Tuple(elems))
+      }
+      AstExpr::LitObj(obj) => {
+        let mut shape = Shape::new();
+        for member in obj.stx.members.iter() {
+          match &member.stx.typ {
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Direct(direct) = key {
+                if let ClassOrObjVal::Prop(Some(value)) = val {
+                  let prop_key = PropKey::String(self.store.intern_name(direct.stx.key.clone()));
+                  let value_ty = self.const_inference_type(value);
+                  shape.properties.push(types_ts_interned::Property {
+                    key: prop_key,
+                    data: PropData {
+                      ty: value_ty,
+                      optional: false,
+                      readonly: true,
+                      accessibility: None,
+                      is_method: false,
+                      origin: None,
+                      declared_on: None,
+                    },
+                  });
+                }
+              }
+            }
+            ObjMemberType::Shorthand { id } => {
+              let key = PropKey::String(self.store.intern_name(id.stx.name.clone()));
+              let ty = self
+                .lookup(&id.stx.name)
+                .map(|b| b.ty)
+                .unwrap_or(prim.unknown);
+              shape.properties.push(types_ts_interned::Property {
+                key,
+                data: PropData {
+                  ty,
+                  optional: false,
+                  readonly: true,
+                  accessibility: None,
+                  is_method: false,
+                  origin: None,
+                  declared_on: None,
+                },
+              });
+            }
+            ObjMemberType::Rest { .. } => {}
+          }
+        }
+        let shape_id = self.store.intern_shape(shape);
+        let obj = self.store.intern_object(ObjectType { shape: shape_id });
+        self.store.intern_type(TypeKind::Object(obj))
+      }
+      AstExpr::TypeAssertion(assert) if assert.stx.const_assertion => {
+        self.const_inference_type(&assert.stx.expression)
+      }
+      _ => {
+        let range = loc_to_range(self.file, expr.loc);
+        self
+          .expr_map
+          .get(&range)
+          .and_then(|id| self.expr_types.get(id.0 as usize))
+          .copied()
+          .unwrap_or(prim.unknown)
+      }
+    }
+  }
+
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let prim = self.store.primitive_ids();
     let ty = match expr.stx.as_ref() {
@@ -3131,9 +3285,10 @@ impl<'a> Checker<'a> {
     let prim = self.store.primitive_ids();
     let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
-      // `expand_ref` above already followed any resolvable references; if we
-      // still have a `Ref`, treat it as unknown to avoid infinitely recursing
-      // on self-referential expansions (e.g. during in-progress type computation).
+      // `expand_ref` above follows any resolvable references with a local
+      // cycle guard. If we still have a `Ref`, treat it as unknown to avoid
+      // infinitely recursing on self-referential expansions (e.g. during
+      // in-progress type computation).
       TypeKind::Ref { .. } => prim.unknown,
       TypeKind::Callable { .. } if prop == "call" => {
         let sigs = callable_signatures(self.store.as_ref(), obj);
@@ -3220,44 +3375,53 @@ impl<'a> Checker<'a> {
   }
 
   fn type_has_prop(&self, ty: TypeId, prop: &str) -> bool {
-    let expanded = self.expand_for_props(ty);
-    if expanded != ty {
-      return self.type_has_prop(expanded, prop);
-    }
-    match self.store.type_kind(ty) {
-      TypeKind::Object(obj_id) => {
-        let shape = self.store.shape(self.store.object(obj_id).shape);
-        if !shape.indexers.is_empty() {
-          return true;
-        }
-        for candidate in shape.properties.iter() {
-          match candidate.key {
-            PropKey::String(name_id) => {
-              if self.store.name(name_id) == prop {
-                return true;
-              }
-            }
-            PropKey::Number(num) => {
-              if prop.parse::<i64>().ok() == Some(num) {
-                return true;
-              }
-            }
-            _ => {}
+    fn inner(checker: &Checker<'_>, ty: TypeId, prop: &str, seen: &mut HashSet<TypeId>) -> bool {
+      let ty = checker.store.canon(ty);
+      if !seen.insert(ty) {
+        return false;
+      }
+      let expanded = checker.expand_for_props(ty);
+      if expanded != ty {
+        return inner(checker, expanded, prop, seen);
+      }
+      let ty = checker.expand_ref(ty);
+      if ty != expanded {
+        return inner(checker, ty, prop, seen);
+      }
+      match checker.store.type_kind(ty) {
+        TypeKind::Object(obj_id) => {
+          let shape = checker.store.shape(checker.store.object(obj_id).shape);
+          if !shape.indexers.is_empty() {
+            return true;
           }
+          for candidate in shape.properties.iter() {
+            match candidate.key {
+              PropKey::String(name_id) => {
+                if checker.store.name(name_id) == prop {
+                  return true;
+                }
+              }
+              PropKey::Number(num) => {
+                if prop.parse::<i64>().ok() == Some(num) {
+                  return true;
+                }
+              }
+              _ => {}
+            }
+          }
+          false
         }
-        false
+        TypeKind::Union(members) | TypeKind::Intersection(members) => members
+          .iter()
+          .copied()
+          .any(|member| inner(checker, member, prop, seen)),
+        TypeKind::Ref { .. } => false,
+        TypeKind::Mapped(_) => true,
+        _ => false,
       }
-      TypeKind::Union(members) | TypeKind::Intersection(members) => members
-        .iter()
-        .copied()
-        .any(|member| self.type_has_prop(member, prop)),
-      TypeKind::Ref { .. } => {
-        let expanded = self.expand_ref(ty);
-        expanded != ty && self.type_has_prop(expanded, prop)
-      }
-      TypeKind::Mapped(_) => true,
-      _ => false,
     }
+
+    inner(self, ty, prop, &mut HashSet::new())
   }
 
   fn member_type_for_index_key(&mut self, obj: TypeId, key_ty: TypeId) -> TypeId {
@@ -3284,6 +3448,7 @@ impl<'a> Checker<'a> {
       _ => {}
     }
 
+    let obj = self.expand_ref(obj);
     match self.store.type_kind(obj) {
       TypeKind::Union(members) => {
         let mut collected = Vec::new();
@@ -4679,6 +4844,7 @@ impl<'a> Checker<'a> {
   }
 
   fn type_accepts_props(&self, target: TypeId, props: &HashSet<String>) -> bool {
+    let target = self.expand_ref(target);
     let expanded = self.expand_for_props(target);
     if expanded != target {
       return self.type_accepts_props(expanded, props);
@@ -4687,22 +4853,14 @@ impl<'a> Checker<'a> {
       TypeKind::Union(members) => {
         let mut saw_object = false;
         for member in members {
+          let member = self.expand_ref(self.expand_for_props(member));
           match self.store.type_kind(member) {
-            TypeKind::Object(_) | TypeKind::Union(_) | TypeKind::Intersection(_) => {
+            TypeKind::Object(_)
+            | TypeKind::Union(_)
+            | TypeKind::Intersection(_)
+            | TypeKind::Mapped(_) => {
               saw_object = true;
               if self.type_accepts_props(member, props) {
-                return true;
-              }
-            }
-            TypeKind::Ref { def, args } => {
-              let expanded = self
-                .ref_expander
-                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args));
-              let Some(expanded) = expanded.filter(|expanded| *expanded != member) else {
-                continue;
-              };
-              saw_object = true;
-              if self.type_accepts_props(expanded, props) {
                 return true;
               }
             }
@@ -4724,7 +4882,7 @@ impl<'a> Checker<'a> {
         let expanded_members: Vec<TypeId> = members
           .iter()
           .copied()
-          .map(|member| self.expand_for_props(member))
+          .map(|member| self.expand_ref(self.expand_for_props(member)))
           .collect();
         for (idx, member) in expanded_members.iter().enumerate() {
           if let TypeKind::Union(options) = self.store.type_kind(*member) {
@@ -4752,15 +4910,6 @@ impl<'a> Checker<'a> {
             | TypeKind::Intersection(_)
             | TypeKind::Mapped(_) => {
               object_members.push(member);
-            }
-            TypeKind::Ref { def, args } => {
-              let expanded = self
-                .ref_expander
-                .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args));
-              let Some(expanded) = expanded.filter(|expanded| *expanded != member) else {
-                continue;
-              };
-              object_members.push(expanded);
             }
             _ => {}
           }
@@ -4803,12 +4952,7 @@ impl<'a> Checker<'a> {
         props.iter().all(|p| allowed.contains(p))
       }
       TypeKind::Mapped(_) => true,
-      TypeKind::Ref { .. } => {
-        // If we cannot expand (or expansion makes no progress), accept all props
-        // to keep excess property checks conservative.
-        let expanded = self.expand_ref(target);
-        expanded == target || self.type_accepts_props(expanded, props)
-      }
+      TypeKind::Ref { .. } => true,
       _ => true,
     }
   }
@@ -7091,6 +7235,7 @@ impl<'a> FlowBodyChecker<'a> {
         &arg_bases,
         None,
         None,
+        None,
         span,
         self.ref_expander,
       )
@@ -7101,6 +7246,7 @@ impl<'a> FlowBodyChecker<'a> {
         &self.instantiation_cache,
         callee_non_nullish,
         &arg_bases,
+        None,
         this_arg,
         None,
         span,

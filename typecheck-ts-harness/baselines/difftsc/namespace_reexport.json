@@ -34,13 +34,25 @@
     }
   ],
   "type_facts": {
+    "exports": [
+      {
+        "file": "m.ts",
+        "name": "Foo",
+        "type": "any"
+      },
+      {
+        "file": "re.ts",
+        "name": "Foo",
+        "type": "any"
+      }
+    ],
     "markers": [
       {
         "file": "a.ts",
         "offset": 49,
         "line": 4,
         "column": 2,
-        "type": "any"
+        "type": "number"
       }
     ]
   }

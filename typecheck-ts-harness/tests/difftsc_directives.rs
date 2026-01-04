@@ -13,7 +13,7 @@ fn difftsc_honors_fixture_directives_for_rust_runs() {
   let baseline = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("baselines")
     .join("difftsc")
-    .join("this_param_call.json");
+    .join("win_paths.json");
 
   #[allow(deprecated)]
   let output = Command::cargo_bin("typecheck-ts-harness")
@@ -43,8 +43,12 @@ fn difftsc_honors_fixture_directives_for_rust_runs() {
     .expect("results array");
   let case = results
     .iter()
-    .find(|case| case.get("name").and_then(|n| n.as_str()) == Some("this_param_call"))
-    .expect("this_param_call case present");
+    .find(|case| case.get("name").and_then(|n| n.as_str()) == Some("win_paths"))
+    .expect("win_paths case present");
+  assert!(
+    case.get("actual_types").is_none() && case.get("type_diff").is_none(),
+    "expected difftsc to skip type-fact collection when the baseline has no type_facts; case: {case:?}"
+  );
 
   let baseline_json: Value =
     serde_json::from_str(&std::fs::read_to_string(&baseline).expect("read baseline"))
