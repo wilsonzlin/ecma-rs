@@ -39,12 +39,6 @@ enum OverloadKind {
   Construct,
 }
 
-#[derive(Clone, Copy, Debug)]
-struct ShapeInfo {
-  repr: SignatureId,
-  ret: TypeId,
-}
-
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
 pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
@@ -536,19 +530,42 @@ fn signature_shape_key(sig: &Signature) -> SignatureShapeKey {
   )
 }
 
+fn dedup_signatures_by_shape(store: &TypeStore, sigs: Vec<SignatureId>) -> Vec<SignatureId> {
+  let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
+  for sig_id in sigs.into_iter() {
+    let sig = store.signature(sig_id);
+    let key = signature_shape_key(&sig);
+    let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
+    match by_shape.entry(key) {
+      Entry::Vacant(entry) => {
+        entry.insert((sig_id, is_unknown));
+      }
+      Entry::Occupied(mut entry) => {
+        let (existing, existing_unknown) = *entry.get();
+        if existing_unknown && !is_unknown {
+          entry.insert((sig_id, is_unknown));
+        } else if existing_unknown == is_unknown && sig_id < existing {
+          entry.insert((sig_id, is_unknown));
+        }
+      }
+    }
+  }
+  let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
+  out.sort();
+  out
+}
+
 fn union_common_signatures(
   store: &TypeStore,
   kind: OverloadKind,
   members: &[TypeId],
   expander: Option<&dyn RelateTypeExpander>,
 ) -> Vec<SignatureId> {
-  let mut per_member: Vec<HashMap<SignatureShapeKey, ShapeInfo>> = Vec::with_capacity(members.len());
+  let mut member_sigs: Vec<Vec<SignatureId>> = Vec::with_capacity(members.len());
   for member in members.iter().copied() {
     let mut sigs = Vec::new();
     match kind {
-      OverloadKind::Call => {
-        collect_signatures(store, member, &mut sigs, &mut HashSet::new(), expander)
-      }
+      OverloadKind::Call => collect_signatures(store, member, &mut sigs, &mut HashSet::new(), expander),
       OverloadKind::Construct => collect_construct_signatures(
         store,
         member,
@@ -556,69 +573,304 @@ fn union_common_signatures(
         &mut HashSet::new(),
         expander,
       ),
-    };
+    }
     if sigs.is_empty() {
       return Vec::new();
     }
-    let mut map: HashMap<SignatureShapeKey, ShapeInfo> = HashMap::new();
-    for sig_id in sigs {
-      let sig = store.signature(sig_id);
+    sigs.sort();
+    sigs.dedup();
+    member_sigs.push(dedup_signatures_by_shape(store, sigs));
+  }
+
+  let Some((first, rest)) = member_sigs.split_first() else {
+    return Vec::new();
+  };
+
+  let mut combined = first.clone();
+  for sigs in rest.iter() {
+    combined = intersect_signature_sets(store, &combined, sigs);
+    if combined.is_empty() {
+      return Vec::new();
+    }
+  }
+  combined.sort();
+  combined.dedup();
+  combined
+}
+
+fn intersect_signature_sets(
+  store: &TypeStore,
+  lhs: &[SignatureId],
+  rhs: &[SignatureId],
+) -> Vec<SignatureId> {
+  #[derive(Clone)]
+  struct SigInfo {
+    sig: Signature,
+    arity: ArityInfo,
+  }
+
+  let lhs_info: Vec<SigInfo> = lhs
+    .iter()
+    .map(|sig_id| {
+      let sig = store.signature(*sig_id);
+      let arity = analyze_arity(store, &sig);
+      SigInfo { sig, arity }
+    })
+    .collect();
+  let rhs_info: Vec<SigInfo> = rhs
+    .iter()
+    .map(|sig_id| {
+      let sig = store.signature(*sig_id);
+      let arity = analyze_arity(store, &sig);
+      SigInfo { sig, arity }
+    })
+    .collect();
+
+  let mut by_shape: HashMap<SignatureShapeKey, TypeId> = HashMap::new();
+  let mut order: Vec<SignatureShapeKey> = Vec::new();
+
+  for lhs in lhs_info.iter() {
+    for rhs in rhs_info.iter() {
+      let Some(sig) = intersect_signatures(store, &lhs.sig, &lhs.arity, &rhs.sig, &rhs.arity) else {
+        continue;
+      };
       let key = signature_shape_key(&sig);
-      match map.entry(key) {
+      match by_shape.entry(key.clone()) {
         Entry::Vacant(entry) => {
-          entry.insert(ShapeInfo {
-            repr: sig_id,
-            ret: sig.ret,
-          });
+          entry.insert(sig.ret);
+          order.push(key);
         }
         Entry::Occupied(mut entry) => {
-          let existing = *entry.get();
-          let merged_ret = if existing.ret == sig.ret {
-            existing.ret
-          } else {
-            store.union(vec![existing.ret, sig.ret])
-          };
-          let repr = existing.repr.min(sig_id);
-          entry.insert(ShapeInfo {
-            repr,
-            ret: merged_ret,
-          });
+          let merged = store.union(vec![*entry.get(), sig.ret]);
+          entry.insert(merged);
         }
       }
     }
-    per_member.push(map);
   }
 
-  if per_member.is_empty() {
-    return Vec::new();
+  let mut out = Vec::with_capacity(order.len());
+  for key in order {
+    let ret = *by_shape.get(&key).expect("key should exist");
+    let (params, type_params, this_param) = key;
+    out.push(store.intern_signature(Signature {
+      params: params
+        .into_iter()
+        .map(|(ty, optional, rest)| Param {
+          name: None,
+          ty,
+          optional,
+          rest,
+        })
+        .collect(),
+      ret,
+      type_params,
+      this_param,
+    }));
   }
-  let first = &per_member[0];
-  let mut out = Vec::new();
-  for (key, first_info) in first.iter() {
-    if per_member
-      .iter()
-      .skip(1)
-      .all(|member| member.contains_key(key))
-    {
-      let mut ret_types = Vec::with_capacity(per_member.len());
-      for member in per_member.iter() {
-        ret_types.push(member.get(key).expect("checked contains").ret);
-      }
-      let ret = if ret_types.len() == 1 {
-        ret_types[0]
-      } else {
-        store.union(ret_types)
-      };
 
-      let mut sig = store.signature(first_info.repr);
-      sig.ret = ret;
-      let combined = store.intern_signature(sig);
-      out.push(combined);
-    }
-  }
   out.sort();
   out.dedup();
   out
+}
+
+fn intersect_signatures(
+  store: &TypeStore,
+  lhs: &Signature,
+  lhs_arity: &ArityInfo,
+  rhs: &Signature,
+  rhs_arity: &ArityInfo,
+) -> Option<Signature> {
+  if lhs.type_params != rhs.type_params {
+    return None;
+  }
+
+  let min = lhs_arity.min.max(rhs_arity.min);
+  let max = match (lhs_arity.max, rhs_arity.max) {
+    (Some(a), Some(b)) => Some(a.min(b)),
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  };
+  if let Some(max) = max {
+    if min > max {
+      return None;
+    }
+  }
+
+  let this_param = match (lhs.this_param, rhs.this_param) {
+    (Some(a), Some(b)) => {
+      let combined = store.intersection(vec![a, b]);
+      if is_obviously_empty_intersection(store, combined) {
+        return None;
+      }
+      Some(combined)
+    }
+    (Some(a), None) => Some(a),
+    (None, Some(b)) => Some(b),
+    (None, None) => None,
+  };
+
+  let ret = store.union(vec![lhs.ret, rhs.ret]);
+
+  let mut params = Vec::new();
+  match max {
+    Some(max) => {
+      for idx in 0..max {
+        let lhs = expected_arg_type(lhs, lhs_arity, idx)?;
+        let rhs = expected_arg_type(rhs, rhs_arity, idx)?;
+        let combined = store.intersection(vec![lhs.ty, rhs.ty]);
+        if is_obviously_empty_intersection(store, combined) {
+          return None;
+        }
+        params.push(Param {
+          name: None,
+          ty: combined,
+          optional: idx >= min,
+          rest: false,
+        });
+      }
+    }
+    None => {
+      for idx in 0..min {
+        let lhs = expected_arg_type(lhs, lhs_arity, idx)?;
+        let rhs = expected_arg_type(rhs, rhs_arity, idx)?;
+        let combined = store.intersection(vec![lhs.ty, rhs.ty]);
+        if is_obviously_empty_intersection(store, combined) {
+          return None;
+        }
+        params.push(Param {
+          name: None,
+          ty: combined,
+          optional: false,
+          rest: false,
+        });
+      }
+
+      let lhs_rest = expected_arg_type(lhs, lhs_arity, min)?;
+      let rhs_rest = expected_arg_type(rhs, rhs_arity, min)?;
+      let combined = store.intersection(vec![lhs_rest.ty, rhs_rest.ty]);
+      if is_obviously_empty_intersection(store, combined) {
+        return None;
+      }
+      params.push(Param {
+        name: None,
+        ty: combined,
+        optional: false,
+        rest: true,
+      });
+    }
+  }
+
+  Some(Signature {
+    params,
+    ret,
+    type_params: lhs.type_params.clone(),
+    this_param,
+  })
+}
+
+fn is_obviously_empty_intersection(store: &TypeStore, ty: TypeId) -> bool {
+  let prim = store.primitive_ids();
+  if ty == prim.never {
+    return true;
+  }
+  let TypeKind::Intersection(members) = store.type_kind(ty) else {
+    return false;
+  };
+
+  const STRING: u16 = 1 << 0;
+  const NUMBER: u16 = 1 << 1;
+  const BOOLEAN: u16 = 1 << 2;
+  const BIGINT: u16 = 1 << 3;
+  const SYMBOL: u16 = 1 << 4;
+  const NULLISH: u16 = 1 << 5;
+  const ALL: u16 = STRING | NUMBER | BOOLEAN | BIGINT | SYMBOL | NULLISH;
+
+  fn primitive_mask(store: &TypeStore, ty: TypeId) -> Option<u16> {
+    match store.type_kind(ty) {
+      TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_) => Some(STRING),
+      TypeKind::Number | TypeKind::NumberLiteral(_) => Some(NUMBER),
+      TypeKind::Boolean | TypeKind::BooleanLiteral(_) => Some(BOOLEAN),
+      TypeKind::BigInt | TypeKind::BigIntLiteral(_) => Some(BIGINT),
+      TypeKind::Symbol | TypeKind::UniqueSymbol => Some(SYMBOL),
+      TypeKind::Null | TypeKind::Undefined | TypeKind::Void => Some(NULLISH),
+      TypeKind::Union(members) => {
+        let mut mask = 0u16;
+        for member in members {
+          mask |= primitive_mask(store, member)?;
+        }
+        Some(mask)
+      }
+      _ => None,
+    }
+  }
+
+  let mut mask = ALL;
+  let mut string_lit = None;
+  let mut number_lit = None;
+  let mut boolean_lit = None;
+  let mut bigint_lit = None;
+  let mut unique_symbol = false;
+
+  for member in members {
+    match store.type_kind(member) {
+      TypeKind::StringLiteral(id) => {
+        if let Some(existing) = string_lit {
+          if existing != id {
+            return true;
+          }
+        } else {
+          string_lit = Some(id);
+        }
+      }
+      TypeKind::NumberLiteral(num) => {
+        if let Some(existing) = number_lit {
+          if existing != num {
+            return true;
+          }
+        } else {
+          number_lit = Some(num);
+        }
+      }
+      TypeKind::BooleanLiteral(value) => {
+        if let Some(existing) = boolean_lit {
+          if existing != value {
+            return true;
+          }
+        } else {
+          boolean_lit = Some(value);
+        }
+      }
+      TypeKind::BigIntLiteral(value) => {
+        if let Some(existing) = bigint_lit.as_ref() {
+          if existing != &value {
+            return true;
+          }
+        } else {
+          bigint_lit = Some(value);
+        }
+      }
+      TypeKind::UniqueSymbol => {
+        if unique_symbol {
+          // Two distinct unique symbols cannot overlap, but we do not track
+          // identity here; treat it as potentially non-empty.
+          return false;
+        }
+        unique_symbol = true;
+      }
+      _ => {}
+    }
+
+    let Some(member_mask) = primitive_mask(store, member) else {
+      return false;
+    };
+    mask &= member_mask;
+    if mask == 0 {
+      return true;
+    }
+  }
+
+  false
 }
 
 fn rank_key_no_id(
