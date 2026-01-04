@@ -8,7 +8,7 @@ use crate::eval::TypeExpander as EvalTypeExpander;
 use crate::shape::Indexer;
 use crate::shape::Property;
 use crate::shape::Shape;
-use crate::signature::Signature;
+use crate::signature::{Signature, TypeParamDecl, TypeParamVariance};
 use crate::Accessibility;
 use crate::DefId;
 use crate::ObjectId;
@@ -182,6 +182,10 @@ impl RelationCache {
 
 pub trait RelateTypeExpander {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId>;
+
+  fn type_param_decls(&self, _def: DefId) -> Option<Arc<[TypeParamDecl]>> {
+    None
+  }
 }
 
 struct RelateExpanderAdapter<'a> {
@@ -646,6 +650,129 @@ impl<'a> RelateCtx<'a> {
           depth,
         ),
       };
+    }
+
+    if let (
+      TypeKind::Ref {
+        def: src_def,
+        args: src_args,
+      },
+      TypeKind::Ref {
+        def: dst_def,
+        args: dst_args,
+      },
+    ) = (self.store.type_kind(src), self.store.type_kind(dst))
+    {
+      if src_def == dst_def
+        && src_args.len() == dst_args.len()
+        && !src_args.is_empty()
+        && self.hooks.expander.is_some()
+      {
+        let expander = self.hooks.expander.expect("checked is_some above");
+        if let Some(param_decls) = expander.type_param_decls(src_def) {
+          if param_decls.len() == src_args.len() {
+            let mut saw_variance = false;
+            let mut fully_annotated = true;
+            let mut children = Vec::new();
+
+            for ((decl, src_arg), dst_arg) in param_decls
+              .iter()
+              .zip(src_args.iter().copied())
+              .zip(dst_args.iter().copied())
+            {
+              let Some(variance) = decl.variance else {
+                fully_annotated = false;
+                continue;
+              };
+              saw_variance = true;
+              let record = record && self.take_reason_slot();
+              let related = match variance {
+                TypeParamVariance::Out => self.relate_internal(
+                  src_arg,
+                  dst_arg,
+                  RelationKind::Assignable,
+                  mode,
+                  record,
+                  depth + 1,
+                ),
+                TypeParamVariance::In => self.relate_internal(
+                  dst_arg,
+                  src_arg,
+                  RelationKind::Assignable,
+                  mode,
+                  record,
+                  depth + 1,
+                ),
+                TypeParamVariance::InOut => {
+                  let forward = self.relate_internal(
+                    src_arg,
+                    dst_arg,
+                    RelationKind::Assignable,
+                    mode,
+                    record,
+                    depth + 1,
+                  );
+                  if !forward.result {
+                    forward
+                  } else {
+                    let backward = self.relate_internal(
+                      dst_arg,
+                      src_arg,
+                      RelationKind::Assignable,
+                      mode,
+                      record,
+                      depth + 1,
+                    );
+                    RelationResult {
+                      result: backward.result,
+                      reason: self.join_reasons(
+                        record,
+                        key,
+                        vec![forward.reason, backward.reason],
+                        backward.result,
+                        Some("invariant type argument".into()),
+                        depth,
+                      ),
+                    }
+                  }
+                }
+              };
+              if record {
+                children.push(related.reason);
+              }
+              if !related.result {
+                let record = record && self.take_reason_slot();
+                return RelationResult {
+                  result: false,
+                  reason: self.join_reasons(
+                    record,
+                    key,
+                    children,
+                    false,
+                    Some("variance".into()),
+                    depth,
+                  ),
+                };
+              }
+            }
+
+            if saw_variance && fully_annotated {
+              let record = record && self.take_reason_slot();
+              return RelationResult {
+                result: true,
+                reason: self.join_reasons(
+                  record,
+                  key,
+                  children,
+                  true,
+                  Some("variance".into()),
+                  depth,
+                ),
+              };
+            }
+          }
+        }
+      }
     }
 
     if !mode.contains(RelationMode::SKIP_NORMALIZE) {

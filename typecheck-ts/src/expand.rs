@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use types_ts_interned::{
   DefId, EvaluatorCaches, ExpandedType, IntrinsicKind, RelateTypeExpander, TypeEvaluator,
-  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
+  TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -103,6 +103,7 @@ pub struct ProgramTypeExpander<'a> {
   store: Arc<TypeStore>,
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+  type_param_decls: &'a HashMap<DefId, Arc<[TypeParamDecl]>>,
   intrinsics: &'a HashMap<DefId, IntrinsicKind>,
   class_instances: &'a HashMap<DefId, TypeId>,
   caches: EvaluatorCaches,
@@ -114,6 +115,7 @@ impl<'a> ProgramTypeExpander<'a> {
     store: Arc<TypeStore>,
     def_types: &'a HashMap<DefId, TypeId>,
     type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+    type_param_decls: &'a HashMap<DefId, Arc<[TypeParamDecl]>>,
     intrinsics: &'a HashMap<DefId, IntrinsicKind>,
     class_instances: &'a HashMap<DefId, TypeId>,
     caches: EvaluatorCaches,
@@ -122,6 +124,7 @@ impl<'a> ProgramTypeExpander<'a> {
       store,
       def_types,
       type_params,
+      type_param_decls,
       intrinsics,
       class_instances,
       caches,
@@ -196,5 +199,9 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
     self.guard.end(&key);
     self.caches.insert_ref(def, &key.args, instantiated);
     Some(instantiated)
+  }
+
+  fn type_param_decls(&self, def: DefId) -> Option<Arc<[TypeParamDecl]>> {
+    self.type_param_decls.get(&def).cloned()
   }
 }

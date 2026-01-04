@@ -14,11 +14,6 @@ status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
-id = "difftsc/variance_annotations"
-status = "xfail"
-reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
-
-[[expectations]]
 id = "difftsc/narrowing"
 status = "xfail"
 reason = "tsc emits TS18048 for optional chaining + nullish coalescing narrowing; Rust checker currently does not report this diagnostic."

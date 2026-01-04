@@ -491,7 +491,7 @@ pub mod body_check {
   use parse_js::ast::stx::TopLevel;
   use semantic_js::ts as sem_ts;
   use types_ts_interned::{
-    IntrinsicKind, RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore,
+    IntrinsicKind, RelateCtx, TypeId as InternedTypeId, TypeParamDecl, TypeParamId, TypeStore,
   };
 
   use crate::check::caches::{CheckerCacheStats, CheckerCaches};
@@ -565,6 +565,7 @@ pub mod body_check {
     pub use_define_for_class_fields: bool,
     pub interned_def_types: HashMap<DefId, InternedTypeId>,
     pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+    pub interned_type_param_decls: HashMap<DefId, Arc<[TypeParamDecl]>>,
     pub interned_intrinsics: HashMap<DefId, IntrinsicKind>,
     pub asts: HashMap<FileId, Arc<Node<TopLevel>>>,
     pub lowered: HashMap<FileId, Arc<hir_js::LowerResult>>,
@@ -734,6 +735,13 @@ pub mod body_check {
         .cloned()
         .map(Arc::from)
         .unwrap_or_else(|| Arc::from([]))
+    }
+
+    fn type_param_decls(&self, def: types_ts_interned::DefId) -> Option<Arc<[TypeParamDecl]>> {
+      self
+        .interned_type_param_decls
+        .get(&crate::api::DefId(def.0))
+        .cloned()
     }
 
     fn type_of_def(&self, def: types_ts_interned::DefId) -> Option<InternedTypeId> {

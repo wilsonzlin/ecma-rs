@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use types_ts_interned::{
   DefId, EvaluatorCaches, ExpandedType, IntrinsicKind, RelateTypeExpander, TypeExpander, TypeId,
-  TypeKind, TypeParamId, TypeStore,
+  TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 use crate::expand::{instantiate_expanded, RefKey, RefRecursionGuard};
@@ -22,6 +22,10 @@ pub trait TypeExpanderDb: Send + Sync {
   fn type_params(&self, def: DefId) -> Arc<[TypeParamId]> {
     let _: DefId = def;
     Arc::from([])
+  }
+
+  fn type_param_decls(&self, _def: DefId) -> Option<Arc<[TypeParamDecl]>> {
+    None
   }
 
   /// Fully inferred type of the definition, if available.
@@ -127,5 +131,9 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
     self.guard.end(&key);
     self.caches.insert_ref(def, &key.args, instantiated);
     Some(instantiated)
+  }
+
+  fn type_param_decls(&self, def: DefId) -> Option<Arc<[TypeParamDecl]>> {
+    self.db.type_param_decls(def)
   }
 }

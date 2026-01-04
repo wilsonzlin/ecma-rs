@@ -6,7 +6,7 @@ use crate::program::{BodyCheckResult, BuiltinTypes, DefData, TypeStore};
 use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
 use crate::{BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
-  IntrinsicKind, TypeId, TypeId as InternedTypeId, TypeParamId,
+  IntrinsicKind, TypeId, TypeId as InternedTypeId, TypeParamDecl, TypeParamId,
   TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
@@ -119,6 +119,8 @@ pub struct ProgramSnapshot {
   pub interned_def_types: Vec<(DefId, InternedTypeId)>,
   pub enum_value_types: Vec<(DefId, InternedTypeId)>,
   pub interned_type_params: Vec<(DefId, Vec<TypeParamId>)>,
+  #[serde(default)]
+  pub interned_type_param_decls: Vec<(DefId, Vec<TypeParamDecl>)>,
   pub interned_intrinsics: Vec<(DefId, IntrinsicKind)>,
   pub value_def_map: Vec<(DefId, DefId)>,
   pub builtin: BuiltinTypes,

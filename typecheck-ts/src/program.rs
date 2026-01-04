@@ -2,7 +2,6 @@ use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span
 use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
-use ::semantic_js::ts as sem_ts;
 use ahash::AHashSet;
 use hir_js::{
   BinaryOp as HirBinaryOp, BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind,
@@ -28,6 +27,7 @@ use parse_js::{
   parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
+use ::semantic_js::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -1190,6 +1190,7 @@ impl Program {
               Arc::clone(store),
               &state.interned_def_types,
               &state.interned_type_params,
+              &state.interned_type_param_decls,
               &state.interned_intrinsics,
               &state.interned_class_instances,
               caches.eval.clone(),
@@ -1547,6 +1548,7 @@ impl Program {
         Arc::clone(&store),
         &state.interned_def_types,
         &state.interned_type_params,
+        &state.interned_type_param_decls,
         &state.interned_intrinsics,
         &state.interned_class_instances,
         caches.eval.clone(),
@@ -2519,6 +2521,12 @@ impl Program {
       .map(|(def, params)| (*def, params.clone()))
       .collect();
     interned_type_params.sort_by_key(|(def, _)| def.0);
+    let mut interned_type_param_decls: Vec<_> = state
+      .interned_type_param_decls
+      .iter()
+      .map(|(def, decls)| (*def, decls.as_ref().to_vec()))
+      .collect();
+    interned_type_param_decls.sort_by_key(|(def, _)| def.0);
     let mut interned_intrinsics: Vec<_> = state
       .interned_intrinsics
       .iter()
@@ -2596,6 +2604,7 @@ impl Program {
       interned_def_types,
       enum_value_types: Vec::new(),
       interned_type_params,
+      interned_type_param_decls,
       interned_intrinsics,
       value_def_map: Vec::new(),
       builtin: state.builtin,
@@ -2731,6 +2740,11 @@ impl Program {
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
+      state.interned_type_param_decls = snapshot
+        .interned_type_param_decls
+        .into_iter()
+        .map(|(def, decls)| (def, Arc::from(decls.into_boxed_slice())))
+        .collect();
       state.interned_intrinsics = snapshot.interned_intrinsics.into_iter().collect();
       state.root_ids = snapshot.roots.clone();
       state.lib_diagnostics.clear();
@@ -4470,6 +4484,7 @@ struct ProgramState {
   interned_def_types: HashMap<DefId, tti::TypeId>,
   interned_named_def_types: HashMap<tti::TypeId, DefId>,
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+  interned_type_param_decls: HashMap<DefId, Arc<[tti::TypeParamDecl]>>,
   interned_intrinsics: HashMap<DefId, tti::IntrinsicKind>,
   interned_class_instances: HashMap<DefId, tti::TypeId>,
   value_defs: HashMap<DefId, DefId>,
@@ -4585,6 +4600,7 @@ impl ProgramState {
       interned_def_types: HashMap::new(),
       interned_named_def_types: HashMap::new(),
       interned_type_params: HashMap::new(),
+      interned_type_param_decls: HashMap::new(),
       interned_intrinsics: HashMap::new(),
       interned_class_instances: HashMap::new(),
       value_defs: HashMap::new(),
@@ -4763,6 +4779,7 @@ impl ProgramState {
       use_define_for_class_fields: self.compiler_options.use_define_for_class_fields,
       interned_def_types: self.interned_def_types.clone(),
       interned_type_params: self.interned_type_params.clone(),
+      interned_type_param_decls: self.interned_type_param_decls.clone(),
       interned_intrinsics: self.interned_intrinsics.clone(),
       asts: self.asts.clone(),
       lowered: self
@@ -5724,12 +5741,14 @@ impl ProgramState {
     self.interned_def_types.clear();
     self.interned_named_def_types.clear();
     self.interned_type_params.clear();
+    self.interned_type_param_decls.clear();
     self.interned_intrinsics.clear();
     self.rebuild_module_namespace_defs();
     self.rebuild_callable_overloads();
     self.check_cancelled()?;
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
+    let mut type_param_decls = HashMap::new();
 
     fn type_expr_is_intrinsic_marker(
       arenas: &hir_js::TypeArenas,
@@ -5948,7 +5967,8 @@ impl ProgramState {
               .unwrap_or(instance);
             def_types.insert(mapped, instance);
             if !params.is_empty() {
-              type_params.insert(mapped, params.into_iter().map(|param| param.id).collect());
+              type_params.insert(mapped, params.iter().map(|param| param.id).collect());
+              type_param_decls.insert(mapped, Arc::from(params.into_boxed_slice()));
             }
             let value_def = self
               .value_defs
@@ -5999,7 +6019,8 @@ impl ProgramState {
               .unwrap_or(ty);
             def_types.insert(mapped, ty);
             if !params.is_empty() {
-              type_params.insert(mapped, params.into_iter().map(|param| param.id).collect());
+              type_params.insert(mapped, params.iter().map(|param| param.id).collect());
+              type_param_decls.insert(mapped, Arc::from(params.into_boxed_slice()));
             }
           }
         }
@@ -6652,6 +6673,7 @@ impl ProgramState {
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
+    self.interned_type_param_decls = type_param_decls;
     self.merge_callable_overload_types();
     self.merge_namespace_value_types()?;
     self.merge_interface_symbol_types_all()?;
@@ -7704,6 +7726,12 @@ impl ProgramState {
       .filter(|(id, _)| !file_def_ids.contains(id))
       .map(|(id, params)| (*id, params.clone()))
       .collect();
+    let mut new_interned_type_param_decls: HashMap<DefId, Arc<[tti::TypeParamDecl]>> = self
+      .interned_type_param_decls
+      .iter()
+      .filter(|(id, _)| !file_def_ids.contains(id))
+      .map(|(id, decls)| (*id, Arc::clone(decls)))
+      .collect();
     let mut id_mapping: HashMap<DefId, DefId> = HashMap::new();
 
     let Some(file_state) = self.files.get(&file).cloned() else {
@@ -7801,6 +7829,9 @@ impl ProgramState {
         }
         if let Some(params) = self.interned_type_params.get(&old_id).cloned() {
           new_interned_type_params.insert(def.id, params);
+        }
+        if let Some(decls) = self.interned_type_param_decls.get(&old_id).cloned() {
+          new_interned_type_param_decls.insert(def.id, decls);
         }
         (def.id, data)
       } else {
@@ -7920,6 +7951,9 @@ impl ProgramState {
         if let Some(params) = self.interned_type_params.get(&old_id).cloned() {
           new_interned_type_params.insert(old_id, params);
         }
+        if let Some(decls) = self.interned_type_param_decls.get(&old_id).cloned() {
+          new_interned_type_param_decls.insert(old_id, decls);
+        }
       }
     }
 
@@ -8007,6 +8041,7 @@ impl ProgramState {
     self.def_types = new_def_types;
     self.interned_def_types = new_interned_def_types;
     self.interned_type_params = new_interned_type_params;
+    self.interned_type_param_decls = new_interned_type_param_decls;
 
     self.symbol_to_def.clear();
     for (def, data) in self.def_data.iter() {
@@ -11737,6 +11772,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_type_param_decls,
         &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),
@@ -12044,6 +12080,7 @@ impl ProgramState {
         Arc::clone(store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_type_param_decls,
         &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),
@@ -12131,6 +12168,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_type_param_decls,
         &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),

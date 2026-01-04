@@ -61,3 +61,41 @@ fn accepts_invariant_type_parameter_used_only_covariantly() {
   let diagnostics = program.check();
   assert_eq!(diagnostics, Vec::new());
 }
+
+#[test]
+fn invariant_type_arguments_are_checked_during_assignment() {
+  let source = r#"
+interface Animal { kind: "animal" }
+interface Dog extends Animal { bark(): void }
+interface Box<in out T> { readonly value: T }
+const dogBox: Box<Dog> = { value: { kind: "animal", bark() {} } };
+const animalBox: Box<Animal> = dogBox;
+"#;
+  let mut host = MemoryHost::new();
+  let key = FileKey::new("main.ts");
+  host.insert(key.clone(), source);
+
+  let program = Program::new(host, vec![key.clone()]);
+  let file_id = program.file_id(&key).expect("file id");
+  let diagnostics = program.check();
+
+  let diag = diagnostics
+    .iter()
+    .find(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str())
+    .unwrap_or_else(|| panic!("expected type mismatch diagnostic, got {diagnostics:?}"));
+
+  let start = source.find("animalBox").expect("animalBox in source") as u32;
+  let end = start + "animalBox".len() as u32;
+  assert_eq!(diag.primary.file, file_id);
+  assert_eq!(diag.primary.range.start, start);
+  assert!(
+    diag.primary.range.end == end || diag.primary.range.end == end + 1,
+    "expected diagnostic span to cover `animalBox`, got {:?}",
+    diag.primary.range
+  );
+  let span_text = &source[start as usize..diag.primary.range.end as usize];
+  assert!(
+    span_text.starts_with("animalBox"),
+    "expected diagnostic span to start with `animalBox`, got {span_text:?}"
+  );
+}
