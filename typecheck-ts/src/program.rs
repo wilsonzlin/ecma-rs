@@ -5566,6 +5566,7 @@ impl ProgramState {
       self.semantics = Some(Arc::clone(&ts_semantics.semantics));
       self.extend_symbol_to_def_with_semantic_ids();
       self.push_semantic_diagnostics(ts_semantics.diagnostics.as_ref().clone());
+      self.check_export_assignments_in_esm();
       self.check_import_assignment_requires();
       self.check_required_global_types();
     }
@@ -8351,8 +8352,11 @@ impl ProgramState {
 
   fn check_import_assignment_requires(&mut self) {
     // Match tsc's TS1202 behaviour: `import x = require("...")` is rejected when
-    // emitting ECMAScript modules, unless the referenced module uses an `export =`
-    // assignment (which still requires CommonJS-style interop).
+    // emitting ECMAScript modules.
+    //
+    // Note: `tsc` only allows `import = require()` in ESM output modes for the
+    // Node16/NodeNext emit strategies, and only when importing from a
+    // CommonJS-style module (one that uses `export =`).
     let module =
       self
         .compiler_options
@@ -8378,23 +8382,68 @@ impl ProgramState {
       return;
     };
 
+    let allow_commonjs_interop = matches!(module, ModuleKind::Node16 | ModuleKind::NodeNext);
     let mut records = self.import_assignment_requires.clone();
     records.sort_by_key(|record| (record.file.0, record.span.start, record.span.end));
     for record in records {
-      let ImportTarget::File(target_file) = record.target else {
-        continue;
-      };
-      let has_export_assignment = semantics
-        .exports_of_opt(sem_ts::FileId(target_file.0))
-        .map(|exports| exports.contains_key("export="))
-        .unwrap_or(false);
-      if has_export_assignment {
-        continue;
+      if allow_commonjs_interop {
+        let has_export_assignment = match record.target {
+          ImportTarget::File(target_file) => semantics
+            .exports_of_opt(sem_ts::FileId(target_file.0))
+            .map(|exports| exports.contains_key("export="))
+            .unwrap_or(false),
+          ImportTarget::Unresolved { .. } => false,
+        };
+        if has_export_assignment {
+          continue;
+        }
       }
       self.diagnostics.push(codes::IMPORT_ASSIGNMENT_IN_ESM.error(
         "Import assignment cannot be used when targeting ECMAScript modules.",
         Span::new(record.file, record.span),
       ));
+    }
+  }
+
+  fn check_export_assignments_in_esm(&mut self) {
+    // Match tsc's TS1203 behaviour: `export = value` is rejected when emitting
+    // ECMAScript modules.
+    let module =
+      self
+        .compiler_options
+        .module
+        .unwrap_or_else(|| match self.compiler_options.target {
+          ScriptTarget::Es3 | ScriptTarget::Es5 => ModuleKind::CommonJs,
+          _ => ModuleKind::Es2015,
+        });
+    let targets_ecmascript_modules = matches!(
+      module,
+      ModuleKind::Es2015
+        | ModuleKind::Es2020
+        | ModuleKind::Es2022
+        | ModuleKind::EsNext
+        | ModuleKind::Node16
+        | ModuleKind::NodeNext
+    );
+    if !targets_ecmascript_modules {
+      return;
+    }
+
+    let mut files: Vec<_> = self.asts.keys().copied().collect();
+    files.sort_by_key(|file| file.0);
+    for file in files {
+      let Some(ast) = self.asts.get(&file) else {
+        continue;
+      };
+      for stmt in ast.stx.body.iter() {
+        if matches!(stmt.stx.as_ref(), Stmt::ExportAssignmentDecl(_)) {
+          let span = loc_to_span(file, stmt.loc).range;
+          self.diagnostics.push(codes::EXPORT_ASSIGNMENT_IN_ESM.error(
+            "Export assignment cannot be used when targeting ECMAScript modules.",
+            Span::new(file, span),
+          ));
+        }
+      }
     }
   }
 

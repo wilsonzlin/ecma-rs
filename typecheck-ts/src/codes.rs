@@ -264,6 +264,19 @@ pub const IMPORT_ASSIGNMENT_IN_ESM: Code = Code::new(
   &[],
 );
 
+/// TS1203: Export assignment cannot be used when targeting ECMAScript modules.
+///
+/// - Primary span: the full `export = ...` statement.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const EXPORT_ASSIGNMENT_IN_ESM: Code = Code::new(
+  "TS1203",
+  "export assignment not allowed for ECMAScript module targets",
+  "export assignment statement",
+  &["primary: export assignment statement"],
+  &[],
+);
+
 /// TS2729: Property is used before it has been initialized.
 ///
 /// - Primary span: the property name within a `this.x` access in a class field initializer.

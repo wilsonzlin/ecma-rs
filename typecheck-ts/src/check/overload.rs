@@ -649,20 +649,17 @@ fn resolve_overload_set(
     };
   }
 
-  let mut contextual_applied = false;
-  if let Some(expected_ret) = contextual_return {
-    let contextual: Vec<&CandidateOutcome> = applicable
-      .iter()
-      .copied()
-      .filter(|candidate| relate.is_assignable(candidate.instantiated_sig.ret, expected_ret))
-      .collect();
-    if !contextual.is_empty() {
-      applicable = contextual;
-      contextual_applied = true;
-    }
-  }
-
-  applicable.sort_by_key(|candidate| fallback_rank_key(candidate, contextual_applied));
+  // TypeScript's overload resolution does not use the *contextual return type* to
+  // filter/choose overloads. In particular, a context like:
+  //
+  //   declare function pick(x: any): number;
+  //   declare function pick(x: any): string;
+  //   const chosen: string = pick(0);
+  //
+  // still resolves to the first overload (`number`) and reports TS2322 at the
+  // assignment site. (The contextual type can still participate in generic
+  // inference via `infer_type_arguments_for_call` above.)
+  applicable.sort_by_key(|candidate| fallback_rank_key(candidate, false));
 
   let best = applicable[0];
   CallResolution {
