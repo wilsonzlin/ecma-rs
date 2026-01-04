@@ -1,9 +1,4 @@
 [[expectations]]
-id = "difftsc/const_type_params"
-status = "xfail"
-reason = "Rust checker does not yet support `const` type parameter inference (literal preservation), so inferred types and assignability diagnostics diverge."
-
-[[expectations]]
 id = "difftsc/function_namespace_export"
 status = "xfail"
 reason = "Rust checker does not yet follow tsc's function+namespace merge rules, so diagnostics and exported types differ."

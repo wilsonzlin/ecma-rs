@@ -5552,8 +5552,9 @@ impl<'a> Checker<'a> {
         self.store.type_kind(dst)
       );
     }
-    let mut range = range_override.unwrap_or_else(|| loc_to_range(self.file, expr.loc));
+    let range = range_override.unwrap_or_else(|| loc_to_range(self.file, expr.loc));
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+      let mut property_mismatches = Vec::new();
       for member in obj.stx.members.iter() {
         let (prop, key_loc) = match &member.stx.typ {
           ObjMemberType::Valued {
@@ -5571,13 +5572,25 @@ impl<'a> Checker<'a> {
         if !self.relate.is_assignable(prop_src, prop_dst) {
           if let Some(loc) = key_loc {
             let key_range = loc_to_range(self.file, loc);
-            range = TextRange::new(
+            let range = TextRange::new(
               key_range.start,
               key_range.start.saturating_add(prop.len() as u32),
             );
+            property_mismatches.push(range);
           }
-          break;
         }
+      }
+      if !property_mismatches.is_empty() {
+        for range in property_mismatches {
+          self.diagnostics.push(codes::TYPE_MISMATCH.error(
+            "type mismatch",
+            Span {
+              file: self.file,
+              range,
+            },
+          ));
+        }
+        return;
       }
     }
 

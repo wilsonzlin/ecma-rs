@@ -64,26 +64,44 @@ pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
     _ => {
       let mut collected = Vec::new();
       collect_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
-      let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
+      let mut by_shape: HashMap<SignatureShapeKey, Vec<SignatureId>> = HashMap::new();
       for sig_id in collected.into_iter() {
         let sig = store.signature(sig_id);
-        let key = signature_shape_key(&sig);
-        let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
-        match by_shape.entry(key) {
-          Entry::Vacant(entry) => {
-            entry.insert((sig_id, is_unknown));
+        by_shape
+          .entry(signature_shape_key(&sig))
+          .or_default()
+          .push(sig_id);
+      }
+
+      let mut out = Vec::new();
+      for sig_ids in by_shape.values() {
+        let has_non_unknown = sig_ids.iter().any(|sig_id| {
+          let sig = store.signature(*sig_id);
+          !matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any)
+        });
+
+        let mut by_ret: HashMap<TypeId, SignatureId> = HashMap::new();
+        for sig_id in sig_ids.iter().copied() {
+          let sig = store.signature(sig_id);
+          if has_non_unknown
+            && matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any)
+          {
+            continue;
           }
-          Entry::Occupied(mut entry) => {
-            let (existing, existing_unknown) = *entry.get();
-            if existing_unknown && !is_unknown {
-              entry.insert((sig_id, is_unknown));
-            } else if existing_unknown == is_unknown && sig_id < existing {
-              entry.insert((sig_id, is_unknown));
+          match by_ret.entry(sig.ret) {
+            Entry::Vacant(entry) => {
+              entry.insert(sig_id);
+            }
+            Entry::Occupied(mut entry) => {
+              if sig_id < *entry.get() {
+                entry.insert(sig_id);
+              }
             }
           }
         }
+        out.extend(by_ret.values().copied());
       }
-      let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
+
       out.sort();
       out
     }
@@ -238,8 +256,7 @@ fn analyze_call_arity(
       }
       continue;
     }
-    let (spread_min, spread_max) =
-      spread_arity(store, arg.ty, expander, &mut HashSet::new());
+    let (spread_min, spread_max) = spread_arity(store, arg.ty, expander, &mut HashSet::new());
     min += spread_min;
     max = combine(max, spread_max);
   }
@@ -484,8 +501,13 @@ fn resolve_overload_set(
     }
     let expanded_args = effective_args.as_deref().unwrap_or(&base_expanded_args);
 
-    let inference =
-      infer_type_arguments_for_call(store, relate, &outcome.instantiated_sig, expanded_args, contextual_return);
+    let inference = infer_type_arguments_for_call(
+      store,
+      relate,
+      &outcome.instantiated_sig,
+      expanded_args,
+      contextual_return,
+    );
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
@@ -1570,9 +1592,9 @@ fn describe_rejection(
       (Some(max), Some(actual_max)) => format!(
         "expected between {min} and {max} arguments but got between {actual_min} and {actual_max}"
       ),
-      (Some(max), None) => format!(
-        "expected between {min} and {max} arguments but got at least {actual_min}"
-      ),
+      (Some(max), None) => {
+        format!("expected between {min} and {max} arguments but got at least {actual_min}")
+      }
       (None, Some(actual_max)) => {
         format!("expected at least {min} arguments but got at most {actual_max}")
       }

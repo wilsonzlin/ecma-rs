@@ -1825,6 +1825,22 @@ impl Program {
           }
           evaluated
         }
+        tti::TypeKind::Ref { def, args }
+          if can_evaluate
+            && args.is_empty()
+            && state
+              .def_data
+              .get(&DefId(def.0))
+              .is_some_and(|data| matches!(data.kind, DefKind::Function(_) | DefKind::Var(_))) =>
+        {
+          match state.resolve_value_ref_type(ty) {
+            Ok(resolved) => resolved,
+            Err(fatal) => {
+              state.diagnostics.push(fatal_to_diagnostic(fatal));
+              ty
+            }
+          }
+        }
         tti::TypeKind::Ref { def, .. } if can_evaluate => {
           let should_expand = state
             .def_data
