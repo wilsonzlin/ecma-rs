@@ -305,22 +305,27 @@ impl<'p> HirSourceToInst<'p> {
 
     let left_expr = &self.body.exprs[left.0 as usize];
     let right_expr = &self.body.exprs[right.0 as usize];
-    let left_nullish = matches!(
-      left_expr.kind,
-      ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
-    );
-    let right_nullish = matches!(
-      right_expr.kind,
-      ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
-    );
+    let is_nullish = |expr_id: ExprId, expr: &hir_js::Expr| match expr.kind {
+      ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined) => true,
+      ExprKind::Ident(name) => {
+        self.symbol_for_expr(expr_id).is_none() && self.program.names.resolve(name) == Some("undefined")
+      }
+      _ => false,
+    };
+    let left_nullish = is_nullish(left, left_expr);
+    let right_nullish = is_nullish(right, right_expr);
 
-    if matches!(operator, BinaryOp::StrictEquality | BinaryOp::StrictInequality) {
+    if matches!(
+      operator,
+      BinaryOp::StrictEquality | BinaryOp::StrictInequality | BinaryOp::Equality | BinaryOp::Inequality
+    ) {
       if (left_nullish && self.expr_excludes_nullish(right))
         || (right_nullish && self.expr_excludes_nullish(left))
       {
         let _ = self.compile_expr(left)?;
         let _ = self.compile_expr(right)?;
-        return Ok(Arg::Const(Const::Bool(operator == BinaryOp::StrictInequality)));
+        let is_inequality = matches!(operator, BinaryOp::StrictInequality | BinaryOp::Inequality);
+        return Ok(Arg::Const(Const::Bool(is_inequality)));
       }
 
       let typeof_left = match left_expr.kind {
@@ -338,30 +343,36 @@ impl<'p> HirSourceToInst<'p> {
         _ => None,
       };
 
-      if let Some(((typeof_expr, typeof_operand), typeof_on_left)) =
-        match (typeof_left, typeof_right) {
-          (Some((expr, operand)), None) => Some(((expr, operand), true)),
-          (None, Some((expr, operand))) => Some(((expr, operand), false)),
-          _ => None,
-        }
-      {
-        let literal = if typeof_on_left {
-          match &right_expr.kind {
-            ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+      // Type-driven folding for `typeof` equality is only valid for strict
+      // equality/inequality. The optimizer doesn't currently lower non-nullish
+      // loose equality operators because they can trigger ToPrimitive coercions
+      // (and user-defined side effects) on objects.
+      if matches!(operator, BinaryOp::StrictEquality | BinaryOp::StrictInequality) {
+        if let Some(((typeof_expr, typeof_operand), typeof_on_left)) =
+          match (typeof_left, typeof_right) {
+            (Some((expr, operand)), None) => Some(((expr, operand), true)),
+            (None, Some((expr, operand))) => Some(((expr, operand), false)),
             _ => None,
           }
-        } else {
-          match &left_expr.kind {
-            ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
-            _ => None,
-          }
-        };
-        if let Some(literal) = literal {
-          if let Some(known) = self.typeof_string_expr(typeof_operand) {
-            let _ = self.compile_expr(typeof_expr)?;
-            let eq = known == literal;
-            let value = if operator == BinaryOp::StrictEquality { eq } else { !eq };
-            return Ok(Arg::Const(Const::Bool(value)));
+        {
+          let literal = if typeof_on_left {
+            match &right_expr.kind {
+              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+              _ => None,
+            }
+          } else {
+            match &left_expr.kind {
+              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+              _ => None,
+            }
+          };
+          if let Some(literal) = literal {
+            if let Some(known) = self.typeof_string_expr(typeof_operand) {
+              let _ = self.compile_expr(typeof_expr)?;
+              let eq = known == literal;
+              let value = if operator == BinaryOp::StrictEquality { eq } else { !eq };
+              return Ok(Arg::Const(Const::Bool(value)));
+            }
           }
         }
       }

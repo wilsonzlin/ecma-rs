@@ -98,6 +98,40 @@ fn typed_null_check_is_folded_when_operand_cannot_be_nullish() {
 }
 
 #[test]
+fn typed_null_check_loose_equality_is_folded_when_operand_cannot_be_nullish() {
+  let src = r#"
+    if (console == null) {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(2);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_null_check_loose_inequality_is_folded_when_operand_cannot_be_nullish() {
+  let src = r#"
+    if (console != null) {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_null_check_strict_inequality_is_folded_when_operand_cannot_be_nullish() {
   let src = r#"
     if (console !== null) {
@@ -107,6 +141,23 @@ fn typed_null_check_strict_inequality_is_folded_when_operand_cannot_be_nullish()
     }
   "#;
   let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_null_check_strict_equality_with_undefined_is_folded_when_operand_cannot_be_nullish() {
+  let src = r#"
+    if (console === undefined) {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(2);";
 
   let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
   let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
