@@ -914,12 +914,14 @@ fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
 
 fn rewrite_enum_member_refs(
   expr: &mut Node<Expr>,
-  enum_name: &str,
+  enum_object_ident: &str,
+  enum_source_name: &str,
   enum_alias: &str,
   member_names: &HashSet<String>,
 ) -> bool {
   struct Rewriter<'a> {
     enum_name: &'a str,
+    enum_source_name: &'a str,
     enum_alias: &'a str,
     member_names: &'a HashSet<String>,
     shadowed: Vec<HashSet<String>>,
@@ -962,7 +964,10 @@ fn rewrite_enum_member_refs(
     fn collect_pat_declared(&self, pat: &Node<Pat>, out: &mut HashSet<String>) {
       match pat.stx.as_ref() {
         Pat::Id(id) => {
-          if self.member_names.contains(&id.stx.name) || id.stx.name == self.enum_name {
+          if self.member_names.contains(&id.stx.name)
+            || id.stx.name == self.enum_name
+            || id.stx.name == self.enum_source_name
+          {
             out.insert(id.stx.name.clone());
           }
         }
@@ -1086,7 +1091,10 @@ fn rewrite_enum_member_refs(
               .as_ref()
               .map(|name| name.stx.name.clone())
             {
-              if self.member_names.contains(&name) || name == self.enum_name {
+              if self.member_names.contains(&name)
+                || name == self.enum_name
+                || name == self.enum_source_name
+              {
                 out.insert(name);
               }
             }
@@ -1098,7 +1106,10 @@ fn rewrite_enum_member_refs(
               .as_ref()
               .map(|name| name.stx.name.clone())
             {
-              if self.member_names.contains(&name) || name == self.enum_name {
+              if self.member_names.contains(&name)
+                || name == self.enum_name
+                || name == self.enum_source_name
+              {
                 out.insert(name);
               }
             }
@@ -1158,7 +1169,8 @@ fn rewrite_enum_member_refs(
         self.collect_pat_declared(&param.stx.pattern.stx.pat, &mut scope);
       }
       if let Some(name) = func_name {
-        if self.member_names.contains(name) || name == self.enum_name {
+        if self.member_names.contains(name) || name == self.enum_name || name == self.enum_source_name
+        {
           scope.insert(name.to_string());
         }
       }
@@ -1543,6 +1555,24 @@ fn rewrite_enum_member_refs(
     }
 
     fn rewrite_expr(&mut self, expr: &mut Node<Expr>) {
+      if self.enum_source_name != self.enum_name {
+        if let Some(loc) = match expr.stx.as_ref() {
+          Expr::Id(id)
+            if id.stx.name == self.enum_source_name && !self.is_shadowed(self.enum_source_name) =>
+          {
+            Some(id.loc)
+          }
+          _ => None,
+        } {
+          let assoc = std::mem::take(&mut expr.assoc);
+          let object_ident = self.enum_object_ident();
+          let mut replacement = ts_lower::id(loc, object_ident.to_string());
+          replacement.assoc = assoc;
+          *expr = replacement;
+          return;
+        }
+      }
+
       if let Some(member) = match expr.stx.as_ref() {
         Expr::Id(id)
           if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) =>
@@ -1572,7 +1602,10 @@ fn rewrite_enum_member_refs(
             .as_ref()
             .map(|name| name.stx.name.clone())
           {
-            if self.member_names.contains(&name) || name == self.enum_name {
+            if self.member_names.contains(&name)
+              || name == self.enum_name
+              || name == self.enum_source_name
+            {
               let mut scope = HashSet::new();
               scope.insert(name);
               self.with_scope(scope, |rewriter| {
@@ -1697,7 +1730,8 @@ fn rewrite_enum_member_refs(
   }
 
   let mut rewriter = Rewriter {
-    enum_name,
+    enum_name: enum_object_ident,
+    enum_source_name,
     enum_alias,
     member_names,
     shadowed: Vec::new(),
@@ -1739,15 +1773,21 @@ fn enum_reverse_mapping_stmt(
   )
 }
 
-fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> Node<Expr> {
+fn enum_iife_arg(
+  loc: Loc,
+  local_ident: &str,
+  property_name: &str,
+  parent_namespace: Option<&str>,
+  bind_to_local: bool,
+) -> Node<Expr> {
   match parent_namespace {
     None => ts_lower::binary_expr(
       loc,
       OperatorName::LogicalOr,
-      ts_lower::id(loc, enum_name),
+      ts_lower::id(loc, local_ident),
       ts_lower::assign_expr(
         loc,
-        ts_lower::id(loc, enum_name),
+        ts_lower::id(loc, local_ident),
         ts_lower::empty_object(loc),
       ),
     ),
@@ -1755,12 +1795,12 @@ fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> N
       let prop_read = ts_lower::member_expr(
         loc,
         ts_lower::id(loc, namespace_param),
-        ts_lower::MemberKey::Name(enum_name.to_string()),
+        ts_lower::MemberKey::Name(property_name.to_string()),
       );
       let prop_write = ts_lower::member_expr(
         loc,
         ts_lower::id(loc, namespace_param),
-        ts_lower::MemberKey::Name(enum_name.to_string()),
+        ts_lower::MemberKey::Name(property_name.to_string()),
       );
       let prop_or = ts_lower::binary_expr(
         loc,
@@ -1768,7 +1808,11 @@ fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> N
         prop_read,
         ts_lower::assign_expr(loc, prop_write, ts_lower::empty_object(loc)),
       );
-      ts_lower::assign_expr(loc, ts_lower::id(loc, enum_name), prop_or)
+      if bind_to_local {
+        ts_lower::assign_expr(loc, ts_lower::id(loc, local_ident), prop_or)
+      } else {
+        prop_or
+      }
     }
   }
 }
@@ -1786,7 +1830,22 @@ fn strip_enum_decl(
   }
 
   let enum_name = decl.stx.name.clone();
-  let has_value_binding = ctx.current_value_bindings().contains(&enum_name);
+  let name_is_binding_identifier = is_valid_binding_identifier(&enum_name, ctx.top_level_mode);
+  if parent_namespace.is_none() && !name_is_binding_identifier {
+    unsupported_ts(
+      ctx,
+      loc,
+      format!("runtime enum name `{enum_name}` is not a valid JavaScript identifier"),
+    );
+    return vec![];
+  }
+  let enum_param_ident = if name_is_binding_identifier {
+    enum_name.clone()
+  } else {
+    format!("__minify_ts_enum_obj_{enum_name}")
+  };
+  let has_value_binding =
+    name_is_binding_identifier && ctx.current_value_bindings().contains(&enum_name);
   let member_names: HashSet<String> = decl
     .stx
     .members
@@ -1820,7 +1879,7 @@ fn strip_enum_decl(
     }
   }
 
-  if !has_value_binding {
+  if name_is_binding_identifier && !has_value_binding {
     out.push(ts_lower::var_decl_stmt(
       loc,
       enum_name.clone(),
@@ -1845,12 +1904,18 @@ fn strip_enum_decl(
       .map(|expr| enum_value_kind(&enum_name, expr, &known_member_kinds))
       .unwrap_or(EnumValueKind::Number);
     if let Some(expr) = initializer.as_mut() {
-      used_enum_alias |= rewrite_enum_member_refs(expr, &enum_name, &enum_alias, &member_names);
+      used_enum_alias |= rewrite_enum_member_refs(
+        expr,
+        &enum_param_ident,
+        &enum_name,
+        &enum_alias,
+        &member_names,
+      );
     }
 
     match (kind, initializer) {
       (EnumValueKind::String, Some(expr)) => {
-        body.push(enum_assign_stmt(loc, &enum_name, &member_name, expr));
+        body.push(enum_assign_stmt(loc, &enum_param_ident, &member_name, expr));
         next_auto = None;
         last_numeric_member = None;
       }
@@ -1858,7 +1923,7 @@ fn strip_enum_decl(
         next_auto = eval_number_expr(&expr).map(|v| v + 1.0);
         body.push(enum_reverse_mapping_stmt(
           loc,
-          &enum_name,
+          &enum_param_ident,
           &member_name,
           expr,
         ));
@@ -1875,7 +1940,7 @@ fn strip_enum_decl(
             OperatorName::Addition,
             ts_lower::member_expr(
               loc,
-              ts_lower::id(loc, enum_name.clone()),
+              ts_lower::id(loc, enum_param_ident.clone()),
               ts_lower::MemberKey::Name(prev.to_string()),
             ),
             ts_lower::number(loc, 1.0),
@@ -1887,7 +1952,7 @@ fn strip_enum_decl(
         };
         body.push(enum_reverse_mapping_stmt(
           loc,
-          &enum_name,
+          &enum_param_ident,
           &member_name,
           value_expr,
         ));
@@ -1904,15 +1969,21 @@ fn strip_enum_decl(
       ts_lower::var_decl_stmt(
         loc,
         enum_alias,
-        Some(ts_lower::id(loc, enum_name.clone())),
+        Some(ts_lower::id(loc, enum_param_ident.clone())),
         false,
         VarDeclMode::Var,
       ),
     );
   }
 
-  let arg = enum_iife_arg(loc, &enum_name, parent_namespace);
-  out.push(ts_lower::iife_stmt(loc, enum_name, arg, body));
+  let arg = enum_iife_arg(
+    loc,
+    &enum_param_ident,
+    &enum_name,
+    parent_namespace,
+    name_is_binding_identifier,
+  );
+  out.push(ts_lower::iife_stmt(loc, enum_param_ident, arg, body));
   out
 }
 

@@ -712,6 +712,31 @@ fn avoids_synthetic_namespace_param_collisions_with_user_bindings() {
 }
 
 #[test]
+fn lowers_exported_enums_with_strict_reserved_names_inside_namespaces_to_parseable_js() {
+  let src = r#"
+    export namespace A {
+      eval("x");
+      export enum static { A = 1, B }
+    }
+    console.log(A["static"].A, A["static"].B);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    code.contains("\"static\""),
+    "expected enum name to be accessed via a string key on the namespace object: {code}"
+  );
+  assert!(
+    !code.contains("var static"),
+    "lowering should not introduce a `var static` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(static"),
+    "lowering should not introduce a `function(static)` parameter (invalid strict mode JS): {code}"
+  );
+}
+
+#[test]
 fn lowers_top_level_namespaces_named_using_to_parseable_js() {
   let src = r#"
     export namespace using {
