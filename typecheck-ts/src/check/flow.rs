@@ -52,14 +52,6 @@ pub enum BindingKey {
   External(NameId),
 }
 
-impl BindingKey {
-  pub fn name(self) -> NameId {
-    match self {
-      BindingKey::Local { name, .. } | BindingKey::External(name) => name,
-    }
-  }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InitState {
   Unassigned,
@@ -132,10 +124,6 @@ impl Env {
     self.vars.retain(|key, _| !prefix.is_prefix_of(key));
   }
 
-  pub fn invalidate_all(&mut self) {
-    self.vars.clear();
-  }
-
   /// Remove any tracked information for a variable, clearing previous narrowings.
   pub fn invalidate(&mut self, name: FlowBindingId) {
     self.invalidate_prefix(&FlowKey::root(name));
@@ -144,23 +132,9 @@ impl Env {
   /// Clear any tracked property narrowings rooted at `name`. Currently there are
   /// no separate property entries, but this hook is used to invalidate access
   /// paths when writes occur.
-  pub fn clear_properties_of(&mut self, name: FlowBindingId) {
-    self
-      .vars
-      .retain(|key, _| key.root != name || key.segments.is_empty());
-  }
-
   /// Clear all tracked property-specific narrowings.
   pub fn clear_all_properties(&mut self) {
     self.vars.retain(|key, _| key.segments.is_empty());
-  }
-
-  pub fn mark_assigned(&mut self, binding: BindingKey) {
-    self.init.insert(binding, InitState::Assigned);
-  }
-
-  pub fn mark_unassigned(&mut self, binding: BindingKey) {
-    self.init.insert(binding, InitState::Unassigned);
   }
 
   pub fn set_init_state(&mut self, key: BindingKey, state: InitState) {
@@ -198,10 +172,6 @@ impl Env {
     for (name, ty) in facts.iter() {
       self.vars.insert(name.clone(), *ty);
     }
-  }
-
-  pub fn merge(&mut self, other: &Env, store: &TypeStore) {
-    self.merge_from(other, store);
   }
 
   /// Join another environment into this one, returning whether any mapping
