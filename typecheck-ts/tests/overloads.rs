@@ -169,7 +169,7 @@ fn reports_no_matching_overload_with_reasons() {
 }
 
 #[test]
-fn selects_first_overload_on_tie() {
+fn reports_ambiguous_overload_on_tie() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
@@ -207,10 +207,16 @@ fn selects_first_overload_on_tie() {
     None,
   );
 
-  assert!(resolution.diagnostics.is_empty());
-  assert_eq!(resolution.signature, Some(sig_a_id));
-  assert_eq!(resolution.return_type, primitives.boolean);
-  assert_ne!(resolution.signature, Some(sig_b_id));
+  assert_eq!(resolution.signature, None);
+  assert_eq!(resolution.diagnostics.len(), 1);
+  assert_eq!(
+    resolution.diagnostics[0].code.as_str(),
+    codes::AMBIGUOUS_OVERLOAD.as_str()
+  );
+  assert_eq!(
+    resolution.return_type,
+    store.union(vec![primitives.boolean, primitives.number])
+  );
 }
 
 #[test]

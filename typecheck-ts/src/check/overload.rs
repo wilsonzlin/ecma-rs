@@ -20,8 +20,17 @@ pub struct CallResolution {
   pub return_type: TypeId,
   /// Selected signature after instantiation, if any.
   pub signature: Option<SignatureId>,
+  /// Best candidate signature (after instantiation) to use for contextual typing
+  /// even when overload resolution fails (no match / ambiguous).
+  pub contextual_signature: Option<SignatureId>,
   /// Diagnostics produced during resolution (ambiguous or no match).
   pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OverloadKind {
+  Call,
+  Construct,
 }
 
 /// Collect all callable signatures from a type, expanding unions/intersections
@@ -133,13 +142,37 @@ enum CandidateRejection {
   },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MatchScore {
+  /// Count of parameter positions where the parameter type was wider than the
+  /// argument type (`!param <= arg`). Smaller is better.
+  widen: u32,
+  /// Count of parameters typed as `any` / `unknown` (highly permissive).
+  any_like: u32,
+  /// Count of parameters still represented as unresolved type parameters after
+  /// instantiation.
+  type_param: u32,
+  /// Count of arguments matched via a rest parameter.
+  rest: u32,
+}
+
+impl MatchScore {
+  fn worst() -> Self {
+    Self {
+      widen: u32::MAX,
+      any_like: u32::MAX,
+      type_param: u32::MAX,
+      rest: u32::MAX,
+    }
+  }
+}
+
 #[derive(Debug, Clone)]
 struct CandidateOutcome {
   sig_id: SignatureId,
-  display: String,
   instantiated_sig: Signature,
   instantiated_id: SignatureId,
-  specificity: usize,
+  match_score: MatchScore,
   unknown_inferred: usize,
   return_rank: usize,
   rejection: Option<CandidateRejection>,
@@ -159,214 +192,19 @@ pub fn resolve_overloads(
   span: Span,
   expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> CallResolution {
-  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
-  let mut candidates = Vec::new();
-  collect_signatures(
-    store.as_ref(),
+  resolve_overload_set(
+    OverloadKind::Call,
+    store,
+    relate,
+    instantiation,
     callee,
-    &mut candidates,
-    &mut HashSet::new(),
+    args,
+    const_args,
+    this_arg,
+    contextual_return,
+    span,
     expander,
-  );
-  let mut seen_sig = HashSet::new();
-  candidates.retain(|sig| seen_sig.insert(*sig));
-  candidates.sort();
-  let primitives = store.primitive_ids();
-  if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
-    return CallResolution {
-      return_type: primitives.unknown,
-      signature: None,
-      diagnostics: Vec::new(),
-    };
-  }
-  if candidates.is_empty() {
-    let diag = codes::NO_OVERLOAD
-      .error("expression is not callable", span)
-      .with_note(format!(
-        "callee has type {}",
-        TypeDisplay::new(store, callee)
-      ));
-    return CallResolution {
-      return_type: primitives.unknown,
-      signature: None,
-      diagnostics: vec![diag],
-    };
-  }
-
-  let mut outcomes = Vec::new();
-
-  for sig_id in candidates {
-    let original_sig = store.signature(sig_id);
-    let display = format_signature(store.as_ref(), &original_sig);
-    let mut outcome = CandidateOutcome {
-      sig_id,
-      display,
-      instantiated_sig: original_sig.clone(),
-      instantiated_id: sig_id,
-      specificity: usize::MAX,
-      unknown_inferred: 0,
-      return_rank: usize::MAX,
-      rejection: None,
-    };
-
-    let arity = analyze_arity(store.as_ref(), &original_sig);
-    if !arity.allows(args.len()) {
-      outcome.rejection = Some(CandidateRejection::Arity {
-        min: arity.min,
-        max: arity.max,
-        actual: args.len(),
-      });
-      outcomes.push(outcome);
-      continue;
-    }
-
-    let mut effective_args = None;
-    if let Some(const_args) = const_args {
-      for idx in 0..args.len() {
-        if uses_const_arg(store.as_ref(), &original_sig, &arity, idx) {
-          if effective_args.is_none() {
-            effective_args = Some(args.to_vec());
-          }
-          if let Some(slot) = effective_args.as_mut().and_then(|a| a.get_mut(idx)) {
-            *slot = const_args[idx];
-          }
-        }
-      }
-    }
-    let args = effective_args.as_deref().unwrap_or(args);
-
-    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-    outcome.unknown_inferred = count_unknown(
-      store.as_ref(),
-      &inference.substitutions,
-      primitives.any,
-      primitives.unknown,
-    );
-    if !inference.diagnostics.is_empty() {
-      outcome.rejection = Some(CandidateRejection::Inference(
-        inference
-          .diagnostics
-          .into_iter()
-          .map(|d| d.message)
-          .collect(),
-      ));
-      outcomes.push(outcome);
-      continue;
-    }
-
-    let instantiated_id =
-      instantiation.instantiate_signature(store, sig_id, &original_sig, &inference.substitutions);
-    let instantiated_sig = store.signature(instantiated_id);
-
-    let arity = analyze_arity(store.as_ref(), &instantiated_sig);
-    if !arity.allows(args.len()) {
-      outcome.rejection = Some(CandidateRejection::Arity {
-        min: arity.min,
-        max: arity.max,
-        actual: args.len(),
-      });
-      outcomes.push(outcome);
-      continue;
-    }
-
-    if let Some(expected_this) = instantiated_sig.this_param {
-      match this_arg {
-        Some(actual_this) => {
-          if !relate.is_assignable(actual_this, expected_this) {
-            outcome.rejection = Some(CandidateRejection::ThisType {
-              expected: expected_this,
-              actual: Some(actual_this),
-            });
-            outcomes.push(outcome);
-            continue;
-          }
-        }
-        None => {
-          outcome.rejection = Some(CandidateRejection::ThisType {
-            expected: expected_this,
-            actual: None,
-          });
-          outcomes.push(outcome);
-          continue;
-        }
-      }
-    }
-
-    let (_assignable, specificity, mismatch) =
-      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, args);
-    outcome.instantiated_sig = instantiated_sig;
-    outcome.instantiated_id = instantiated_id;
-    outcome.specificity = specificity;
-    outcome.return_rank = return_rank(store.as_ref(), outcome.instantiated_sig.ret);
-    outcome.rejection = mismatch;
-    outcomes.push(outcome);
-    continue;
-  }
-
-  let mut applicable: Vec<&CandidateOutcome> =
-    outcomes.iter().filter(|c| c.rejection.is_none()).collect();
-  if applicable.is_empty() {
-    let mut fallback = outcomes.clone();
-    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
-    fallback.sort_by(|a, b| {
-      (
-        a.specificity,
-        a.unknown_inferred,
-        a.return_rank,
-        a.instantiated_sig.params.len(),
-        a.sig_id,
-      )
-        .cmp(&(
-          b.specificity,
-          b.unknown_inferred,
-          b.return_rank,
-          b.instantiated_sig.params.len(),
-          b.sig_id,
-        ))
-    });
-    let best = fallback.first();
-    let ret = best
-      .map(|best| best.instantiated_sig.ret)
-      .unwrap_or(primitives.unknown);
-    return CallResolution {
-      return_type: ret,
-      signature: None,
-      diagnostics: vec![diag],
-    };
-  }
-
-  if let Some(expected_ret) = contextual_return {
-    let contextual: Vec<&CandidateOutcome> = applicable
-      .iter()
-      .copied()
-      .filter(|candidate| relate.is_assignable(candidate.instantiated_sig.ret, expected_ret))
-      .collect();
-    if !contextual.is_empty() {
-      applicable = contextual;
-    }
-  }
-
-  applicable.sort_by(|a, b| {
-    (
-      a.specificity,
-      a.unknown_inferred,
-      a.instantiated_sig.params.len(),
-      a.sig_id,
-    )
-      .cmp(&(
-        b.specificity,
-        b.unknown_inferred,
-        b.instantiated_sig.params.len(),
-        b.sig_id,
-      ))
-  });
-
-  let best = applicable[0];
-  CallResolution {
-    return_type: best.instantiated_sig.ret,
-    signature: Some(best.instantiated_id),
-    diagnostics: Vec::new(),
-  }
+  )
 }
 
 /// Resolve a `new` expression against a constructable type, performing overload
@@ -383,29 +221,74 @@ pub fn resolve_construct_overloads(
   span: Span,
   expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> CallResolution {
-  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
-  let mut candidates = Vec::new();
-  collect_construct_signatures(
-    store.as_ref(),
+  resolve_overload_set(
+    OverloadKind::Construct,
+    store,
+    relate,
+    instantiation,
     callee,
-    &mut candidates,
-    &mut HashSet::new(),
+    args,
+    const_args,
+    this_arg,
+    contextual_return,
+    span,
     expander,
-  );
-  let mut seen_sig = HashSet::new();
-  candidates.retain(|sig| seen_sig.insert(*sig));
-  candidates.sort();
+  )
+}
+
+fn resolve_overload_set(
+  kind: OverloadKind,
+  store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
+  instantiation: &InstantiationCache,
+  callee: TypeId,
+  args: &[TypeId],
+  const_args: Option<&[TypeId]>,
+  this_arg: Option<TypeId>,
+  contextual_return: Option<TypeId>,
+  span: Span,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+) -> CallResolution {
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
+      contextual_signature: None,
       diagnostics: Vec::new(),
     };
   }
+
+  let const_args = const_args.filter(|const_args| const_args.len() == args.len());
+
+  let mut candidates = Vec::new();
+  match kind {
+    OverloadKind::Call => collect_signatures(
+      store.as_ref(),
+      callee,
+      &mut candidates,
+      &mut HashSet::new(),
+      expander,
+    ),
+    OverloadKind::Construct => collect_construct_signatures(
+      store.as_ref(),
+      callee,
+      &mut candidates,
+      &mut HashSet::new(),
+      expander,
+    ),
+  };
+  let mut seen_sig = HashSet::new();
+  candidates.retain(|sig| seen_sig.insert(*sig));
+  candidates.sort();
+
   if candidates.is_empty() {
+    let message = match kind {
+      OverloadKind::Call => "expression is not callable",
+      OverloadKind::Construct => "expression is not constructable",
+    };
     let diag = codes::NO_OVERLOAD
-      .error("expression is not constructable", span)
+      .error(message, span)
       .with_note(format!(
         "callee has type {}",
         TypeDisplay::new(store, callee)
@@ -413,27 +296,25 @@ pub fn resolve_construct_overloads(
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
+      contextual_signature: None,
       diagnostics: vec![diag],
     };
   }
 
-  let mut outcomes = Vec::new();
-
+  let mut outcomes = Vec::with_capacity(candidates.len());
   for sig_id in candidates {
     let original_sig = store.signature(sig_id);
-    let display = format_signature(store.as_ref(), &original_sig);
     let mut outcome = CandidateOutcome {
       sig_id,
-      display,
-      instantiated_sig: original_sig.clone(),
+      instantiated_sig: original_sig,
       instantiated_id: sig_id,
-      specificity: usize::MAX,
+      match_score: MatchScore::worst(),
       unknown_inferred: 0,
       return_rank: usize::MAX,
       rejection: None,
     };
 
-    let arity = analyze_arity(store.as_ref(), &original_sig);
+    let arity = analyze_arity(store.as_ref(), &outcome.instantiated_sig);
     if !arity.allows(args.len()) {
       outcome.rejection = Some(CandidateRejection::Arity {
         min: arity.min,
@@ -447,7 +328,7 @@ pub fn resolve_construct_overloads(
     let mut effective_args = None;
     if let Some(const_args) = const_args {
       for idx in 0..args.len() {
-        if uses_const_arg(store.as_ref(), &original_sig, &arity, idx) {
+        if uses_const_arg(store.as_ref(), &outcome.instantiated_sig, &arity, idx) {
           if effective_args.is_none() {
             effective_args = Some(args.to_vec());
           }
@@ -459,7 +340,8 @@ pub fn resolve_construct_overloads(
     }
     let args = effective_args.as_deref().unwrap_or(args);
 
-    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let inference =
+      infer_type_arguments_for_call(store, &outcome.instantiated_sig, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
@@ -478,11 +360,18 @@ pub fn resolve_construct_overloads(
       continue;
     }
 
-    let instantiated_id =
-      instantiation.instantiate_signature(store, sig_id, &original_sig, &inference.substitutions);
+    let instantiated_id = instantiation.instantiate_signature(
+      store,
+      sig_id,
+      &outcome.instantiated_sig,
+      &inference.substitutions,
+    );
     let instantiated_sig = store.signature(instantiated_id);
+    outcome.instantiated_sig = instantiated_sig;
+    outcome.instantiated_id = instantiated_id;
+    outcome.return_rank = return_rank(store.as_ref(), outcome.instantiated_sig.ret);
 
-    let arity = analyze_arity(store.as_ref(), &instantiated_sig);
+    let arity = analyze_arity(store.as_ref(), &outcome.instantiated_sig);
     if !arity.allows(args.len()) {
       outcome.rejection = Some(CandidateRejection::Arity {
         min: arity.min,
@@ -493,22 +382,15 @@ pub fn resolve_construct_overloads(
       continue;
     }
 
-    if let Some(expected_this) = instantiated_sig.this_param {
-      match this_arg {
-        Some(actual_this) => {
-          if !relate.is_assignable(actual_this, expected_this) {
-            outcome.rejection = Some(CandidateRejection::ThisType {
-              expected: expected_this,
-              actual: Some(actual_this),
-            });
-            outcomes.push(outcome);
-            continue;
-          }
-        }
-        None => {
+    if matches!(kind, OverloadKind::Call) {
+      if let Some(expected_this) = outcome.instantiated_sig.this_param {
+        // In TypeScript, a plain call expression uses a `this` context of `void`.
+        // Only property accesses (e.g. `obj.method()`) have a meaningful receiver.
+        let actual_this = this_arg.unwrap_or(primitives.void);
+        if !relate.is_assignable(actual_this, expected_this) {
           outcome.rejection = Some(CandidateRejection::ThisType {
             expected: expected_this,
-            actual: None,
+            actual: Some(actual_this),
           });
           outcomes.push(outcome);
           continue;
@@ -516,49 +398,33 @@ pub fn resolve_construct_overloads(
       }
     }
 
-    let (_assignable, specificity, mismatch) =
-      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, args);
-    outcome.instantiated_sig = instantiated_sig;
-    outcome.instantiated_id = instantiated_id;
-    outcome.specificity = specificity;
-    outcome.return_rank = return_rank(store.as_ref(), outcome.instantiated_sig.ret);
+    let (score, mismatch) =
+      check_arguments(store.as_ref(), relate, &outcome.instantiated_sig, &arity, args);
+    outcome.match_score = score;
     outcome.rejection = mismatch;
     outcomes.push(outcome);
-    continue;
   }
 
   let mut applicable: Vec<&CandidateOutcome> =
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
+
   if applicable.is_empty() {
+    let diag = build_no_match_diagnostic(store.as_ref(), span, &outcomes);
     let mut fallback = outcomes.clone();
-    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
-    fallback.sort_by(|a, b| {
-      (
-        a.specificity,
-        a.unknown_inferred,
-        a.return_rank,
-        a.instantiated_sig.params.len(),
-        a.sig_id,
-      )
-        .cmp(&(
-          b.specificity,
-          b.unknown_inferred,
-          b.return_rank,
-          b.instantiated_sig.params.len(),
-          b.sig_id,
-        ))
-    });
-    let best = fallback.first();
-    let ret = best
-      .map(|best| best.instantiated_sig.ret)
-      .unwrap_or(primitives.unknown);
+    fallback.sort_by_key(|candidate| fallback_rank_key(candidate, false));
+    let (ret, contextual_signature) = fallback
+      .first()
+      .map(|candidate| (candidate.instantiated_sig.ret, Some(candidate.instantiated_id)))
+      .unwrap_or((primitives.unknown, None));
     return CallResolution {
       return_type: ret,
       signature: None,
+      contextual_signature,
       diagnostics: vec![diag],
     };
   }
 
+  let mut contextual_applied = false;
   if let Some(expected_ret) = contextual_return {
     let contextual: Vec<&CandidateOutcome> = applicable
       .iter()
@@ -567,28 +433,51 @@ pub fn resolve_construct_overloads(
       .collect();
     if !contextual.is_empty() {
       applicable = contextual;
+      contextual_applied = true;
     }
   }
 
-  applicable.sort_by(|a, b| {
-    (
-      a.specificity,
-      a.unknown_inferred,
-      a.instantiated_sig.params.len(),
-      a.sig_id,
-    )
-      .cmp(&(
-        b.specificity,
-        b.unknown_inferred,
-        b.instantiated_sig.params.len(),
-        b.sig_id,
-      ))
-  });
+  applicable.sort_by_key(|candidate| fallback_rank_key(candidate, contextual_applied));
 
-  let best = applicable[0];
+  let best_key_no_id = rank_key_no_id(applicable[0], contextual_applied);
+  let best_candidates: Vec<&CandidateOutcome> = applicable
+    .iter()
+    .copied()
+    .filter(|candidate| rank_key_no_id(candidate, contextual_applied) == best_key_no_id)
+    .collect();
+
+  if best_candidates.len() > 1 {
+    let diag = build_ambiguous_diagnostic(store.as_ref(), span, &best_candidates);
+    let mut ret_types: Vec<TypeId> = best_candidates
+      .iter()
+      .map(|candidate| candidate.instantiated_sig.ret)
+      .collect();
+    ret_types.sort();
+    ret_types.dedup();
+    let ret = if ret_types.is_empty() {
+      primitives.unknown
+    } else if ret_types.len() == 1 {
+      ret_types[0]
+    } else {
+      store.union(ret_types)
+    };
+    let contextual_signature = best_candidates
+      .iter()
+      .min_by_key(|candidate| candidate.sig_id)
+      .map(|candidate| candidate.instantiated_id);
+    return CallResolution {
+      return_type: ret,
+      signature: None,
+      contextual_signature,
+      diagnostics: vec![diag],
+    };
+  }
+
+  let best = best_candidates[0];
   CallResolution {
     return_type: best.instantiated_sig.ret,
     signature: Some(best.instantiated_id),
+    contextual_signature: Some(best.instantiated_id),
     diagnostics: Vec::new(),
   }
 }
@@ -623,6 +512,32 @@ fn collect_signatures(
     }
     _ => {}
   }
+}
+
+fn rank_key_no_id(
+  candidate: &CandidateOutcome,
+  contextual_applied: bool,
+) -> (MatchScore, usize, usize, usize) {
+  let return_rank = if contextual_applied {
+    candidate.return_rank
+  } else {
+    0
+  };
+  (
+    candidate.match_score,
+    candidate.unknown_inferred,
+    return_rank,
+    candidate.instantiated_sig.params.len(),
+  )
+}
+
+fn fallback_rank_key(
+  candidate: &CandidateOutcome,
+  contextual_applied: bool,
+) -> (MatchScore, usize, usize, usize, SignatureId) {
+  let (score, unknown_inferred, return_rank, params_len) =
+    rank_key_no_id(candidate, contextual_applied);
+  (score, unknown_inferred, return_rank, params_len, candidate.sig_id)
 }
 
 fn collect_construct_signatures(
@@ -791,15 +706,20 @@ fn check_arguments(
   sig: &Signature,
   arity: &ArityInfo,
   args: &[TypeId],
-) -> (bool, usize, Option<CandidateRejection>) {
-  let mut specificity = 0usize;
+) -> (MatchScore, Option<CandidateRejection>) {
+  let mut score = MatchScore {
+    widen: 0,
+    any_like: 0,
+    type_param: 0,
+    rest: 0,
+  };
+
   for (idx, arg) in args.iter().enumerate() {
     let expected = match expected_arg_type(sig, arity, idx) {
       Some(param) => param,
       None => {
         return (
-          false,
-          specificity,
+          MatchScore::worst(),
           Some(CandidateRejection::Arity {
             min: arity.min,
             max: arity.max,
@@ -809,26 +729,17 @@ fn check_arguments(
       }
     };
     if expected.from_rest {
-      // Prefer fixed parameters over rest matches when both are applicable.
-      specificity += 1;
+      score.rest += 1;
     }
-    if matches!(store.type_kind(expected.ty), TypeKind::TypeParam(_)) {
-      // Unsolved type parameters are treated like `unknown` for compatibility,
-      // but they should make the candidate less specific than one with a
-      // concrete parameter type.
-      specificity += 2;
-      continue;
+    match store.type_kind(expected.ty) {
+      TypeKind::Any | TypeKind::Unknown => score.any_like += 1,
+      TypeKind::TypeParam(_) | TypeKind::Infer { .. } => score.type_param += 1,
+      _ => {}
     }
-    if matches!(
-      (store.type_kind(*arg), store.type_kind(expected.ty)),
-      (TypeKind::Any | TypeKind::Unknown, _) | (_, TypeKind::Any | TypeKind::Unknown)
-    ) {
-      continue;
-    }
+
     if !relate.is_assignable(*arg, expected.ty) {
       return (
-        false,
-        specificity,
+        score,
         Some(CandidateRejection::ArgumentType {
           index: idx,
           arg: *arg,
@@ -836,17 +747,13 @@ fn check_arguments(
         }),
       );
     }
+
     if !relate.is_assignable(expected.ty, *arg) {
-      specificity += 1;
-    }
-    match store.type_kind(expected.ty) {
-      TypeKind::Any | TypeKind::Unknown => {
-        specificity += 2;
-      }
-      _ => {}
+      score.widen += 1;
     }
   }
-  (true, specificity, None)
+
+  (score, None)
 }
 
 fn count_unknown(
@@ -866,26 +773,63 @@ fn count_unknown(
 fn build_no_match_diagnostic(
   store: &TypeStore,
   span: Span,
-  outcomes: Vec<CandidateOutcome>,
+  outcomes: &[CandidateOutcome],
 ) -> Diagnostic {
   let mut diag = codes::NO_OVERLOAD.error("no overload matches this call", span);
-  let mut shown = 0usize;
-  for outcome in outcomes.iter() {
-    if let Some(reason) = &outcome.rejection {
-      if shown >= MAX_NOTES {
-        break;
-      }
-      diag.push_note(format!(
-        "{}: {}",
-        outcome.display,
-        describe_rejection(store, reason)
-      ));
-      shown += 1;
-    }
+
+  let mut rejected: Vec<&CandidateOutcome> = outcomes
+    .iter()
+    .filter(|outcome| outcome.rejection.is_some())
+    .collect();
+  rejected.sort_by_key(|candidate| fallback_rank_key(candidate, false));
+
+  let width = rejected.len().max(1).to_string().len();
+  let shown = rejected.len().min(MAX_NOTES);
+  for (idx, outcome) in rejected.iter().take(shown).enumerate() {
+    let Some(reason) = &outcome.rejection else {
+      continue;
+    };
+    let sig = store.signature(outcome.sig_id);
+    diag.push_note(format!(
+      "overload {index:0width$}: {sig}: {reason}",
+      index = idx + 1,
+      width = width,
+      sig = format_signature(store, &sig),
+      reason = describe_rejection(store, reason),
+    ));
   }
-  let hidden = outcomes.len().saturating_sub(shown);
+
+  let hidden = rejected.len().saturating_sub(shown);
   if hidden > 0 {
-    diag.push_note(format!("{hidden} overload(s) not shown"));
+    diag.push_note(format!("~ {hidden} overload(s) not shown"));
+  }
+  diag
+}
+
+fn build_ambiguous_diagnostic(
+  store: &TypeStore,
+  span: Span,
+  best_candidates: &[&CandidateOutcome],
+) -> Diagnostic {
+  let mut diag = codes::AMBIGUOUS_OVERLOAD.error("call is ambiguous", span);
+  let mut candidates: Vec<&CandidateOutcome> = best_candidates.iter().copied().collect();
+  candidates.sort_by_key(|candidate| candidate.sig_id);
+
+  let width = candidates.len().max(1).to_string().len();
+  let shown = candidates.len().min(MAX_NOTES);
+  for (idx, outcome) in candidates.iter().take(shown).enumerate() {
+    let sig = store.signature(outcome.sig_id);
+    diag.push_note(format!(
+      "overload {index:0width$}: {sig}",
+      index = idx + 1,
+      width = width,
+      sig = format_signature(store, &sig),
+    ));
+  }
+
+  let hidden = candidates.len().saturating_sub(shown);
+  if hidden > 0 {
+    diag.push_note(format!("~ {hidden} overload(s) not shown"));
   }
   diag
 }

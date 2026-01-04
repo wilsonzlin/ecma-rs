@@ -2165,17 +2165,29 @@ impl<'a> RelateCtx<'a> {
           ),
         }
       }
-      (None, Some(_)) => {
-        return RelationResult {
-          result: false,
-          reason: self.join_reasons(
-            record,
-            key,
-            Vec::new(),
-            false,
-            Some("missing this".into()),
-            depth,
-          ),
+      (None, Some(d)) => {
+        // A signature without an explicit `this` parameter is effectively
+        // `this: any` in TypeScript. This is important for callback-heavy DOM
+        // APIs where the expected type includes a `this` parameter but common
+        // call sites (arrow functions) omit it.
+        let any_this = self.store.primitive_ids().any;
+        let related =
+          self.relate_internal(*d, any_this, RelationKind::Assignable, mode, record, depth + 1);
+        if record {
+          children.push(related.reason);
+        }
+        if !related.result {
+          return RelationResult {
+            result: false,
+            reason: self.join_reasons(
+              record,
+              key,
+              children,
+              false,
+              Some("this parameter".into()),
+              depth,
+            ),
+          };
         }
       }
       _ => {}
@@ -2284,22 +2296,27 @@ impl<'a> RelateCtx<'a> {
       }
     }
 
-    let ret_related = self.relate_internal(
-      src.ret,
-      dst.ret,
-      RelationKind::Assignable,
-      mode,
-      record,
-      depth + 1,
-    );
-    if record {
-      children.push(ret_related.reason);
-    }
-    if !ret_related.result {
-      return RelationResult {
-        result: false,
-        reason: self.join_reasons(record, key, children, false, Some("return".into()), depth),
-      };
+    // TypeScript treats `void` return types as non-observable at the call site:
+    // a function that returns a value is still assignable to a `() => void`
+    // callback since callers ignore the return value.
+    if !matches!(self.store.type_kind(dst.ret), TypeKind::Void) {
+      let ret_related = self.relate_internal(
+        src.ret,
+        dst.ret,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      if record {
+        children.push(ret_related.reason);
+      }
+      if !ret_related.result {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(record, key, children, false, Some("return".into()), depth),
+        };
+      }
     }
 
     RelationResult {

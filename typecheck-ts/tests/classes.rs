@@ -527,7 +527,7 @@ fn this_parameter_is_enforced_in_assignability() {
     "missing this parameter should make signatures incompatible"
   );
   assert!(
-    !relate.is_assignable(without_this, with_this),
-    "adding this parameter should change assignability"
+    relate.is_assignable(without_this, with_this),
+    "a signature without an explicit `this` parameter is treated as `this: any`"
   );
 }

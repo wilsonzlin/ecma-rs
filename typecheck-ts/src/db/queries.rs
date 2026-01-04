@@ -1054,7 +1054,23 @@ pub mod body_check {
               let existing = result.expr_types[idx];
               let narrower =
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              if existing == prim.unknown || narrower {
+              let flow_literal_on_primitive = matches!(
+                (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
+                (types_ts_interned::TypeKind::Number, types_ts_interned::TypeKind::NumberLiteral(_))
+                  | (
+                    types_ts_interned::TypeKind::String,
+                    types_ts_interned::TypeKind::StringLiteral(_),
+                  )
+                  | (
+                    types_ts_interned::TypeKind::Boolean,
+                    types_ts_interned::TypeKind::BooleanLiteral(_),
+                  )
+                  | (
+                    types_ts_interned::TypeKind::BigInt,
+                    types_ts_interned::TypeKind::BigIntLiteral(_),
+                  )
+              );
+              if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.expr_types[idx] = *ty;
               }
             }
@@ -1066,7 +1082,23 @@ pub mod body_check {
               let existing = result.pat_types[idx];
               let narrower =
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              if existing == prim.unknown || narrower {
+              let flow_literal_on_primitive = matches!(
+                (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
+                (types_ts_interned::TypeKind::Number, types_ts_interned::TypeKind::NumberLiteral(_))
+                  | (
+                    types_ts_interned::TypeKind::String,
+                    types_ts_interned::TypeKind::StringLiteral(_),
+                  )
+                  | (
+                    types_ts_interned::TypeKind::Boolean,
+                    types_ts_interned::TypeKind::BooleanLiteral(_),
+                  )
+                  | (
+                    types_ts_interned::TypeKind::BigInt,
+                    types_ts_interned::TypeKind::BigIntLiteral(_),
+                  )
+              );
+              if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.pat_types[idx] = *ty;
               }
             }

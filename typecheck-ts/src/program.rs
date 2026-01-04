@@ -9675,7 +9675,7 @@ impl ProgramState {
     let unknown = self.interned_unknown();
     let interned_store = self.interned_store.as_ref().cloned();
     fn record_pat(
-      state: &ProgramState,
+      state: &mut ProgramState,
       pat_id: HirPatId,
       body: &hir_js::Body,
       names: &hir_js::NameInterner,
@@ -9702,13 +9702,84 @@ impl ProgramState {
             if !seen.insert(name.clone()) {
               return;
             }
-            bindings.insert(name.clone(), ty);
-            if let Some(def_id) = state
+
+            let def_id = state
               .def_data
               .iter()
-              .find_map(|(id, data)| (data.file == file && data.span == pat.span).then_some(*id))
-            {
-              binding_defs.insert(name, def_id);
+              .filter_map(|(id, data)| {
+                if data.file != file || data.name != name {
+                  return None;
+                }
+                if matches!(data.kind, DefKind::VarDeclarator(_)) {
+                  return None;
+                }
+                if data.span == pat.span {
+                  return Some((0_u8, data.span.len(), data.span.start, data.span.end, *id));
+                }
+                if data.span.start <= pat.span.start && data.span.end >= pat.span.end {
+                  return Some((1_u8, data.span.len(), data.span.start, data.span.end, *id));
+                }
+                None
+              })
+              .min_by_key(|key| *key)
+              .map(|(_, _, _, _, id)| id);
+
+            if let Some(def_id) = def_id {
+              binding_defs.insert(name.clone(), def_id);
+            }
+
+            // If this binding has an explicit type annotation, prefer the declared
+            // type over the (possibly literal-inferred) pattern type from the parent
+            // body. This matches TypeScript's behavior for e.g.
+            // `const x: string = ""` where `x` should be `string`, not `""`.
+            let should_prefer_declared = if let Some(store) = state.interned_store.as_ref() {
+              matches!(
+                store.type_kind(ty),
+                tti::TypeKind::Unknown
+                  | tti::TypeKind::StringLiteral(_)
+                  | tti::TypeKind::NumberLiteral(_)
+                  | tti::TypeKind::BooleanLiteral(_)
+                  | tti::TypeKind::BigIntLiteral(_)
+              )
+            } else {
+              ty == unknown
+            };
+            if should_prefer_declared {
+              let declared = state.declared_type_for_span(file, pat.span);
+              if let Some(declared) = declared {
+                if let Some(store) = state.interned_store.as_ref() {
+                  if store.contains_type_id(declared) {
+                    ty = store.canon(declared);
+                  }
+                } else {
+                  ty = declared;
+                }
+              }
+            }
+            let replace = match bindings.get(&name) {
+              None => true,
+              Some(existing) => {
+                if let Some(store) = state.interned_store.as_ref() {
+                  if !store.contains_type_id(*existing)
+                    || matches!(store.type_kind(*existing), tti::TypeKind::Unknown)
+                  {
+                    true
+                  } else {
+                    matches!(
+                      (store.type_kind(*existing), store.type_kind(ty)),
+                      (tti::TypeKind::StringLiteral(_), tti::TypeKind::String)
+                        | (tti::TypeKind::NumberLiteral(_), tti::TypeKind::Number)
+                        | (tti::TypeKind::BooleanLiteral(_), tti::TypeKind::Boolean)
+                        | (tti::TypeKind::BigIntLiteral(_), tti::TypeKind::BigInt)
+                    )
+                  }
+                } else {
+                  *existing == unknown
+                }
+              }
+            };
+            if replace {
+              bindings.insert(name, ty);
             }
           }
         }
@@ -9839,7 +9910,7 @@ impl ProgramState {
         current = self.body_parents.get(&parent).copied();
         continue;
       };
-      let Some(lowered) = self.hir_lowered.get(&meta.file) else {
+      let Some(lowered) = self.hir_lowered.get(&meta.file).cloned() else {
         current = self.body_parents.get(&parent).copied();
         continue;
       };
@@ -10266,6 +10337,25 @@ impl ProgramState {
               .map(|ty| canon_or_convert(state, store, cache, ty))
           });
       }
+
+       let var_info = state.def_data.get(&def).and_then(|def_data| {
+         if let DefKind::Var(var) = &def_data.kind {
+           Some((def_data.file, def_data.span, var.typ))
+         } else {
+           None
+         }
+       });
+       if let Some((file, span, var_typ)) = var_info {
+         // `VarData::typ` is populated during binding using the legacy `TypeStore`
+         // (it cannot represent intersections, indexed access types, etc).
+         // Prefer lowering the declared annotation into the interned store when
+         // we can find it in the parsed AST so we preserve rich key types such
+         // as `(string | symbol) & string` for index signatures.
+         let ty = state.declared_type_for_span(file, span).or(var_typ);
+         if let Some(ty) = ty {
+           return Some(canon_or_convert(state, store, cache, ty));
+         }
+       }
 
       let import_target = state.def_data.get(&def).and_then(|data| {
         if let DefKind::Import(import) = &data.kind {
@@ -11023,6 +11113,7 @@ impl ProgramState {
           tti::TypeKind::NumberLiteral(_) => prim.number,
           tti::TypeKind::StringLiteral(_) => prim.string,
           tti::TypeKind::BooleanLiteral(_) => prim.boolean,
+          tti::TypeKind::BigIntLiteral(_) => prim.bigint,
           _ => ty,
         };
         if flow_result.expr_types.len() == result.expr_types.len() {
@@ -11030,7 +11121,16 @@ impl ProgramState {
             if *ty != prim.unknown {
               let existing = result.expr_types[idx];
               if matches!(body.exprs[idx].kind, hir_js::ExprKind::Ident(_)) {
-                result.expr_types[idx] = *ty;
+                let flow_literal_on_primitive = matches!(
+                  (store.type_kind(existing), store.type_kind(*ty)),
+                  (tti::TypeKind::Number, tti::TypeKind::NumberLiteral(_))
+                    | (tti::TypeKind::String, tti::TypeKind::StringLiteral(_))
+                    | (tti::TypeKind::Boolean, tti::TypeKind::BooleanLiteral(_))
+                    | (tti::TypeKind::BigInt, tti::TypeKind::BigIntLiteral(_))
+                );
+                if existing == prim.unknown || !flow_literal_on_primitive {
+                  result.expr_types[idx] = *ty;
+                }
                 continue;
               }
               let narrower =
@@ -11040,6 +11140,7 @@ impl ProgramState {
                 (tti::TypeKind::Number, tti::TypeKind::NumberLiteral(_))
                   | (tti::TypeKind::String, tti::TypeKind::StringLiteral(_))
                   | (tti::TypeKind::Boolean, tti::TypeKind::BooleanLiteral(_))
+                  | (tti::TypeKind::BigInt, tti::TypeKind::BigIntLiteral(_))
               );
               if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.expr_types[idx] = *ty;
@@ -11053,7 +11154,14 @@ impl ProgramState {
               let existing = result.pat_types[idx];
               let narrower =
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
-              if existing == prim.unknown || narrower {
+              let flow_literal_on_primitive = matches!(
+                (store.type_kind(existing), store.type_kind(*ty)),
+                (tti::TypeKind::Number, tti::TypeKind::NumberLiteral(_))
+                  | (tti::TypeKind::String, tti::TypeKind::StringLiteral(_))
+                  | (tti::TypeKind::Boolean, tti::TypeKind::BooleanLiteral(_))
+                  | (tti::TypeKind::BigInt, tti::TypeKind::BigIntLiteral(_))
+              );
+              if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.pat_types[idx] = *ty;
               }
             }
@@ -11999,12 +12107,54 @@ impl ProgramState {
             }
           }
           Stmt::VarDecl(var) => {
+            // Most definitions use the binding pattern span, but some def IDs
+            // (notably for local variables) may be keyed by a wider span (e.g.
+            // the declarator span). Prefer the exact pattern match first, then
+            // fall back to a single unambiguous declarator whose span contains
+            // the target.
             for decl in var.stx.declarators.iter() {
               let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
               if pat_span == target {
                 if let Some(ann) = decl.type_annotation.as_ref() {
                   return Some(state.lower_interned_type_expr(file, ann));
                 }
+              }
+            }
+
+            let mut matching_decl = None;
+            for decl in var.stx.declarators.iter() {
+              let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
+              let end = decl
+                .initializer
+                .as_ref()
+                .map(|init| loc_to_span(file, init.loc).range.end)
+                .or_else(|| {
+                  decl
+                    .type_annotation
+                    .as_ref()
+                    .map(|ann| loc_to_span(file, ann.loc).range.end)
+                })
+                .unwrap_or(pat_span.end);
+              let decl_span = TextRange::new(pat_span.start, end);
+              // Some defs may be keyed by a span that covers the full declarator
+              // (or even the full statement). Prefer matching those wider spans,
+              // but avoid matching arbitrary sub-spans inside the pattern (e.g.
+              // bindings within destructuring patterns).
+              let matches = decl_span == target
+                || (target.start <= decl_span.start && target.end >= decl_span.end)
+                || (target.start == decl_span.start && target.end <= decl_span.end);
+              if matches {
+                if matching_decl.is_some() {
+                  matching_decl = None;
+                  break;
+                }
+                matching_decl = Some(decl);
+              }
+            }
+
+            if let Some(decl) = matching_decl {
+              if let Some(ann) = decl.type_annotation.as_ref() {
+                return Some(state.lower_interned_type_expr(file, ann));
               }
             }
           }

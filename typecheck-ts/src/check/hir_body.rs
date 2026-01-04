@@ -1268,7 +1268,10 @@ impl<'a> Checker<'a> {
         self.check_stmt_list(block);
       }
       Some(FuncBody::Expression(expr)) => {
-        let expr_ty = self.check_expr(expr);
+        let expr_ty = match self.expected_return {
+          Some(expected) => self.check_expr_with_expected(expr, expected),
+          None => self.check_expr(expr),
+        };
         let ty = if self.in_async_function {
           awaited_type(self.store.as_ref(), expr_ty, self.ref_expander)
         } else {
@@ -1309,12 +1312,12 @@ impl<'a> Checker<'a> {
         self.check_expr(&default_expr.stx.expression);
       }
       Stmt::Return(ret) => {
-        let expr_ty = ret
-          .stx
-          .value
-          .as_ref()
-          .map(|v| self.check_expr(v))
-          .unwrap_or(self.store.primitive_ids().undefined);
+        let prim = self.store.primitive_ids();
+        let expr_ty = match (self.expected_return, ret.stx.value.as_ref()) {
+          (Some(expected), Some(value)) => self.check_expr_with_expected(value, expected),
+          (None, Some(value)) => self.check_expr(value),
+          (_, None) => prim.undefined,
+        };
         let ty = if self.in_async_function {
           awaited_type(self.store.as_ref(), expr_ty, self.ref_expander)
         } else {
@@ -1632,64 +1635,7 @@ impl<'a> Checker<'a> {
       AstExpr::Super(_) => self.store.primitive_ids().unknown,
       AstExpr::Unary(un) => {
         if matches!(un.stx.operator, OperatorName::New) {
-          let (callee_expr, arg_exprs, span_loc) = match un.stx.argument.stx.as_ref() {
-            AstExpr::Call(call) => (
-              &call.stx.callee,
-              Some(call.stx.arguments.as_slice()),
-              call.loc,
-            ),
-            _ => (&un.stx.argument, None, expr.loc),
-          };
-          let callee_ty = self.check_expr(callee_expr);
-          let arg_exprs = arg_exprs.unwrap_or(&[]);
-          let arg_types: Vec<TypeId> = arg_exprs
-            .iter()
-            .map(|arg| self.check_expr(&arg.stx.value))
-            .collect();
-          let const_arg_types: Vec<TypeId> = arg_exprs
-            .iter()
-            .map(|arg| self.const_inference_type(&arg.stx.value))
-            .collect();
-          let span = Span {
-            file: self.file,
-            range: loc_to_range(self.file, span_loc),
-          };
-          let resolution = resolve_construct(
-            &self.store,
-            &self.relate,
-            &self.instantiation_cache,
-            callee_ty,
-            &arg_types,
-            Some(&const_arg_types),
-            None,
-            None,
-            span,
-            self.ref_expander,
-          );
-          for diag in &resolution.diagnostics {
-            self.diagnostics.push(diag.clone());
-          }
-          if resolution.diagnostics.is_empty() {
-            if let Some(sig_id) = resolution.signature {
-              let sig = self.store.signature(sig_id);
-              for (idx, arg) in arg_exprs.iter().enumerate() {
-                if let Some(param) = sig.params.get(idx) {
-                  let arg_expr = &arg.stx.value;
-                  let arg_ty = match arg_expr.stx.as_ref() {
-                    AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
-                      self.check_expr_with_expected(arg_expr, param.ty)
-                    }
-                    _ => arg_types
-                      .get(idx)
-                      .copied()
-                      .unwrap_or(self.store.primitive_ids().unknown),
-                  };
-                  self.check_assignable(arg_expr, arg_ty, param.ty);
-                }
-              }
-            }
-          }
-          resolution.return_type
+          self.check_new_expr(un, expr.loc, None)
         } else {
           self.check_unary(un.stx.operator, &un.stx.argument)
         }
@@ -1706,201 +1652,7 @@ impl<'a> Checker<'a> {
         let alt = self.check_expr(&cond.stx.alternate);
         self.store.union(vec![cons, alt])
       }
-      AstExpr::Call(call) => {
-        let prim = self.store.primitive_ids();
-        let callee_ty = self.check_expr(&call.stx.callee);
-        let callee_base = if call.stx.optional_chaining {
-          let (non_nullish, _) = narrow_non_nullish(callee_ty, &self.store);
-          non_nullish
-        } else {
-          callee_ty
-        };
-        let mut arg_types: Vec<TypeId> = call
-          .stx
-          .arguments
-          .iter()
-          .map(|arg| self.check_expr(&arg.stx.value))
-          .collect();
-        let mut const_arg_types: Vec<TypeId> = call
-          .stx
-          .arguments
-          .iter()
-          .map(|arg| self.const_inference_type(&arg.stx.value))
-          .collect();
-        let span = Span {
-          file: self.file,
-          range: loc_to_range(self.file, call.loc),
-        };
-        let mut ty = if call.stx.optional_chaining && callee_base == prim.never {
-          prim.undefined
-        } else {
-          let mut resolution = resolve_call(
-            &self.store,
-            &self.relate,
-            &self.instantiation_cache,
-            callee_base,
-            &arg_types,
-            Some(&const_arg_types),
-            None,
-            None,
-            span,
-            self.ref_expander,
-          );
-          if resolution.diagnostics.is_empty() {
-            if let Some(sig_id) = resolution.signature {
-              let sig = self.store.signature(sig_id);
-              let mut refined = false;
-              for (idx, arg) in call.stx.arguments.iter().enumerate() {
-                let Some(param) = sig.params.get(idx) else {
-                  continue;
-                };
-                let Some(func) = (match arg.stx.value.stx.as_ref() {
-                  AstExpr::ArrowFunc(arrow) => Some(&arrow.stx.func),
-                  AstExpr::Func(func) => Some(&func.stx.func),
-                  _ => None,
-                }) else {
-                  continue;
-                };
-
-                let Some(refined_ty) = self.refine_function_expr_with_expected(func, param.ty)
-                else {
-                  continue;
-                };
-                if let Some(slot) = arg_types.get_mut(idx) {
-                  *slot = refined_ty;
-                  refined = true;
-                }
-                if let Some(slot) = const_arg_types.get_mut(idx) {
-                  *slot = refined_ty;
-                }
-                self.record_expr_type(arg.stx.value.loc, refined_ty);
-              }
-
-              if refined {
-                let next = resolve_call(
-                  &self.store,
-                  &self.relate,
-                  &self.instantiation_cache,
-                  callee_base,
-                  &arg_types,
-                  Some(&const_arg_types),
-                  None,
-                  None,
-                  span,
-                  self.ref_expander,
-                );
-                if next.diagnostics.is_empty() && next.signature.is_some() {
-                  resolution = next;
-                }
-              }
-            }
-          }
-
-          let candidate_sigs = callable_signatures(self.store.as_ref(), callee_base);
-          let allow_assignable_fallback = resolution.diagnostics.len() == 1
-            && resolution.diagnostics[0].code.as_str() == codes::NO_OVERLOAD.as_str()
-            && candidate_sigs.len() == 1;
-          let mut reported_assignability = false;
-          if allow_assignable_fallback {
-            if let Some(sig_id) = candidate_sigs.first().copied() {
-              let sig = self.store.signature(sig_id);
-              let before = self.diagnostics.len();
-              for (idx, arg) in call.stx.arguments.iter().enumerate() {
-                if let Some(param) = sig.params.get(idx) {
-                  let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
-                  self.check_assignable(&arg.stx.value, arg_ty, param.ty);
-                }
-              }
-              reported_assignability = self.diagnostics.len() > before;
-            }
-          }
-
-          if !reported_assignability {
-            for diag in &resolution.diagnostics {
-              self.diagnostics.push(diag.clone());
-            }
-          }
-          if resolution.diagnostics.is_empty() {
-            if let Some(sig_id) = resolution.signature {
-              let sig = self.store.signature(sig_id);
-              for (idx, arg) in call.stx.arguments.iter().enumerate() {
-                if let Some(param) = sig.params.get(idx) {
-                  let arg_expr = &arg.stx.value;
-                  let arg_ty = match arg_expr.stx.as_ref() {
-                    AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
-                      let contextual = self.check_expr_with_expected(arg_expr, param.ty);
-                      if let Some(slot) = arg_types.get_mut(idx) {
-                        *slot = contextual;
-                      }
-                      contextual
-                    }
-                    _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
-                  };
-                  self.check_assignable(arg_expr, arg_ty, param.ty);
-                }
-              }
-              if let TypeKind::Predicate {
-                parameter: Some(param_name),
-                asserted: Some(asserted),
-                asserts: true,
-              } = self.store.type_kind(sig.ret)
-              {
-                let target = sig
-                  .params
-                  .iter()
-                  .enumerate()
-                  .find(|(_, p)| p.name == Some(param_name))
-                  .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
-                if let Some((idx, _)) = target {
-                  if let Some(arg) = call.stx.arguments.get(idx) {
-                    if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
-                      self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
-                    }
-                  }
-                }
-              }
-              let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
-              let has_rest = sig.params.iter().any(|p| p.rest);
-              let max = if has_rest {
-                None
-              } else {
-                Some(sig.params.len())
-              };
-              if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
-                self
-                  .diagnostics
-                  .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
-              }
-            }
-          }
-          let contextual_sig = resolution
-            .signature
-            .or_else(|| candidate_sigs.into_iter().next());
-          if let Some(sig_id) = contextual_sig {
-            let sig = self.store.signature(sig_id);
-            for (idx, arg) in call.stx.arguments.iter().enumerate() {
-              if let Some(param) = sig.params.get(idx) {
-                let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
-                let contextual = match arg.stx.value.stx.as_ref() {
-                  AstExpr::ArrowFunc(_) | AstExpr::Func(_)
-                    if self.first_callable_signature(param.ty).is_some() =>
-                  {
-                    arg_ty
-                  }
-                  _ => self.contextual_arg_type(arg_ty, param.ty),
-                };
-                self.record_expr_type(arg.stx.value.loc, contextual);
-              }
-            }
-          }
-
-          resolution.return_type
-        };
-        if call.stx.optional_chaining {
-          ty = self.store.union(vec![ty, prim.undefined]);
-        }
-        ty
-      }
+      AstExpr::Call(call) => self.check_call_expr(call, None),
       AstExpr::Member(mem) => {
         let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.left);
@@ -2014,6 +1766,308 @@ impl<'a> Checker<'a> {
     };
     self.record_expr_type(expr.loc, ty);
     ty
+  }
+
+  fn recorded_expr_type(&self, loc: Loc) -> Option<TypeId> {
+    let range = loc_to_range(self.file, loc);
+    self
+      .expr_map
+      .get(&range)
+      .and_then(|id| self.expr_types.get(id.0 as usize))
+      .copied()
+  }
+
+  fn check_call_expr(
+    &mut self,
+    call: &Node<parse_js::ast::expr::CallExpr>,
+    contextual_return: Option<TypeId>,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let callee_ty = self.check_expr(&call.stx.callee);
+
+    let call_optional = call.stx.optional_chaining
+      || matches!(
+        call.stx.callee.stx.as_ref(),
+        AstExpr::Member(mem) if mem.stx.optional_chaining
+      )
+      || matches!(
+        call.stx.callee.stx.as_ref(),
+        AstExpr::ComputedMember(mem) if mem.stx.optional_chaining
+      );
+
+    let callee_base = if call_optional {
+      narrow_non_nullish(callee_ty, &self.store).0
+    } else {
+      callee_ty
+    };
+
+    let mut arg_types: Vec<TypeId> = call
+      .stx
+      .arguments
+      .iter()
+      .map(|arg| self.check_expr(&arg.stx.value))
+      .collect();
+    let mut const_arg_types: Vec<TypeId> = call
+      .stx
+      .arguments
+      .iter()
+      .map(|arg| self.const_inference_type(&arg.stx.value))
+      .collect();
+
+    let mut this_arg = match call.stx.callee.stx.as_ref() {
+      AstExpr::Member(mem) => self.recorded_expr_type(mem.stx.left.loc),
+      AstExpr::ComputedMember(mem) => self.recorded_expr_type(mem.stx.object.loc),
+      _ => None,
+    };
+    if call_optional {
+      if let Some(this_arg_ty) = this_arg.as_mut() {
+        *this_arg_ty = narrow_non_nullish(*this_arg_ty, &self.store).0;
+      }
+    }
+
+    let span = Span {
+      file: self.file,
+      range: loc_to_range(self.file, call.loc),
+    };
+
+    let mut ty = if call_optional && callee_base == prim.never {
+      prim.undefined
+    } else {
+      let mut resolution = resolve_call(
+        &self.store,
+        &self.relate,
+        &self.instantiation_cache,
+        callee_base,
+        &arg_types,
+        Some(&const_arg_types),
+        this_arg,
+        contextual_return,
+        span,
+        self.ref_expander,
+      );
+      if let Some(sig_id) = resolution.signature.or(resolution.contextual_signature) {
+        let sig = self.store.signature(sig_id);
+        let mut refined = false;
+        for (idx, arg) in call.stx.arguments.iter().enumerate() {
+          let Some(param) = sig.params.get(idx) else {
+            continue;
+          };
+          let Some(func) = (match arg.stx.value.stx.as_ref() {
+            AstExpr::ArrowFunc(arrow) => Some(&arrow.stx.func),
+            AstExpr::Func(func) => Some(&func.stx.func),
+            _ => None,
+          }) else {
+            continue;
+          };
+
+          let Some(refined_ty) = self.refine_function_expr_with_expected(func, param.ty) else {
+            continue;
+          };
+          if let Some(slot) = arg_types.get_mut(idx) {
+            *slot = refined_ty;
+            refined = true;
+          }
+          if let Some(slot) = const_arg_types.get_mut(idx) {
+            *slot = refined_ty;
+          }
+          self.record_expr_type(arg.stx.value.loc, refined_ty);
+        }
+
+        if refined {
+          let next = resolve_call(
+            &self.store,
+            &self.relate,
+            &self.instantiation_cache,
+            callee_base,
+            &arg_types,
+            Some(&const_arg_types),
+            this_arg,
+            contextual_return,
+            span,
+            self.ref_expander,
+          );
+          if next.diagnostics.is_empty() && next.signature.is_some() {
+            resolution = next;
+          }
+        }
+      }
+
+      let candidate_sigs = callable_signatures(self.store.as_ref(), callee_base);
+      let allow_assignable_fallback = resolution.diagnostics.len() == 1
+        && resolution.diagnostics[0].code.as_str() == codes::NO_OVERLOAD.as_str()
+        && candidate_sigs.len() == 1;
+      let mut reported_assignability = false;
+      if allow_assignable_fallback {
+        if let Some(sig_id) = resolution
+          .contextual_signature
+          .or_else(|| candidate_sigs.first().copied())
+        {
+          let sig = self.store.signature(sig_id);
+          let before = self.diagnostics.len();
+          for (idx, arg) in call.stx.arguments.iter().enumerate() {
+            if let Some(param) = sig.params.get(idx) {
+              let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
+              self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+            }
+          }
+          reported_assignability = self.diagnostics.len() > before;
+        }
+      }
+
+      if !reported_assignability {
+        for diag in &resolution.diagnostics {
+          self.diagnostics.push(diag.clone());
+        }
+      }
+      if resolution.diagnostics.is_empty() {
+        if let Some(sig_id) = resolution.signature {
+          let sig = self.store.signature(sig_id);
+          for (idx, arg) in call.stx.arguments.iter().enumerate() {
+            if let Some(param) = sig.params.get(idx) {
+              let arg_expr = &arg.stx.value;
+              let arg_ty = match arg_expr.stx.as_ref() {
+                AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+                  let contextual = self.check_expr_with_expected(arg_expr, param.ty);
+                  if let Some(slot) = arg_types.get_mut(idx) {
+                    *slot = contextual;
+                  }
+                  contextual
+                }
+                _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
+              };
+              self.check_assignable(arg_expr, arg_ty, param.ty);
+            }
+          }
+          if let TypeKind::Predicate {
+            parameter: Some(param_name),
+            asserted: Some(asserted),
+            asserts: true,
+          } = self.store.type_kind(sig.ret)
+          {
+            let target = sig
+              .params
+              .iter()
+              .enumerate()
+              .find(|(_, p)| p.name == Some(param_name))
+              .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
+            if let Some((idx, _)) = target {
+              if let Some(arg) = call.stx.arguments.get(idx) {
+                if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
+                  self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
+                }
+              }
+            }
+          }
+          let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
+          let has_rest = sig.params.iter().any(|p| p.rest);
+          let max = if has_rest {
+            None
+          } else {
+            Some(sig.params.len())
+          };
+          if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
+            self
+              .diagnostics
+              .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
+          }
+        }
+      }
+      let contextual_sig = resolution
+        .signature
+        .or(resolution.contextual_signature)
+        .or_else(|| candidate_sigs.into_iter().next());
+      if let Some(sig_id) = contextual_sig {
+        let sig = self.store.signature(sig_id);
+        for (idx, arg) in call.stx.arguments.iter().enumerate() {
+          if let Some(param) = sig.params.get(idx) {
+            let arg_ty = arg_types.get(idx).copied().unwrap_or(prim.unknown);
+            let contextual = match arg.stx.value.stx.as_ref() {
+              AstExpr::ArrowFunc(_) | AstExpr::Func(_)
+                if self.first_callable_signature(param.ty).is_some() =>
+              {
+                arg_ty
+              }
+              _ => self.contextual_arg_type(arg_ty, param.ty),
+            };
+            self.record_expr_type(arg.stx.value.loc, contextual);
+          }
+        }
+      }
+
+      resolution.return_type
+    };
+
+    if call_optional {
+      ty = self.store.union(vec![ty, prim.undefined]);
+    }
+    ty
+  }
+
+  fn check_new_expr(
+    &mut self,
+    un: &Node<parse_js::ast::expr::UnaryExpr>,
+    expr_loc: Loc,
+    contextual_return: Option<TypeId>,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let (callee_expr, arg_exprs, span_loc) = match un.stx.argument.stx.as_ref() {
+      AstExpr::Call(call) => (
+        &call.stx.callee,
+        Some(call.stx.arguments.as_slice()),
+        call.loc,
+      ),
+      _ => (&un.stx.argument, None, expr_loc),
+    };
+    let callee_ty = self.check_expr(callee_expr);
+    let arg_types: Vec<TypeId> = arg_exprs
+      .unwrap_or(&[])
+      .iter()
+      .map(|arg| self.check_expr(&arg.stx.value))
+      .collect();
+    let const_arg_types: Vec<TypeId> = arg_exprs
+      .unwrap_or(&[])
+      .iter()
+      .map(|arg| self.const_inference_type(&arg.stx.value))
+      .collect();
+    let span = Span {
+      file: self.file,
+      range: loc_to_range(self.file, span_loc),
+    };
+    let resolution = resolve_construct(
+      &self.store,
+      &self.relate,
+      &self.instantiation_cache,
+      callee_ty,
+      &arg_types,
+      Some(&const_arg_types),
+      None,
+      contextual_return,
+      span,
+      self.ref_expander,
+    );
+    for diag in &resolution.diagnostics {
+      self.diagnostics.push(diag.clone());
+    }
+    if resolution.diagnostics.is_empty() {
+      if let Some(sig_id) = resolution.signature {
+        let sig = self.store.signature(sig_id);
+        if let Some(arg_exprs) = arg_exprs {
+          for (idx, arg) in arg_exprs.iter().enumerate() {
+            if let Some(param) = sig.params.get(idx) {
+              let arg_expr = &arg.stx.value;
+              let arg_ty = match arg_expr.stx.as_ref() {
+                AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+                  self.check_expr_with_expected(arg_expr, param.ty)
+                }
+                _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
+              };
+              self.check_assignable(arg_expr, arg_ty, param.ty);
+            }
+          }
+        }
+      }
+    }
+    resolution.return_type
   }
 
   fn check_jsx_elem(&mut self, elem: &Node<JsxElem>) -> TypeId {
@@ -4432,6 +4486,24 @@ impl<'a> Checker<'a> {
         } else {
           self.check_expr(expr)
         }
+      }
+      AstExpr::Call(call) => {
+        let contextual_return = match self.store.type_kind(expected) {
+          TypeKind::Any | TypeKind::Unknown => None,
+          _ => Some(expected),
+        };
+        let ty = self.check_call_expr(call, contextual_return);
+        self.record_expr_type(expr.loc, ty);
+        ty
+      }
+      AstExpr::Unary(un) if matches!(un.stx.operator, OperatorName::New) => {
+        let contextual_return = match self.store.type_kind(expected) {
+          TypeKind::Any | TypeKind::Unknown => None,
+          _ => Some(expected),
+        };
+        let ty = self.check_new_expr(un, expr.loc, contextual_return);
+        self.record_expr_type(expr.loc, ty);
+        ty
       }
       _ => self.check_expr(expr),
     }
