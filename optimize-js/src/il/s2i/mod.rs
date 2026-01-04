@@ -41,7 +41,15 @@ pub struct HirSourceToInst<'p> {
   pub symbol_to_temp: HashMap<SymbolId, u32>,
   pub break_stack: Vec<u32>,
   pub continue_stack: Vec<u32>,
+  pub label_stack: Vec<LabeledLoopTarget>,
   pub return_label: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LabeledLoopTarget {
+  pub label: NameId,
+  pub break_target: u32,
+  pub continue_target: u32,
 }
 
 impl<'p> HirSourceToInst<'p> {
@@ -58,6 +66,7 @@ impl<'p> HirSourceToInst<'p> {
       symbol_to_temp: HashMap::new(),
       break_stack: Vec::new(),
       continue_stack: Vec::new(),
+      label_stack: Vec::new(),
       return_label: None,
     }
   }
