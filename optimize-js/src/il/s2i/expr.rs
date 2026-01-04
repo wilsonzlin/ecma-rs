@@ -924,6 +924,8 @@ impl<'p> HirSourceToInst<'p> {
       ExprKind::Ident(name) => self.compile_id_expr(expr_id, *name),
       ExprKind::Literal(lit) => self.literal_arg(span, lit),
       ExprKind::This => Ok(Arg::Builtin("this".to_string())),
+      ExprKind::ImportMeta => Ok(Arg::Builtin("import.meta".to_string())),
+      ExprKind::NewTarget => Ok(Arg::Builtin("new.target".to_string())),
       ExprKind::TypeAssertion { expr, .. }
       | ExprKind::NonNull { expr }
       | ExprKind::Satisfies { expr, .. } => self.compile_expr(*expr),
