@@ -107,6 +107,60 @@ const y = x;
 }
 
 #[test]
+fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_export_assignment() {
+  let options = CompilerOptions::default();
+  // Keep bundled libs enabled so primitives like `number` are available without
+  // requiring additional host-provided lib files.
+
+  let entry = FileKey::new("main.ts");
+  let ambient = FileKey::new("ambient_mod.d.ts");
+
+  let mut host = ModuleHost::new(options);
+  host.insert(
+    ambient.clone(),
+    r#"
+export {};
+declare module "pkg" {
+  declare function Foo(): 1;
+  declare namespace Foo {
+    export interface Bar {
+      x: number;
+    }
+  }
+  export = Foo;
+}
+"#,
+  );
+  host.insert(
+    entry.clone(),
+    r#"
+import Foo = require("pkg");
+const y: Foo.Bar = { x: 123 };
+export const z = y.x;
+"#,
+  );
+  // Allow `declare module "pkg"` to augment the resolved module.
+  host.link(entry.clone(), "pkg", ambient.clone());
+  host.link(ambient.clone(), "pkg", ambient.clone());
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&entry).expect("main.ts id");
+  let exports = program.exports_of(entry_id);
+  let z_entry = exports.get("z").expect("export z");
+  let z_ty = z_entry
+    .type_id
+    .or_else(|| z_entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported z");
+  assert_eq!(program.display_type(z_ty).to_string(), "number");
+}
+
+#[test]
 fn import_equals_require_resolves_ambient_export_assignment_through_host_module_mapping() {
   let options = CompilerOptions::default();
   // Keep bundled libs enabled so primitives like literal types are available without
