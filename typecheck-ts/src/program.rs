@@ -1851,13 +1851,13 @@ impl Program {
 
   pub fn definitions_in_file_fallible(&self, file: FileId) -> Result<Vec<DefId>, FatalError> {
     self.with_analyzed_state(|state| {
-      Ok(
-        state
-          .files
-          .get(&file)
-          .map(|f| f.defs.clone())
-          .unwrap_or_default(),
-      )
+      let mut defs = state
+        .files
+        .get(&file)
+        .map(|f| f.defs.clone())
+        .unwrap_or_default();
+      defs.sort_by_key(|id| id.0);
+      Ok(defs)
     })
   }
 
