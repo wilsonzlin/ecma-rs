@@ -114,6 +114,8 @@ struct SemanticsBuilder {
   symbols: BTreeMap<SymbolId, SymbolData>,
   top_scope: ScopeId,
   decl_spans: BTreeMap<SymbolId, DeclSpanInfo>,
+  block_var_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
+  block_lexical_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
   diagnostics: Vec<Diagnostic>,
 }
 
@@ -146,6 +148,8 @@ impl SemanticsBuilder {
       symbols: BTreeMap::new(),
       top_scope,
       decl_spans: BTreeMap::new(),
+      block_var_decl_spans: BTreeMap::new(),
+      block_lexical_decl_spans: BTreeMap::new(),
       diagnostics: Vec::new(),
     }
   }
@@ -175,12 +179,63 @@ impl SemanticsBuilder {
   }
 
   fn intern_name(&mut self, name: &str) -> NameId {
-    let id = *self.name_lookup.entry(name.to_string()).or_insert_with(|| {
-      let id = name_id_for(self.file, name);
-      self.names.entry(id).or_insert_with(|| name.to_string());
-      id
-    });
+    if let Some(id) = self.name_lookup.get(name).copied() {
+      return id;
+    }
+
+    let id = name_id_for(self.file, name);
+    let owned = name.to_string();
+    self.name_lookup.insert(owned.clone(), id);
+    self.names.insert(id, owned);
     id
+  }
+
+  fn record_block_var_decl(&mut self, scope: ScopeId, name: NameId, raw_name: &str, span: TextRange) {
+    let key = (scope, name);
+    if self.block_var_decl_spans.contains_key(&key) {
+      return;
+    }
+    self.block_var_decl_spans.insert(key, span);
+
+    if let Some(prev_lexical) = self.block_lexical_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting lexical and var declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_lexical),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
+  }
+
+  fn record_block_lexical_decl(
+    &mut self,
+    scope: ScopeId,
+    name: NameId,
+    raw_name: &str,
+    span: TextRange,
+  ) {
+    let key = (scope, name);
+    if self.block_lexical_decl_spans.contains_key(&key) {
+      return;
+    }
+    self.block_lexical_decl_spans.insert(key, span);
+
+    if let Some(prev_var) = self.block_var_decl_spans.get(&key).copied() {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0002",
+        format!("Conflicting lexical and var declarations for `{raw_name}`"),
+        Span::new(self.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.file, prev_var),
+        "previous declaration here",
+      ));
+      self.diagnostics.push(diagnostic);
+    }
   }
 
   fn mark_tdz_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
@@ -313,7 +368,7 @@ impl SemanticsBuilder {
   }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum DeclTarget {
   IfNotGlobal,
   NearestClosure,
@@ -348,6 +403,7 @@ struct DeclareVisitor {
   scope_stack: Vec<ScopeId>,
   decl_target_stack: Vec<DeclContext>,
   in_pattern_decl: Vec<bool>,
+  top_level_mode: TopLevelMode,
 }
 
 impl DeclareVisitor {
@@ -359,6 +415,7 @@ impl DeclareVisitor {
       scope_stack: vec![top_scope],
       decl_target_stack: Vec::new(),
       in_pattern_decl: vec![false],
+      top_level_mode: mode,
     }
   }
 
@@ -424,6 +481,32 @@ impl DeclareVisitor {
     ctx: DeclContext,
     span: TextRange,
   ) -> Option<(SymbolId, ScopeId)> {
+    let name_id = self.builder.intern_name(name);
+
+    // Static semantics: `var`-scoped declarations inside a block participate in
+    // the block's `VarDeclaredNames`, so they cannot conflict with any lexical
+    // declarations (`let`/`const`/`class`/block functions in modules) declared in
+    // that same block.
+    if ctx.target == DeclTarget::NearestClosure && !ctx.lexical {
+      for scope_id in self.scope_stack.iter().rev().copied() {
+        let kind = self.builder.scope_kind(scope_id);
+        if kind == ScopeKind::Block {
+          self
+            .builder
+            .record_block_var_decl(scope_id, name_id, name, span);
+        }
+        if kind.is_closure() {
+          break;
+        }
+      }
+    }
+
+    if ctx.lexical && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
+      self
+        .builder
+        .record_block_lexical_decl(self.current_scope(), name_id, name, span);
+    }
+
     let (symbol, scope) = match ctx.target {
       DeclTarget::IfNotGlobal => {
         let scope = self.current_scope();
@@ -552,12 +635,20 @@ impl DeclareVisitor {
 
   fn enter_func_decl_node(&mut self, node: &mut FuncDeclNode) {
     if let Some(name) = &mut node.stx.name {
+      let scope_kind = self.builder.scope_kind(self.current_scope());
+      let is_module_function_decl = self.top_level_mode == TopLevelMode::Module
+        && matches!(scope_kind, ScopeKind::Module | ScopeKind::Block);
+      let target = if is_module_function_decl && scope_kind == ScopeKind::Block {
+        DeclTarget::IfNotGlobal
+      } else {
+        DeclTarget::NearestClosure
+      };
       self.declare_class_or_func_name(
         name,
         DeclContext {
-          target: DeclTarget::NearestClosure,
+          target,
           flags: SymbolFlags::hoisted(),
-          lexical: false,
+          lexical: is_module_function_decl,
         },
       );
     }

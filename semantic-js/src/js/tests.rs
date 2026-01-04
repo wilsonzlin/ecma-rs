@@ -313,6 +313,90 @@ fn class_name_in_computed_key_is_in_tdz() {
 }
 
 #[test]
+fn module_top_level_function_redeclaration_is_reported() {
+  let source = "function f() {} function f() {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(55));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0001");
+  assert_eq!(slice_range(source, &diagnostics[0]), "f");
+}
+
+#[test]
+fn module_top_level_var_function_conflict_is_reported() {
+  let source = "var f = 1; function f() {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(56));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
+  assert_eq!(slice_range(source, &diagnostics[0]), "f");
+}
+
+#[test]
+fn block_var_lexical_conflict_is_reported() {
+  let source = "function wrap(){ { let a = 1; var a = 2; } }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(57));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn nested_block_var_lexical_conflict_is_reported() {
+  let source = "function wrap(){ { let a = 1; { var a = 2; } } }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(58));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn block_function_is_lexical_in_modules() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), ClassOrFuncNameNode(enter))]
+  struct FooCollector {
+    decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl FooCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "foo" {
+        self.decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "foo" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "function outer(){ if(true){ function foo(){} foo; } foo; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(59));
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+
+  let mut collector = FooCollector::default();
+  ast.drive_mut(&mut collector);
+  let decl = collector.decl.expect("expected foo declaration symbol");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 2);
+  assert_eq!(collector.uses[0].1, Some(decl));
+  assert_eq!(collector.uses[1].1, None);
+}
+
+#[test]
 fn hoisted_var_uses_are_not_in_tdz() {
   let mut ast = parse("console.log(x); var x = 1;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
