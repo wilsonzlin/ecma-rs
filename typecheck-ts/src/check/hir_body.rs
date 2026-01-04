@@ -3055,8 +3055,13 @@ impl<'a> Checker<'a> {
       let mut props_ty = sig.params.first().map(|p| p.ty).unwrap_or(empty_props);
       let mut ret_ty = sig.ret;
       if !sig.type_params.is_empty() && !sig.params.is_empty() {
-        let inference =
-          infer_type_arguments_for_call(&self.store, &self.relate, &sig, &args, contextual_return_ty);
+        let inference = infer_type_arguments_for_call(
+          &self.store,
+          &self.relate,
+          &sig,
+          &args,
+          contextual_return_ty,
+        );
         let mut substituter = Substituter::new(Arc::clone(&self.store), inference.substitutions);
         props_ty = substituter.substitute_type(props_ty);
         ret_ty = substituter.substitute_type(ret_ty);
@@ -4000,7 +4005,11 @@ impl<'a> Checker<'a> {
     self.store.intern_type(TypeKind::Callable { overloads })
   }
 
-  fn array_literal_context(&self, expected: TypeId, arity: usize) -> Option<ArrayLiteralContext> {
+  fn array_literal_context_candidates(
+    &self,
+    expected: TypeId,
+    arity: usize,
+  ) -> Vec<ArrayLiteralContext> {
     let mut queue: VecDeque<TypeId> = VecDeque::from([expected]);
     let mut seen = HashSet::new();
     let mut tuples: Vec<Vec<types_ts_interned::TupleElem>> = Vec::new();
@@ -4030,24 +4039,19 @@ impl<'a> Checker<'a> {
       }
     }
 
-    if !tuples.is_empty() {
-      let mut best: Option<((u32, usize), Vec<types_ts_interned::TupleElem>)> = None;
-      for tuple in tuples.into_iter() {
-        let len = tuple.len();
-        let diff = len.abs_diff(arity) as u32;
-        let key = (diff, len);
-        let replace = match best.as_ref() {
-          Some((best_key, _)) => key < *best_key,
-          None => true,
-        };
-        if replace {
-          best = Some((key, tuple));
-        }
-      }
-      return best.map(|(_, elems)| ArrayLiteralContext::Tuple(elems));
-    }
+    tuples.sort_by_key(|tuple| {
+      let len = tuple.len();
+      let diff = len.abs_diff(arity) as u32;
+      (diff, len)
+    });
 
-    arrays.into_iter().next().map(ArrayLiteralContext::Array)
+    arrays.sort_by(|a, b| self.store.type_cmp(*a, *b));
+    arrays.dedup();
+
+    let mut out = Vec::new();
+    out.extend(tuples.into_iter().map(ArrayLiteralContext::Tuple));
+    out.extend(arrays.into_iter().map(ArrayLiteralContext::Array));
+    out
   }
 
   fn expected_contains_primitive(&self, expected: TypeId, primitive: TypeId) -> bool {
@@ -4185,9 +4189,34 @@ impl<'a> Checker<'a> {
       })
       .collect();
     let arity = elems.len();
-    let Some(context) = self.array_literal_context(expected, arity) else {
+
+    let contexts = self.array_literal_context_candidates(expected, arity);
+    if contexts.is_empty() {
       return self.array_literal_type(arr);
-    };
+    }
+
+    let selected = contexts
+      .iter()
+      .enumerate()
+      .find_map(|(context_idx, context)| {
+        let ok = elems.iter().enumerate().all(|(idx, expr)| {
+          let expected_elem = match context {
+            ArrayLiteralContext::Tuple(expected_elems) => expected_elems
+              .get(idx)
+              .map(|e| e.ty)
+              .unwrap_or(prim.unknown),
+            ArrayLiteralContext::Array(expected_elem) => *expected_elem,
+          };
+          !self.has_contextual_excess_properties(expr, expected_elem)
+        });
+        ok.then_some(context_idx)
+      })
+      .unwrap_or(0);
+
+    let context = contexts
+      .into_iter()
+      .nth(selected)
+      .unwrap_or_else(|| unreachable!("contexts non-empty; selected index {selected} must exist"));
 
     match context {
       ArrayLiteralContext::Tuple(expected_elems) => {
@@ -5308,38 +5337,32 @@ impl<'a> Checker<'a> {
             })
             .collect();
           let arity = elems.len();
-          let Some(context) = checker.array_literal_context(expected, arity) else {
+          let contexts = checker.array_literal_context_candidates(expected, arity);
+          if contexts.is_empty() {
             return false;
-          };
+          }
 
-          match context {
-            ArrayLiteralContext::Tuple(expected_elems) => {
-              for (idx, expr) in elems.into_iter().enumerate() {
-                let expected_elem = expected_elems
-                  .get(idx)
-                  .map(|e| e.ty)
-                  .unwrap_or(prim.unknown);
-                if expected_elem == prim.unknown {
-                  continue;
-                }
-                if inner(checker, expr, expected_elem, depth + 1) {
-                  return true;
-                }
+          for context in contexts.into_iter() {
+            let passes = match context {
+              ArrayLiteralContext::Tuple(expected_elems) => {
+                elems.iter().enumerate().all(|(idx, expr)| {
+                  let expected_elem = expected_elems
+                    .get(idx)
+                    .map(|e| e.ty)
+                    .unwrap_or(prim.unknown);
+                  !inner(checker, expr, expected_elem, depth + 1)
+                })
               }
-            }
-            ArrayLiteralContext::Array(expected_elem) => {
-              if expected_elem == prim.unknown {
-                return false;
-              }
-              for expr in elems.into_iter() {
-                if inner(checker, expr, expected_elem, depth + 1) {
-                  return true;
-                }
-              }
+              ArrayLiteralContext::Array(expected_elem) => elems
+                .iter()
+                .all(|expr| !inner(checker, expr, expected_elem, depth + 1)),
+            };
+            if passes {
+              return false;
             }
           }
 
-          false
+          true
         }
         _ => false,
       }
