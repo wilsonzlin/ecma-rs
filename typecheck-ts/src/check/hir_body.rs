@@ -1220,6 +1220,7 @@ impl<'a> Checker<'a> {
     if !ctx.is_static
       && matches!(obj_kind, CheckObject::This)
       && !self.use_define_for_class_fields
+      && !prop.starts_with('#')
       && self
         .index
         .instance_prop_declared_in_ancestor(ctx.class_index, prop)
@@ -2911,9 +2912,11 @@ impl<'a> Checker<'a> {
           let arity = arr.stx.elements.len();
           let mut expected_elems = Vec::with_capacity(arity);
           for offset in 0..arity {
-            let Some(param_ty) =
-              expected_arg_type_at(self.store.as_ref(), &sig, param_index.saturating_add(offset))
-            else {
+            let Some(param_ty) = expected_arg_type_at(
+              self.store.as_ref(),
+              &sig,
+              param_index.saturating_add(offset),
+            ) else {
               expected_elems.clear();
               break;
             };
