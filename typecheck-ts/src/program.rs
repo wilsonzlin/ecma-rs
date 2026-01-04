@@ -12943,6 +12943,10 @@ impl ProgramState {
       }
     }
 
+    if self.snapshot_loaded {
+      return None;
+    }
+
     if let Some(init) = crate::db::var_initializer(&self.typecheck_db, def) {
       if std::env::var("DEBUG_OVERLOAD").is_ok() {
         if let Some(data) = self.def_data.get(&def) {

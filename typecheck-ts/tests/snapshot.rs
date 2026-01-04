@@ -476,6 +476,50 @@ fn snapshot_restoration_preserves_expr_span_and_id_queries() {
 }
 
 #[test]
+fn snapshot_restoration_var_initializer_does_not_reparse() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let total_def = program
+    .exports_of(entry_id)
+    .get("total")
+    .and_then(|entry| entry.def)
+    .expect("total def");
+  let expected = program.var_initializer(total_def).expect("var initializer");
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let parses_before = parse_call_count();
+  let restored_init = restored
+    .var_initializer(total_def)
+    .expect("restored initializer");
+  let parses_after = parse_call_count();
+  assert_eq!(restored_init.body, expected.body);
+  assert_eq!(restored_init.expr, expected.expr);
+  assert_eq!(restored_init.decl_kind, expected.decl_kind);
+  assert_eq!(restored_init.span, expected.span);
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "var_initializer should not trigger salsa parsing when restored from snapshot"
+  );
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));
