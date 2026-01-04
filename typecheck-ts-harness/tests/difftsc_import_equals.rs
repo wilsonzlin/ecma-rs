@@ -21,6 +21,10 @@ fn this_param_dts_matches_baseline_type_facts() {
     .arg(&suite)
     .arg("--manifest")
     .arg(&manifest)
+    // Run difftsc with limited parallelism to keep this integration test
+    // comfortably below its wall-clock timeout under parallel `cargo test`.
+    .arg("--jobs")
+    .arg("1")
     .arg("--use-baselines")
     .arg("--compare-rust")
     .arg("--allow-mismatches")

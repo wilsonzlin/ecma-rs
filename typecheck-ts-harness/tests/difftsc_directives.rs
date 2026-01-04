@@ -22,6 +22,10 @@ fn difftsc_honors_fixture_directives_for_rust_runs() {
     .arg("difftsc")
     .arg("--suite")
     .arg(&suite)
+    // Avoid oversubscribing CPU/memory when multiple harness integration tests
+    // run in parallel under the default Rust test runner settings.
+    .arg("--jobs")
+    .arg("1")
     .arg("--use-baselines")
     .arg("--compare-rust")
     .arg("--allow-mismatches")

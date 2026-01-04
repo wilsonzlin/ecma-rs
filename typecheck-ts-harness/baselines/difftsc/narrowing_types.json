@@ -31,6 +31,69 @@
         "line": 2,
         "column": 18,
         "type": "string"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 378,
+        "line": 15,
+        "column": 17,
+        "type": "string"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 428,
+        "line": 19,
+        "column": 15,
+        "type": "number"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 564,
+        "line": 26,
+        "column": 19,
+        "type": "string"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 618,
+        "line": 29,
+        "column": 19,
+        "type": "number"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 739,
+        "line": 36,
+        "column": 13,
+        "type": "string"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 769,
+        "line": 38,
+        "column": 13,
+        "type": "number"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 921,
+        "line": 47,
+        "column": 9,
+        "type": "Box"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1036,
+        "line": 54,
+        "column": 7,
+        "type": "{ foo: string }"
+      },
+      {
+        "file": "narrowing_types.ts",
+        "offset": 1139,
+        "line": 60,
+        "column": 10,
+        "type": "null | undefined"
       }
     ]
   }

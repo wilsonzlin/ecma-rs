@@ -6835,9 +6835,19 @@ impl<'a> FlowBodyChecker<'a> {
         self.store.union(vec![left_ty, right_ty])
       }
       BinaryOp::NullishCoalescing => {
-        let right_ty = self.eval_expr(right, env).0;
-        let (nonnullish, _) = narrow_non_nullish(left_ty, &self.store);
-        self.store.union(vec![nonnullish, right_ty])
+        let (present, nullish) = self.split_nullish(left_ty);
+        let mut right_env = env.clone();
+        if nullish != self.store.primitive_ids().never {
+          if let Some(binding) = self.ident_binding(left) {
+            right_env.set(binding, nullish);
+          }
+        }
+        let right_ty = self.eval_expr(right, &mut right_env).0;
+        if nullish == self.store.primitive_ids().never {
+          present
+        } else {
+          self.store.union(vec![present, right_ty])
+        }
       }
       _ => {
         let right_ty = self.eval_expr(right, env).0;
@@ -6899,8 +6909,12 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
-    if let Some((target, prop, target_ty)) = self.discriminant_member(left) {
+    if let Some((target, prop, object_expr)) = self.discriminant_member(left) {
       if let Some(lit) = self.literal_value(right) {
+        let target_ty = env
+          .get(target)
+          .or_else(|| self.initial.get(&target).copied())
+          .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
         if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
@@ -6928,15 +6942,20 @@ impl<'a> FlowBodyChecker<'a> {
             }
           }
           _ => {
-            let (yes, no) = narrow_by_discriminant(target_ty, &prop, &lit, &self.store);
+            let (yes, no) =
+              narrow_by_discriminant(target_ty, &prop, &lit, &self.store, self.ref_expander);
             apply_narrowing(out, negate, target, yes, no);
             return;
           }
         }
       }
     }
-    if let Some((target, prop, target_ty)) = self.discriminant_member(right) {
+    if let Some((target, prop, object_expr)) = self.discriminant_member(right) {
       if let Some(lit) = self.literal_value(left) {
+        let target_ty = env
+          .get(target)
+          .or_else(|| self.initial.get(&target).copied())
+          .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
         if let Some(prop_ty) = self.object_prop_type(target_ty, &prop) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
@@ -6964,7 +6983,8 @@ impl<'a> FlowBodyChecker<'a> {
             }
           }
           _ => {
-            let (yes, no) = narrow_by_discriminant(target_ty, &prop, &lit, &self.store);
+            let (yes, no) =
+              narrow_by_discriminant(target_ty, &prop, &lit, &self.store, self.ref_expander);
             apply_narrowing(out, negate, target, yes, no);
             return;
           }
@@ -7439,15 +7459,14 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn discriminant_member(&self, expr_id: ExprId) -> Option<(FlowBindingId, String, TypeId)> {
+  fn discriminant_member(&self, expr_id: ExprId) -> Option<(FlowBindingId, String, ExprId)> {
     if let ExprKind::Member(MemberExpr {
       object, property, ..
     }) = &self.body.exprs[expr_id.0 as usize].kind
     {
       if let Some(binding) = self.ident_binding(*object) {
         let prop = self.member_property_name(property)?;
-        let obj_ty = self.expr_types[object.0 as usize];
-        return Some((binding, prop, obj_ty));
+        return Some((binding, prop, *object));
       }
     }
     None
@@ -8388,13 +8407,16 @@ impl<'a> FlowBodyChecker<'a> {
         let lit = self.literal_value(test)?;
         Some(narrow_by_literal(ty, &lit, &self.store))
       }
-      SwitchDiscriminant::Member { prop, .. } => match self.literal_value(test) {
-        Some(LiteralValue::String(value)) => {
-          let lit = LiteralValue::String(value);
-          Some(narrow_by_discriminant(ty, prop, &lit, &self.store))
-        }
-        _ => None,
-      },
+      SwitchDiscriminant::Member { prop, .. } => {
+        let lit = self.literal_value(test)?;
+        Some(narrow_by_discriminant(
+          ty,
+          prop,
+          &lit,
+          &self.store,
+          self.ref_expander,
+        ))
+      }
       SwitchDiscriminant::Typeof { .. } => match self.literal_value(test) {
         Some(LiteralValue::String(value)) => Some(narrow_by_typeof(ty, &value, &self.store)),
         _ => None,

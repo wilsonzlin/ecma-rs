@@ -19,6 +19,10 @@ fn difftsc_uses_canonical_file_paths() {
     .arg("difftsc")
     .arg("--suite")
     .arg(&suite)
+    // Keep the difftsc CLI lightweight so it stays within the test timeout even
+    // when the cargo test harness runs multiple integration tests in parallel.
+    .arg("--jobs")
+    .arg("1")
     .arg("--use-baselines")
     .arg("--compare-rust")
     .arg("--allow-mismatches")

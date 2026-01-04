@@ -437,6 +437,84 @@ fn narrows_discriminants() {
 }
 
 #[test]
+fn discriminant_narrowing_expands_refs() {
+  let src = r#"
+function pick(val) {
+  if (val.kind === "foo") {
+    return val.value;
+  }
+  return val.value;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+  let foo_obj = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let bar_obj = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
+  let foo_def = DefId(0);
+  let bar_def = DefId(1);
+  let foo_ref = store.intern_type(TypeKind::Ref {
+    def: foo_def,
+    args: Vec::new(),
+  });
+  let bar_ref = store.intern_type(TypeKind::Ref {
+    def: bar_def,
+    args: Vec::new(),
+  });
+
+  struct Expander {
+    foo_def: DefId,
+    foo_ty: TypeId,
+    bar_def: DefId,
+    bar_ty: TypeId,
+  }
+
+  impl RelateTypeExpander for Expander {
+    fn expand_ref(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<TypeId> {
+      if def == self.foo_def {
+        Some(self.foo_ty)
+      } else if def == self.bar_def {
+        Some(self.bar_ty)
+      } else {
+        None
+      }
+    }
+  }
+
+  let expander = Expander {
+    foo_def,
+    foo_ty: foo_obj,
+    bar_def,
+    bar_ty: bar_obj,
+  };
+
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "val"),
+    store.union(vec![foo_ref, bar_ref]),
+  );
+
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    Some(&expander),
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
 fn narrows_numeric_discriminants() {
   let src = "function f(x: { kind: 0, v: string } | { kind: 1, v: number }) { if (x.kind === 0) { return x.v; } else { return x.v; } }";
   let lowered = lower_from_source(src).expect("lower");
