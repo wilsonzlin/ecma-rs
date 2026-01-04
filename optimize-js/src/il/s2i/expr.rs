@@ -175,6 +175,8 @@ impl<'p> HirSourceToInst<'p> {
             AssignOp::SubAssign => BinOp::Sub,
             AssignOp::MulAssign => BinOp::Mul,
             AssignOp::DivAssign => BinOp::Div,
+            AssignOp::RemAssign => BinOp::Mod,
+            AssignOp::ExponentAssign => BinOp::Exp,
             _ => {
               return Err(unsupported_syntax(
                 span,
@@ -238,6 +240,8 @@ impl<'p> HirSourceToInst<'p> {
             AssignOp::SubAssign => BinOp::Sub,
             AssignOp::MulAssign => BinOp::Mul,
             AssignOp::DivAssign => BinOp::Div,
+            AssignOp::RemAssign => BinOp::Mod,
+            AssignOp::ExponentAssign => BinOp::Exp,
             _ => {
               return Err(unsupported_syntax(
                 span,
@@ -292,6 +296,46 @@ impl<'p> HirSourceToInst<'p> {
     Ok(Arg::Var(res_tmp_var))
   }
 
+  pub fn compile_nullish_coalescing_expr(
+    &mut self,
+    left: ExprId,
+    right: ExprId,
+  ) -> OptimizeResult<Arg> {
+    if self.expr_excludes_nullish(left) {
+      return self.compile_expr(left);
+    }
+
+    let converge_label_id = self.c_label.bump();
+    let res_tmp_var = self.c_temp.bump();
+
+    let left_arg = self.compile_expr(left)?;
+    self.out.push(Inst::var_assign(res_tmp_var, left_arg));
+
+    let is_nullish_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::bin(
+      is_nullish_tmp_var,
+      Arg::Var(res_tmp_var),
+      BinOp::LooseEq,
+      Arg::Const(Const::Null),
+    ));
+    self.out.push(Inst::cond_goto(
+      Arg::Var(is_nullish_tmp_var),
+      DUMMY_LABEL,
+      converge_label_id,
+    ));
+
+    let right_arg = self.compile_expr(right)?;
+    self.out.push(Inst::var_assign(res_tmp_var, right_arg));
+    self.out.push(Inst::label(converge_label_id));
+
+    Ok(Arg::Var(res_tmp_var))
+  }
+
+  pub fn compile_comma_expr(&mut self, left: ExprId, right: ExprId) -> OptimizeResult<Arg> {
+    let _ = self.compile_expr(left)?;
+    self.compile_expr(right)
+  }
+
   pub fn compile_binary_expr(
     &mut self,
     span: Loc,
@@ -301,6 +345,12 @@ impl<'p> HirSourceToInst<'p> {
   ) -> OptimizeResult<Arg> {
     if matches!(operator, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
       return self.compile_logical_expr(span, operator, left, right);
+    }
+    if operator == BinaryOp::NullishCoalescing {
+      return self.compile_nullish_coalescing_expr(left, right);
+    }
+    if operator == BinaryOp::Comma {
+      return self.compile_comma_expr(left, right);
     }
 
     let left_expr = &self.body.exprs[left.0 as usize];
@@ -392,30 +442,19 @@ impl<'p> HirSourceToInst<'p> {
       }
     }
 
-    if matches!(
-      operator,
-      BinaryOp::NullishCoalescing
-        | BinaryOp::BitAnd
-        | BinaryOp::BitOr
-        | BinaryOp::BitXor
-        | BinaryOp::Instanceof
-        | BinaryOp::In
-        | BinaryOp::Comma
-    ) {
-      return Err(unsupported_syntax(
-        span,
-        format!("unsupported binary operator {operator:?}"),
-      ));
-    }
     let op = match operator {
       BinaryOp::Add => BinOp::Add,
       BinaryOp::Divide => BinOp::Div,
       BinaryOp::LessThan => BinOp::Lt,
+      BinaryOp::LessEqual => BinOp::Leq,
       BinaryOp::Multiply => BinOp::Mul,
+      BinaryOp::Remainder => BinOp::Mod,
+      BinaryOp::Exponent => BinOp::Exp,
       BinaryOp::StrictEquality => BinOp::StrictEq,
       BinaryOp::StrictInequality => BinOp::NotStrictEq,
       BinaryOp::Subtract => BinOp::Sub,
       BinaryOp::GreaterThan => BinOp::Gt,
+      BinaryOp::GreaterEqual => BinOp::Geq,
       BinaryOp::Equality if left_nullish || right_nullish => BinOp::LooseEq,
       BinaryOp::Inequality if left_nullish || right_nullish => BinOp::NotLooseEq,
       _ => {

@@ -85,6 +85,20 @@ fn typed_optional_chaining_is_elided_for_non_nullish_union() {
 }
 
 #[test]
+fn typed_nullish_coalescing_is_elided_when_left_is_non_nullish() {
+  let src = r#"
+    declare function sideEffect(): number;
+    console.log(console ?? sideEffect());
+  "#;
+  let expected_src = "console.log(console);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_null_check_is_folded_when_operand_cannot_be_nullish() {
   let src = r#"
     if (console === null) {
