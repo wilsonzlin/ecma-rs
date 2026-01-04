@@ -2,6 +2,7 @@ use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span
 use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
+use ::semantic_js::ts as sem_ts;
 use ahash::AHashSet;
 use hir_js::{
   BinaryOp as HirBinaryOp, BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind,
@@ -27,7 +28,6 @@ use parse_js::{
   parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
   ParseOptions as JsParseOptions, SourceType as JsSourceType,
 };
-use ::semantic_js::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
@@ -2174,6 +2174,20 @@ impl Program {
   /// Span for a pattern, if available.
   pub fn pat_span(&self, body: BodyId, pat: PatId) -> Option<Span> {
     match self.with_analyzed_state(|state| {
+      if state.snapshot_loaded {
+        let Some(meta) = state.body_map.get(&body) else {
+          return Ok(None);
+        };
+        if let Some(result) = state.body_results.get(&body) {
+          if let Some(range) = result.pat_span(pat) {
+            return Ok(Some(Span {
+              file: meta.file,
+              range,
+            }));
+          }
+        }
+      }
+
       Ok(state.body_map.get(&body).and_then(|meta| {
         meta.hir.and_then(|hir_id| {
           state

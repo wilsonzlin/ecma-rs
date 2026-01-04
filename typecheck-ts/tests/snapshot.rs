@@ -286,6 +286,54 @@ fn snapshot_restoration_span_queries_do_not_reparse() {
 }
 
 #[test]
+fn snapshot_restoration_preserves_pat_span_queries() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
+  let top_body = program.file_body(entry_id).expect("top-level body");
+  let result = program.check_body(top_body);
+  let total_start = entry_source.find("total").expect("total offset") as u32;
+  let total_end = total_start + "total".len() as u32;
+  let expected = typecheck_ts::TextRange::new(total_start, total_end);
+  let pat_index = result
+    .pat_spans()
+    .iter()
+    .position(|span| *span == expected)
+    .expect("pat span for total");
+  let pat_id = typecheck_ts::PatId(pat_index as u32);
+
+  let span = program.pat_span(top_body, pat_id).expect("pat span");
+  assert_eq!(span.file, entry_id);
+  assert_eq!(span.range, expected);
+
+  let snapshot = program.snapshot();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
+  let restored_body = restored
+    .file_body(restored_entry)
+    .expect("restored top body");
+  assert_eq!(restored_body, top_body);
+  let restored_span = restored
+    .pat_span(restored_body, pat_id)
+    .expect("restored pat span");
+  assert_eq!(restored_span.file, restored_entry);
+  assert_eq!(restored_span.range, expected);
+}
+
+#[test]
 fn snapshot_serialization_is_deterministic() {
   let mut host = MemoryHost::default();
   let key = key(FileId(10));
