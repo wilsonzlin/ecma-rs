@@ -20,6 +20,7 @@ use crate::TypeKind;
 use crate::TypeOptions;
 use crate::TypeStore;
 use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -32,7 +33,7 @@ thread_local! {
   static NORMALIZE_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum RelationKind {
   Assignable,
   Comparable,
@@ -59,7 +60,7 @@ pub struct RelationResult {
   pub reason: Option<ReasonNode>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReasonNode {
   pub src: TypeId,
   pub dst: TypeId,
@@ -406,19 +407,19 @@ impl<'a> RelateCtx<'a> {
       mode,
     };
     if let Some(hit) = self.cache.get(&key) {
+      let record = record && self.take_reason_slot();
       return RelationResult {
         result: hit,
-        reason: record
-          .then(|| self.cached_reason(key, hit, depth))
-          .flatten(),
+        reason: self.cached_reason(record, key, hit, depth),
       };
     }
     if self.in_progress.borrow().contains(&key) {
       // Structural relations in TypeScript assume success on cycles to break
       // infinite recursion. We mirror that here.
+      let record = record && self.take_reason_slot();
       return RelationResult {
         result: true,
-        reason: record.then(|| self.cycle_reason(key, depth)).flatten(),
+        reason: self.cycle_reason(record, key, depth),
       };
     }
 
@@ -435,6 +436,7 @@ impl<'a> RelateCtx<'a> {
             (&src_kind, &dst_kind),
             (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) if a == b
           );
+          let record = record && self.take_reason_slot();
           RelationResult {
             result: res,
             reason: self.join_reasons(
@@ -452,6 +454,7 @@ impl<'a> RelateCtx<'a> {
             forward
           } else {
             let backward = self.assignable(dst, src, mode, record, depth + 1);
+            let record = record && self.take_reason_slot();
             RelationResult {
               result: backward.result,
               reason: self.join_reasons(
@@ -473,6 +476,7 @@ impl<'a> RelateCtx<'a> {
         } else {
           let backward = self.assignable(dst, src, mode, record, depth + 1);
           let res = forward.result && !backward.result;
+          let record = record && self.take_reason_slot();
           RelationResult {
             result: res,
             reason: self.join_reasons(
@@ -493,12 +497,18 @@ impl<'a> RelateCtx<'a> {
     outcome
   }
 
-  fn cached_reason(&self, key: RelationKey, result: bool, depth: usize) -> Option<ReasonNode> {
-    self.join_reasons(true, key, Vec::new(), result, Some("cached".into()), depth)
+  fn cached_reason(
+    &self,
+    record: bool,
+    key: RelationKey,
+    result: bool,
+    depth: usize,
+  ) -> Option<ReasonNode> {
+    self.join_reasons(record, key, Vec::new(), result, Some("cached".into()), depth)
   }
 
-  fn cycle_reason(&self, key: RelationKey, depth: usize) -> Option<ReasonNode> {
-    self.join_reasons(true, key, Vec::new(), true, Some("cycle".into()), depth)
+  fn cycle_reason(&self, record: bool, key: RelationKey, depth: usize) -> Option<ReasonNode> {
+    self.join_reasons(record, key, Vec::new(), true, Some("cycle".into()), depth)
   }
 
   fn join_reasons(
@@ -510,7 +520,7 @@ impl<'a> RelateCtx<'a> {
     note: Option<String>,
     depth: usize,
   ) -> Option<ReasonNode> {
-    if !record || !self.take_reason_slot() {
+    if !record {
       return None;
     }
     let mut note = note;
@@ -559,6 +569,7 @@ impl<'a> RelateCtx<'a> {
     };
 
     if src == dst {
+      let record = record && self.take_reason_slot();
       return RelationResult {
         result: true,
         reason: self.join_reasons(
@@ -576,6 +587,7 @@ impl<'a> RelateCtx<'a> {
       let normalized_src = self.normalize_type(src);
       let normalized_dst = self.normalize_type(dst);
       if normalized_src != src || normalized_dst != dst {
+        let record = record && self.take_reason_slot();
         let related = self.relate_internal(
           normalized_src,
           normalized_dst,
@@ -621,6 +633,7 @@ impl<'a> RelateCtx<'a> {
     }
 
     if let Some(res) = self.assignable_special(&src_kind, &dst_kind) {
+      let record = record && self.take_reason_slot();
       return RelationResult {
         result: res,
         reason: self.join_reasons(record, key, Vec::new(), res, Some("special".into()), depth),
@@ -629,6 +642,7 @@ impl<'a> RelateCtx<'a> {
 
     if let TypeKind::Ref { def, args } = &src_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
+        let record = record && self.take_reason_slot();
         let related = self.relate_internal(
           expanded,
           dst,
@@ -652,6 +666,7 @@ impl<'a> RelateCtx<'a> {
     }
     if let TypeKind::Ref { def, args } = &dst_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
+        let record = record && self.take_reason_slot();
         let related = self.relate_internal(
           src,
           expanded,
@@ -676,6 +691,7 @@ impl<'a> RelateCtx<'a> {
 
     // Unions
     if let TypeKind::Union(srcs) = &src_kind {
+      let record = record && self.take_reason_slot();
       let mut children = Vec::new();
       for member in srcs {
         let related = self.relate_internal(
@@ -716,6 +732,7 @@ impl<'a> RelateCtx<'a> {
       };
     }
     if let TypeKind::Union(dsts) = &dst_kind {
+      let record = record && self.take_reason_slot();
       let mut attempts = Vec::new();
       for member in dsts {
         let related = self.relate_internal(
@@ -759,6 +776,7 @@ impl<'a> RelateCtx<'a> {
 
     // Intersections
     if let TypeKind::Intersection(dsts) = &dst_kind {
+      let record = record && self.take_reason_slot();
       let mut children = Vec::new();
       for member in dsts {
         let related = self.relate_internal(
@@ -800,6 +818,7 @@ impl<'a> RelateCtx<'a> {
     }
 
     if let TypeKind::Intersection(srcs) = &src_kind {
+      let record = record && self.take_reason_slot();
       if let TypeKind::Object(dst_obj) = &dst_kind {
         if let Some(merged) = self.merge_intersection(srcs) {
           let related = self.relate_object(src, dst, merged, *dst_obj, mode, record, depth + 1);
@@ -860,6 +879,7 @@ impl<'a> RelateCtx<'a> {
     match (&src_kind, &dst_kind) {
       (TypeKind::BooleanLiteral(a), TypeKind::BooleanLiteral(b)) => {
         let res = a == b;
+        let record = record && self.take_reason_slot();
         RelationResult {
           result: res,
           reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
@@ -867,6 +887,7 @@ impl<'a> RelateCtx<'a> {
       }
       (TypeKind::NumberLiteral(a), TypeKind::NumberLiteral(b)) => {
         let res = a == b;
+        let record = record && self.take_reason_slot();
         RelationResult {
           result: res,
           reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
@@ -874,6 +895,7 @@ impl<'a> RelateCtx<'a> {
       }
       (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => {
         let res = a == b;
+        let record = record && self.take_reason_slot();
         RelationResult {
           result: res,
           reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
@@ -881,6 +903,7 @@ impl<'a> RelateCtx<'a> {
       }
       (TypeKind::BigIntLiteral(a), TypeKind::BigIntLiteral(b)) => {
         let res = a == b;
+        let record = record && self.take_reason_slot();
         RelationResult {
           result: res,
           reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
@@ -906,6 +929,7 @@ impl<'a> RelateCtx<'a> {
         depth + 1,
       ),
       (TypeKind::Array { ty: src_elem, .. }, TypeKind::Object(dst_obj)) => {
+        let record = record && self.take_reason_slot();
         let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
         // `object` (keyword) is represented as an empty structural object type.
         // Arrays (and tuples) are objects in TypeScript, so they are assignable
@@ -970,6 +994,7 @@ impl<'a> RelateCtx<'a> {
         }
       }
       (TypeKind::Tuple(_), TypeKind::Object(dst_obj)) => {
+        let record = record && self.take_reason_slot();
         let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
         let res = dst_shape.properties.is_empty()
           && dst_shape.call_signatures.is_empty()
@@ -1008,17 +1033,20 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::Object(src_obj), TypeKind::Object(dst_obj)) => {
         self.relate_object(src, dst, *src_obj, *dst_obj, mode, record, depth + 1)
       }
-      _ => RelationResult {
-        result: false,
-        reason: self.join_reasons(
-          record,
-          key,
-          Vec::new(),
-          false,
-          Some("structural".into()),
-          depth,
-        ),
-      },
+      _ => {
+        let record = record && self.take_reason_slot();
+        RelationResult {
+          result: false,
+          reason: self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            false,
+            Some("structural".into()),
+            depth,
+          ),
+        }
+      }
     }
   }
 
@@ -1325,6 +1353,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     if !dst_readonly && src_readonly {
       return RelationResult {
         result: false,
@@ -1369,6 +1398,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     // Array -> fixed tuple is not assignable because an array type cannot
     // statically guarantee the tuple's maximum length.
     //
@@ -1546,6 +1576,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     if !dst_readonly && src_elems.iter().any(|e| e.readonly) {
       return RelationResult {
         result: false,
@@ -1614,6 +1645,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     let mut children = Vec::new();
     let src_required = src_elems.iter().filter(|e| !e.optional && !e.rest).count();
     let dst_required = dst_elems.iter().filter(|e| !e.optional && !e.rest).count();
@@ -1879,6 +1911,7 @@ impl<'a> RelateCtx<'a> {
       kind: RelationKind::Assignable,
       mode,
     };
+    let record = record && self.take_reason_slot();
     let mut children = Vec::new();
     for dst_sig in dst_overloads {
       let dst_sig_data = self.store.signature(*dst_sig);
@@ -1935,6 +1968,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     let dst_shape = self.store.shape(self.store.object(dst_obj).shape);
     if !dst_shape.properties.is_empty()
       || !dst_shape.construct_signatures.is_empty()
@@ -1974,6 +2008,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     let src_shape = self.store.shape(self.store.object(src_obj).shape);
     if !src_shape.properties.is_empty()
       || !src_shape.construct_signatures.is_empty()
@@ -2012,6 +2047,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let record = record && self.take_reason_slot();
     let (src_reason_ty, dst_reason_ty) = if record {
       (
         self.store.intern_type(TypeKind::Callable {
@@ -2306,6 +2342,7 @@ impl<'a> RelateCtx<'a> {
       kind: RelationKind::Assignable,
       mode,
     };
+    let record = record && self.take_reason_slot();
     let mut children: Vec<Option<ReasonNode>> = Vec::new();
 
     let src_shape = self.store.shape(self.store.object(src_obj).shape);

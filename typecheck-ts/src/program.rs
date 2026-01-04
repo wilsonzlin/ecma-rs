@@ -220,6 +220,12 @@ pub struct TypeDisplay {
   resolver: Option<Arc<dyn Fn(tti::DefId) -> Option<String> + Send + Sync>>,
 }
 
+/// Structured explanation for why one type is not assignable to another.
+///
+/// This is powered by the `types-ts-interned` relation engine and is intended
+/// for diagnostics, debugging, and tooling (e.g. CLI output).
+pub type ExplainTree = tti::ReasonNode;
+
 impl std::fmt::Display for TypeDisplay {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     let display = if let Some(resolver) = self.resolver.as_ref() {
@@ -1428,6 +1434,76 @@ impl Program {
         .as_ref()
         .expect("interned store initialized");
       Ok(store.type_kind(ty))
+    })
+  }
+
+  /// Explain why `src` is not assignable to `dst`.
+  ///
+  /// Returns `None` if `src` is assignable to `dst`.
+  pub fn explain_assignability(&self, src: TypeId, dst: TypeId) -> Option<ExplainTree> {
+    match self.explain_assignability_fallible(src, dst) {
+      Ok(tree) => tree,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn explain_assignability_fallible(
+    &self,
+    src: TypeId,
+    dst: TypeId,
+  ) -> Result<Option<ExplainTree>, FatalError> {
+    self.with_interned_state(|state| {
+      let src = state.ensure_interned_type(src);
+      let dst = state.ensure_interned_type(dst);
+      let store = Arc::clone(
+        state
+          .interned_store
+          .as_ref()
+          .expect("interned store initialized"),
+      );
+      let caches = state.checker_caches.for_body();
+      let expander = RefExpander::new(
+        Arc::clone(&store),
+        &state.interned_def_types,
+        &state.interned_type_params,
+        &state.interned_class_instances,
+        caches.eval.clone(),
+      );
+      let hooks = relate_hooks();
+      let hooks = tti::RelateHooks {
+        expander: Some(&expander),
+        is_same_origin_private_member: hooks.is_same_origin_private_member,
+      };
+      // Use a fresh relation cache so explanation trees contain full structure
+      // instead of "cached" sentinel nodes from prior checker passes.
+      let relation_cache = tti::RelationCache::new(state.compiler_options.cache.relation_config());
+      let options = store.options();
+      let ctx = RelateCtx::with_hooks_cache_and_normalizer_caches(
+        Arc::clone(&store),
+        options,
+        hooks,
+        relation_cache,
+        caches.eval.clone(),
+      );
+
+      let result = ctx.explain_assignable(src, dst);
+      if result.result {
+        return Ok(None);
+      }
+
+      Ok(result.reason.or_else(|| {
+        Some(tti::ReasonNode {
+          src,
+          dst,
+          relation: tti::RelationKind::Assignable,
+          outcome: false,
+          note: Some("no explanation available".into()),
+          children: Vec::new(),
+        })
+      }))
     })
   }
 

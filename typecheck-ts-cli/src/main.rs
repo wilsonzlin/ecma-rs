@@ -60,6 +60,13 @@ struct TypecheckArgs {
   #[arg(long)]
   symbol_at: Option<String>,
 
+  /// Explain why the type at `SRC` is not assignable to the type at `DST`.
+  ///
+  /// The argument format is `SRC,DST` where each side is `<path:offset>`.
+  /// Example: `main.ts:10,main.ts:42`.
+  #[arg(long, value_name = "SRC,DST")]
+  explain_assignability: Option<String>,
+
   /// Print the export map for the given file.
   #[arg(long)]
   exports: Option<PathBuf>,
@@ -155,6 +162,8 @@ struct JsonQueries {
   type_at: Option<TypeAtResult>,
   #[serde(skip_serializing_if = "Option::is_none")]
   symbol_at: Option<SymbolAtResult>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  explain_assignability: Option<ExplainAssignabilityResult>,
   #[serde(skip_serializing_if = "BTreeMap::is_empty")]
   exports: BTreeMap<String, BTreeMap<String, ExportEntryJson>>,
 }
@@ -188,6 +197,15 @@ struct SymbolAtResult {
   #[serde(skip_serializing_if = "Option::is_none")]
   #[serde(rename = "type")]
   typ: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ExplainAssignabilityResult {
+  src: TypeAtResult,
+  dst: TypeAtResult,
+  assignable: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  tree: Option<typecheck_ts::ExplainTree>,
 }
 
 #[derive(Serialize)]
@@ -352,6 +370,17 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     None => None,
   };
 
+  let explain_assignability = match args.explain_assignability {
+    Some(raw) => match query_explain_assignability(&program, &host, &raw) {
+      Ok(res) => res,
+      Err(err) => {
+        eprintln!("{err}");
+        return ExitCode::FAILURE;
+      }
+    },
+    None => None,
+  };
+
   let exports = match args.exports {
     Some(path) => match query_exports(&program, &host, path) {
       Ok(res) => res,
@@ -377,6 +406,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       queries: JsonQueries {
         type_at,
         symbol_at,
+        explain_assignability,
         exports,
       },
     };
@@ -437,6 +467,22 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
         } else {
           println!("  def: {def}");
         }
+      }
+    }
+
+    if let Some(explain) = &explain_assignability {
+      println!(
+        "assignable? {} (src: {}:{}, dst: {}:{})",
+        explain.assignable,
+        explain.src.file,
+        explain.src.offset,
+        explain.dst.file,
+        explain.dst.offset
+      );
+      println!("  src type: {}", explain.src.typ);
+      println!("  dst type: {}", explain.dst.typ);
+      if let Some(tree) = &explain.tree {
+        println!("{}", format_explain_tree(&program, tree));
       }
     }
 
@@ -1040,6 +1086,26 @@ fn parse_offset_arg(raw: &str) -> Result<(PathBuf, u32), String> {
   Ok((PathBuf::from(path), offset))
 }
 
+fn parse_offset_pair_arg(raw: &str) -> Result<((PathBuf, u32), (PathBuf, u32)), String> {
+  let (left, right) = raw
+    .split_once(',')
+    .ok_or_else(|| format!("expected <src:path:offset,dst:path:offset>, got '{raw}'"))?;
+  let left = left.trim();
+  let right = right.trim();
+  Ok((parse_offset_arg(left)?, parse_offset_arg(right)?))
+}
+
+fn display_file_for_query(program: &Program, host: &DiskHost, file_id: FileId, fallback: &Path) -> String {
+  host
+    .path_for_key(
+      &program
+        .file_key(file_id)
+        .unwrap_or_else(|| FileKey::new(fallback.display().to_string())),
+    )
+    .map(|p| p.display().to_string())
+    .unwrap_or_else(|| fallback.to_string_lossy().to_string())
+}
+
 fn query_type_at(
   program: &Program,
   host: &DiskHost,
@@ -1067,6 +1133,61 @@ fn query_type_at(
     }
     None => Ok(None),
   }
+}
+
+fn query_explain_assignability(
+  program: &Program,
+  host: &DiskHost,
+  raw: &str,
+) -> Result<Option<ExplainAssignabilityResult>, String> {
+  let ((src_path, src_offset), (dst_path, dst_offset)) = parse_offset_pair_arg(raw)?;
+
+  let src_key = host.key_for_path(&src_path).ok_or_else(|| {
+    format!(
+      "unknown file in --explain-assignability: {}",
+      src_path.to_string_lossy()
+    )
+  })?;
+  let dst_key = host.key_for_path(&dst_path).ok_or_else(|| {
+    format!(
+      "unknown file in --explain-assignability: {}",
+      dst_path.to_string_lossy()
+    )
+  })?;
+
+  let src_file_id = program
+    .file_id(&src_key)
+    .ok_or_else(|| format!("file not part of program: {}", src_path.to_string_lossy()))?;
+  let dst_file_id = program
+    .file_id(&dst_key)
+    .ok_or_else(|| format!("file not part of program: {}", dst_path.to_string_lossy()))?;
+
+  let Some(src_ty) = program.type_at(src_file_id, src_offset) else {
+    return Ok(None);
+  };
+  let Some(dst_ty) = program.type_at(dst_file_id, dst_offset) else {
+    return Ok(None);
+  };
+
+  let src = TypeAtResult {
+    file: display_file_for_query(program, host, src_file_id, &src_path),
+    offset: src_offset,
+    typ: program.display_type(src_ty).to_string(),
+  };
+  let dst = TypeAtResult {
+    file: display_file_for_query(program, host, dst_file_id, &dst_path),
+    offset: dst_offset,
+    typ: program.display_type(dst_ty).to_string(),
+  };
+
+  let tree = program.explain_assignability(src_ty, dst_ty);
+  let assignable = tree.is_none();
+  Ok(Some(ExplainAssignabilityResult {
+    src,
+    dst,
+    assignable,
+    tree,
+  }))
 }
 
 fn query_symbol_at(
@@ -1154,6 +1275,39 @@ fn query_exports(
     .unwrap_or_else(|| path.to_string_lossy().to_string());
   outer.insert(file_name, map);
   Ok(outer)
+}
+
+fn format_explain_tree(program: &Program, tree: &typecheck_ts::ExplainTree) -> String {
+  fn write_node(
+    program: &Program,
+    node: &typecheck_ts::ExplainTree,
+    indent: usize,
+    out: &mut String,
+  ) {
+    use std::fmt::Write;
+
+    for _ in 0..indent {
+      out.push_str("  ");
+    }
+
+    let relation = format!("{:?}", node.relation);
+    let outcome = if node.outcome { "ok" } else { "fail" };
+    let src = program.display_type(node.src);
+    let dst = program.display_type(node.dst);
+    let _ = write!(out, "{relation} ({outcome}): {src} -> {dst}");
+    if let Some(note) = node.note.as_deref() {
+      let _ = write!(out, " [{note}]");
+    }
+    out.push('\n');
+
+    for child in &node.children {
+      write_node(program, child, indent + 1, out);
+    }
+  }
+
+  let mut out = String::new();
+  write_node(program, tree, 0, &mut out);
+  out
 }
 
 fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {

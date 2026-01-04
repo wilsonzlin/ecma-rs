@@ -1576,6 +1576,80 @@ fn explain_assignable_reason_nodes_only_reference_interned_type_ids() {
 }
 
 #[test]
+fn explain_assignable_reason_tree_is_deterministic_for_union_targets() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let union_a = store.union(vec![primitives.string, primitives.number]);
+  let union_b = store.union(vec![primitives.number, primitives.string]);
+  assert_eq!(union_a, union_b, "union canonicalization should be stable");
+
+  let result = ctx.explain_assignable(primitives.boolean, union_a);
+  assert!(!result.result);
+  let reason = result.reason.expect("expected reason tree");
+
+  let TypeKind::Union(members) = store.type_kind(union_a) else {
+    panic!("expected union type kind");
+  };
+
+  let child_dsts: Vec<_> = reason.children.iter().map(|child| child.dst).collect();
+  assert_eq!(child_dsts, members, "union member checks should be ordered deterministically");
+}
+
+#[test]
+fn explain_assignable_reason_tree_truncates_large_unions_deterministically() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let mut members = Vec::new();
+  for idx in 0u32..300 {
+    members.push(store.intern_type(TypeKind::Ref {
+      def: DefId(idx),
+      args: Vec::new(),
+    }));
+  }
+  let big_union = store.union(members);
+  let TypeKind::Union(ordered_members) = store.type_kind(big_union) else {
+    panic!("expected union type kind");
+  };
+  assert!(
+    ordered_members.len() >= 300,
+    "expected a union with many members; got {}",
+    ordered_members.len()
+  );
+
+  let ctx1 = RelateCtx::new(store.clone(), default_options());
+  let ctx2 = RelateCtx::new(store.clone(), default_options());
+
+  let tree1 = ctx1
+    .explain_assignable(primitives.boolean, big_union)
+    .reason
+    .expect("expected reason tree");
+  let tree2 = ctx2
+    .explain_assignable(primitives.boolean, big_union)
+    .reason
+    .expect("expected reason tree");
+
+  let json1 = serde_json::to_string(&tree1).expect("serialize reason tree");
+  let json2 = serde_json::to_string(&tree2).expect("serialize reason tree");
+  assert_eq!(json1, json2, "reason trees should be identical across contexts");
+
+  let recorded: Vec<_> = tree1.children.iter().map(|child| child.dst).collect();
+  assert!(
+    recorded.len() < ordered_members.len(),
+    "expected the reason tree to be truncated; recorded {} of {} members",
+    recorded.len(),
+    ordered_members.len()
+  );
+  assert_eq!(
+    recorded,
+    ordered_members.iter().copied().take(recorded.len()).collect::<Vec<_>>(),
+    "truncation should preserve union member order deterministically"
+  );
+}
+
+#[test]
 fn cyclic_reference_conditional_normalization_terminates() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
