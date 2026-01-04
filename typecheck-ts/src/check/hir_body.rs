@@ -47,7 +47,7 @@ use super::expr::{resolve_call, resolve_construct};
 use super::infer::infer_type_arguments_for_call;
 use super::instantiate::{InstantiationCache, Substituter};
 use super::overload::{
-  callable_signatures, expected_arg_type_at, signature_allows_arg_count,
+  callable_signatures, construct_signatures, expected_arg_type_at, signature_allows_arg_count,
   signature_contains_literal_types, CallArgType,
 };
 use super::type_expr::{TypeLowerer, TypeResolver};
@@ -2616,8 +2616,107 @@ impl<'a> Checker<'a> {
     };
     let callee_ty = self.check_expr(callee_expr);
     let arg_exprs = arg_exprs.unwrap_or(&[]);
+    let all_candidate_sigs = construct_signatures(self.store.as_ref(), callee_ty);
+    let mut candidate_sigs = all_candidate_sigs.clone();
+    let has_spread = arg_exprs.iter().any(|arg| arg.stx.spread);
+    let mut callee_for_resolution = callee_ty;
+    let sigs_for_context = {
+      let base_for_context = if has_spread {
+        let sigs_without_excess_props: Vec<_> = all_candidate_sigs
+          .iter()
+          .copied()
+          .filter(|sig_id| {
+            let sig = self.store.signature(*sig_id);
+            arg_exprs
+              .iter()
+              .enumerate()
+              .take_while(|(_, arg)| !arg.stx.spread)
+              .all(|(idx, arg)| {
+                let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) else {
+                  return false;
+                };
+                !self.has_contextual_excess_properties(&arg.stx.value, param_ty)
+              })
+          })
+          .collect();
+
+        if sigs_without_excess_props.is_empty() {
+          candidate_sigs.clone()
+        } else {
+          candidate_sigs = sigs_without_excess_props;
+
+          let mut shape = Shape::new();
+          shape.construct_signatures = candidate_sigs.clone();
+          let shape_id = self.store.intern_shape(shape);
+          let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
+          callee_for_resolution = self.store.intern_type(TypeKind::Object(obj_id));
+
+          candidate_sigs.clone()
+        }
+      } else {
+        let sigs_by_arity: Vec<_> = all_candidate_sigs
+          .iter()
+          .copied()
+          .filter(|sig_id| {
+            let sig = self.store.signature(*sig_id);
+            signature_allows_arg_count(self.store.as_ref(), &sig, arg_exprs.len())
+          })
+          .collect();
+
+        let sigs_without_excess_props: Vec<_> = sigs_by_arity
+          .iter()
+          .copied()
+          .filter(|sig_id| {
+            let sig = self.store.signature(*sig_id);
+            arg_exprs.iter().enumerate().all(|(idx, arg)| {
+              let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) else {
+                return false;
+              };
+              !self.has_contextual_excess_properties(&arg.stx.value, param_ty)
+            })
+          })
+          .collect();
+
+        if sigs_without_excess_props.is_empty() {
+          if sigs_by_arity.is_empty() {
+            all_candidate_sigs.clone()
+          } else {
+            sigs_by_arity
+          }
+        } else {
+          candidate_sigs = sigs_without_excess_props;
+
+          let mut shape = Shape::new();
+          shape.construct_signatures = candidate_sigs.clone();
+          let shape_id = self.store.intern_shape(shape);
+          let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
+          callee_for_resolution = self.store.intern_type(TypeKind::Object(obj_id));
+
+          candidate_sigs.clone()
+        }
+      };
+
+      let specialized: Vec<_> = base_for_context
+        .iter()
+        .copied()
+        .filter(|sig_id| {
+          let sig = self.store.signature(*sig_id);
+          signature_contains_literal_types(self.store.as_ref(), &sig)
+        })
+        .collect();
+
+      if specialized.is_empty() {
+        base_for_context
+      } else {
+        specialized
+      }
+    };
+
     let mut arg_types = Vec::with_capacity(arg_exprs.len());
     let mut const_arg_types = Vec::with_capacity(arg_exprs.len());
+    // For each argument expression, record which parameter index it corresponds
+    // to. Spread arguments (and arguments after an unknown-length spread) have no
+    // stable mapping.
     let mut param_index_map = Vec::with_capacity(arg_exprs.len());
     let mut mapping_known = true;
     let mut next_param_index = 0usize;
@@ -2644,7 +2743,24 @@ impl<'a> Checker<'a> {
       let param_index = mapping_known.then_some(next_param_index);
       param_index_map.push(param_index);
 
-      let ty = self.check_expr(&arg.stx.value);
+      let ty = if let Some(param_index) = param_index {
+        let mut expected_tys = Vec::new();
+        for sig_id in sigs_for_context.iter().copied() {
+          let sig = self.store.signature(sig_id);
+          if let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) {
+            expected_tys.push(param_ty);
+          }
+        }
+        let expected = if expected_tys.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(expected_tys)
+        };
+        self.check_expr_with_expected(&arg.stx.value, expected)
+      } else {
+        self.check_expr(&arg.stx.value)
+      };
+
       arg_types.push(CallArgType::new(ty));
       const_arg_types.push(self.const_inference_type(&arg.stx.value));
       if mapping_known {
@@ -2659,7 +2775,7 @@ impl<'a> Checker<'a> {
       &self.store,
       &self.relate,
       &self.instantiation_cache,
-      callee_ty,
+      callee_for_resolution,
       &arg_types,
       Some(&const_arg_types),
       None,
@@ -2704,7 +2820,7 @@ impl<'a> Checker<'a> {
           &self.store,
           &self.relate,
           &self.instantiation_cache,
-          callee_ty,
+          callee_for_resolution,
           &arg_types,
           Some(&const_arg_types),
           None,
@@ -2733,11 +2849,42 @@ impl<'a> Checker<'a> {
           };
           let arg_expr = &arg.stx.value;
           let arg_ty = match arg_expr.stx.as_ref() {
-            AstExpr::LitObj(_) | AstExpr::LitArr(_) => self.check_expr_with_expected(arg_expr, param_ty),
+            AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+              let contextual = self.check_expr_with_expected(arg_expr, param_ty);
+              if let Some(slot) = arg_types.get_mut(idx) {
+                slot.ty = contextual;
+              }
+              contextual
+            }
             _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
           };
           self.check_assignable(arg_expr, arg_ty, param_ty, None);
         }
+      }
+    }
+    let contextual_sig = resolution
+      .signature
+      .or(resolution.contextual_signature)
+      .or_else(|| candidate_sigs.first().copied());
+    if let Some(sig_id) = contextual_sig {
+      let sig = self.store.signature(sig_id);
+      for (idx, arg) in arg_exprs.iter().enumerate() {
+        let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
+          continue;
+        };
+        let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+          continue;
+        };
+        let arg_ty = arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown);
+        let contextual = match arg.stx.value.stx.as_ref() {
+          AstExpr::ArrowFunc(_) | AstExpr::Func(_)
+            if self.first_callable_signature(param_ty).is_some() =>
+          {
+            arg_ty
+          }
+          _ => self.contextual_arg_type(arg_ty, param_ty),
+        };
+        self.record_expr_type(arg.stx.value.loc, contextual);
       }
     }
     resolution.return_type

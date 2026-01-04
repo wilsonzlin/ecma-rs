@@ -108,6 +108,42 @@ pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
   }
 }
 
+/// Collect all construct signatures from a type, expanding unions/intersections
+/// and object construct signatures.
+pub fn construct_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      union_common_signatures(store, OverloadKind::Construct, &members, None)
+    }
+    _ => {
+      let mut collected = Vec::new();
+      collect_construct_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
+      let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
+      for sig_id in collected.into_iter() {
+        let sig = store.signature(sig_id);
+        let key = signature_shape_key(&sig);
+        let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
+        match by_shape.entry(key) {
+          Entry::Vacant(entry) => {
+            entry.insert((sig_id, is_unknown));
+          }
+          Entry::Occupied(mut entry) => {
+            let (existing, existing_unknown) = *entry.get();
+            if existing_unknown && !is_unknown {
+              entry.insert((sig_id, is_unknown));
+            } else if existing_unknown == is_unknown && sig_id < existing {
+              entry.insert((sig_id, is_unknown));
+            }
+          }
+        }
+      }
+      let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
+      out.sort();
+      out
+    }
+  }
+}
+
 /// Expected argument type at the given index, applying rest element expansion
 /// when needed. Returns `None` if the signature does not accept an argument at
 /// this position.
