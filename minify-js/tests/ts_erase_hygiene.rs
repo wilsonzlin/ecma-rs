@@ -400,3 +400,27 @@ fn avoids_synthetic_namespace_binding_collisions_with_ambient_var_decls() {
     "expected TS erasure to avoid colliding with ambient globals declared in the input. output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_enum_object_collisions_with_free_identifier_references() {
+  let src = r#"
+    eval("x");
+    export enum static { A = __minify_ts_enum_obj_static, B }
+  "#;
+  let (code, mut parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime enum");
+  assert_ne!(
+    local, "__minify_ts_enum_obj_static",
+    "expected TS erasure to avoid shadowing free identifier references that match the enum object binding. output: {code}"
+  );
+  assert!(
+    local.starts_with("__minify_ts_enum_obj_static_"),
+    "expected TS erasure to disambiguate the enum object binding with a suffix, got `{local}`. output: {code}"
+  );
+  assert!(
+    program_contains_id_expr(&mut parsed, "__minify_ts_enum_obj_static"),
+    "expected the `__minify_ts_enum_obj_static` identifier reference to remain in output: {code}"
+  );
+}
