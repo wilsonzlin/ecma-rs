@@ -7,7 +7,7 @@ use crate::ProgramCompiler;
 use crate::TextRange;
 use hir_js::{
   Body, BodyId, BodyKind, ExprId, ExprKind, ForHead, ForInit, NameId, ObjectKey, PatId, PatKind,
-  StmtId, StmtKind, VarDecl, VarDeclarator,
+  StmtId, StmtKind, VarDecl, VarDeclKind, VarDeclarator,
 };
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
@@ -184,13 +184,38 @@ impl<'p> HirSourceToInst<'p> {
 
   pub fn compile_var_decl(&mut self, decl: &VarDecl) -> OptimizeResult<()> {
     for VarDeclarator { pat, init, .. } in decl.declarators.iter() {
-      let Some(init) = init else {
-        continue;
-      };
-      let tmp = self.c_temp.bump();
-      let rval = self.compile_expr(*init)?;
-      self.out.push(Inst::var_assign(tmp, rval));
-      self.compile_destructuring(*pat, Arg::Var(tmp))?;
+      let pat_span = self.body.pats[pat.0 as usize].span;
+      match init {
+        Some(init) => {
+          let tmp = self.c_temp.bump();
+          let rval = self.compile_expr(*init)?;
+          self.out.push(Inst::var_assign(tmp, rval));
+          self.compile_destructuring(*pat, Arg::Var(tmp))?;
+        }
+        None => match decl.kind {
+          VarDeclKind::Const | VarDeclKind::Using | VarDeclKind::AwaitUsing => {
+            return Err(unsupported_syntax_range(
+              pat_span,
+              format!("{:?} declarations must have initializers", decl.kind),
+            ));
+          }
+          VarDeclKind::Let => match self.body.pats[pat.0 as usize].kind {
+            PatKind::Ident(_) => {
+              self.compile_destructuring(*pat, Arg::Const(Const::Undefined))?;
+            }
+            _ => {
+              return Err(unsupported_syntax_range(
+                pat_span,
+                "destructuring declarations must have initializers",
+              ));
+            }
+          },
+          VarDeclKind::Var => {
+            // `var x;` is hoisted and has no runtime effect at the declaration site, so
+            // we do not emit an explicit assignment here.
+          }
+        },
+      }
     }
     Ok(())
   }
