@@ -1,6 +1,7 @@
 use minify_js::{minify_with_options, Dialect, MinifyOptions, TopLevelMode};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::{Expr, IdExpr};
+use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -34,6 +35,48 @@ fn has_top_level_var_binding(program: &Node<TopLevel>, name: &str) -> bool {
     }),
     _ => false,
   })
+}
+
+fn count_top_level_var_bindings(program: &Node<TopLevel>, name: &str) -> usize {
+  program
+    .stx
+    .body
+    .iter()
+    .filter_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::VarDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .flat_map(|decl| decl.stx.declarators.iter())
+    .filter(|declarator| {
+      matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
+    })
+    .count()
+}
+
+fn find_exported_local_binding(program: &Node<TopLevel>, exported: &str) -> Option<String> {
+  for stmt in &program.stx.body {
+    let Stmt::ExportList(export_list) = stmt.stx.as_ref() else {
+      continue;
+    };
+    let ExportNames::Specific(entries) = &export_list.stx.names else {
+      continue;
+    };
+    for entry in entries {
+      if entry.stx.type_only {
+        continue;
+      }
+      if entry.stx.alias.stx.name != exported {
+        continue;
+      }
+      let parse_js::ast::import_export::ModuleExportImportName::Ident(local) =
+        &entry.stx.exportable
+      else {
+        continue;
+      };
+      return Some(local.clone());
+    }
+  }
+  None
 }
 
 fn find_iife_body_by_outer_name<'a>(
@@ -77,6 +120,39 @@ fn find_iife_body_by_outer_name<'a>(
     return Some(body);
   }
   None
+}
+
+fn count_iifes_by_outer_name(program: &Node<TopLevel>, outer_name: &str) -> usize {
+  program
+    .stx
+    .body
+    .iter()
+    .filter(|stmt| {
+      let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+        return false;
+      };
+      let Expr::Binary(comma) = expr_stmt.stx.expr.stx.as_ref() else {
+        return false;
+      };
+      if comma.stx.operator != OperatorName::Comma {
+        return false;
+      }
+      let Expr::Call(call) = comma.stx.right.stx.as_ref() else {
+        return false;
+      };
+      if call.stx.arguments.len() != 1 {
+        return false;
+      }
+      let arg = &call.stx.arguments[0].stx.value;
+      let Expr::Binary(or) = arg.stx.as_ref() else {
+        return false;
+      };
+      if or.stx.operator != OperatorName::LogicalOr {
+        return false;
+      }
+      matches!(or.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == outer_name)
+    })
+    .count()
 }
 
 fn program_contains_id_expr(program: &mut Node<TopLevel>, target: &str) -> bool {
@@ -192,5 +268,59 @@ fn avoids_synthetic_enum_alias_collisions_with_identifier_references() {
   assert!(
     program_contains_id_expr(&mut parsed, "__minify_ts_enum_E"),
     "expected the `__minify_ts_enum_E` identifier reference to remain in output: {code}"
+  );
+}
+
+#[test]
+fn preserves_merging_of_invalid_top_level_runtime_namespaces() {
+  let src = r#"
+    eval("x");
+    export namespace static { export const a = 1; }
+    export namespace static { export const b = 2; }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert!(
+    local.starts_with("__minify_ts_namespace_static"),
+    "expected a synthesized local binding for `namespace static`, got `{local}`. output: {code}"
+  );
+  assert_eq!(
+    count_top_level_var_bindings(&parsed, &local),
+    1,
+    "expected a single top-level var binding for the merged runtime namespace. output: {code}"
+  );
+  assert_eq!(
+    count_iifes_by_outer_name(&parsed, &local),
+    2,
+    "expected two IIFEs targeting the same merged runtime namespace binding. output: {code}"
+  );
+}
+
+#[test]
+fn preserves_merging_of_invalid_top_level_runtime_enums() {
+  let src = r#"
+    eval("x");
+    export enum static { A = 1 }
+    export enum static { B }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime enum");
+  assert!(
+    local.starts_with("__minify_ts_enum_obj_static"),
+    "expected a synthesized local binding for `enum static`, got `{local}`. output: {code}"
+  );
+  assert_eq!(
+    count_top_level_var_bindings(&parsed, &local),
+    1,
+    "expected a single top-level var binding for the merged runtime enum. output: {code}"
+  );
+  assert_eq!(
+    count_iifes_by_outer_name(&parsed, &local),
+    2,
+    "expected two IIFEs targeting the same merged runtime enum binding. output: {code}"
   );
 }

@@ -143,6 +143,8 @@ struct StripContext {
   top_level_module_exports: HashSet<String>,
   emitted_export_var: HashSet<String>,
   fresh_internal_names: FreshInternalNameGenerator,
+  runtime_namespace_param_idents: HashMap<String, String>,
+  runtime_enum_object_idents: HashMap<String, String>,
   ts_erase_options: TsEraseOptions,
   diagnostics: Vec<Diagnostic>,
 }
@@ -164,6 +166,28 @@ impl StripContext {
 
   fn fresh_internal_name(&mut self, preferred: String) -> String {
     self.fresh_internal_names.fresh(preferred)
+  }
+
+  fn runtime_namespace_param_ident(&mut self, namespace_name: &str) -> String {
+    if let Some(ident) = self.runtime_namespace_param_idents.get(namespace_name) {
+      return ident.clone();
+    }
+    let ident = self.fresh_internal_name(format!("__minify_ts_namespace_{namespace_name}"));
+    self
+      .runtime_namespace_param_idents
+      .insert(namespace_name.to_string(), ident.clone());
+    ident
+  }
+
+  fn runtime_enum_object_ident(&mut self, enum_name: &str) -> String {
+    if let Some(ident) = self.runtime_enum_object_idents.get(enum_name) {
+      return ident.clone();
+    }
+    let ident = self.fresh_internal_name(format!("__minify_ts_enum_obj_{enum_name}"));
+    self
+      .runtime_enum_object_idents
+      .insert(enum_name.to_string(), ident.clone());
+    ident
   }
 }
 
@@ -363,6 +387,8 @@ pub fn erase_types_with_options(
     top_level_module_exports,
     emitted_export_var: HashSet::new(),
     fresh_internal_names: FreshInternalNameGenerator::new(all_identifier_strings),
+    runtime_namespace_param_idents: HashMap::new(),
+    runtime_enum_object_idents: HashMap::new(),
     ts_erase_options,
     diagnostics: Vec::new(),
   };
@@ -2046,7 +2072,7 @@ fn strip_enum_decl(
   let enum_param_ident = if name_is_binding_identifier {
     enum_name.clone()
   } else {
-    ctx.fresh_internal_name(format!("__minify_ts_enum_obj_{enum_name}"))
+    ctx.runtime_enum_object_ident(&enum_name)
   };
   let binding_ident = if name_is_binding_identifier {
     enum_name.clone()
@@ -2463,7 +2489,7 @@ fn strip_namespace_decl(
   let namespace_param_ident = if name_is_binding_identifier {
     namespace_name.clone()
   } else {
-    ctx.fresh_internal_name(format!("__minify_ts_namespace_{namespace_name}"))
+    ctx.runtime_namespace_param_ident(&namespace_name)
   };
   let binding_ident = if name_is_binding_identifier {
     namespace_name.clone()
