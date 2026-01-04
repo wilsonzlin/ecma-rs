@@ -14,6 +14,11 @@ status = "xfail"
 reason = "Rust checker renders synthesized type parameter names (`T0`) while tsc keeps source names (`T`)."
 
 [[expectations]]
+id = "difftsc/generic_constraints"
+status = "xfail"
+reason = "Rust checker spans differ from tsc for constraint violations and exported generic type parameter names (`T0`) differ from tsc (`T`)."
+
+[[expectations]]
 id = "difftsc/dts_overloads"
 status = "xfail"
 reason = "Rust checker does not yet model `.d.ts` overload sets the same way as tsc; export and marker type facts differ."
@@ -49,6 +54,16 @@ status = "xfail"
 reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
+id = "difftsc/module_types"
+status = "xfail"
+reason = "Type-only export type facts differ from tsc baseline (tsc reports `any` for interface exports)."
+
+[[expectations]]
+id = "difftsc/multi"
+status = "xfail"
+reason = "Type-only export type facts differ from tsc baseline (tsc reports `any` for interface exports)."
+
+[[expectations]]
 id = "difftsc/namespace_reexport"
 status = "xfail"
 reason = "Rust checker does not yet report tsc's definite assignment (`TS2454`) diagnostics and marker typing differs."
@@ -72,11 +87,6 @@ reason = "Rust checker does not yet support `using`/`await using` resource manag
 id = "difftsc/variance_annotations"
 status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
-
-[[expectations]]
-id = "difftsc/export_assignment_mixed_exports"
-status = "xfail"
-reason = "Rust binder reports `BIND1005` for mixed export assignment; tsc reports `TS2309`"
 
 [[expectations]]
 id = "difftsc/using_invalid"

@@ -60,6 +60,8 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
     "TC2008" => Some(&[2304]),
     // Variance annotation mismatch as implied by variance annotation.
     "TC3004" => Some(&[2636]),
+    // `export =` combined with other exports.
+    "BIND1005" => Some(&[2309]),
     _ => None,
   }
 }
@@ -93,5 +95,6 @@ mod tests {
     assert!(rust_code_matches_tsc("TC1001", 2307));
     assert!(rust_code_matches_tsc("TC1006", 2554));
     assert!(rust_code_matches_tsc("TC3004", 2636));
+    assert!(rust_code_matches_tsc("BIND1005", 2309));
   }
 }
