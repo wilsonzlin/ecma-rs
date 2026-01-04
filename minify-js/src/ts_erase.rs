@@ -502,6 +502,43 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
   names
 }
 
+fn collect_namespace_body_binding_names_for_synthetic_param(body: &NamespaceBody) -> HashSet<String> {
+  match body {
+    NamespaceBody::Block(stmts) => {
+      let mut names = collect_top_level_value_bindings(stmts);
+      for stmt in stmts {
+        match stmt.stx.as_ref() {
+          Stmt::EnumDecl(decl) if !decl.stx.declare => {
+            names.insert(decl.stx.name.clone());
+          }
+          Stmt::NamespaceDecl(decl) if !decl.stx.declare => {
+            names.insert(decl.stx.name.clone());
+          }
+          Stmt::ModuleDecl(decl) if !decl.stx.declare => {
+            let Some(_body) = &decl.stx.body else {
+              continue;
+            };
+            let ModuleName::Identifier(name) = &decl.stx.name else {
+              // String modules have no runtime representation.
+              continue;
+            };
+            names.insert(name.clone());
+          }
+          _ => {}
+        }
+      }
+      names
+    }
+    NamespaceBody::Namespace(inner) => {
+      let mut names = HashSet::new();
+      if !inner.stx.declare {
+        names.insert(inner.stx.name.clone());
+      }
+      names
+    }
+  }
+}
+
 fn collect_top_level_module_exports(stmts: &[Node<Stmt>]) -> HashSet<String> {
   let mut names = HashSet::new();
   for stmt in stmts {
@@ -2258,10 +2295,7 @@ fn strip_namespace_decl(
     format!("__minify_ts_namespace_{namespace_name}")
   };
   if !name_is_binding_identifier {
-    let used_bindings = match &decl.stx.body {
-      NamespaceBody::Block(stmts) => collect_top_level_value_bindings(stmts),
-      NamespaceBody::Namespace(_) => HashSet::new(),
-    };
+    let used_bindings = collect_namespace_body_binding_names_for_synthetic_param(&decl.stx.body);
     if used_bindings.contains(&namespace_param_ident) {
       let base = namespace_param_ident;
       let mut suffix = 1usize;

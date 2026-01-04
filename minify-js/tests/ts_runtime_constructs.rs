@@ -712,6 +712,30 @@ fn avoids_synthetic_namespace_param_collisions_with_user_bindings() {
 }
 
 #[test]
+fn avoids_synthetic_namespace_param_collisions_with_ts_runtime_decls() {
+  // The collision check must include TS runtime declarations that lower into bindings (e.g. enums),
+  // not just explicit `var`/`let`/`const` declarations.
+  let src = r#"
+    export namespace A.class {
+      eval("x");
+      enum __minify_ts_namespace_class { A = 1, B }
+      export const x = 1;
+    }
+    console.log(A["class"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    !code.contains("function(__minify_ts_namespace_class)"),
+    "expected synthesized namespace param to avoid colliding with lowered TS runtime decls: {code}"
+  );
+  assert!(
+    code.contains("function(__minify_ts_namespace_class_"),
+    "expected synthesized namespace param to be disambiguated with a suffix: {code}"
+  );
+}
+
+#[test]
 fn lowers_dotted_namespaces_with_strict_reserved_identifier_package_to_parseable_js() {
   // `package` is reserved in strict mode but is not tokenized as a keyword by the lexer.
   let src = r#"
