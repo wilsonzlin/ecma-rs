@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -18,5 +19,24 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "main.ts",
+        "name": "from_dep",
+        "type": "string"
+      },
+      {
+        "file": "main.ts",
+        "name": "from_example2",
+        "type": "string"
+      },
+      {
+        "file": "node_modules/dep/index.ts",
+        "name": "value",
+        "type": "string"
+      }
+    ]
+  }
 }
