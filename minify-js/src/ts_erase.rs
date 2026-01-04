@@ -471,8 +471,8 @@ fn lower_import_equals_decl(
   if decl.stx.type_only {
     return None;
   }
-  if !is_top_level {
-    unsupported_ts(ctx, loc, "import= assignments must be at top level");
+  if decl.stx.export && !is_top_level {
+    unsupported_ts(ctx, loc, "exported import= assignments must be at top level");
     return None;
   }
   let initializer = match &decl.stx.rhs {
@@ -1918,6 +1918,20 @@ fn strip_namespace_body_stmt(
   let loc = stmt.loc;
   let assoc = stmt.assoc;
   match *stmt.stx {
+    Stmt::ImportEqualsDecl(mut decl) if decl.stx.export => {
+      if decl.stx.type_only {
+        return vec![];
+      }
+      let name = decl.stx.name.clone();
+      decl.stx.export = false;
+      let Some(stmt) = lower_import_equals_decl(ctx, decl, loc, assoc, false) else {
+        return vec![];
+      };
+      let mut out = Vec::new();
+      out.push(stmt);
+      out.extend(namespace_export_assignments(loc, namespace_param, &[name]));
+      out
+    }
     Stmt::VarDecl(mut decl) if decl.stx.export => {
       decl.stx.export = false;
       strip_var_decl(ctx, &mut decl.stx);

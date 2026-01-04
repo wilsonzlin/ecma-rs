@@ -381,3 +381,89 @@ fn lowers_namespaces_merged_with_classes_inside_runtime_namespaces() {
     "expected an assignment of the merged class onto the parent namespace object. output: {code}"
   );
 }
+
+#[test]
+fn lowers_export_import_equals_inside_runtime_namespaces() {
+  let src = r#"
+    export namespace N {
+      export import Foo = require("foo");
+      export import Bar = Other.Nested;
+    }
+    console.log(N.Foo, N.Bar);
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  assert!(
+    !code.contains("import Foo"),
+    "expected TS import= syntax to be removed: {code}"
+  );
+
+  let body = find_iife_body_by_outer_name(&parsed, "N").expect("expected N namespace IIFE");
+  let mut decl_inits = std::collections::HashMap::<String, &Node<Expr>>::new();
+  let mut exports = std::collections::HashMap::<String, String>::new();
+
+  for stmt in body {
+    match stmt.stx.as_ref() {
+      Stmt::VarDecl(decl) => {
+        for declarator in &decl.stx.declarators {
+          let Pat::Id(id) = declarator.pattern.stx.pat.stx.as_ref() else {
+            continue;
+          };
+          let Some(init) = declarator.initializer.as_ref() else {
+            continue;
+          };
+          decl_inits.insert(id.stx.name.clone(), init);
+        }
+      }
+      Stmt::Expr(expr_stmt) => {
+        let Expr::Binary(assign) = expr_stmt.stx.expr.stx.as_ref() else {
+          continue;
+        };
+        if assign.stx.operator != OperatorName::Assignment {
+          continue;
+        }
+        let Expr::ComputedMember(member) = assign.stx.left.stx.as_ref() else {
+          continue;
+        };
+        let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
+          continue;
+        };
+        let Expr::Id(value) = assign.stx.right.stx.as_ref() else {
+          continue;
+        };
+        exports.insert(key.stx.value.clone(), value.stx.name.clone());
+      }
+      _ => {}
+    }
+  }
+
+  let foo_binding = exports
+    .get("Foo")
+    .expect("expected N[\"Foo\"] assignment")
+    .clone();
+  let foo_init = decl_inits
+    .get(&foo_binding)
+    .expect("expected a binding initializer for Foo alias");
+  match foo_init.stx.as_ref() {
+    Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+      Expr::Id(id) => assert_eq!(id.stx.name, "require"),
+      other => panic!("expected require call callee, got {other:?}"),
+    },
+    other => panic!("expected require call initializer for Foo, got {other:?}"),
+  }
+
+  let bar_binding = exports
+    .get("Bar")
+    .expect("expected N[\"Bar\"] assignment")
+    .clone();
+  let bar_init = decl_inits
+    .get(&bar_binding)
+    .expect("expected a binding initializer for Bar alias");
+  assert!(
+    matches!(
+      bar_init.stx.as_ref(),
+      Expr::Member(member) if member.stx.right == "Nested"
+    ),
+    "expected Bar initializer to reference `.Nested`, got {bar_init:?}"
+  );
+}
