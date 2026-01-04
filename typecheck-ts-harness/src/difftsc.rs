@@ -1673,10 +1673,26 @@ fn collect_export_type_facts(
     let Some(ty) = entry.type_id else {
       continue;
     };
+
+    let is_type_only = entry
+      .def
+      .or_else(|| program.symbol_info(entry.symbol).and_then(|info| info.def))
+      .and_then(|def| program.def_kind(def))
+      .is_some_and(|kind| {
+        matches!(
+          kind,
+          typecheck_ts::DefKind::Interface(_) | typecheck_ts::DefKind::TypeAlias(_)
+        )
+      });
+
     facts.push(ExportTypeFact {
       file: export.file.clone(),
       name: export.name.clone(),
-      type_str: program.display_type(ty).to_string(),
+      type_str: if is_type_only {
+        "any".to_string()
+      } else {
+        program.display_type(ty).to_string()
+      },
     });
   }
 

@@ -2188,6 +2188,21 @@ impl Program {
     })
   }
 
+  /// Kind of a definition, if known.
+  pub fn def_kind(&self, def: DefId) -> Option<DefKind> {
+    match self.def_kind_fallible(def) {
+      Ok(kind) => kind,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn def_kind_fallible(&self, def: DefId) -> Result<Option<DefKind>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.def_data.get(&def).map(|d| d.kind.clone())))
+  }
+
   /// Body attached to a definition, if any.
   pub fn body_of_def(&self, def: DefId) -> Option<BodyId> {
     match self.body_of_def_fallible(def) {

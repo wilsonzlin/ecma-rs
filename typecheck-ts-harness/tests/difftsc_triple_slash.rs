@@ -59,7 +59,7 @@ fn assert_matched(case: &Value, name: &str) {
 }
 
 #[test]
-fn difftsc_triple_slash_cases_match_baselines() {
+fn difftsc_selected_cases_match_baselines() {
   let report = run_difftsc();
   let summary = report
     .get("summary")
@@ -74,9 +74,12 @@ fn difftsc_triple_slash_cases_match_baselines() {
   );
 
   for name in [
+    "import_equals_require",
+    "module_types",
+    "multi",
+    "triple_slash_references",
     "triple_slash_no_default_lib",
     "triple_slash_path_imported",
-    "triple_slash_references",
     "triple_slash_types_imported",
     "triple_slash_lib_imported",
   ] {
