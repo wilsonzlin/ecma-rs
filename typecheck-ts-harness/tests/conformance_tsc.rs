@@ -26,7 +26,7 @@ fn conformance_tsc_engine_is_ok_and_sorted() {
 
   let report = run_conformance(options).expect("run conformance");
 
-  assert_eq!(report.summary.total, 5);
+  assert_eq!(report.summary.total, 6);
 
   for result in &report.results {
     assert_eq!(

@@ -4,7 +4,6 @@ use typecheck_ts::{FileKey, MemoryHost, Program, TypeKindSummary};
 #[test]
 fn typeof_import_type_queries_enqueue_modules() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     ..Default::default()
   });
 
@@ -58,7 +57,6 @@ export const x: T = 1;
 #[test]
 fn import_type_in_arrow_param_enqueues_modules() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     ..Default::default()
   });
 
@@ -91,7 +89,6 @@ export const f = (x: import("./dep").Thing) => x;
 #[test]
 fn typeof_import_in_arrow_return_enqueues_modules() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     ..Default::default()
   });
 
@@ -124,7 +121,6 @@ export const f = (): typeof import("./dep").value => 1;
 #[test]
 fn typeof_import_without_qualifier_enqueues_modules() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     ..Default::default()
   });
 
@@ -157,7 +153,6 @@ export type Mod = typeof import("./dep");
 #[test]
 fn import_type_in_type_assertion_enqueues_modules() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     ..Default::default()
   });
 

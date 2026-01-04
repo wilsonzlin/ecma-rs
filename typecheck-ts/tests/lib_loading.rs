@@ -359,7 +359,7 @@ fn module_resolution_can_target_lib_file_keys() {
 #[test]
 fn host_file_named_like_lib_does_not_collide() {
   let mut options = CompilerOptions::default();
-  options.libs = vec![LibName::Es2020];
+  options.libs = vec![LibName::parse("es2020").expect("lib name")];
   let key = FileKey::new("lib:lib.es2020.d.ts");
   let host = TestHost::new(options).with_file(key.clone(), "export const local = 1;");
   let program = Program::new(host, vec![key.clone()]);
@@ -382,7 +382,7 @@ fn host_file_named_like_lib_does_not_collide() {
 #[test]
 fn host_file_named_like_default_lib_has_distinct_text() {
   let mut options = CompilerOptions::default();
-  options.libs = vec![LibName::Es5];
+  options.libs = vec![LibName::parse("es5").expect("lib name")];
   let key = FileKey::new("lib:lib.es5.d.ts");
   let host_text = "export const local = 1;";
   let host = TestHost::new(options).with_file(key.clone(), host_text);
@@ -489,9 +489,7 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
 
 #[test]
 fn bundled_libs_enable_dom_and_promise_fixture() {
-  let mut options = CompilerOptions::default();
-  options.include_dom = true;
-  let host = TestHost::new(options).with_file(FileKey::new("entry.ts"), PROMISE_DOM);
+  let host = TestHost::new(CompilerOptions::default()).with_file(FileKey::new("entry.ts"), PROMISE_DOM);
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
@@ -546,7 +544,6 @@ fn type_imports_in_lib_files_queue_dependencies() {
 
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
-  options.include_dom = false;
 
   let host = TestHost::new(options)
     .with_file(entry.clone(), "export const value = 1;")

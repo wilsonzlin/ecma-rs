@@ -378,21 +378,20 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
   if let Some(libs) = raw.lib.as_ref() {
     let mut parsed = Vec::new();
     for raw in libs {
-      if let Some(lib) = parse_lib_name(raw) {
+      if let Some(lib) = LibName::parse(raw) {
         parsed.push(lib);
       }
     }
     if parsed.is_empty() && !libs.is_empty() {
       return Err("compilerOptions.lib did not include any supported libs".to_string());
     }
-    parsed.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    parsed.sort();
     parsed.dedup();
     options.libs = parsed;
   }
 
   if raw.no_lib.unwrap_or(false) || raw.no_default_lib.unwrap_or(false) {
     options.no_default_lib = true;
-    options.libs.clear();
   }
 
   if let Some(module_resolution) = raw.module_resolution.as_deref() {
@@ -463,45 +462,6 @@ fn parse_script_target(raw: &str) -> Option<ScriptTarget> {
     "es2021" => Some(ScriptTarget::Es2021),
     "es2022" => Some(ScriptTarget::Es2022),
     "esnext" => Some(ScriptTarget::EsNext),
-    _ => None,
-  }
-}
-
-fn parse_lib_name(raw: &str) -> Option<LibName> {
-  let normalized = raw.trim().to_ascii_lowercase();
-  let normalized = normalized
-    .trim_start_matches("lib.")
-    .trim_end_matches(".d.ts")
-    .trim_end_matches(".ts");
-  let base = normalized.split('.').next().unwrap_or(normalized);
-  match base {
-    "dom" | "webworker" | "scripthost" => Some(LibName::Dom),
-    "es3" | "es5" => Some(LibName::Es5),
-    "es2015" | "es6" => Some(LibName::Es2015),
-    "es2016" => Some(LibName::Es2016),
-    "es2017" => Some(LibName::Es2017),
-    "es2018" => Some(LibName::Es2018),
-    "es2019" => Some(LibName::Es2019),
-    "es2020" => Some(LibName::Es2020),
-    "es2021" => Some(LibName::Es2021),
-    "es2022" => Some(LibName::Es2022),
-    "esnext" => Some(LibName::EsNext),
-    other if other.starts_with("es20") => {
-      let Ok(year) = other.trim_start_matches("es").parse::<u32>() else {
-        return None;
-      };
-      match year {
-        2015 => Some(LibName::Es2015),
-        2016 => Some(LibName::Es2016),
-        2017 => Some(LibName::Es2017),
-        2018 => Some(LibName::Es2018),
-        2019 => Some(LibName::Es2019),
-        2020 => Some(LibName::Es2020),
-        2021 => Some(LibName::Es2021),
-        2022 => Some(LibName::Es2022),
-        _ => Some(LibName::EsNext),
-      }
-    }
     _ => None,
   }
 }

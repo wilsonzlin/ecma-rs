@@ -9,7 +9,6 @@ fn lower_query_uses_cache_across_program_checks() {
   // single minimal `.d.ts` lib so the program does not emit `NO_LIBS_LOADED`.
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
-  options.include_dom = false;
 
   let mut host = MemoryHost::with_options(options);
   host.add_lib(LibFile {

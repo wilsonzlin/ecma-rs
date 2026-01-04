@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 const ENTRY: &str = r#"
@@ -55,8 +55,11 @@ impl Host for TestHost {
 #[test]
 fn program_check_terminates_with_recursive_promise_like() {
   let mut options = CompilerOptions::default();
-  options.include_dom = false;
   options.target = ScriptTarget::EsNext;
+  options.libs = vec![
+    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
   options.skip_lib_check = false;
 
   let entry = FileKey::new("entry.ts");

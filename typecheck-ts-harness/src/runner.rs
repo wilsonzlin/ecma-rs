@@ -2882,7 +2882,6 @@ echo '{"diagnostics":[]}'
     }]);
     let mut compiler_options = CompilerOptions::default();
     compiler_options.no_default_lib = true;
-    compiler_options.include_dom = false;
     let host = HarnessHost::new(file_set.clone(), compiler_options);
     let roots = file_set.root_keys();
     let program = Arc::new(Program::new(host, roots));
@@ -2914,7 +2913,6 @@ echo '{"diagnostics":[]}'
     }]);
     let mut compiler_options = CompilerOptions::default();
     compiler_options.no_default_lib = true;
-    compiler_options.include_dom = false;
     let host = HarnessHost::new(file_set.clone(), compiler_options);
     let roots = file_set.root_keys();
     let program = Arc::new(Program::new(host, roots));

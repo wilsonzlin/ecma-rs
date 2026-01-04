@@ -542,9 +542,12 @@ fn build_compiler_options(
   if !args.lib.is_empty() {
     let mut libs = Vec::new();
     for raw in &args.lib {
-      libs.push(parse_lib_name(raw)?);
+      let Some(lib) = LibName::parse(raw) else {
+        return Err(format!("unknown lib '{}'", raw.trim()));
+      };
+      libs.push(lib);
     }
-    libs.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    libs.sort();
     libs.dedup();
     options.libs = libs;
   }
@@ -566,30 +569,7 @@ fn build_compiler_options(
     options.no_unchecked_indexed_access = true;
   }
 
-  // Convenience: include DOM if explicitly requested via --lib dom.
-  if options.libs.contains(&LibName::Dom) {
-    options.include_dom = true;
-  }
-
   Ok(options)
-}
-
-fn parse_lib_name(raw: &str) -> Result<LibName, String> {
-  let normalized = raw.trim().to_ascii_lowercase();
-  match normalized.as_str() {
-    "es5" => Ok(LibName::Es5),
-    "es2015" | "es6" => Ok(LibName::Es2015),
-    "es2016" => Ok(LibName::Es2016),
-    "es2017" => Ok(LibName::Es2017),
-    "es2018" => Ok(LibName::Es2018),
-    "es2019" => Ok(LibName::Es2019),
-    "es2020" => Ok(LibName::Es2020),
-    "es2021" => Ok(LibName::Es2021),
-    "es2022" => Ok(LibName::Es2022),
-    "esnext" => Ok(LibName::EsNext),
-    "dom" => Ok(LibName::Dom),
-    other => Err(format!("unknown lib '{other}'")),
-  }
 }
 
 fn init_tracing(enabled: bool) {

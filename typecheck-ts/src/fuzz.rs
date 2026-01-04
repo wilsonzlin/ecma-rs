@@ -154,7 +154,6 @@ impl Host for FuzzHost {
 
   fn compiler_options(&self) -> CompilerOptions {
     CompilerOptions {
-      include_dom: false,
       no_default_lib: true,
       ..CompilerOptions::default()
     }

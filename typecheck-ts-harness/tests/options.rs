@@ -111,8 +111,10 @@ fn exposes_applied_options_for_multi_file_fixture() {
   assert_eq!(result.options.harness.declaration, Some(true));
 
   assert!(result.options.rust.no_default_lib);
-  assert!(!result.options.rust.include_dom);
-  assert_eq!(result.options.rust.libs, vec![LibName::Es2020]);
+  assert_eq!(
+    result.options.rust.libs,
+    vec![LibName::parse("es2020").expect("es2020 lib")]
+  );
   assert_eq!(
     result.options.rust.module_resolution.as_deref(),
     Some("node16")
@@ -137,5 +139,27 @@ fn exposes_applied_options_for_multi_file_fixture() {
   assert_eq!(
     result.options.tsc.get("noLib").and_then(|v| v.as_bool()),
     Some(true)
+  );
+}
+
+#[test]
+fn exposes_applied_lib_list_with_dotted_names() {
+  let options = conformance_options(CompareMode::None);
+  let report = run_conformance(options).expect("run conformance");
+
+  let result = report
+    .results
+    .iter()
+    .find(|r| r.id.ends_with("lib_names_dotted.ts"))
+    .expect("lib_names_dotted fixture");
+
+  assert_eq!(result.options.harness.lib, vec!["DOM.Iterable", "es2015.promise"]);
+  assert!(!result.options.rust.no_default_lib);
+  assert_eq!(
+    result.options.rust.libs,
+    vec![
+      LibName::parse("dom.iterable").expect("dom.iterable lib"),
+      LibName::parse("es2015.promise").expect("es2015.promise lib"),
+    ],
   );
 }

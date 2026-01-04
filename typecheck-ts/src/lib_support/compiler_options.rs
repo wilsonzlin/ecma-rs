@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use types_ts_interned::CacheConfig;
 
@@ -77,8 +77,6 @@ impl Default for ScriptTarget {
 pub struct CompilerOptions {
   pub target: ScriptTarget,
   pub module: Option<ModuleKind>,
-  /// Whether DOM libs should be included in addition to the ES lib set.
-  pub include_dom: bool,
   /// If true, do not automatically include default libs.
   pub no_default_lib: bool,
   /// Explicit lib overrides (when non-empty this replaces the default target-derived set).
@@ -118,7 +116,6 @@ impl Default for CompilerOptions {
     CompilerOptions {
       target: ScriptTarget::default(),
       module: None,
-      include_dom: true,
       no_default_lib: false,
       libs: Vec::new(),
       skip_lib_check: true,
@@ -215,79 +212,83 @@ impl Default for CacheOptions {
 
 /// Named libraries that can be loaded.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum LibName {
-  Es5,
-  Es2015,
-  Es2015Promise,
-  Es2016,
-  Es2017,
-  Es2018,
-  Es2019,
-  Es2020,
-  Es2021,
-  Es2022,
-  EsNext,
-  /// Explicit Resource Management (`using` / `await using`) declarations.
-  EsNextDisposable,
-  Dom,
-}
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", serde(transparent))]
+pub struct LibName(Arc<str>);
 
 impl LibName {
-  pub fn as_str(&self) -> &'static str {
-    match self {
-      LibName::Es5 => "lib.es5.d.ts",
-      LibName::Es2015 => "lib.es2015.d.ts",
-      LibName::Es2015Promise => "lib.es2015.promise.d.ts",
-      LibName::Es2016 => "lib.es2016.d.ts",
-      LibName::Es2017 => "lib.es2017.d.ts",
-      LibName::Es2018 => "lib.es2018.d.ts",
-      LibName::Es2019 => "lib.es2019.d.ts",
-      LibName::Es2020 => "lib.es2020.d.ts",
-      LibName::Es2021 => "lib.es2021.d.ts",
-      LibName::Es2022 => "lib.es2022.d.ts",
-      LibName::EsNext => "lib.esnext.d.ts",
-      LibName::EsNextDisposable => "lib.esnext.disposable.d.ts",
-      LibName::Dom => "lib.dom.d.ts",
-    }
+  /// Parse a TypeScript lib name from the `--lib` / `compilerOptions.lib` model.
+  ///
+  /// Accepts the canonical names (e.g. `es2020`, `dom.iterable`), common case
+  /// variants (e.g. `ES2020`), and the filename form (e.g. `lib.es2020.d.ts`).
+  ///
+  /// Returns `None` when the string cannot represent a TS lib name.
+  pub fn parse(raw: &str) -> Option<Self> {
+    canonicalize_lib_name(raw).map(|name| LibName(Arc::from(name)))
   }
 
-  pub fn option_name(&self) -> &'static str {
-    match self {
-      LibName::Es5 => "es5",
-      LibName::Es2015 => "es2015",
-      LibName::Es2015Promise => "es2015.promise",
-      LibName::Es2016 => "es2016",
-      LibName::Es2017 => "es2017",
-      LibName::Es2018 => "es2018",
-      LibName::Es2019 => "es2019",
-      LibName::Es2020 => "es2020",
-      LibName::Es2021 => "es2021",
-      LibName::Es2022 => "es2022",
-      LibName::EsNext => "esnext",
-      LibName::EsNextDisposable => "esnext.disposable",
-      LibName::Dom => "dom",
-    }
-  }
-
+  /// Parse a lib name from TypeScript-style option strings (e.g. `dom`, `es2020`,
+  /// `esnext.disposable`). This is a small compatibility shim used by features
+  /// like `/// <reference lib="..." />`.
   pub fn from_option_name(raw: &str) -> Option<Self> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-      "es5" => Some(LibName::Es5),
-      "es2015" => Some(LibName::Es2015),
-      "es2015.promise" => Some(LibName::Es2015Promise),
-      "es2016" => Some(LibName::Es2016),
-      "es2017" => Some(LibName::Es2017),
-      "es2018" => Some(LibName::Es2018),
-      "es2019" => Some(LibName::Es2019),
-      "es2020" => Some(LibName::Es2020),
-      "es2021" => Some(LibName::Es2021),
-      "es2022" => Some(LibName::Es2022),
-      "esnext" => Some(LibName::EsNext),
-      "esnext.disposable" => Some(LibName::EsNextDisposable),
-      "dom" => Some(LibName::Dom),
-      _ => None,
-    }
+    LibName::parse(raw)
   }
+
+  /// Canonical lib name used by TypeScript (lower-cased, no `lib.` / `.d.ts`).
+  pub fn as_str(&self) -> &str {
+    &self.0
+  }
+
+  /// Filename used by the TypeScript lib bundle (`lib.<name>.d.ts`).
+  pub fn file_name(&self) -> String {
+    format!("lib.{}.d.ts", self.as_str())
+  }
+}
+
+impl fmt::Display for LibName {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
+
+fn canonicalize_lib_name(raw: &str) -> Option<String> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+
+  // TypeScript treats lib names case-insensitively.
+  let mut normalized = trimmed.to_ascii_lowercase();
+
+  // Permit passing file names/paths (`lib.es2020.d.ts` or `.../lib.es2020.d.ts`).
+  if let Some((_, tail)) = normalized.rsplit_once(['/', '\\']) {
+    normalized = tail.to_string();
+  }
+
+  normalized = normalized.trim_start_matches("lib.").to_string();
+  normalized = normalized
+    .trim_end_matches(".d.ts")
+    .trim_end_matches(".ts")
+    .to_string();
+
+  // `--lib es6` is an alias for `es2015`.
+  if normalized == "es6" {
+    normalized = "es2015".to_string();
+  }
+
+  if normalized.is_empty() {
+    return None;
+  }
+
+  // TypeScript lib names are dot-separated ASCII identifiers.
+  if !normalized
+    .chars()
+    .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '.')
+  {
+    return None;
+  }
+
+  Some(normalized)
 }
 
 /// Ordered set of libs to load.
@@ -304,23 +305,19 @@ impl LibSet {
 
   /// Compute the default lib set for a given compiler configuration.
   pub fn for_options(options: &CompilerOptions) -> Self {
-    if options.no_default_lib {
-      return LibSet::from(options.libs.clone());
-    }
-
     if !options.libs.is_empty() {
       return LibSet::from(options.libs.clone());
     }
 
-    let es_lib = es_lib_for_target(options.target);
-    let mut libs = vec![es_lib];
+    if options.no_default_lib {
+      return LibSet::empty();
+    }
+
+    let mut libs = vec![es_lib_for_target(options.target), lib_name("dom")];
     if matches!(options.target, ScriptTarget::EsNext) {
-      libs.push(LibName::EsNextDisposable);
+      libs.push(lib_name("esnext.disposable"));
     }
-    if options.include_dom && !libs.contains(&LibName::Dom) {
-      libs.push(LibName::Dom);
-    }
-    LibSet { libs }
+    LibSet::from(libs)
   }
 
   pub fn libs(&self) -> &[LibName] {
@@ -337,22 +334,102 @@ impl fmt::Display for LibSet {
 
 impl From<Vec<LibName>> for LibSet {
   fn from(libs: Vec<LibName>) -> Self {
+    let mut libs = libs;
+    libs.sort();
+    libs.dedup();
     LibSet { libs }
   }
 }
 
 fn es_lib_for_target(target: ScriptTarget) -> LibName {
   match target {
-    ScriptTarget::Es3 | ScriptTarget::Es5 => LibName::Es5,
-    ScriptTarget::Es2015 => LibName::Es2015,
-    ScriptTarget::Es2016 => LibName::Es2016,
-    ScriptTarget::Es2017 => LibName::Es2017,
-    ScriptTarget::Es2018 => LibName::Es2018,
-    ScriptTarget::Es2019 => LibName::Es2019,
-    ScriptTarget::Es2020 => LibName::Es2020,
-    ScriptTarget::Es2021 => LibName::Es2021,
-    ScriptTarget::Es2022 => LibName::Es2022,
-    ScriptTarget::EsNext => LibName::EsNext,
+    ScriptTarget::Es3 | ScriptTarget::Es5 => lib_name("es5"),
+    ScriptTarget::Es2015 => lib_name("es2015"),
+    ScriptTarget::Es2016 => lib_name("es2016"),
+    ScriptTarget::Es2017 => lib_name("es2017"),
+    ScriptTarget::Es2018 => lib_name("es2018"),
+    ScriptTarget::Es2019 => lib_name("es2019"),
+    ScriptTarget::Es2020 => lib_name("es2020"),
+    ScriptTarget::Es2021 => lib_name("es2021"),
+    ScriptTarget::Es2022 => lib_name("es2022"),
+    ScriptTarget::EsNext => lib_name("esnext"),
+  }
+}
+
+fn lib_name(name: &'static str) -> LibName {
+  LibName(Arc::from(name))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn canonicalizes_lib_names() {
+    let cases = [
+      ("es2020", "es2020"),
+      ("ES2020", "es2020"),
+      ("lib.es2020.d.ts", "es2020"),
+      ("lib.es2020.ts", "es2020"),
+      ("dom.iterable", "dom.iterable"),
+      ("LIB.DOM.ITERABLE.D.TS", "dom.iterable"),
+      ("esnext.disposable", "esnext.disposable"),
+      ("lib.esnext.disposable.d.ts", "esnext.disposable"),
+      ("es6", "es2015"),
+      ("lib.es6.d.ts", "es2015"),
+      ("path/to/lib.es2020.d.ts", "es2020"),
+      ("path\\to\\lib.es2020.d.ts", "es2020"),
+    ];
+
+    for (raw, expected) in cases {
+      let parsed = LibName::parse(raw).unwrap_or_else(|| panic!("expected parse for {raw}"));
+      assert_eq!(parsed.as_str(), expected);
+    }
+
+    assert!(LibName::parse("").is_none());
+    assert!(LibName::parse("lib.").is_none());
+    assert!(LibName::parse("es2020+dom").is_none());
+  }
+
+  #[test]
+  fn computes_default_libs_from_target() {
+    let mut options = CompilerOptions::default();
+    options.target = ScriptTarget::Es2020;
+    let libs = LibSet::for_options(&options);
+    assert_eq!(
+      libs.libs(),
+      &[lib_name("dom"), lib_name("es2020")],
+      "default libs should include target ES lib plus dom"
+    );
+
+    let mut options = CompilerOptions::default();
+    options.target = ScriptTarget::Es3;
+    let libs = LibSet::for_options(&options);
+    assert_eq!(libs.libs(), &[lib_name("dom"), lib_name("es5")]);
+
+    let mut options = CompilerOptions::default();
+    options.target = ScriptTarget::EsNext;
+    let libs = LibSet::for_options(&options);
+    assert_eq!(
+      libs.libs(),
+      &[
+        lib_name("dom"),
+        lib_name("esnext"),
+        lib_name("esnext.disposable")
+      ],
+      "esnext defaults should include esnext.disposable for using/await using support"
+    );
+
+    let mut options = CompilerOptions::default();
+    options.no_default_lib = true;
+    let libs = LibSet::for_options(&options);
+    assert!(libs.libs().is_empty());
+
+    let mut options = CompilerOptions::default();
+    options.no_default_lib = true;
+    options.libs = vec![LibName::parse("es2015.promise").unwrap()];
+    let libs = LibSet::for_options(&options);
+    assert_eq!(libs.libs(), &[LibName::parse("es2015.promise").unwrap()]);
   }
 }
 

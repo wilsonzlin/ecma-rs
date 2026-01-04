@@ -239,19 +239,16 @@ impl HarnessOptions {
 
     let mut libs = Vec::new();
     for lib in &self.lib {
-      if let Some(parsed) = parse_lib_name(lib) {
+      if let Some(parsed) = LibName::parse(lib) {
         libs.push(parsed);
       }
     }
-    let no_lib = self.no_lib.unwrap_or(false);
     if !libs.is_empty() {
-      opts.include_dom = libs.iter().any(|l| matches!(l, LibName::Dom));
-      opts.libs = libs.clone();
-      opts.no_default_lib = true;
-    } else {
-      opts.include_dom = !no_lib;
-      opts.no_default_lib |= no_lib;
+      libs.sort();
+      libs.dedup();
+      opts.libs = libs;
     }
+    opts.no_default_lib = self.no_lib.unwrap_or(false);
 
     opts
   }
@@ -321,7 +318,7 @@ impl HarnessOptions {
         compiler
           .libs
           .iter()
-          .map(|lib| lib.option_name().to_string())
+          .map(|lib| lib.as_str().to_string())
           .collect()
       };
       map.insert(
@@ -447,10 +444,6 @@ fn parse_module_kind(raw: &str) -> Option<ModuleKind> {
   }
 }
 
-fn parse_lib_name(raw: &str) -> Option<LibName> {
-  LibName::from_option_name(raw)
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -554,8 +547,14 @@ mod tests {
     assert!(compiler.strict_function_types);
     assert!(!compiler.no_implicit_any);
     assert!(compiler.strict_null_checks);
-    assert!(compiler.no_default_lib);
-    assert_eq!(compiler.libs, vec![LibName::Dom, LibName::Es2015]);
+    assert!(!compiler.no_default_lib);
+    assert_eq!(
+      compiler.libs,
+      vec![
+        LibName::parse("dom").expect("dom lib"),
+        LibName::parse("es2015").expect("es2015 lib")
+      ]
+    );
   }
 
   #[test]
@@ -580,9 +579,11 @@ mod tests {
     let tsc = options.to_tsc_options_map();
     let compiler = options.to_compiler_options();
 
-    assert_eq!(compiler.libs, vec![LibName::Es2020]);
+    assert_eq!(
+      compiler.libs,
+      vec![LibName::parse("es2020").expect("es2020 lib")]
+    );
     assert!(compiler.no_default_lib);
-    assert!(!compiler.include_dom);
     assert_eq!(compiler.types, vec!["foo".to_string(), "bar".to_string()]);
     assert_eq!(
       compiler.module_resolution.as_deref(),

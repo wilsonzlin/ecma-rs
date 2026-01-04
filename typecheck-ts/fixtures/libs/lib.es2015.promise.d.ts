@@ -9,4 +9,3 @@ interface Promise<T> {
 }
 
 declare const esVersion: "es2015.promise";
-

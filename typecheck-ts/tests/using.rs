@@ -1,14 +1,17 @@
 use diagnostics::TextRange;
 use std::sync::Arc;
 
-use typecheck_ts::lib_support::{CompilerOptions, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, LibName, ScriptTarget};
 use typecheck_ts::{codes, FileKey, MemoryHost, Program};
 
 #[test]
 fn using_accepts_disposable_initializer() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
-  options.include_dom = false;
+  options.libs = vec![
+    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
   let mut host = MemoryHost::with_options(options);
 
   let file = FileKey::new("main.ts");
@@ -38,7 +41,10 @@ using x = new D();
 fn using_rejects_non_disposable_initializer() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
-  options.include_dom = false;
+  options.libs = vec![
+    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
   let mut host = MemoryHost::with_options(options);
 
   let file = FileKey::new("main.ts");
@@ -58,7 +64,10 @@ fn using_rejects_non_disposable_initializer() {
 fn await_using_requires_async_context() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
-  options.include_dom = false;
+  options.libs = vec![
+    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
   let mut host = MemoryHost::with_options(options);
 
   let file = FileKey::new("main.ts");
@@ -92,7 +101,10 @@ function bad() {
 fn await_using_allowed_in_async_function() {
   let mut options = CompilerOptions::default();
   options.target = ScriptTarget::EsNext;
-  options.include_dom = false;
+  options.libs = vec![
+    LibName::parse("esnext").expect("esnext lib"),
+    LibName::parse("esnext.disposable").expect("esnext.disposable lib"),
+  ];
   let mut host = MemoryHost::with_options(options);
 
   let file = FileKey::new("main.ts");

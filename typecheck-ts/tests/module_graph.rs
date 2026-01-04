@@ -4,7 +4,6 @@ use typecheck_ts::{FileId, FileKey, MemoryHost, Program};
 #[test]
 fn reachable_files_are_stable_and_cycle_safe() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     no_default_lib: true,
     ..Default::default()
   });
@@ -32,7 +31,6 @@ fn reachable_files_are_stable_and_cycle_safe() {
 #[test]
 fn reachable_files_include_type_import_deps() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     no_default_lib: true,
     ..Default::default()
   });
@@ -64,7 +62,6 @@ type Bar = typeof import("./file1").Foo;
 #[test]
 fn check_is_cycle_safe_for_value_imports() {
   let mut host = MemoryHost::with_options(CompilerOptions {
-    include_dom: false,
     no_default_lib: true,
     ..Default::default()
   });

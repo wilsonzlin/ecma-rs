@@ -80,7 +80,7 @@ fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
 pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
   #[cfg(feature = "bundled-libs")]
   {
-    Some(bundled::lib_file(name))
+    bundled::lib_file(name)
   }
 
   #[cfg(not(feature = "bundled-libs"))]
@@ -94,80 +94,39 @@ pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
 mod bundled {
   use std::sync::Arc;
 
+  use include_dir::{include_dir, Dir};
+
   use super::super::FileKind;
   use super::super::LibFile;
   use super::super::LibName;
   use super::super::LibSet;
   use crate::FileKey;
 
-  pub(super) fn lib_file(name: LibName) -> LibFile {
-    LibFile {
-      key: FileKey::new(format!("lib:{}", name.as_str())),
-      name: Arc::from(name.as_str()),
-      kind: FileKind::Dts,
-      text: Arc::from(text_for(&name)),
-    }
-  }
+  static LIB_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/fixtures/libs");
 
   pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
-    lib_set.libs().iter().cloned().map(lib_file).collect()
+    lib_set
+      .libs()
+      .iter()
+      .cloned()
+      .filter_map(lib_file)
+      .collect()
   }
 
-  fn text_for(name: &LibName) -> &'static str {
-    match name {
-      LibName::Es5 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es5.d.ts"
-      )),
-      LibName::Es2015 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2015.d.ts"
-      )),
-      LibName::Es2015Promise => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2015.promise.d.ts"
-      )),
-      LibName::Es2016 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2016.d.ts"
-      )),
-      LibName::Es2017 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2017.d.ts"
-      )),
-      LibName::Es2018 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2018.d.ts"
-      )),
-      LibName::Es2019 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2019.d.ts"
-      )),
-      LibName::Es2020 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2020.d.ts"
-      )),
-      LibName::Es2021 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2021.d.ts"
-      )),
-      LibName::Es2022 => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.es2022.d.ts"
-      )),
-      LibName::EsNext => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.esnext.d.ts"
-      )),
-      LibName::EsNextDisposable => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.esnext.disposable.d.ts"
-      )),
-      LibName::Dom => include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/fixtures/libs/lib.dom.d.ts"
-      )),
-    }
+  pub(super) fn lib_file(name: LibName) -> Option<LibFile> {
+    let filename = name.file_name();
+    let text = text_for(filename.as_str())?;
+    let key = FileKey::new(format!("lib:{filename}"));
+    Some(LibFile {
+      key,
+      name: Arc::from(filename),
+      kind: FileKind::Dts,
+      text: Arc::from(text),
+    })
+  }
+
+  fn text_for(filename: &str) -> Option<&'static str> {
+    LIB_DIR.get_file(filename).and_then(|file| file.contents_utf8())
   }
 }
 
