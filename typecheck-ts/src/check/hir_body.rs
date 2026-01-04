@@ -5713,12 +5713,6 @@ enum BindingMode {
   Assign,
 }
 
-struct OptionalChainInfo {
-  base: FlowKey,
-  base_ty: TypeId,
-  result_ty: Option<TypeId>,
-}
-
 enum SwitchDiscriminant {
   Ident {
     name: FlowBindingId,
@@ -7369,8 +7363,8 @@ impl<'a> FlowBodyChecker<'a> {
 
     if let Some((target, path, object_expr, optional_bases)) = self.discriminant_member(left) {
       if let Some(lit) = self.literal_value(right) {
-        self.optional_chain_equality_facts(left, right_ty, negate, out);
-        self.optional_chain_equality_facts(right, left_ty, negate, out);
+        self.optional_chain_equality_facts(left, right, right_ty, op, env, out);
+        self.optional_chain_equality_facts(right, left, left_ty, op, env, out);
 
         let target_ty = env
           .get(target)
@@ -7432,8 +7426,8 @@ impl<'a> FlowBodyChecker<'a> {
     }
     if let Some((target, path, object_expr, optional_bases)) = self.discriminant_member(right) {
       if let Some(lit) = self.literal_value(left) {
-        self.optional_chain_equality_facts(left, right_ty, negate, out);
-        self.optional_chain_equality_facts(right, left_ty, negate, out);
+        self.optional_chain_equality_facts(left, right, right_ty, op, env, out);
+        self.optional_chain_equality_facts(right, left, left_ty, op, env, out);
 
         let target_ty = env
           .get(target)
@@ -7535,8 +7529,8 @@ impl<'a> FlowBodyChecker<'a> {
       apply_narrowing(out, negate, target, yes, no);
     }
 
-    self.optional_chain_equality_facts(left, right_ty, negate, out);
-    self.optional_chain_equality_facts(right, left_ty, negate, out);
+    self.optional_chain_equality_facts(left, right, right_ty, op, env, out);
+    self.optional_chain_equality_facts(right, left, left_ty, op, env, out);
   }
 
   fn eval_call(
@@ -7707,72 +7701,92 @@ impl<'a> FlowBodyChecker<'a> {
   fn optional_chain_equality_facts(
     &mut self,
     expr: ExprId,
+    other: ExprId,
     other_ty: TypeId,
-    negate: bool,
+    op: BinaryOp,
+    env: &Env,
     out: &mut Facts,
   ) {
     let prim = self.store.primitive_ids();
-    let Some(info) = self.optional_chain_info(expr) else {
-      return;
-    };
-    let (non_nullish_base, nullish_base) = narrow_non_nullish(info.base_ty, &self.store);
-    if non_nullish_base == prim.never {
+    let mut bases = Vec::new();
+    self.optional_chain_base_keys(expr, &mut bases);
+    if bases.is_empty() {
       return;
     }
 
-    if self.excludes_nullish(other_ty) {
-      let target = if negate {
-        &mut out.falsy
-      } else {
-        &mut out.truthy
-      };
-      target.insert(info.base.clone(), non_nullish_base);
-      return;
-    }
-
-    if self.is_nullish_only(other_ty) {
-      if let Some(result_ty) = info.result_ty {
-        let (_, result_nullish) = narrow_non_nullish(result_ty, &self.store);
-        if result_nullish == prim.never && nullish_base != prim.never {
-          let target = if negate {
-            &mut out.falsy
-          } else {
-            &mut out.truthy
-          };
-          target.insert(info.base.clone(), nullish_base);
+    let effective_other_ty = match self.literal_value(other) {
+      Some(LiteralValue::Undefined) => {
+        let binding = self.ident_binding(other);
+        let binding_key = binding.and_then(|id| self.bindings.binding_for_flow(id));
+        if binding_key.is_none() || matches!(binding_key, Some(BindingKey::External(_))) {
+          prim.undefined
+        } else {
+          other_ty
         }
       }
-    }
-  }
+      Some(LiteralValue::Null) => prim.null,
+      _ => other_ty,
+    };
 
-  fn optional_chain_info(&mut self, expr: ExprId) -> Option<OptionalChainInfo> {
-    let prim = self.store.primitive_ids();
-    match &self.body.exprs[expr.0 as usize].kind {
-      ExprKind::Member(mem) if mem.optional => {
-        let base = self.flow_key_for_expr(mem.object)?;
-        let base_ty = self.expr_types[mem.object.0 as usize];
+    fn insert_fact(store: &TypeStore, target: &mut HashMap<FlowKey, TypeId>, key: FlowKey, ty: TypeId) {
+      target
+        .entry(key)
+        .and_modify(|existing| *existing = store.intersection(vec![*existing, ty]))
+        .or_insert(ty);
+    }
+
+    let negate = matches!(op, BinaryOp::Inequality | BinaryOp::StrictInequality);
+    let (eq_target, neq_target) = if negate {
+      (&mut out.falsy, &mut out.truthy)
+    } else {
+      (&mut out.truthy, &mut out.falsy)
+    };
+
+    if self.excludes_nullish(effective_other_ty) {
+      for base in bases.iter() {
+        let base_ty = self.flow_key_type(env, base);
         let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
-        let result_ty = Some(if non_nullish == prim.never {
-          prim.never
-        } else {
-          self.member_type(non_nullish, mem)
-        });
-        Some(OptionalChainInfo {
-          base,
-          base_ty,
-          result_ty,
-        })
+        if non_nullish != prim.never {
+          insert_fact(self.store.as_ref(), eq_target, base.clone(), non_nullish);
+        }
       }
-      ExprKind::Call(call) if call.optional => {
-        let base = self.flow_key_for_expr(call.callee)?;
-        let base_ty = self.expr_types[call.callee.0 as usize];
-        Some(OptionalChainInfo {
-          base,
-          base_ty,
-          result_ty: None,
-        })
+      return;
+    }
+
+    if self.is_nullish_only(effective_other_ty) {
+      let op_for_equality = match op {
+        BinaryOp::Inequality => BinaryOp::Equality,
+        BinaryOp::StrictInequality => BinaryOp::StrictEquality,
+        _ => op,
+      };
+      let (other_undefined, _) = narrow_by_nullish_equality(
+        effective_other_ty,
+        op_for_equality,
+        &LiteralValue::Undefined,
+        &self.store,
+      );
+      if other_undefined != prim.never {
+        for base in bases.iter() {
+          let base_ty = self.flow_key_type(env, base);
+          let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
+          if non_nullish != prim.never {
+            insert_fact(self.store.as_ref(), neq_target, base.clone(), non_nullish);
+          }
+        }
+        if bases.len() == 1 {
+          if let Some(exec_ty) = self.optional_chain_exec_type(expr) {
+            let (_, exec_nullish) = narrow_non_nullish(exec_ty, &self.store);
+            if exec_nullish == prim.never {
+              let base = &bases[0];
+              let base_ty = self.flow_key_type(env, base);
+              let (_, base_nullish) = narrow_non_nullish(base_ty, &self.store);
+              if base_nullish != prim.never {
+                insert_fact(self.store.as_ref(), eq_target, base.clone(), base_nullish);
+              }
+            }
+          }
+        }
       }
-      _ => None,
     }
   }
 
