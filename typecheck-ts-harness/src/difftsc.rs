@@ -787,14 +787,24 @@ fn diff_diagnostics(
   normalization: &NormalizationOptions,
 ) -> Option<MismatchReport> {
   let mut used = vec![false; actual.len()];
-  let mut diff = MismatchReport::default();
+  let mut unmatched: Vec<&NormalizedDiagnostic> = Vec::new();
 
+  // First match exact diagnostics so later mismatch classification doesn't
+  // consume an `actual` diagnostic that could have been an exact match for a
+  // different `expected` entry (for example, when tsc emits multiple diagnostics
+  // at the same span).
   for exp in expected {
     if let Some(idx) = find_match(actual, &used, |act| exp.matches(act, normalization)) {
       used[idx] = true;
-      continue;
+    } else {
+      unmatched.push(exp);
     }
+  }
 
+  let mut diff = MismatchReport::default();
+  let mut unmatched_after_code: Vec<&NormalizedDiagnostic> = Vec::new();
+
+  for exp in unmatched {
     if let Some((idx, reason)) = find_code_or_severity_match(actual, &used, exp, normalization) {
       used[idx] = true;
       diff.code.push(MismatchPair {
@@ -802,9 +812,12 @@ fn diff_diagnostics(
         actual: actual[idx].clone(),
         reason: Some(reason),
       });
-      continue;
+    } else {
+      unmatched_after_code.push(exp);
     }
+  }
 
+  for exp in unmatched_after_code {
     if let Some(idx) = find_span_mismatch(actual, &used, exp) {
       used[idx] = true;
       diff.span.push(MismatchPair {
@@ -812,10 +825,9 @@ fn diff_diagnostics(
         actual: actual[idx].clone(),
         reason: None,
       });
-      continue;
+    } else {
+      diff.missing.push(exp.clone());
     }
-
-    diff.missing.push(exp.clone());
   }
 
   for (idx, act) in actual.iter().enumerate() {

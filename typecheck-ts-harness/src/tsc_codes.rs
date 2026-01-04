@@ -70,6 +70,8 @@ pub(crate) fn mapped_tsc_codes_for_rust_code(raw: &str) -> Option<&'static [u32]
     "TC2010" => Some(&[2307]),
     // `typeof` type query failures generally surface as missing-name diagnostics in tsc.
     "TC2011" => Some(&[2304]),
+    // Invalid `using` / `await using` initializer (explicit resource management).
+    "TC2012" => Some(&[2850, 2851]),
     // `--noImplicitAny` family (multiple codes depending on context).
     "TC3000" => Some(&[7005, 7006, 7031, 7034]),
     // JSX diagnostics.
@@ -118,6 +120,8 @@ mod tests {
     assert!(rust_code_matches_tsc("TC1006", 2554));
     assert!(rust_code_matches_tsc("TC2010", 2307));
     assert!(rust_code_matches_tsc("TC2011", 2304));
+    assert!(rust_code_matches_tsc("TC2012", 2850));
+    assert!(rust_code_matches_tsc("TC2012", 2851));
     assert!(rust_code_matches_tsc("TC3000", 7006));
     assert!(rust_code_matches_tsc("TC3001", 17004));
     assert!(rust_code_matches_tsc("TC3002", 2339));
