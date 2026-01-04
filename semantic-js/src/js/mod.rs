@@ -43,6 +43,13 @@
 //!   are visible throughout that scope regardless of source order. Hoisted
 //!   bindings for each scope are listed in [`ScopeData::hoisted_bindings`] so
 //!   downstream passes can model the implicit `undefined` initialization.
+//! - Annex B block functions (non-strict scripts): a function declaration inside
+//!   a block introduces **two** bindings: a block-scoped binding and (when not
+//!   suppressed by an enclosing lexical declaration) a hoisted `var` binding in
+//!   the nearest variable scope. When both bindings are present,
+//!   [`JsSemantics::annex_b_function_decls`] links the block binding to the
+//!   hoisted binding so downstream renamers can keep their identifier text
+//!   consistent.
 //! - Temporal dead zones (TDZ): `let`/`const`/class declarations are recorded as
 //!   TDZ bindings in their block scope; resolution marks uses as `in_tdz` until
 //!   the binding is initialized.
@@ -246,6 +253,10 @@ pub struct JsSemantics {
   pub name_lookup: BTreeMap<String, NameId>,
   pub scopes: BTreeMap<ScopeId, ScopeData>,
   pub symbols: BTreeMap<SymbolId, SymbolData>,
+  /// Maps the block-scoped binding introduced by an Annex B block function
+  /// declaration to the corresponding hoisted `var` binding in the nearest
+  /// variable scope.
+  pub annex_b_function_decls: BTreeMap<SymbolId, SymbolId>,
   pub top_scope: ScopeId,
 }
 

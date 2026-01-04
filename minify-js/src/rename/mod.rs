@@ -388,6 +388,19 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     .collect();
   let mut renames = HashMap::default();
 
+  let mut annex_b_block_to_var = HashMap::default();
+  let mut annex_b_var_to_blocks: HashMap<SymbolId, Vec<SymbolId>> = HashMap::default();
+  for (block, var_sym) in sem.annex_b_function_decls.iter() {
+    annex_b_block_to_var.insert(*block, *var_sym);
+    annex_b_var_to_blocks
+      .entry(*var_sym)
+      .or_default()
+      .push(*block);
+  }
+  for blocks in annex_b_var_to_blocks.values_mut() {
+    blocks.sort_by_key(|sym| sym.raw());
+  }
+
   fn assign_scope(
     scope: ScopeId,
     sem: &JsSemantics,
@@ -395,6 +408,8 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     reserved: &HashSet<String>,
     disabled_scopes: &HashSet<ScopeId>,
     pinned_symbols: &HashSet<SymbolId>,
+    annex_b_block_to_var: &HashMap<SymbolId, SymbolId>,
+    annex_b_var_to_blocks: &HashMap<SymbolId, Vec<SymbolId>>,
     renames: &mut HashMap<SymbolId, String>,
   ) {
     let symbol_order = usage
@@ -414,6 +429,8 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
           reserved,
           disabled_scopes,
           pinned_symbols,
+          annex_b_block_to_var,
+          annex_b_var_to_blocks,
           renames,
         );
       }
@@ -436,12 +453,104 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
 
     let mut generator = NameGenerator::new();
     let mut used = HashSet::default();
+
+    // Reserve any pinned bindings before generating new names so we never
+    // accidentally rename another symbol to the same identifier.
+    for sym in symbol_order.iter() {
+      let Some(name) = usage.symbol_names.get(sym) else {
+        continue;
+      };
+      if usage.exported.contains(sym) || pinned_symbols.contains(sym) {
+        used.insert(name.clone());
+      }
+    }
+
+    // Annex B block functions (sloppy scripts) introduce two linked bindings
+    // (block + hoisted var). The function name token is shared, so all linked
+    // symbols must receive the same rename. Reserve the final group name in the
+    // block scope up-front so later renames cannot collide.
+    for sym in symbol_order.iter() {
+      let Some(rep) = annex_b_block_to_var.get(sym).copied() else {
+        continue;
+      };
+      let group_name = renames
+        .get(&rep)
+        .cloned()
+        .or_else(|| usage.symbol_names.get(&rep).cloned());
+      if let Some(name) = group_name {
+        used.insert(name);
+      }
+      if let Some(name) = renames.get(&rep).cloned() {
+        renames.insert(*sym, name);
+      }
+    }
+
     for sym in symbol_order {
+      if annex_b_block_to_var.contains_key(&sym) {
+        continue;
+      }
+
       let Some(name) = usage.symbol_names.get(&sym) else {
         continue;
       };
+
+      if let Some(blocks) = annex_b_var_to_blocks.get(&sym) {
+        let mut pinned = usage.exported.contains(&sym) || pinned_symbols.contains(&sym);
+        for block in blocks.iter() {
+          let block_scope = sem.symbol(*block).decl_scope;
+          if disabled_scopes.contains(&block_scope) {
+            pinned = true;
+            break;
+          }
+        }
+        if pinned {
+          used.insert(name.clone());
+          continue;
+        }
+
+        let mut group_disallowed: HashSet<String> = HashSet::default();
+        for block in blocks.iter() {
+          let block_scope = sem.symbol(*block).decl_scope;
+          group_disallowed.extend(reserved.iter().cloned());
+          if let Some(u) = usage.scope_usages.get(&block_scope) {
+            for foreign in u.foreign.iter() {
+              if let Some(foreign_name) = renames.get(foreign) {
+                group_disallowed.insert(foreign_name.clone());
+              } else if let Some(foreign_name) = usage.symbol_names.get(foreign) {
+                group_disallowed.insert(foreign_name.clone());
+              }
+            }
+            for unknown in u.unknown.iter() {
+              group_disallowed.insert(unknown.clone());
+            }
+          }
+
+          if let Some(order) = usage.scope_symbol_order.get(&block_scope) {
+            for local_sym in order.iter() {
+              if usage.exported.contains(local_sym) || pinned_symbols.contains(local_sym) {
+                if let Some(local_name) = usage.symbol_names.get(local_sym) {
+                  group_disallowed.insert(local_name.clone());
+                }
+              }
+            }
+          }
+        }
+
+        let new_name = generator.next_name(|candidate| {
+          !disallowed.contains(candidate)
+            && !used.contains(candidate)
+            && !group_disallowed.contains(candidate)
+        });
+        used.insert(new_name.clone());
+        renames.insert(sym, new_name.clone());
+        for block in blocks.iter().copied() {
+          renames.insert(block, new_name.clone());
+        }
+        continue;
+      }
+
       if usage.exported.contains(&sym) || pinned_symbols.contains(&sym) {
-        used.insert(name.clone());
+        // Already reserved above.
         continue;
       }
       let new_name = generator
@@ -458,6 +567,8 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
         reserved,
         disabled_scopes,
         pinned_symbols,
+        annex_b_block_to_var,
+        annex_b_var_to_blocks,
         renames,
       );
     }
@@ -470,6 +581,8 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     &reserved,
     &disabled_scopes,
     &pinned_symbols,
+    &annex_b_block_to_var,
+    &annex_b_var_to_blocks,
     &mut renames,
   );
   renames
@@ -717,6 +830,34 @@ mod tests {
     let mut replacements = apply_renames(&mut ast, &renames);
     let rewritten = rewrite_source(source, &mut replacements);
     assert_eq!(rewritten, "const a=1;");
+  }
+
+  #[test]
+  fn annex_b_block_function_symbols_share_a_rename() {
+    let source = "function outer(){ if(true){ function foo(){} foo; } foo; }";
+    let mut ast = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Js,
+        source_type: SourceType::Script,
+      },
+    )
+    .expect("parse");
+    let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(0));
+    assert!(diagnostics.is_empty());
+
+    let (&block_sym, &var_sym) = sem
+      .annex_b_function_decls
+      .iter()
+      .next()
+      .expect("expected annex b linkage");
+
+    let usage = collect_usages(&mut ast, &sem, TopLevelMode::Global);
+    let renames = assign_names(&sem, &usage);
+
+    let block_name = renames.get(&block_sym).expect("block rename");
+    let var_name = renames.get(&var_sym).expect("var rename");
+    assert_eq!(block_name, var_name);
   }
 
   #[test]

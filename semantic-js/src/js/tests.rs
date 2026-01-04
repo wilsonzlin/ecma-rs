@@ -108,6 +108,12 @@ fn snapshot(sem: &JsSemantics) -> Vec<u8> {
     )
     .unwrap();
   }
+  let annex_pairs: Vec<_> = sem
+    .annex_b_function_decls
+    .iter()
+    .map(|(block, var_sym)| (block.raw(), var_sym.raw()))
+    .collect();
+  writeln!(&mut out, "annex_b_function_decls {annex_pairs:?}").unwrap();
   out.into_bytes()
 }
 
@@ -539,7 +545,7 @@ fn parenthesized_use_strict_is_not_a_directive() {
 
   let source = r#"function outer(){ ("use strict"); if(true){ function foo(){} } foo; }"#;
   let mut ast = parse(source).unwrap();
-  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(90));
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(90));
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
@@ -551,7 +557,14 @@ fn parenthesized_use_strict_is_not_a_directive() {
 
   collector.uses.sort_by_key(|(loc, _)| loc.0);
   assert_eq!(collector.uses.len(), 1);
-  assert_eq!(collector.uses[0].1, Some(decl));
+  let outside = collector.uses[0]
+    .1
+    .expect("expected hoisted foo binding to resolve");
+  assert_ne!(outside, decl);
+  assert_eq!(
+    sem.annex_b_function_decls.get(&decl).copied(),
+    Some(outside)
+  );
 }
 
 #[test]
@@ -664,9 +677,9 @@ fn script_block_function_hoists_when_not_shadowed() {
     }
   }
 
-  let source = "function outer(){ if(true){ function foo(){} } foo; }";
+  let source = "function outer(){ if(true){ function foo(){} foo; } foo; }";
   let mut ast = parse(source).unwrap();
-  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(63));
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(63));
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
@@ -677,8 +690,15 @@ fn script_block_function_hoists_when_not_shadowed() {
   let decl = collector.decl.expect("expected foo declaration symbol");
 
   collector.uses.sort_by_key(|(loc, _)| loc.0);
-  assert_eq!(collector.uses.len(), 1);
+  assert_eq!(collector.uses.len(), 2);
   assert_eq!(collector.uses[0].1, Some(decl));
+
+  let outside = collector.uses[1].1.expect("expected hoisted foo binding");
+  assert_ne!(outside, decl);
+  assert_eq!(
+    sem.annex_b_function_decls.get(&decl).copied(),
+    Some(outside)
+  );
 }
 
 #[test]
@@ -712,7 +732,7 @@ fn script_block_function_does_not_hoist_over_parameter() {
 
   let source = "function outer(foo){ if(true){ function foo(){} foo; } foo; }";
   let mut ast = parse(source).unwrap();
-  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(64));
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(64));
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
@@ -725,7 +745,11 @@ fn script_block_function_does_not_hoist_over_parameter() {
   collector.uses.sort_by_key(|(loc, _)| loc.0);
   assert_eq!(collector.uses.len(), 2);
   assert_eq!(collector.uses[0].1, Some(decl));
-  assert_ne!(collector.uses[1].1, Some(decl));
+  let outside = collector.uses[1]
+    .1
+    .expect("expected parameter foo binding to resolve");
+  assert_ne!(outside, decl);
+  assert!(!sem.symbol(outside).flags.hoisted);
 }
 
 #[test]
@@ -736,6 +760,107 @@ fn script_block_function_var_conflict_is_reported() {
   assert_eq!(diagnostics.len(), 1);
   assert_eq!(diagnostics[0].code.as_str(), "BIND0002");
   assert_eq!(slice_range(source, &diagnostics[0]), "foo");
+}
+
+#[test]
+fn script_block_function_var_binding_exists_even_if_block_never_executes() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), ClassOrFuncNameNode(enter))]
+  struct FooCollector {
+    decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl FooCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "foo" {
+        self.decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "foo" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "function outer(){ if(false){ function foo(){} } foo; }";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(91));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collector = FooCollector::default();
+  ast.drive_mut(&mut collector);
+  let decl = collector.decl.expect("expected foo declaration symbol");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 1);
+  let outside = collector.uses[0]
+    .1
+    .expect("expected hoisted foo binding to resolve");
+  assert_ne!(outside, decl);
+  assert_eq!(
+    sem.annex_b_function_decls.get(&decl).copied(),
+    Some(outside)
+  );
+}
+
+#[test]
+fn for_of_let_suppresses_script_block_function_hoisting() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), ClassOrFuncNameNode(enter))]
+  struct XCollector {
+    decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl XCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "x" {
+        self.decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "x" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "function outer(){ for (let x of y) { function x(){} x; } x; }";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(92));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collector = XCollector::default();
+  ast.drive_mut(&mut collector);
+  let decl = collector.decl.expect("expected x declaration symbol");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 2);
+  assert_eq!(collector.uses[0].1, Some(decl));
+  assert_eq!(collector.uses[1].1, None);
+  assert!(!sem.annex_b_function_decls.contains_key(&decl));
 }
 
 #[test]

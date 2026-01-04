@@ -9,12 +9,11 @@ use super::SymbolId;
 use super::TopLevelMode;
 use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
-use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
+use derive_visitor::{Drive, DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
 use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
-use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
@@ -43,7 +42,7 @@ use parse_js::ast::stmt::SwitchBranch;
 use parse_js::ast::stmt::SwitchStmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 type BlockStmtNode = Node<BlockStmt>;
 type CallExprNode = Node<CallExpr>;
@@ -97,197 +96,6 @@ fn ident_range(loc: parse_js::loc::Loc, name: &str) -> TextRange {
   let start = loc.start_u32();
   let end = start.saturating_add(name.len() as u32);
   TextRange::new(start, end)
-}
-
-fn collect_pat_decl_names(file: FileId, pat_decl: &PatDecl, out: &mut BTreeSet<NameId>) {
-  collect_pat_names(file, pat_decl.pat.stx.as_ref(), out);
-}
-
-fn collect_pat_names(file: FileId, pat: &Pat, out: &mut BTreeSet<NameId>) {
-  match pat {
-    Pat::Id(id) => {
-      out.insert(name_id_for(file, &id.stx.name));
-    }
-    Pat::Arr(arr) => {
-      for elem in arr.stx.elements.iter().flatten() {
-        collect_pat_names(file, elem.target.stx.as_ref(), out);
-      }
-      if let Some(rest) = arr.stx.rest.as_ref() {
-        collect_pat_names(file, rest.stx.as_ref(), out);
-      }
-    }
-    Pat::Obj(obj) => {
-      for prop in obj.stx.properties.iter() {
-        collect_pat_names(file, prop.stx.target.stx.as_ref(), out);
-      }
-      if let Some(rest) = obj.stx.rest.as_ref() {
-        collect_pat_names(file, rest.stx.as_ref(), out);
-      }
-    }
-    Pat::AssignTarget(_) => {}
-  }
-}
-
-#[derive(Visitor)]
-#[visitor(
-  BlockStmtNode(enter, exit),
-  CatchBlockNode(enter, exit),
-  ClassDeclNode(enter, exit),
-  ClassExprNode(enter, exit),
-  ForBodyNode(enter, exit),
-  ForInStmtNode(enter, exit),
-  ForInOfLhs(enter, exit),
-  ForOfStmtNode(enter, exit),
-  ForTripleStmtNode(enter, exit),
-  FuncNode(enter, exit),
-  SwitchStmtNode(enter, exit),
-  VarDeclNode(enter)
-)]
-struct ClosureLexicalCollector {
-  file: FileId,
-  depth: usize,
-  names: BTreeSet<NameId>,
-}
-
-impl ClosureLexicalCollector {
-  fn new(file: FileId) -> Self {
-    Self {
-      file,
-      depth: 0,
-      names: BTreeSet::new(),
-    }
-  }
-
-  fn enter_block_stmt_node(&mut self, _node: &BlockStmtNode) {
-    self.depth += 1;
-  }
-
-  fn exit_block_stmt_node(&mut self, _node: &BlockStmtNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_catch_block_node(&mut self, _node: &CatchBlockNode) {
-    self.depth += 1;
-  }
-
-  fn exit_catch_block_node(&mut self, _node: &CatchBlockNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_class_decl_node(&mut self, node: &ClassDeclNode) {
-    if self.depth == 0 {
-      if let Some(name) = node.stx.name.as_ref() {
-        self.names.insert(name_id_for(self.file, &name.stx.name));
-      }
-    }
-    self.depth += 1;
-  }
-
-  fn exit_class_decl_node(&mut self, _node: &ClassDeclNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_class_expr_node(&mut self, _node: &ClassExprNode) {
-    self.depth += 1;
-  }
-
-  fn exit_class_expr_node(&mut self, _node: &ClassExprNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_for_body_node(&mut self, _node: &ForBodyNode) {
-    self.depth += 1;
-  }
-
-  fn exit_for_body_node(&mut self, _node: &ForBodyNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_for_in_stmt_node(&mut self, _node: &ForInStmtNode) {
-    self.depth += 1;
-  }
-
-  fn exit_for_in_stmt_node(&mut self, _node: &ForInStmtNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_for_in_of_lhs(&mut self, node: &ForInOfLhs) {
-    if self.depth > 0 {
-      return;
-    }
-    if let ForInOfLhs::Decl((mode, pat)) = node {
-      if matches!(
-        mode,
-        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
-      ) {
-        collect_pat_decl_names(self.file, pat.stx.as_ref(), &mut self.names);
-      }
-    }
-  }
-
-  fn exit_for_in_of_lhs(&mut self, _node: &ForInOfLhs) {}
-
-  fn enter_for_of_stmt_node(&mut self, _node: &ForOfStmtNode) {
-    self.depth += 1;
-  }
-
-  fn exit_for_of_stmt_node(&mut self, _node: &ForOfStmtNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_for_triple_stmt_node(&mut self, _node: &ForTripleStmtNode) {
-    self.depth += 1;
-  }
-
-  fn exit_for_triple_stmt_node(&mut self, _node: &ForTripleStmtNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_func_node(&mut self, _node: &FuncNode) {
-    self.depth += 1;
-  }
-
-  fn exit_func_node(&mut self, _node: &FuncNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_switch_stmt_node(&mut self, _node: &SwitchStmtNode) {
-    self.depth += 1;
-  }
-
-  fn exit_switch_stmt_node(&mut self, _node: &SwitchStmtNode) {
-    self.depth = self.depth.saturating_sub(1);
-  }
-
-  fn enter_var_decl_node(&mut self, node: &VarDeclNode) {
-    if self.depth > 0 {
-      return;
-    }
-    if !matches!(
-      node.stx.mode,
-      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
-    ) {
-      return;
-    }
-    for decl in node.stx.declarators.iter() {
-      collect_pat_decl_names(self.file, decl.pattern.stx.as_ref(), &mut self.names);
-    }
-  }
-}
-
-fn closure_lexical_names(file: FileId, func: &Func) -> BTreeSet<NameId> {
-  let mut visitor = ClosureLexicalCollector::new(file);
-
-  let Some(body) = func.body.as_ref() else {
-    return visitor.names;
-  };
-  let FuncBody::Block(stmts) = body else {
-    return visitor.names;
-  };
-  for stmt in stmts.iter() {
-    stmt.drive(&mut visitor);
-  }
-  visitor.names
 }
 
 fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
@@ -351,6 +159,7 @@ struct SemanticsBuilder {
   name_lookup: BTreeMap<String, NameId>,
   scopes: BTreeMap<ScopeId, ScopeData>,
   symbols: BTreeMap<SymbolId, SymbolData>,
+  annex_b_function_decls: BTreeMap<SymbolId, SymbolId>,
   top_scope: ScopeId,
   decl_spans: BTreeMap<SymbolId, DeclSpanInfo>,
   block_var_decl_spans: BTreeMap<(ScopeId, NameId), TextRange>,
@@ -387,6 +196,7 @@ impl SemanticsBuilder {
       name_lookup: BTreeMap::new(),
       scopes,
       symbols: BTreeMap::new(),
+      annex_b_function_decls: BTreeMap::new(),
       top_scope,
       decl_spans: BTreeMap::new(),
       block_var_decl_spans: BTreeMap::new(),
@@ -694,6 +504,7 @@ impl SemanticsBuilder {
         name_lookup: self.name_lookup,
         scopes: self.scopes,
         symbols: self.symbols,
+        annex_b_function_decls: self.annex_b_function_decls,
         top_scope: self.top_scope,
       },
       self.diagnostics,
@@ -721,6 +532,14 @@ struct DeclContext {
 struct ForInOfContext {
   loop_scope: Option<ScopeId>,
   body_span: TextRange,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct AnnexBBlockFunction {
+  name: NameId,
+  block_symbol: SymbolId,
+  block_scope: ScopeId,
+  closure_scope: Option<ScopeId>,
 }
 
 #[derive(VisitorMut)]
@@ -753,12 +572,12 @@ struct DeclareVisitor {
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
   strict_stack: Vec<bool>,
-  closure_lexical_names_stack: Vec<BTreeSet<NameId>>,
   switch_scope_stack: Vec<(ScopeId, bool)>,
   for_in_of_stack: Vec<ForInOfContext>,
   for_in_of_lhs_scope_stack: Vec<Option<ScopeId>>,
   for_body_loop_scope_stack: Vec<Option<ScopeId>>,
   for_triple_scope_stack: Vec<bool>,
+  annex_b_block_functions: Vec<AnnexBBlockFunction>,
 }
 
 impl DeclareVisitor {
@@ -772,21 +591,106 @@ impl DeclareVisitor {
       in_pattern_decl: vec![false],
       top_level_mode: mode,
       strict_stack: vec![strict],
-      closure_lexical_names_stack: Vec::new(),
       switch_scope_stack: Vec::new(),
       for_in_of_stack: Vec::new(),
       for_in_of_lhs_scope_stack: Vec::new(),
       for_body_loop_scope_stack: Vec::new(),
       for_triple_scope_stack: Vec::new(),
+      annex_b_block_functions: Vec::new(),
     }
   }
 
-  fn finish(self) -> (JsSemantics, Vec<Diagnostic>) {
+  fn finish(mut self) -> (JsSemantics, Vec<Diagnostic>) {
+    self.process_annex_b_block_functions();
     self.builder.finish()
   }
 
   fn current_scope(&self) -> ScopeId {
     *self.scope_stack.last().unwrap()
+  }
+
+  fn process_annex_b_block_functions(&mut self) {
+    let functions = std::mem::take(&mut self.annex_b_block_functions);
+    for func in functions {
+      let Some(closure_scope) = func.closure_scope else {
+        continue;
+      };
+
+      // Annex B hoisting is suppressed if any enclosing lexical environment
+      // between the function's block and the nearest variable scope already
+      // declares the same name.
+      let mut current = self
+        .builder
+        .scopes
+        .get(&func.block_scope)
+        .and_then(|scope| scope.parent);
+      let mut suppressed = false;
+      while let Some(scope_id) = current {
+        if scope_id == closure_scope {
+          break;
+        }
+        if self
+          .builder
+          .scopes
+          .get(&scope_id)
+          .is_some_and(|scope| scope.symbols.contains_key(&func.name))
+        {
+          suppressed = true;
+          break;
+        }
+        current = self
+          .builder
+          .scopes
+          .get(&scope_id)
+          .and_then(|scope| scope.parent);
+      }
+      if suppressed {
+        continue;
+      }
+
+      // If the nearest variable scope already has a non-hoisted binding
+      // (parameters or lexical declarations), hoisting is suppressed.
+      if let Some(existing) = self
+        .builder
+        .scopes
+        .get(&closure_scope)
+        .and_then(|scope| scope.symbols.get(&func.name))
+        .copied()
+      {
+        let is_hoisted = self
+          .builder
+          .symbols
+          .get(&existing)
+          .map(|sym| sym.flags.hoisted)
+          .unwrap_or(false);
+        if !is_hoisted {
+          continue;
+        }
+        self
+          .builder
+          .annex_b_function_decls
+          .insert(func.block_symbol, existing);
+        continue;
+      }
+
+      let name = self
+        .builder
+        .names
+        .get(&func.name)
+        .cloned()
+        .expect("annex b function name interned");
+      let var_symbol = self.builder.declare_in_scope_with_span(
+        closure_scope,
+        &name,
+        SymbolFlags::hoisted(),
+        false,
+        None,
+      );
+      self
+        .builder
+        .annex_b_function_decls
+        .insert(func.block_symbol, var_symbol);
+    }
   }
 
   fn is_strict(&self) -> bool {
@@ -1192,7 +1096,6 @@ impl DeclareVisitor {
     if let Some(name) = &mut node.stx.name {
       let scope_kind = self.builder.scope_kind(self.current_scope());
       let span = ident_range(name.loc, &name.stx.name);
-      let name_id = name_id_for(self.builder.file, &name.stx.name);
 
       if self.top_level_mode == TopLevelMode::Module {
         let is_module_function_decl = matches!(scope_kind, ScopeKind::Module | ScopeKind::Block);
@@ -1233,46 +1136,32 @@ impl DeclareVisitor {
 
       // Non-strict script: block-level functions are `var` scoped but still
       // participate in block-level early errors (e.g. they conflict with
-      // `var`/`let`/`const` declarations in the same block).
+      // `var`/`let`/`const` declarations in the same block). Annex B additionally
+      // creates a hoisted `var` binding in the nearest variable scope unless the
+      // name is shadowed by an enclosing lexical binding.
       if scope_kind == ScopeKind::Block {
+        let block_scope = self.current_scope();
+        let name_id = self.builder.intern_name(&name.stx.name);
+
         self
           .builder
-          .record_block_func_decl(self.current_scope(), name_id, &name.stx.name, span);
+          .record_block_func_decl(block_scope, name_id, &name.stx.name, span);
 
-        let Some(closure) = self.nearest_closure() else {
-          return;
-        };
-
-        let suppress_hoist = self
-          .closure_lexical_names_stack
-          .last()
-          .map_or(false, |names| names.contains(&name_id))
-          || self
-            .builder
-            .scopes
-            .get(&closure)
-            .and_then(|s| s.symbols.get(&name_id))
-            .and_then(|sym| self.builder.symbols.get(sym))
-            .map(|sym| !sym.flags.hoisted)
-            .unwrap_or(false);
-
-        let target = if suppress_hoist {
-          DeclTarget::IfNotGlobal
-        } else {
-          DeclTarget::NearestClosure
-        };
-
-        self.declare_class_or_func_name(
-          name,
-          DeclContext {
-            target,
-            flags: SymbolFlags::hoisted(),
-            lexical: false,
-            block_lexical: false,
-            block_var: false,
-            catch_param: false,
-          },
+        let block_symbol = self.builder.declare_in_scope_with_span(
+          block_scope,
+          &name.stx.name,
+          SymbolFlags::hoisted(),
+          false,
+          None,
         );
+        name.assoc.set(DeclaredSymbol(block_symbol));
+
+        self.annex_b_block_functions.push(AnnexBBlockFunction {
+          name: name_id,
+          block_symbol,
+          block_scope,
+          closure_scope: self.nearest_closure(),
+        });
         return;
       }
 
@@ -1315,13 +1204,6 @@ impl DeclareVisitor {
     let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
     self.strict_stack.push(strict);
 
-    let lexicals = if self.top_level_mode == TopLevelMode::Global {
-      closure_lexical_names(self.builder.file, node.stx.as_ref())
-    } else {
-      BTreeSet::new()
-    };
-    self.closure_lexical_names_stack.push(lexicals);
-
     let kind = if node.stx.arrow {
       ScopeKind::ArrowFunction
     } else {
@@ -1334,7 +1216,6 @@ impl DeclareVisitor {
   fn exit_func_node(&mut self, _node: &mut FuncNode) {
     self.pop_scope();
     self.pop_decl_target();
-    self.closure_lexical_names_stack.pop();
     self.strict_stack.pop();
   }
 
