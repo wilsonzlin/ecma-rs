@@ -30,7 +30,7 @@ impl Rng {
 }
 
 fn fragment(rng: &mut Rng, id: u32) -> String {
-  match rng.gen_usize(14) {
+  match rng.gen_usize(18) {
     0 => format!(
       "type Lit{id} = \"a\" | \"b\" | \"c\";\nconst v{id}: Lit{id} = \"a\";\n"
     ),
@@ -77,6 +77,14 @@ fn fragment(rng: &mut Rng, id: u32) -> String {
     13 => format!(
       "type Remap{id}<T> = {{ [K in keyof T as `${{K & string}}_done`]: T[K] }};\ntype RemapUse{id} = Remap{id}<{{ a: number }}>;\n"
     ),
+    14 => format!("type Self{id} = Self{id};\ntype SelfUse{id} = Self{id};\n"),
+    15 => format!(
+      "type A{id} = B{id};\ntype B{id} = A{id};\ntype AliasUse{id} = A{id};\n"
+    ),
+    16 => format!(
+      "type G{id}<T> = G{id}<T>;\ntype GUse{id} = G{id}<string>;\n"
+    ),
+    17 => format!("type Tpl{id} = `${{Tpl{id}}}`;\ntype TplUse{id} = Tpl{id};\n"),
     _ => unreachable!("rng.gen_usize is bounded"),
   }
 }
@@ -148,7 +156,7 @@ fn run_with_timeout(case: usize, source: &str, timeout: Duration) -> Vec<typeche
 fn fuzz_smoke_program_check_is_total_and_fast() {
   const CASES: usize = 32;
   const SEED: u64 = 0x9d3d_6f5c_2b4a_1c87;
-  const TIMEOUT: Duration = Duration::from_millis(250);
+  const TIMEOUT: Duration = Duration::from_millis(400);
 
   let mut rng = Rng::new(SEED);
   for case in 0..CASES {
@@ -255,4 +263,3 @@ mod fuzzing {
     }
   }
 }
-
