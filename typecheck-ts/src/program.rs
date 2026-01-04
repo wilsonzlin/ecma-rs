@@ -8468,27 +8468,6 @@ impl ProgramState {
     }
   }
 
-  fn update_export_types(&mut self) -> Result<(), FatalError> {
-    let mut updates: Vec<(FileId, String, DefId)> = Vec::new();
-    for (file_id, state) in self.files.iter() {
-      for (name, entry) in state.exports.iter() {
-        if let Some(def) = entry.def {
-          updates.push((*file_id, name.clone(), def));
-        }
-      }
-    }
-    for (file_id, name, def) in updates.into_iter() {
-      if let Some(ty) = self.export_type_for_def(def)? {
-        if let Some(state) = self.files.get_mut(&file_id) {
-          if let Some(entry) = state.exports.get_mut(&name) {
-            entry.type_id = Some(ty);
-          }
-        }
-      }
-    }
-    Ok(())
-  }
-
   fn export_type_for_def(&mut self, def: DefId) -> Result<Option<TypeId>, FatalError> {
     self.rebuild_callable_overloads();
     if let Some(store) = self.interned_store.clone() {
@@ -12518,24 +12497,6 @@ impl ProgramState {
       TypeKind::LiteralBoolean(_) => self.builtin.boolean,
       _ => ty,
     }
-  }
-
-  fn widen_literal_any(&self, ty: TypeId) -> TypeId {
-    let widened = self.widen_literal(ty);
-    if widened != ty {
-      return widened;
-    }
-    if let Some(store) = self.interned_store.as_ref() {
-      if store.contains_type_id(ty) {
-        return match store.type_kind(ty) {
-          tti::TypeKind::NumberLiteral(_) => self.builtin.number,
-          tti::TypeKind::StringLiteral(_) => self.builtin.string,
-          tti::TypeKind::BooleanLiteral(_) => self.builtin.boolean,
-          _ => ty,
-        };
-      }
-    }
-    ty
   }
 
   fn widen_union_literals(&mut self, ty: TypeId) -> TypeId {
