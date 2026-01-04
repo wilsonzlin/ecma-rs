@@ -13,6 +13,12 @@ use crate::codes;
 
 const MAX_NOTES: usize = 5;
 
+type SignatureShapeKey = (
+  Vec<(TypeId, bool, bool)>,
+  Vec<types_ts_interned::TypeParamDecl>,
+  Option<TypeId>,
+);
+
 /// Result of resolving a call expression against a callable type.
 #[derive(Debug)]
 pub struct CallResolution {
@@ -33,48 +39,44 @@ enum OverloadKind {
   Construct,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ShapeInfo {
+  repr: SignatureId,
+  ret: TypeId,
+}
+
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
 pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
-  let mut collected = Vec::new();
-  collect_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
-  let mut by_shape: HashMap<
-    (
-      Vec<(TypeId, bool, bool)>,
-      Vec<types_ts_interned::TypeParamDecl>,
-      Option<TypeId>,
-    ),
-    (SignatureId, bool),
-  > = HashMap::new();
-  for sig_id in collected.into_iter() {
-    let sig = store.signature(sig_id);
-    let key = (
-      sig
-        .params
-        .iter()
-        .map(|p| (p.ty, p.optional, p.rest))
-        .collect::<Vec<_>>(),
-      sig.type_params.clone(),
-      sig.this_param,
-    );
-    let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
-    match by_shape.entry(key) {
-      Entry::Vacant(entry) => {
-        entry.insert((sig_id, is_unknown));
-      }
-      Entry::Occupied(mut entry) => {
-        let (existing, existing_unknown) = *entry.get();
-        if existing_unknown && !is_unknown {
-          entry.insert((sig_id, is_unknown));
-        } else if existing_unknown == is_unknown && sig_id < existing {
-          entry.insert((sig_id, is_unknown));
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => union_common_signatures(store, OverloadKind::Call, &members, None),
+    _ => {
+      let mut collected = Vec::new();
+      collect_signatures(store, ty, &mut collected, &mut HashSet::new(), None);
+      let mut by_shape: HashMap<SignatureShapeKey, (SignatureId, bool)> = HashMap::new();
+      for sig_id in collected.into_iter() {
+        let sig = store.signature(sig_id);
+        let key = signature_shape_key(&sig);
+        let is_unknown = matches!(store.type_kind(sig.ret), TypeKind::Unknown | TypeKind::Any);
+        match by_shape.entry(key) {
+          Entry::Vacant(entry) => {
+            entry.insert((sig_id, is_unknown));
+          }
+          Entry::Occupied(mut entry) => {
+            let (existing, existing_unknown) = *entry.get();
+            if existing_unknown && !is_unknown {
+              entry.insert((sig_id, is_unknown));
+            } else if existing_unknown == is_unknown && sig_id < existing {
+              entry.insert((sig_id, is_unknown));
+            }
+          }
         }
       }
+      let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
+      out.sort();
+      out
     }
   }
-  let mut out: Vec<_> = by_shape.values().map(|(id, _)| *id).collect();
-  out.sort();
-  out
 }
 
 /// Expected argument type at the given index, applying rest element expansion
@@ -250,7 +252,8 @@ fn resolve_overload_set(
   expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> CallResolution {
   let primitives = store.primitive_ids();
-  if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
+  let callee_kind = store.type_kind(callee);
+  if matches!(callee_kind, TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
@@ -262,25 +265,32 @@ fn resolve_overload_set(
   let const_args = const_args.filter(|const_args| const_args.len() == args.len());
 
   let mut candidates = Vec::new();
-  match kind {
-    OverloadKind::Call => collect_signatures(
-      store.as_ref(),
-      callee,
-      &mut candidates,
-      &mut HashSet::new(),
-      expander,
-    ),
-    OverloadKind::Construct => collect_construct_signatures(
-      store.as_ref(),
-      callee,
-      &mut candidates,
-      &mut HashSet::new(),
-      expander,
-    ),
-  };
-  let mut seen_sig = HashSet::new();
-  candidates.retain(|sig| seen_sig.insert(*sig));
-  candidates.sort();
+  match callee_kind {
+    TypeKind::Union(members) => {
+      candidates = union_common_signatures(store.as_ref(), kind, &members, expander);
+    }
+    _ => {
+      match kind {
+        OverloadKind::Call => collect_signatures(
+          store.as_ref(),
+          callee,
+          &mut candidates,
+          &mut HashSet::new(),
+          expander,
+        ),
+        OverloadKind::Construct => collect_construct_signatures(
+          store.as_ref(),
+          callee,
+          &mut candidates,
+          &mut HashSet::new(),
+          expander,
+        ),
+      };
+      let mut seen_sig = HashSet::new();
+      candidates.retain(|sig| seen_sig.insert(*sig));
+      candidates.sort();
+    }
+  }
 
   if candidates.is_empty() {
     let message = match kind {
@@ -512,6 +522,103 @@ fn collect_signatures(
     }
     _ => {}
   }
+}
+
+fn signature_shape_key(sig: &Signature) -> SignatureShapeKey {
+  (
+    sig
+      .params
+      .iter()
+      .map(|p| (p.ty, p.optional, p.rest))
+      .collect(),
+    sig.type_params.clone(),
+    sig.this_param,
+  )
+}
+
+fn union_common_signatures(
+  store: &TypeStore,
+  kind: OverloadKind,
+  members: &[TypeId],
+  expander: Option<&dyn RelateTypeExpander>,
+) -> Vec<SignatureId> {
+  let mut per_member: Vec<HashMap<SignatureShapeKey, ShapeInfo>> = Vec::with_capacity(members.len());
+  for member in members.iter().copied() {
+    let mut sigs = Vec::new();
+    match kind {
+      OverloadKind::Call => {
+        collect_signatures(store, member, &mut sigs, &mut HashSet::new(), expander)
+      }
+      OverloadKind::Construct => collect_construct_signatures(
+        store,
+        member,
+        &mut sigs,
+        &mut HashSet::new(),
+        expander,
+      ),
+    };
+    if sigs.is_empty() {
+      return Vec::new();
+    }
+    let mut map: HashMap<SignatureShapeKey, ShapeInfo> = HashMap::new();
+    for sig_id in sigs {
+      let sig = store.signature(sig_id);
+      let key = signature_shape_key(&sig);
+      match map.entry(key) {
+        Entry::Vacant(entry) => {
+          entry.insert(ShapeInfo {
+            repr: sig_id,
+            ret: sig.ret,
+          });
+        }
+        Entry::Occupied(mut entry) => {
+          let existing = *entry.get();
+          let merged_ret = if existing.ret == sig.ret {
+            existing.ret
+          } else {
+            store.union(vec![existing.ret, sig.ret])
+          };
+          let repr = existing.repr.min(sig_id);
+          entry.insert(ShapeInfo {
+            repr,
+            ret: merged_ret,
+          });
+        }
+      }
+    }
+    per_member.push(map);
+  }
+
+  if per_member.is_empty() {
+    return Vec::new();
+  }
+  let first = &per_member[0];
+  let mut out = Vec::new();
+  for (key, first_info) in first.iter() {
+    if per_member
+      .iter()
+      .skip(1)
+      .all(|member| member.contains_key(key))
+    {
+      let mut ret_types = Vec::with_capacity(per_member.len());
+      for member in per_member.iter() {
+        ret_types.push(member.get(key).expect("checked contains").ret);
+      }
+      let ret = if ret_types.len() == 1 {
+        ret_types[0]
+      } else {
+        store.union(ret_types)
+      };
+
+      let mut sig = store.signature(first_info.repr);
+      sig.ret = ret;
+      let combined = store.intern_signature(sig);
+      out.push(combined);
+    }
+  }
+  out.sort();
+  out.dedup();
+  out
 }
 
 fn rank_key_no_id(
