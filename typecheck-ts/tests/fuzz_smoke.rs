@@ -32,6 +32,7 @@ struct OffsetQuerySnapshot {
 struct TypeQuerySnapshot {
   ty: TypeId,
   kind: TypeKindSummary,
+  display: String,
   properties: Vec<typecheck_ts::PropertyInfo>,
   call_signatures: Vec<typecheck_ts::SignatureInfo>,
   construct_signatures: Vec<typecheck_ts::SignatureInfo>,
@@ -318,6 +319,7 @@ fn run_with_timeout(
       types.push(TypeQuerySnapshot {
         ty,
         kind: runner.type_kind(ty),
+        display: runner.display_type(ty).to_string(),
         properties: runner.properties_of(ty),
         call_signatures: runner.call_signatures(ty),
         construct_signatures: runner.construct_signatures(ty),

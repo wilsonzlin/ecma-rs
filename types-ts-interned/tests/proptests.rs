@@ -484,6 +484,20 @@ proptest! {
   }
 
   #[test]
+  fn explain_assignable_is_deterministic((store, pairs) in store_with_pairs()) {
+    // Explanations should not depend on internal caching order. Compare two
+    // fresh relation contexts to ensure the produced reason trees are stable.
+    for (src, dst) in pairs {
+      let ctx_a = RelateCtx::new(store.clone(), store.options());
+      let ctx_b = RelateCtx::new(store.clone(), store.options());
+      let res_a = ctx_a.explain_assignable(src, dst);
+      let res_b = ctx_b.explain_assignable(src, dst);
+      prop_assert_eq!(res_a.result, res_b.result);
+      prop_assert_eq!(res_a.reason, res_b.reason);
+    }
+  }
+
+  #[test]
   fn union_and_intersection_are_order_independent((store, pairs) in store_with_pairs()) {
     for (a, b) in pairs {
       prop_assert_eq!(store.union(vec![a, b]), store.union(vec![b, a]));
