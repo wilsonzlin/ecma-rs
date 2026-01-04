@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 99,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [],
+    "markers": [
+      {
+        "file": "await_using_valid.ts",
+        "offset": 160,
+        "line": 9,
+        "column": 14,
+        "type": "AsyncD"
+      }
+    ]
+  }
+}
+

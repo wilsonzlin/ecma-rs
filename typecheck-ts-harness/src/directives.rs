@@ -459,6 +459,7 @@ fn parse_lib_name(raw: &str) -> Option<LibName> {
     "es2021" => Some(LibName::Es2021),
     "es2022" => Some(LibName::Es2022),
     "esnext" => Some(LibName::EsNext),
+    "esnext.disposable" => Some(LibName::EsNextDisposable),
     "dom" => Some(LibName::Dom),
     _ => None,
   }

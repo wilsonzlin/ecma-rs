@@ -142,6 +142,10 @@ mod bundled {
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/libs/lib.esnext.d.ts"
       )),
+      LibName::EsNextDisposable => include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/libs/lib.esnext.disposable.d.ts"
+      )),
       LibName::Dom => include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/libs/lib.dom.d.ts"

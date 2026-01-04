@@ -374,6 +374,19 @@ pub const UNRESOLVED_TYPE_QUERY: Code = Code::new(
   &[],
 );
 
+/// TC2012: `using` / `await using` initializer is not disposable.
+///
+/// - Primary span: the initializer expression for the `using` declarator.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const INVALID_USING_INITIALIZER: Code = Code::new(
+  "TC2012",
+  "invalid using initializer",
+  "initializer expression in the using declarator",
+  &["primary: using initializer expression"],
+  &[],
+);
+
 /// TC3000: Implicit `any` type (TypeScript `--noImplicitAny`).
 ///
 /// This diagnostic is emitted when the checker would otherwise fall back to

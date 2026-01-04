@@ -772,7 +772,14 @@ impl<'a> TypeLowerer<'a> {
         }
         _ => PropertyName::Ident(self.names.intern(&direct.stx.key)),
       },
-      ClassOrObjKey::Computed(_) => PropertyName::Computed,
+      ClassOrObjKey::Computed(expr) => match &*expr.stx {
+        Expr::Member(member)
+          if matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+        {
+          PropertyName::Symbol(self.names.intern(&member.stx.right))
+        }
+        _ => PropertyName::Computed,
+      },
     }
   }
 
@@ -959,6 +966,7 @@ impl<'a> TypeLowerer<'a> {
       PropertyName::Ident(id) => self.names.resolve(*id).unwrap_or("").to_string(),
       PropertyName::String(s) => s.clone(),
       PropertyName::Number(n) => n.clone(),
+      PropertyName::Symbol(id) => format!("[symbol {}]", self.names.resolve(*id).unwrap_or("")),
       PropertyName::Computed => "[computed]".to_string(),
     }
   }
@@ -1064,6 +1072,11 @@ impl<'a> TypeLowerer<'a> {
             }
           }
           PropertyName::String(out)
+        }
+        Expr::Member(member)
+          if matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "Symbol") =>
+        {
+          PropertyName::Symbol(self.names.intern(&member.stx.right))
         }
         _ => PropertyName::Computed,
       },

@@ -107,3 +107,13 @@ reason = "Rust checker uses internal `TC3004` for variance annotation errors; ts
 id = "difftsc/export_assignment_mixed_exports"
 status = "xfail"
 reason = "Rust binder reports `BIND1005` for mixed export assignment; tsc reports `TS2309`"
+
+[[expectations]]
+id = "difftsc/using_invalid"
+status = "xfail"
+reason = "Rust checker uses internal `TC2012` for invalid `using` initializers; tsc reports a `TS*` diagnostic"
+
+[[expectations]]
+id = "difftsc/await_using_invalid"
+status = "xfail"
+reason = "Rust checker uses internal `TC2012` for invalid `await using` initializers; tsc reports a `TS*` diagnostic"

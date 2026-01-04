@@ -1696,6 +1696,8 @@ fn collect_marker_type_facts(
         .symbol_at(file_id, marker.offset)
         .and_then(|symbol| program.symbol_info(symbol))
         .and_then(|info| info.type_id)
+        .and_then(|ty| (program.display_type(ty).to_string() != "unknown").then_some(ty))
+        .or_else(|| program.type_at(file_id, marker.offset))
     };
 
     let type_str = ty

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
-use typecheck_ts::{FileKey, Host, HostError, Program, TypeKindSummary};
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary};
 
 #[derive(Default)]
 struct AmbientHost {
@@ -181,9 +181,20 @@ declare module "ambient" {
     .find(|def| program.def_name(*def).as_deref() == Some("Foo"))
     .expect("imported Foo def");
   let foo_ty = program.type_of_def(foo_import_def);
+  let props = program.properties_of(foo_ty);
+  let from_ambient = props
+    .iter()
+    .find(|prop| matches!(&prop.key, PropertyKey::String(name) if name == "fromAmbient"))
+    .expect("imported Foo should expose `fromAmbient` from the ambient module export");
   assert_eq!(
-    program.display_type(foo_ty).to_string(),
-    "{ fromAmbient: string }",
+    program.type_kind(from_ambient.ty),
+    TypeKindSummary::String,
+    "imported Foo.fromAmbient should be a string"
+  );
+  assert!(
+    !props
+      .iter()
+      .any(|prop| matches!(&prop.key, PropertyKey::String(name) if name == "fromTop")),
     "imported Foo should resolve to the ambient module export, not the global interface"
   );
   assert!(

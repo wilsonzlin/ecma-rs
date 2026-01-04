@@ -220,6 +220,8 @@ pub enum LibName {
   Es2021,
   Es2022,
   EsNext,
+  /// Explicit Resource Management (`using` / `await using`) declarations.
+  EsNextDisposable,
   Dom,
 }
 
@@ -236,6 +238,7 @@ impl LibName {
       LibName::Es2021 => "lib.es2021.d.ts",
       LibName::Es2022 => "lib.es2022.d.ts",
       LibName::EsNext => "lib.esnext.d.ts",
+      LibName::EsNextDisposable => "lib.esnext.disposable.d.ts",
       LibName::Dom => "lib.dom.d.ts",
     }
   }
@@ -252,6 +255,7 @@ impl LibName {
       LibName::Es2021 => "es2021",
       LibName::Es2022 => "es2022",
       LibName::EsNext => "esnext",
+      LibName::EsNextDisposable => "esnext.disposable",
       LibName::Dom => "dom",
     }
   }
@@ -279,7 +283,11 @@ impl LibSet {
       return LibSet::from(options.libs.clone());
     }
 
-    let mut libs = vec![es_lib_for_target(options.target)];
+    let es_lib = es_lib_for_target(options.target);
+    let mut libs = vec![es_lib];
+    if matches!(options.target, ScriptTarget::EsNext) {
+      libs.push(LibName::EsNextDisposable);
+    }
     if options.include_dom && !libs.contains(&LibName::Dom) {
       libs.push(LibName::Dom);
     }

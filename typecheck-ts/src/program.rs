@@ -1763,7 +1763,7 @@ impl Program {
               let queries =
                 TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
               let evaluated = queries.evaluate(ty);
-              let evaluated = state.prefer_named_refs_in_store(&store, evaluated);
+              let evaluated = state.prefer_named_class_refs_in_store(&store, evaluated);
               let ok = match store.type_kind(evaluated) {
                 tti::TypeKind::Object(obj) => {
                   let shape = store.shape(store.object(obj).shape);
@@ -1818,6 +1818,7 @@ impl Program {
         }
         _ => ty,
       };
+      let ty = state.prefer_named_class_refs_in_store(&store, ty);
       (store, ty, resolver)
     };
     let resolver = Arc::new(resolver);
@@ -11641,6 +11642,100 @@ impl ProgramState {
     canonical
   }
 
+  fn prefer_named_class_refs_in_store(&self, store: &Arc<tti::TypeStore>, ty: TypeId) -> TypeId {
+    let canonical = store.canon(ty);
+    let kind = store.type_kind(canonical);
+    let primitive_like = matches!(
+      kind,
+      tti::TypeKind::Any
+        | tti::TypeKind::Unknown
+        | tti::TypeKind::Never
+        | tti::TypeKind::Void
+        | tti::TypeKind::Null
+        | tti::TypeKind::Undefined
+        | tti::TypeKind::Boolean
+        | tti::TypeKind::Number
+        | tti::TypeKind::String
+        | tti::TypeKind::BigInt
+        | tti::TypeKind::Symbol
+        | tti::TypeKind::UniqueSymbol
+        | tti::TypeKind::Callable { .. }
+        | tti::TypeKind::BooleanLiteral(_)
+        | tti::TypeKind::NumberLiteral(_)
+        | tti::TypeKind::StringLiteral(_)
+        | tti::TypeKind::BigIntLiteral(_)
+        | tti::TypeKind::This
+        | tti::TypeKind::TypeParam(_)
+    );
+    if !primitive_like {
+      if let Some(def) = self.interned_named_def_types.get(&canonical).copied() {
+        if self
+          .def_data
+          .get(&def)
+          .is_some_and(|data| matches!(data.kind, DefKind::Class(_)))
+        {
+          let mut args = self
+            .interned_type_params
+            .get(&def)
+            .cloned()
+            .unwrap_or_default();
+          args.sort_by_key(|param| param.0);
+          let args: Vec<_> = args
+            .into_iter()
+            .map(|param| store.intern_type(tti::TypeKind::TypeParam(param)))
+            .collect();
+          return store.canon(store.intern_type(tti::TypeKind::Ref { def, args }));
+        }
+      }
+    }
+    match kind {
+      tti::TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|member| self.prefer_named_class_refs_in_store(store, member))
+          .collect();
+        return store.union(mapped);
+      }
+      tti::TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|member| self.prefer_named_class_refs_in_store(store, member))
+          .collect();
+        return store.intersection(mapped);
+      }
+      tti::TypeKind::Array { ty, readonly } => {
+        let mapped = self.prefer_named_class_refs_in_store(store, ty);
+        if mapped != ty {
+          return store.intern_type(tti::TypeKind::Array {
+            ty: mapped,
+            readonly,
+          });
+        }
+      }
+      tti::TypeKind::Tuple(elems) => {
+        let mut changed = false;
+        let mapped: Vec<_> = elems
+          .into_iter()
+          .map(|elem| {
+            let mapped = self.prefer_named_class_refs_in_store(store, elem.ty);
+            changed |= mapped != elem.ty;
+            tti::TupleElem {
+              ty: mapped,
+              optional: elem.optional,
+              rest: elem.rest,
+              readonly: elem.readonly,
+            }
+          })
+          .collect();
+        if changed {
+          return store.intern_type(tti::TypeKind::Tuple(mapped));
+        }
+      }
+      _ => {}
+    }
+    canonical
+  }
+
   fn resolve_value_ref_type(&mut self, ty: TypeId) -> Result<TypeId, FatalError> {
     let Some(store) = self.interned_store.clone() else {
       return Ok(ty);
@@ -11835,7 +11930,8 @@ impl ProgramState {
               VarDeclMode::Var => HirVarDeclKind::Var,
               VarDeclMode::Let => HirVarDeclKind::Let,
               VarDeclMode::Const => HirVarDeclKind::Const,
-              VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
+              VarDeclMode::Using => HirVarDeclKind::Using,
+              VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
             };
             return Some(VarInit {
               body: var.body,
@@ -12626,6 +12722,10 @@ impl ProgramState {
             .as_ref()
             .map(|init| init.decl_kind)
             .unwrap_or(mode_decl_kind);
+          let const_like = matches!(
+            decl_kind,
+            HirVarDeclKind::Const | HirVarDeclKind::Using | HirVarDeclKind::AwaitUsing
+          );
           let mut init_span_for_const = None;
           let mut init_pat_is_root = true;
           let declared_ann = self.declared_type_for_span(def_data.file, def_data.span);
@@ -12721,7 +12821,7 @@ impl ProgramState {
           } else {
             self.builtin.unknown
           };
-          if matches!(decl_kind, HirVarDeclKind::Const) && init_pat_is_root {
+          if const_like && init_pat_is_root {
             if let Some(init_span) = init_span_for_const {
               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
                 let res = self.check_body(file_body)?;
@@ -12775,7 +12875,7 @@ impl ProgramState {
               inferred = self.widen_object_literal(inferred);
             }
           }
-          let ty = if matches!(decl_kind, HirVarDeclKind::Const) {
+          let ty = if const_like {
             inferred
           } else {
             self.widen_literal(inferred)

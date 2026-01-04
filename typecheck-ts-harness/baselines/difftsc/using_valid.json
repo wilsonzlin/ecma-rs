@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 99,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [],
+    "markers": [
+      {
+        "file": "using_valid.ts",
+        "offset": 113,
+        "line": 8,
+        "column": 6,
+        "type": "D"
+      },
+      {
+        "file": "using_valid.ts",
+        "offset": 235,
+        "line": 17,
+        "column": 8,
+        "type": "number"
+      }
+    ]
+  }
+}
+

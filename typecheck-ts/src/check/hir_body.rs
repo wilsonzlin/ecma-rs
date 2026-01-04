@@ -976,17 +976,40 @@ impl<'a> Checker<'a> {
         matched_blocks.push(block);
       }
     }
-    if matched_blocks.is_empty() {
-      return false;
-    }
     matched_blocks.sort_by_key(|block| (block.span.start, block.span.end));
     matched_blocks.dedup_by_key(|block| (block.span.start, block.span.end, block.block));
-    for block in matched_blocks {
+    let static_block_spans: Vec<TextRange> = matched_blocks.iter().map(|block| block.span).collect();
+
+    for block in matched_blocks.iter() {
       self.check_cancelled();
       let block_node = unsafe { &*block.block };
       self.check_block_body(&block_node.stx.body);
     }
-    true
+
+    // Class bodies can contain additional evaluation expressions (e.g. decorators,
+    // `extends` expressions, computed property names). These expressions are
+    // lowered into the class body HIR but are not part of any static block.
+    // Type-check them directly, skipping any spans that are covered by a static
+    // block so we preserve static block scoping rules.
+    let mut checked_any = !matched_blocks.is_empty();
+    let expr_spans = self.expr_spans.clone();
+    for span in expr_spans {
+      if static_block_spans
+        .iter()
+        .any(|block_span| contains_range(*block_span, span))
+      {
+        continue;
+      }
+      let Some(expr) = self.index.exprs.get(&span).copied() else {
+        continue;
+      };
+      self.check_cancelled();
+      let expr = unsafe { &*expr };
+      let _ = self.check_expr(expr);
+      checked_any = true;
+    }
+
+    checked_any
   }
 
   fn check_matching_initializer(&mut self, body_range: TextRange) -> bool {
@@ -1476,6 +1499,16 @@ impl<'a> Checker<'a> {
       } else {
         prim.unknown
       };
+
+      if self.check_var_assignments {
+        if let Some(init) = declarator.initializer.as_ref() {
+          match decl.stx.mode {
+            VarDeclMode::Using => self.check_using_initializer(init, init_ty, "Disposable"),
+            VarDeclMode::AwaitUsing => self.check_using_initializer(init, init_ty, "AsyncDisposable"),
+            _ => {}
+          }
+        }
+      }
       let binding_ty = match decl.stx.mode {
         VarDeclMode::Const | VarDeclMode::Using | VarDeclMode::AwaitUsing => init_ty,
         _ => self.base_type(init_ty),
@@ -1510,6 +1543,32 @@ impl<'a> Checker<'a> {
       }
       _ => None,
     }
+  }
+
+  fn check_using_initializer(&mut self, init: &Node<AstExpr>, init_ty: TypeId, required: &str) {
+    let prim = self.store.primitive_ids();
+    if matches!(
+      self.store.type_kind(init_ty),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
+      return;
+    }
+    let Some(resolver) = self.type_resolver.as_ref() else {
+      return;
+    };
+    let Some(def) = resolver.resolve_type_name(&[required.to_string()]) else {
+      return;
+    };
+    let required_ty = self.store.intern_type(TypeKind::Ref { def, args: Vec::new() });
+    // `using`/`await using` declarations ignore nullish values at runtime.
+    let required_ty = self.store.union(vec![required_ty, prim.null, prim.undefined]);
+    if self.relate.is_assignable(init_ty, required_ty) {
+      return;
+    }
+    self.diagnostics.push(codes::INVALID_USING_INITIALIZER.error(
+      format!("initializer must be assignable to `{required}`"),
+      Span::new(self.file, loc_to_range(self.file, init.loc)),
+    ));
   }
 
   fn check_namespace(&mut self, ns: &Node<NamespaceDecl>) {
@@ -4571,46 +4630,12 @@ impl<'a> Checker<'a> {
     type_params: Vec<TypeParamDecl>,
   ) {
     let prim = self.store.primitive_ids();
-    let empty_name = self.store.intern_name(String::new());
     let value_is_any = matches!(self.store.type_kind(value), TypeKind::Any);
-    let shape = match self.store.type_kind(value) {
-      TypeKind::Object(obj_id) => Some(self.store.shape(self.store.object(obj_id).shape)),
-      _ => None,
-    };
     for prop in obj.stx.properties.iter() {
-      let key_name = match &prop.stx.key {
-        ClassOrObjKey::Direct(direct) => Some(direct.stx.key.clone()),
-        ClassOrObjKey::Computed(_) => None,
-      };
       let mut prop_ty = if value_is_any { prim.any } else { prim.unknown };
       if !value_is_any {
-        if let Some(shape) = &shape {
-          if let Some(key) = key_name.as_ref() {
-            for candidate in shape.properties.iter() {
-              let matches = match &candidate.key {
-                PropKey::String(name) => self.store.name(*name) == *key,
-                PropKey::Number(num) => num.to_string() == *key,
-                _ => false,
-              };
-              if matches {
-                prop_ty = candidate.data.ty;
-                break;
-              }
-            }
-            if prop_ty == prim.unknown {
-              let probe_key = if key.parse::<f64>().is_ok() {
-                PropKey::Number(0)
-              } else {
-                PropKey::String(empty_name)
-              };
-              for idx in shape.indexers.iter() {
-                if crate::type_queries::indexer_accepts_key(&probe_key, idx.key_type, &self.store) {
-                  prop_ty = idx.value_type;
-                  break;
-                }
-              }
-            }
-          }
+        if let ClassOrObjKey::Direct(direct) = &prop.stx.key {
+          prop_ty = self.member_type(value, &direct.stx.key);
         }
       }
       if let Some(default) = &prop.stx.default_value {

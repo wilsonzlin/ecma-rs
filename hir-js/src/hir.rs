@@ -397,6 +397,11 @@ pub enum PropertyName {
   Ident(NameId),
   String(String),
   Number(String),
+  /// Computed property name that is a well-known symbol (e.g. `[Symbol.dispose]`).
+  ///
+  /// This preserves enough information for downstream type checking to model
+  /// symbol-keyed members in declaration positions.
+  Symbol(NameId),
   Computed,
 }
 

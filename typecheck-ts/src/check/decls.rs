@@ -499,6 +499,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       )),
       hir_js::PropertyName::String(s) => Some(PropKey::String(self.store.intern_name(s.clone()))),
       hir_js::PropertyName::Number(n) => Some(PropKey::Number(n.parse::<i64>().ok()?)),
+      hir_js::PropertyName::Symbol(id) => Some(PropKey::Symbol(
+        self.store.intern_name(names.resolve(*id)?.to_string()),
+      )),
       hir_js::PropertyName::Computed => None,
     }
   }
@@ -1244,6 +1247,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         let parsed = n.parse::<i64>().ok()?;
         PropKey::Number(parsed)
       }
+      hir_js::PropertyName::Symbol(id) => {
+        PropKey::Symbol(self.store.intern_name(names.resolve(*id)?.to_string()))
+      }
       hir_js::PropertyName::Computed => return None,
     };
     let ty = prop
@@ -1290,6 +1296,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       hir_js::PropertyName::Number(n) => {
         let parsed = n.parse::<i64>().ok()?;
         PropKey::Number(parsed)
+      }
+      hir_js::PropertyName::Symbol(id) => {
+        PropKey::Symbol(self.store.intern_name(names.resolve(*id)?.to_string()))
       }
       hir_js::PropertyName::Computed => return None,
     };
