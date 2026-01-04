@@ -885,14 +885,27 @@ fn type_exports_propagate_through_reexports() {
   );
 
   let entry_id = program.file_id(&key_entry).expect("entry id");
-  let exports_types = program.exports_of(entry_id);
-  let foo = exports_types.get("Foo").expect("Foo type export");
+  let exports_entry = program.exports_of(entry_id);
+  let foo = exports_entry.get("Foo").expect("Foo type export");
   assert!(foo.def.is_none(), "re-export should not point to local def");
   let foo_ty = foo.type_id.expect("type for Foo");
   let rendered = program.display_type(foo_ty).to_string();
   assert_eq!(
     rendered, "any",
     "expected type-only export to have `any` value type, got {rendered}"
+  );
+
+  let consumer_id = program.file_id(&key_consumer).expect("consumer id");
+  let foo_import_def = program
+    .definitions_in_file(consumer_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Foo"))
+    .expect("imported Foo def");
+  let foo_import_ty = program.type_of_def_interned(foo_import_def);
+  let rendered = program.display_type(foo_import_ty).to_string();
+  assert!(
+    rendered == "Foo" || rendered.contains("a: string"),
+    "expected imported Foo alias or object type with a: string, got {rendered}"
   );
 }
 
@@ -963,8 +976,8 @@ fn type_exports_support_string_literal_names() {
   let export = exports_mod.get("a-b").expect("export a-b present");
   let export_ty = export.type_id.expect("type for export a-b");
   let rendered = program.display_type(export_ty).to_string();
-  assert!(
-    rendered == "any",
+  assert_eq!(
+    rendered, "any",
     "expected type-only export to have `any` value type, got {rendered}"
   );
 

@@ -742,7 +742,23 @@ impl AstIndex {
             member.stx.accessibility,
             Some(parse_js::ast::stmt::decl::Accessibility::Private)
           ),
-          key_range: loc_to_range(file, key.loc),
+          key_range: {
+            let range = loc_to_range(file, key.loc);
+            let name = key.stx.key.as_str();
+            // `parse-js` key locations can currently span beyond the identifier
+            // token (e.g. include a trailing type annotation). TS2612 expects the
+            // diagnostic to underline only the member name, so shrink
+            // identifier-like keys to their textual length.
+            let is_identifier_like = name.chars().enumerate().all(|(idx, ch)| match idx {
+              0 => ch == '_' || ch == '$' || ch.is_ascii_alphabetic(),
+              _ => ch == '_' || ch == '$' || ch.is_ascii_alphanumeric(),
+            });
+            if is_identifier_like {
+              TextRange::new(range.start, range.start.saturating_add(name.len() as u32))
+            } else {
+              range
+            }
+          },
         };
         if member.stx.static_ {
           info.static_fields.push(field);

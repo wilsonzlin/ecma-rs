@@ -7,4 +7,4 @@ const arr = [255, 0, 0];
 // expect-def-type: arr = number[]
 
 const bad: RGB = arr;
-// expect-diagnostic: TS2322 "RGB = arr"
+// expect-diagnostic: TS2322 "bad"
