@@ -3045,9 +3045,13 @@ echo '{"diagnostics":[]}'
     clear_executor_thread_ids();
 
     let dir = tempdir().expect("tempdir");
-    fs::write(dir.path().join("fast.ts"), "const fast = 1;\n").unwrap();
-    fs::write(dir.path().join("slow.ts"), "const slow = 1;\n").unwrap();
-    let _env = EnvGuard::set(HARNESS_SLEEP_ENV, "slow=2000");
+    // Use a minimal lib set so the "fast" case is actually fast (default libs
+    // include DOM, which is intentionally large).
+    fs::write(dir.path().join("fast.ts"), "// @lib: es5\nconst fast = 1;\n").unwrap();
+    fs::write(dir.path().join("slow.ts"), "// @lib: es5\nconst slow = 1;\n").unwrap();
+    // Allow enough time for a small "fast" case to complete while still
+    // ensuring a deliberately slowed case times out quickly.
+    let _env = EnvGuard::set(HARNESS_SLEEP_ENV, "slow=5000");
 
     let start = Instant::now();
     let opts = ConformanceOptions {
@@ -3057,7 +3061,7 @@ echo '{"diagnostics":[]}'
       shard: None,
       json: false,
       update_snapshots: false,
-      timeout: Duration::from_millis(100),
+      timeout: Duration::from_secs(1),
       trace: false,
       profile: false,
       profile_out: crate::DEFAULT_PROFILE_OUT.into(),
@@ -3081,7 +3085,7 @@ echo '{"diagnostics":[]}'
     // If a timed-out case is not actually cancelled, the full sleep duration
     // would be observed here.
     assert!(
-      elapsed < Duration::from_secs(1),
+      elapsed < Duration::from_secs(4),
       "expected cancelled run to finish quickly; elapsed={elapsed:?}"
     );
   }
