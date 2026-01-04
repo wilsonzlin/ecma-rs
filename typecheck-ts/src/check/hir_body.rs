@@ -450,11 +450,28 @@ impl AstIndex {
         self.index_expr(&cond.stx.consequent, file, cancelled);
         self.index_expr(&cond.stx.alternate, file, cancelled);
       }
+      AstExpr::Import(import) => {
+        self.index_expr(&import.stx.module, file, cancelled);
+        if let Some(attributes) = import.stx.attributes.as_ref() {
+          self.index_expr(attributes, file, cancelled);
+        }
+      }
       AstExpr::Unary(un) => {
         self.index_expr(&un.stx.argument, file, cancelled);
       }
       AstExpr::UnaryPostfix(post) => {
         self.index_expr(&post.stx.argument, file, cancelled);
+      }
+      AstExpr::TaggedTemplate(tagged) => {
+        self.index_expr(&tagged.stx.function, file, cancelled);
+        for part in tagged.stx.parts.iter() {
+          match part {
+            parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) => {
+              self.index_expr(expr, file, cancelled)
+            }
+            parse_js::ast::expr::lit::LitTemplatePart::String(_) => {}
+          }
+        }
       }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter() {
@@ -477,6 +494,16 @@ impl AstIndex {
             },
             ObjMemberType::Rest { val } => self.index_expr(val, file, cancelled),
             ObjMemberType::Shorthand { .. } => {}
+          }
+        }
+      }
+      AstExpr::LitTemplate(template) => {
+        for part in template.stx.parts.iter() {
+          match part {
+            parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) => {
+              self.index_expr(expr, file, cancelled)
+            }
+            parse_js::ast::expr::lit::LitTemplatePart::String(_) => {}
           }
         }
       }
@@ -504,6 +531,9 @@ impl AstIndex {
           self.index_expr(&spread.stx.value, file, cancelled);
         }
       }
+      AstExpr::TypeAssertion(assert) => self.index_expr(&assert.stx.expression, file, cancelled),
+      AstExpr::NonNullAssertion(assert) => self.index_expr(&assert.stx.expression, file, cancelled),
+      AstExpr::SatisfiesExpr(expr) => self.index_expr(&expr.stx.expression, file, cancelled),
       AstExpr::Id(..)
       | AstExpr::LitNull(..)
       | AstExpr::LitStr(..)
@@ -512,16 +542,10 @@ impl AstIndex {
       | AstExpr::LitBigInt(..)
       | AstExpr::This(..)
       | AstExpr::Super(..)
-      | AstExpr::LitTemplate(..)
       | AstExpr::IdPat(..)
       | AstExpr::ArrPat(..)
       | AstExpr::ObjPat(..)
-      | AstExpr::TypeAssertion(..)
-      | AstExpr::NonNullAssertion(..)
-      | AstExpr::SatisfiesExpr(..)
-      | AstExpr::Import(..)
       | AstExpr::ImportMeta(..)
-      | AstExpr::TaggedTemplate(..)
       | AstExpr::JsxMember(..)
       | AstExpr::JsxName(..)
       | AstExpr::JsxText(..)

@@ -70,11 +70,11 @@ fn conflicting_type_arguments_still_error() {
     overloads: vec![sig_id],
   });
   let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
-  let instantiation = InstantiationCache::default();
   let span = diagnostics::Span {
     file: FileId(0),
     range: diagnostics::TextRange::new(0, 0),
   };
+  let instantiation = InstantiationCache::default();
   let resolution = typecheck_ts::check::overload::resolve_overloads(
     &store,
     &relate,

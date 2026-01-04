@@ -10324,11 +10324,20 @@ impl ProgramState {
       if !visited.insert(parent) {
         break;
       }
-      let parent_result = self.check_body(parent)?;
       let Some(meta) = self.body_map.get(&parent).copied() else {
         current = self.body_parents.get(&parent).copied();
         continue;
       };
+      if matches!(meta.kind, HirBodyKind::TopLevel)
+        && self
+          .files
+          .get(&meta.file)
+          .and_then(|state| state.top_body)
+          == Some(parent)
+      {
+        break;
+      }
+      let parent_result = self.check_body(parent)?;
       let Some(hir_body_id) = meta.hir else {
         current = self.body_parents.get(&parent).copied();
         continue;
@@ -13528,27 +13537,28 @@ impl ProgramState {
           if const_like && init_pat_is_root {
             if let Some(init_span) = init_span_for_const {
               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
-                let res = self.check_body(file_body)?;
-                let top_ty = res
-                  .expr_spans()
-                  .iter()
-                  .enumerate()
-                  .find(|(_, span)| **span == init_span)
-                  .and_then(|(idx, _)| res.expr_type(ExprId(idx as u32)));
-                if let (Some(top_ty), Some(store)) = (top_ty, self.interned_store.as_ref()) {
-                  let top_kind = store.type_kind(top_ty);
-                  let has_readonly = match top_kind {
-                    tti::TypeKind::Object(obj) => {
-                      let shape = store.shape(store.object(obj).shape);
-                      shape.properties.iter().any(|p| p.data.readonly)
+                if let Some(res) = self.body_results.get(&file_body).cloned() {
+                  let top_ty = res
+                    .expr_spans()
+                    .iter()
+                    .enumerate()
+                    .find(|(_, span)| **span == init_span)
+                    .and_then(|(idx, _)| res.expr_type(ExprId(idx as u32)));
+                  if let (Some(top_ty), Some(store)) = (top_ty, self.interned_store.as_ref()) {
+                    let top_kind = store.type_kind(top_ty);
+                    let has_readonly = match top_kind {
+                      tti::TypeKind::Object(obj) => {
+                        let shape = store.shape(store.object(obj).shape);
+                        shape.properties.iter().any(|p| p.data.readonly)
+                      }
+                      tti::TypeKind::Tuple(elems) => elems.iter().any(|e| e.readonly),
+                      _ => false,
+                    };
+                    if has_readonly {
+                      let top_ty = store.canon(top_ty);
+                      self.interned_def_types.insert(def, top_ty);
+                      inferred = self.import_interned_type(top_ty);
                     }
-                    tti::TypeKind::Tuple(elems) => elems.iter().any(|e| e.readonly),
-                    _ => false,
-                  };
-                  if has_readonly {
-                    let top_ty = store.canon(top_ty);
-                    self.interned_def_types.insert(def, top_ty);
-                    inferred = self.import_interned_type(top_ty);
                   }
                 }
               }
