@@ -873,6 +873,54 @@ fn preserves_arguments_identifier_inside_namespaces_named_arguments() {
 }
 
 #[test]
+fn preserves_arguments_identifier_inside_enums_named_arguments() {
+  // Similar to namespaces, enums named `arguments` in TS can appear in dotted namespaces. TS erasure
+  // must synthesize a safe identifier for the enum object without rewriting legitimate
+  // `arguments` identifier references (which should continue to refer to the function arguments
+  // object).
+  let src = r#"
+    export namespace A {
+      export enum arguments {
+        A = 1,
+        B = (function() { return arguments.length; })(),
+      }
+    }
+    console.log(A["arguments"].B);
+  "#;
+  let (_code, mut parsed) = minify_ts_module(src);
+
+  use derive_visitor::{DriveMut, VisitorMut};
+  use parse_js::ast::expr::IdExpr;
+  type IdExprNode = Node<IdExpr>;
+
+  #[derive(VisitorMut)]
+  #[visitor(IdExprNode(enter))]
+  struct FindIdExpr<'a> {
+    target: &'a str,
+    found: bool,
+  }
+
+  impl FindIdExpr<'_> {
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == self.target {
+        self.found = true;
+      }
+    }
+  }
+
+  let mut visitor = FindIdExpr {
+    target: "arguments",
+    found: false,
+  };
+  parsed.drive_mut(&mut visitor);
+
+  assert!(
+    visitor.found,
+    "expected `arguments` identifier references inside enum initializers to be preserved"
+  );
+}
+
+#[test]
 fn lowers_exported_enums_with_strict_reserved_names_inside_namespaces_to_parseable_js() {
   let src = r#"
     export namespace A {

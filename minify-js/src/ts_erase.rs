@@ -1043,12 +1043,14 @@ fn rewrite_enum_member_refs(
   enum_source_name: &str,
   enum_alias: &str,
   member_names: &HashSet<String>,
+  rewrite_enum_source_name_refs: bool,
 ) -> bool {
   struct Rewriter<'a> {
     enum_name: &'a str,
     enum_source_name: &'a str,
     enum_alias: &'a str,
     member_names: &'a HashSet<String>,
+    rewrite_enum_source_name_refs: bool,
     shadowed: Vec<HashSet<String>>,
     used_alias: bool,
   }
@@ -1682,7 +1684,7 @@ fn rewrite_enum_member_refs(
     }
 
     fn rewrite_expr(&mut self, expr: &mut Node<Expr>) {
-      if self.enum_source_name != self.enum_name {
+      if self.rewrite_enum_source_name_refs && self.enum_source_name != self.enum_name {
         if let Some(loc) = match expr.stx.as_ref() {
           Expr::Id(id)
             if id.stx.name == self.enum_source_name && !self.is_shadowed(self.enum_source_name) =>
@@ -1861,6 +1863,7 @@ fn rewrite_enum_member_refs(
     enum_source_name,
     enum_alias,
     member_names,
+    rewrite_enum_source_name_refs,
     shadowed: Vec::new(),
     used_alias: false,
   };
@@ -2020,6 +2023,7 @@ fn strip_enum_decl(
   let enum_alias = format!("__minify_ts_enum_{enum_name}");
   let mut used_enum_alias = false;
   let mut body = Vec::with_capacity(decl.stx.members.len());
+  let rewrite_enum_source_name_refs = !is_valid_identifier_reference(&enum_name, ctx.top_level_mode);
   let mut next_auto: Option<f64> = Some(0.0);
   let mut last_numeric_member: Option<String> = None;
   let mut known_member_kinds: HashMap<String, EnumValueKind> = HashMap::new();
@@ -2037,6 +2041,7 @@ fn strip_enum_decl(
         &enum_name,
         &enum_alias,
         &member_names,
+        rewrite_enum_source_name_refs,
       );
     }
 
