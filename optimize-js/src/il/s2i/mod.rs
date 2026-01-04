@@ -100,4 +100,12 @@ impl<'p> HirSourceToInst<'p> {
       },
     }
   }
+
+  pub fn bool_literal_expr(&self, expr: ExprId) -> Option<bool> {
+    self.program.types.bool_literal_expr(self.body_id, expr)
+  }
+
+  pub fn expr_excludes_nullish(&self, expr: ExprId) -> bool {
+    self.program.types.expr_excludes_nullish(self.body_id, expr)
+  }
 }

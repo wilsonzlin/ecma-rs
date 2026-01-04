@@ -31,6 +31,7 @@ pub mod il;
 pub mod opt;
 pub mod ssa;
 pub mod symbol;
+pub mod types;
 pub mod util;
 
 pub use crate::decompile::program_to_js;
@@ -506,6 +507,7 @@ pub struct ProgramCompilerInner {
   pub lower: Arc<LowerResult>,
   pub(crate) bindings: HirSymbolBindings,
   pub names: Arc<NameInterner>,
+  pub(crate) types: crate::types::TypeContext,
 }
 
 /// Our internal compiler state for a program.
@@ -562,6 +564,41 @@ pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> Optimize
   Program::compile(top_level_node, mode, debug)
 }
 
+/// Compile source text with optional `typecheck-ts` type information.
+///
+/// This helper is only available when the crate is built with the `typed`
+/// feature. If the provided type program does not contain usable type
+/// information for a particular expression, the optimizer falls back to the
+/// existing untyped behaviour.
+#[cfg(feature = "typed")]
+pub fn compile_source_with_typecheck(
+  source: &str,
+  mode: TopLevelMode,
+  debug: bool,
+  type_program: std::sync::Arc<typecheck_ts::Program>,
+  type_file: typecheck_ts::FileId,
+) -> OptimizeResult<Program> {
+  let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+  let lower = hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
+  let types = crate::types::TypeContext::from_typecheck_program(type_program, type_file, &lower);
+  Program::compile_with_lower(top_level_node, lower, mode, debug, types)
+}
+
+/// Compile and type-check a single source string using the bundled
+/// `typecheck-ts` memory host.
+#[cfg(feature = "typed")]
+pub fn compile_source_typed(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
+  let mut host = typecheck_ts::MemoryHost::new();
+  let file = typecheck_ts::FileKey::new("input.ts");
+  host.insert(file.clone(), source);
+  let type_program = std::sync::Arc::new(typecheck_ts::Program::new(host, vec![file.clone()]));
+  let _ = type_program.check();
+  let type_file = type_program
+    .file_id(&file)
+    .expect("typecheck program should know the inserted file");
+  compile_source_with_typecheck(source, mode, debug, type_program, type_file)
+}
+
 #[cfg(feature = "legacy-ast-lowering")]
 pub fn compile_source_ast(
   source: &str,
@@ -605,6 +642,7 @@ pub fn compile_source_ast(
     lower: Arc::clone(&lower),
     bindings,
     names: Arc::clone(&lower.names),
+    types: Default::default(),
   }));
 
   let TopLevel { body } = *top_level_node.stx;
@@ -728,6 +766,7 @@ impl Program {
     lower: LowerResult,
     top_level_mode: TopLevelMode,
     debug: bool,
+    types: crate::types::TypeContext,
   ) -> OptimizeResult<Self> {
     let (semantics, diagnostics) = JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
     if !diagnostics.is_empty() {
@@ -766,6 +805,7 @@ impl Program {
       lower: Arc::clone(&lower),
       bindings,
       names: Arc::clone(&lower.names),
+      types,
     }));
 
     let top_level = compile_hir_body(&program, lower.root_body())?;
@@ -809,7 +849,13 @@ impl Program {
     debug: bool,
   ) -> OptimizeResult<Self> {
     let lower = hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
-    Self::compile_with_lower(top_level_node, lower, top_level_mode, debug)
+    Self::compile_with_lower(
+      top_level_node,
+      lower,
+      top_level_mode,
+      debug,
+      Default::default(),
+    )
   }
 
   pub fn compile_lowered(
@@ -819,7 +865,13 @@ impl Program {
     debug: bool,
   ) -> OptimizeResult<Self> {
     let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
-    Self::compile_with_lower(top_level_node, lower, top_level_mode, debug)
+    Self::compile_with_lower(
+      top_level_node,
+      lower,
+      top_level_mode,
+      debug,
+      Default::default(),
+    )
   }
 }
 

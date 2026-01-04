@@ -302,6 +302,28 @@ impl<'p> HirSourceToInst<'p> {
     if matches!(operator, BinaryOp::LogicalAnd | BinaryOp::LogicalOr) {
       return self.compile_logical_expr(span, operator, left, right);
     }
+
+    if operator == BinaryOp::StrictEquality {
+      let left_expr = &self.body.exprs[left.0 as usize];
+      let right_expr = &self.body.exprs[right.0 as usize];
+      let left_nullish = matches!(
+        left_expr.kind,
+        ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
+      );
+      let right_nullish = matches!(
+        right_expr.kind,
+        ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
+      );
+
+      if (left_nullish && self.expr_excludes_nullish(right))
+        || (right_nullish && self.expr_excludes_nullish(left))
+      {
+        let _ = self.compile_expr(left)?;
+        let _ = self.compile_expr(right)?;
+        return Ok(Arg::Const(Const::Bool(false)));
+      }
+    }
+
     if matches!(
       operator,
       BinaryOp::NullishCoalescing
@@ -345,8 +367,16 @@ impl<'p> HirSourceToInst<'p> {
     consequent: ExprId,
     alternate: ExprId,
   ) -> OptimizeResult<Arg> {
+    let known = self.bool_literal_expr(test);
+    let _test_arg = self.compile_expr(test)?;
+    if let Some(value) = known {
+      if value {
+        return self.compile_expr(consequent);
+      }
+      return self.compile_expr(alternate);
+    }
     let res_tmp_var = self.c_temp.bump();
-    let test_arg = self.compile_expr(test)?;
+    let test_arg = _test_arg;
     let cons_label_id = self.c_label.bump();
     let after_label_id = self.c_label.bump();
     self
@@ -426,7 +456,8 @@ impl<'p> HirSourceToInst<'p> {
   ) -> OptimizeResult<CompiledMemberExpr> {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
     let left_arg = self.compile_expr_with_chain(member.object, chain)?;
-    self.conditional_chain_jump(member.optional, &left_arg, chain);
+    let optional = member.optional && !self.expr_excludes_nullish(member.object);
+    self.conditional_chain_jump(optional, &left_arg, chain);
     let res_tmp_var = self.c_temp.bump();
     let right_arg = key_arg(self, &member.property)?;
     self.out.push(Inst::bin(
@@ -474,7 +505,8 @@ impl<'p> HirSourceToInst<'p> {
       }
     };
     let res_tmp_var = self.c_temp.bump();
-    self.conditional_chain_jump(call.optional, &callee_arg, chain);
+    let optional = call.optional && !self.expr_excludes_nullish(call.callee);
+    self.conditional_chain_jump(optional, &callee_arg, chain);
 
     let mut args = Vec::new();
     let mut spreads = Vec::new();

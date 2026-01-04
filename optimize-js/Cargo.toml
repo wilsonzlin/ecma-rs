@@ -5,6 +5,7 @@ edition = "2021"
 
 [features]
 default = []
+typed = ["dep:typecheck-ts"]
 
 [dependencies]
 ahash = { version = "0.8.6", features = ["serde"] }
@@ -22,6 +23,7 @@ rayon = "1.10.0"
 serde = { version = "1.0.216", features = ["derive"] }
 emit-js = { version = "0.1.0", path = "../emit-js" }
 hir-js = { path = "../hir-js" }
+typecheck-ts = { path = "../typecheck-ts", optional = true }
 
 [dev-dependencies]
 serde_json = { version = "1.0" }

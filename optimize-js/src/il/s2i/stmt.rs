@@ -215,7 +215,16 @@ impl<'p> HirSourceToInst<'p> {
     consequent: StmtId,
     alternate: Option<StmtId>,
   ) -> OptimizeResult<()> {
+    let known = self.bool_literal_expr(test);
     let test_arg = self.compile_expr(test)?;
+    if let Some(value) = known {
+      if value {
+        self.compile_stmt(consequent)?;
+      } else if let Some(alternate) = alternate {
+        self.compile_stmt(alternate)?;
+      }
+      return Ok(());
+    }
     match alternate {
       Some(alternate) => {
         let cons_label_id = self.c_label.bump();
