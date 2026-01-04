@@ -52,13 +52,13 @@ bitflags! {
   }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationResult {
   pub result: bool,
   pub reason: Option<ReasonNode>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReasonNode {
   pub src: TypeId,
   pub dst: TypeId,
@@ -78,7 +78,7 @@ const MAX_REASON_NODES: usize = 256;
 //
 // Mirror the existing step-limit behaviour: when this cap is exceeded we
 // assume success and stop descending to preserve termination and determinism.
-const MAX_RELATION_DEPTH: usize = 256;
+const MAX_RELATION_DEPTH: usize = 64;
 const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
 const MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
 const MAX_TEMPLATE_MATCH_STATES: usize = 1024;

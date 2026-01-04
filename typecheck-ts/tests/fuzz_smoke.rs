@@ -39,6 +39,13 @@ struct TypeQuerySnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct ExplainSnapshot {
+  src: TypeId,
+  dst: TypeId,
+  tree: typecheck_ts::ExplainTree,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SmokeSnapshot {
   diagnostics: Vec<typecheck_ts::Diagnostic>,
   files: Vec<FileId>,
@@ -47,6 +54,7 @@ struct SmokeSnapshot {
   global_bindings: BTreeMap<String, typecheck_ts::SymbolBinding>,
   offsets: Vec<OffsetQuerySnapshot>,
   types: Vec<TypeQuerySnapshot>,
+  explain: Option<ExplainSnapshot>,
 }
 
 #[derive(Clone, Debug)]
@@ -317,6 +325,26 @@ fn run_with_timeout(
       });
     }
 
+    let mut explain = None;
+    'outer: for i in 0..types.len() {
+      for j in (i + 1)..types.len() {
+        let src = types[i].ty;
+        let dst = types[j].ty;
+        if let Some(tree) = runner.explain_assignability(src, dst) {
+          explain = Some(ExplainSnapshot { src, dst, tree });
+          break 'outer;
+        }
+        if let Some(tree) = runner.explain_assignability(dst, src) {
+          explain = Some(ExplainSnapshot {
+            src: dst,
+            dst: src,
+            tree,
+          });
+          break 'outer;
+        }
+      }
+    }
+
     SmokeSnapshot {
       diagnostics,
       files,
@@ -325,6 +353,7 @@ fn run_with_timeout(
       global_bindings,
       offsets,
       types,
+      explain,
     }
   });
 
