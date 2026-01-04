@@ -40,6 +40,7 @@ pub struct HirSourceToInst<'p> {
   pub c_label: Counter,
   pub symbol_to_temp: HashMap<SymbolId, u32>,
   pub break_stack: Vec<u32>,
+  pub continue_stack: Vec<u32>,
 }
 
 impl<'p> HirSourceToInst<'p> {
@@ -55,6 +56,7 @@ impl<'p> HirSourceToInst<'p> {
       out: Vec::new(),
       symbol_to_temp: HashMap::new(),
       break_stack: Vec::new(),
+      continue_stack: Vec::new(),
     }
   }
 

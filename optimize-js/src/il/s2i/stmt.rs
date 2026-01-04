@@ -189,6 +189,7 @@ impl<'p> HirSourceToInst<'p> {
       None => {}
     };
     let loop_entry_label = self.c_label.bump();
+    let loop_continue_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label(loop_entry_label));
     if let Some(cond) = cond {
@@ -198,8 +199,11 @@ impl<'p> HirSourceToInst<'p> {
         .push(Inst::cond_goto(cond_arg, DUMMY_LABEL, after_loop_label));
     };
     self.break_stack.push(after_loop_label);
+    self.continue_stack.push(loop_continue_label);
     self.compile_stmt(body)?;
+    self.continue_stack.pop();
     self.break_stack.pop().unwrap();
+    self.out.push(Inst::label(loop_continue_label));
     if let Some(post) = post {
       self.compile_expr(*post)?;
     };
@@ -259,7 +263,9 @@ impl<'p> HirSourceToInst<'p> {
       .out
       .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_loop_label));
     self.break_stack.push(after_loop_label);
+    self.continue_stack.push(before_test_label);
     self.compile_stmt(body)?;
+    self.continue_stack.pop();
     self.break_stack.pop();
     self.out.push(Inst::goto(before_test_label));
     self.out.push(Inst::label(after_loop_label));
@@ -277,7 +283,30 @@ impl<'p> HirSourceToInst<'p> {
         Ok(())
       }
       StmtKind::Break(_) => {
-        self.out.push(Inst::goto(*self.break_stack.last().unwrap()));
+        if !matches!(&stmt.kind, StmtKind::Break(None)) {
+          return Err(unsupported_syntax_range(stmt.span, "labeled break is not supported"));
+        }
+        let target = self
+          .break_stack
+          .last()
+          .copied()
+          .ok_or_else(|| unsupported_syntax_range(stmt.span, "break statement outside loop"))?;
+        self.out.push(Inst::goto(target));
+        Ok(())
+      }
+      StmtKind::Continue(_) => {
+        if !matches!(&stmt.kind, StmtKind::Continue(None)) {
+          return Err(unsupported_syntax_range(
+            stmt.span,
+            "labeled continue is not supported",
+          ));
+        }
+        let target = self
+          .continue_stack
+          .last()
+          .copied()
+          .ok_or_else(|| unsupported_syntax_range(stmt.span, "continue statement outside loop"))?;
+        self.out.push(Inst::goto(target));
         Ok(())
       }
       StmtKind::Expr(expr) => {
