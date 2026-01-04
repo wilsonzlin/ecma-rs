@@ -424,3 +424,44 @@ fn avoids_synthetic_enum_object_collisions_with_free_identifier_references() {
     "expected the `__minify_ts_enum_obj_static` identifier reference to remain in output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_namespace_binding_collisions_with_top_level_bindings() {
+  let src = r#"
+    eval("x");
+    var __minify_ts_namespace_static = 1;
+    export namespace static { export const x = 1; }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  assert!(
+    has_top_level_var_binding(&parsed, "__minify_ts_namespace_static"),
+    "expected user binding `__minify_ts_namespace_static` to remain in output: {code}"
+  );
+
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid reusing the user binding for the runtime namespace. output: {code}"
+  );
+  assert!(
+    local.starts_with("__minify_ts_namespace_static_"),
+    "expected TS erasure to disambiguate the synthesized namespace binding with a suffix, got `{local}`. output: {code}"
+  );
+  assert_eq!(
+    count_iifes_by_outer_name(&parsed, "__minify_ts_namespace_static"),
+    0,
+    "expected the runtime namespace IIFE not to target the user binding. output: {code}"
+  );
+  assert_eq!(
+    count_iifes_by_outer_name(&parsed, &local),
+    1,
+    "expected one runtime namespace IIFE targeting the synthesized binding. output: {code}"
+  );
+  assert_eq!(
+    count_top_level_var_bindings(&parsed, "__minify_ts_namespace_static"),
+    1,
+    "expected the user var binding not to be redeclared. output: {code}"
+  );
+}
