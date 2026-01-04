@@ -161,30 +161,40 @@ impl TypeContext {
 
 #[cfg(feature = "typed")]
 fn type_excludes_nullish(program: &typecheck_ts::Program, ty: typecheck_ts::TypeId, depth: u8) -> bool {
+  if !program.compiler_options().strict_null_checks {
+    return false;
+  }
   // Avoid pathological recursion for self-referential aliases.
   if depth >= 8 {
     return false;
   }
 
-  use typecheck_ts::TypeKindSummary as K;
-  match program.type_kind(ty) {
+  use types_ts_interned::TypeKind as K;
+  match program.interned_type_kind(ty) {
     K::Any
     | K::Unknown
-    | K::Never
     | K::Void
     | K::Null
     | K::Undefined
     | K::This
-    | K::Infer(_)
-    | K::Union { .. }
-    | K::Intersection { .. }
+    | K::Infer { .. }
     | K::TypeParam(_)
-    | K::Conditional
-    | K::Mapped
-    | K::TemplateLiteral
-    | K::IndexedAccess
-    | K::KeyOf => false,
+    | K::Predicate { .. }
+    | K::Conditional { .. }
+    | K::Mapped(_)
+    | K::TemplateLiteral(_)
+    | K::IndexedAccess { .. }
+    | K::KeyOf(_) => false,
+    // `never` contains no values and is trivially non-nullish.
+    K::Never => true,
+    K::Union(members) => members
+      .into_iter()
+      .all(|member| type_excludes_nullish(program, member, depth + 1)),
+    K::Intersection(members) => members
+      .into_iter()
+      .any(|member| type_excludes_nullish(program, member, depth + 1)),
     K::Ref { def, .. } => type_excludes_nullish(program, program.declared_type_of_def_interned(def), depth + 1),
+    K::EmptyObject => true,
     _ => true,
   }
 }
@@ -199,8 +209,8 @@ fn type_to_typeof_string(
     return None;
   }
 
-  use typecheck_ts::TypeKindSummary as K;
-  match program.type_kind(ty) {
+  use types_ts_interned::TypeKind as K;
+  match program.interned_type_kind(ty) {
     K::Boolean | K::BooleanLiteral(_) => Some("boolean"),
     K::Number | K::NumberLiteral(_) => Some("number"),
     K::String | K::StringLiteral(_) => Some("string"),
@@ -212,8 +222,40 @@ fn type_to_typeof_string(
     // We can only return a `typeof` result when it is uniquely determined by
     // the type. Note that the TypeScript `{}`/`object` supertypes can include
     // callable values, so they do *not* map to a single `typeof` tag.
-    K::Tuple { .. } | K::Array { .. } => Some("object"),
+    K::Tuple(_) | K::Array { .. } => Some("object"),
     K::Ref { def, .. } => type_to_typeof_string(program, program.declared_type_of_def_interned(def), depth + 1),
+    K::Union(members) => {
+      let mut tag: Option<&'static str> = None;
+      for member in members {
+        if matches!(program.interned_type_kind(member), K::Never) {
+          continue;
+        }
+        let member_tag = type_to_typeof_string(program, member, depth + 1)?;
+        match tag {
+          None => tag = Some(member_tag),
+          Some(existing) if existing == member_tag => {}
+          _ => return None,
+        }
+      }
+      tag
+    }
+    K::Intersection(members) => {
+      let mut tag: Option<&'static str> = None;
+      for member in members {
+        if matches!(program.interned_type_kind(member), K::Never) {
+          continue;
+        }
+        let Some(member_tag) = type_to_typeof_string(program, member, depth + 1) else {
+          continue;
+        };
+        match tag {
+          None => tag = Some(member_tag),
+          Some(existing) if existing == member_tag => {}
+          _ => return None,
+        }
+      }
+      tag
+    }
     _ => None,
   }
 }

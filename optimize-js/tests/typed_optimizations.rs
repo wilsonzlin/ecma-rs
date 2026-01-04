@@ -64,6 +64,23 @@ fn typed_optional_chaining_is_elided_when_receiver_is_non_nullish() {
 }
 
 #[test]
+fn typed_optional_chaining_is_elided_for_non_nullish_union() {
+  let src = r#"
+    let x: string | number = 1;
+    console.log(x?.toString());
+  "#;
+  let expected_src = r#"
+    let x: string | number = 1;
+    console.log(x.toString());
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_null_check_is_folded_when_operand_cannot_be_nullish() {
   let src = r#"
     if (console === null) {
@@ -134,6 +151,24 @@ fn typed_if_condition_literal_false_elides_then_branch() {
 fn typed_typeof_check_is_folded_when_operand_type_is_known() {
   let src = r#"
     let s: string = "x";
+    if (typeof s === "string") {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_typeof_check_is_folded_for_string_literal_union() {
+  let src = r#"
+    let s: "a" | "b" = "a";
     if (typeof s === "string") {
       console.log(1);
     } else {
