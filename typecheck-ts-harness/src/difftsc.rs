@@ -1683,17 +1683,20 @@ fn collect_marker_type_facts(
       continue;
     };
     // `Program::type_at` uses a trivia lookaround to be resilient to offsets in
-    // whitespace, whereas TypeScript's marker queries use `getTokenAtPosition`
-    // and implicitly skip trivia to find the nearest token.
+    // whitespace, whereas TypeScript's marker queries use `getTokenAtPosition`,
+    // which treats trivia as belonging to the *preceding* token.
     //
     // To stay close to tsc while keeping results deterministic:
     // - Prefer an exact expression hit when the marker offset is inside an
     //   expression span.
     // - Otherwise, try the declared symbol type when the offset lands on an
     //   identifier.
-    // - Finally, fall back to `type_at`, allowing its bounded trivia lookaround
-    //   to recover common "caret points at whitespace" markers.
-    let ty = if program.expr_at(file_id, marker.offset).is_some() {
+    // - Finally, walk backwards across common marker trivia (spaces/tabs and
+    //   the `/*^?*/` marker comment) and only call `type_at` when the preceding
+    //   byte looks like an identifier/keyword/number token. This avoids
+    //   `type_at`'s trivia lookaround binding offsets immediately following
+    //   punctuation (like `=`) to an unrelated expression.
+    let mut ty = if program.expr_at(file_id, marker.offset).is_some() {
       program.type_at(file_id, marker.offset)
     } else {
       program
@@ -1701,8 +1704,34 @@ fn collect_marker_type_facts(
         .and_then(|symbol| program.symbol_info(symbol))
         .and_then(|info| info.type_id)
         .and_then(|ty| (program.display_type(ty).to_string() != "unknown").then_some(ty))
-        .or_else(|| program.type_at(file_id, marker.offset))
     };
+
+    if ty.is_none() && marker.offset > 0 {
+      if let Some(content) = file_set.content(file) {
+        let bytes = content.as_bytes();
+        let mut offset = marker.offset as usize;
+        while offset > 0
+          && offset < bytes.len()
+          && matches!(
+            bytes[offset],
+            b' ' | b'\t' | b'/' | b'*' | b'^' | b'?'
+          )
+        {
+          offset -= 1;
+        }
+        if offset < bytes.len() {
+          let offset = offset as u32;
+          // Only attempt `type_at` when the marker's trailing trivia appears to
+          // follow an identifier/keyword/number token. This mirrors
+          // `ts.getTokenAtPosition`: marker offsets immediately following
+          // punctuation (like `=`) intentionally yield `any`.
+          let candidate = bytes[offset as usize];
+          if candidate.is_ascii_alphanumeric() || matches!(candidate, b'_' | b'$') {
+            ty = program.type_at(file_id, offset);
+          }
+        }
+      }
+    }
 
     let type_str = ty
       .map(|ty| program.display_type(ty).to_string())

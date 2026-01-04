@@ -50,6 +50,9 @@ use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
+use crate::triple_slash::{
+  normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
+};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::{FileOrigin, FileRegistry};
 use crate::profile::{
@@ -5132,7 +5135,7 @@ impl ProgramState {
     self.check_cancelled()?;
     self.module_namespace_types.clear();
     self.module_namespace_in_progress.clear();
-    let libs = self.collect_libraries(host.as_ref());
+    let libs = self.collect_libraries(host.as_ref(), roots)?;
     self.check_cancelled()?;
     let mut lib_queue = VecDeque::new();
     self.process_libs(&libs, host, &mut lib_queue)?;
@@ -5206,6 +5209,29 @@ impl ProgramState {
       .set_roots(Arc::<[FileKey]>::from(root_keys));
     let mut queue: VecDeque<FileId> = self.root_ids.iter().copied().collect();
     queue.extend(lib_queue);
+    if !self.compiler_options.types.is_empty() && !self.root_ids.is_empty() {
+      let root_ids = self.root_ids.clone();
+      let mut type_names = self.compiler_options.types.clone();
+      type_names.sort();
+      type_names.dedup();
+      for name in type_names {
+        self.check_cancelled()?;
+        let mut resolved_any = false;
+        for root in root_ids.iter().copied() {
+          if let Some(target) = self.record_module_resolution(root, name.as_str(), host) {
+            resolved_any = true;
+            queue.push_back(target);
+          }
+        }
+        if !resolved_any {
+          let primary_file = self.root_ids.first().copied().unwrap_or(FileId(u32::MAX));
+          self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+            format!("unresolved type package \"{name}\""),
+            Span::new(primary_file, TextRange::new(0, 0)),
+          ));
+        }
+      }
+    }
     let mut seen: AHashSet<FileId> = AHashSet::new();
     while let Some(file) = queue.pop_front() {
       self.check_cancelled()?;
@@ -5226,6 +5252,53 @@ impl ProgramState {
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       self.check_cancelled()?;
+      let directives = scan_triple_slash_directives(text.as_ref());
+      for reference in directives.references.iter() {
+        let value = reference.value(text.as_ref());
+        if value.is_empty() {
+          continue;
+        }
+        match reference.kind {
+          TripleSlashReferenceKind::Lib => {
+            let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
+              self.push_program_diagnostic(codes::UNKNOWN_LIB_REFERENCE.error(
+                format!("unknown lib reference \"{value}\""),
+                Span::new(file, reference.value_range),
+              ));
+              continue;
+            };
+            if let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) {
+              self.process_libs(std::slice::from_ref(&lib_file), host, &mut queue)?;
+            } else {
+              self.push_program_diagnostic(codes::NO_LIBS_LOADED.error(
+                format!("unable to load bundled lib \"{value}\""),
+                Span::new(file, reference.value_range),
+              ));
+            }
+          }
+          TripleSlashReferenceKind::Path => {
+            let normalized = normalize_reference_path_specifier(value);
+            if let Some(target) = self.record_module_resolution(file, normalized.as_ref(), host) {
+              queue.push_back(target);
+            } else {
+              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+                format!("unresolved reference path \"{value}\""),
+                Span::new(file, reference.value_range),
+              ));
+            }
+          }
+          TripleSlashReferenceKind::Types => {
+            if let Some(target) = self.record_module_resolution(file, value, host) {
+              queue.push_back(target);
+            } else {
+              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+                format!("unresolved reference types \"{value}\""),
+                Span::new(file, reference.value_range),
+              ));
+            }
+          }
+        }
+      }
       let parse_span = QuerySpan::enter(
         QueryKind::Parse,
         query_span!(
@@ -6801,8 +6874,26 @@ impl ProgramState {
     Ok(())
   }
 
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
-    let options = host.compiler_options();
+  fn collect_libraries(
+    &mut self,
+    host: &dyn Host,
+    roots: &[FileKey],
+  ) -> Result<Vec<LibFile>, FatalError> {
+    let mut options = host.compiler_options();
+    if !options.no_default_lib && options.libs.is_empty() && !roots.is_empty() {
+      for key in roots {
+        let text = if let Some(text) = self.file_overrides.get(key) {
+          Arc::clone(text)
+        } else {
+          host.file_text(key)?
+        };
+        if scan_triple_slash_directives(text.as_ref()).no_default_lib {
+          options.no_default_lib = true;
+          break;
+        }
+      }
+    }
+
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
     self.cache_stats = CheckerCacheStats::default();
@@ -6811,6 +6902,10 @@ impl ProgramState {
       .typecheck_db
       .set_cancellation_flag(self.cancelled.clone());
     let libs = collect_libs(&options, host.lib_files(), &self.lib_manager);
+    if libs.is_empty() && options.no_default_lib {
+      self.lib_diagnostics.clear();
+      return Ok(Vec::new());
+    }
     let validated = validate_libs(libs, |lib| {
       self.intern_file_key(lib.key.clone(), FileOrigin::Lib)
     });
@@ -6822,7 +6917,7 @@ impl ProgramState {
       dts_libs.push(lib);
     }
 
-    dts_libs
+    Ok(dts_libs)
   }
 
   fn process_libs(
@@ -6831,10 +6926,67 @@ impl ProgramState {
     host: &Arc<dyn Host>,
     queue: &mut VecDeque<FileId>,
   ) -> Result<(), FatalError> {
-    for lib in libs {
+    let mut pending: VecDeque<LibFile> = libs.iter().cloned().collect();
+    while let Some(lib) = pending.pop_front() {
       self.check_cancelled()?;
       let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
+      if self.lib_texts.contains_key(&file_id) {
+        continue;
+      }
+      self.file_kinds.insert(file_id, FileKind::Dts);
       self.lib_texts.insert(file_id, lib.text.clone());
+
+      let directives = scan_triple_slash_directives(lib.text.as_ref());
+      for reference in directives.references.iter() {
+        let value = reference.value(lib.text.as_ref());
+        if value.is_empty() {
+          continue;
+        }
+        match reference.kind {
+          TripleSlashReferenceKind::Lib => {
+            let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
+              self.push_program_diagnostic(codes::UNKNOWN_LIB_REFERENCE.error(
+                format!("unknown lib reference \"{value}\""),
+                Span::new(file_id, reference.value_range),
+              ));
+              continue;
+            };
+            if let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) {
+              let lib_id = self.intern_file_key(lib_file.key.clone(), FileOrigin::Lib);
+              if !self.lib_texts.contains_key(&lib_id) {
+                pending.push_back(lib_file);
+              }
+            } else {
+              self.push_program_diagnostic(codes::NO_LIBS_LOADED.error(
+                format!("unable to load bundled lib \"{value}\""),
+                Span::new(file_id, reference.value_range),
+              ));
+            }
+          }
+          TripleSlashReferenceKind::Path => {
+            let normalized = normalize_reference_path_specifier(value);
+            if let Some(target) = self.record_module_resolution(file_id, normalized.as_ref(), host) {
+              queue.push_back(target);
+            } else {
+              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+                format!("unresolved reference path \"{value}\""),
+                Span::new(file_id, reference.value_range),
+              ));
+            }
+          }
+          TripleSlashReferenceKind::Types => {
+            if let Some(target) = self.record_module_resolution(file_id, value, host) {
+              queue.push_back(target);
+            } else {
+              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
+                format!("unresolved reference types \"{value}\""),
+                Span::new(file_id, reference.value_range),
+              ));
+            }
+          }
+        }
+      }
+
       let parsed = self.parse_via_salsa(file_id, FileKind::Dts, Arc::clone(&lib.text));
       match parsed {
         Ok(mut ast) => {

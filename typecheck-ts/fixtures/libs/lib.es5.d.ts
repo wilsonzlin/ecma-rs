@@ -4,15 +4,10 @@ declare const console: {
 };
 
 declare const Array: any[];
-declare const Promise: any;
 
 interface Array<T> {
   length: number;
   [n: number]: T;
-}
-
-interface Promise<T> {
-  then(onfulfilled: (value: T) => T): Promise<T>;
 }
 
 type Uppercase<S extends string> = intrinsic;

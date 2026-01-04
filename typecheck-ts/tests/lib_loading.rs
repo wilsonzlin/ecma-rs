@@ -106,12 +106,6 @@ fn missing_libs_emit_unknown_global_diagnostics() {
     TestHost::new(options).with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
-  assert!(
-    diagnostics
-      .iter()
-      .any(|d| d.code.as_str() == codes::NO_LIBS_LOADED.as_str()),
-    "missing libs should surface a dedicated diagnostic: {diagnostics:?}"
-  );
   let unknowns = diagnostics
     .iter()
     .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())

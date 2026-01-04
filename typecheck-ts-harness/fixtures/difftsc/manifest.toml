@@ -39,6 +39,11 @@ status = "xfail"
 reason = "Rust checker renders synthesized type parameter names (`T0`) and disagrees with tsc on marker type-at-location behavior."
 
 [[expectations]]
+id = "difftsc/import_equals_require"
+status = "xfail"
+reason = "Rust checker does not match tsc's `import = require()` restrictions/flow diagnostics."
+
+[[expectations]]
 id = "difftsc/intrinsic_string_mappings"
 status = "xfail"
 reason = "Rust checker does not yet support intrinsic string mapping types (`Uppercase`, etc.)."
@@ -76,7 +81,7 @@ reason = "Rust checker does not match tsc's `this` parameter typing behavior in 
 [[expectations]]
 id = "difftsc/triple_slash_references"
 status = "xfail"
-reason = "Rust checker does not yet process triple-slash `<reference lib/path/types>` directives."
+reason = "Rust checker processes triple-slash directives, but still diverges from tsc diagnostics for unresolved `<reference path/types>` directives."
 
 [[expectations]]
 id = "difftsc/using_declarations"
@@ -87,6 +92,11 @@ reason = "Rust checker does not yet support `using`/`await using` resource manag
 id = "difftsc/variance_annotations"
 status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
+
+[[expectations]]
+id = "difftsc/export_assignment_mixed_exports"
+status = "xfail"
+reason = "Rust binder reports `BIND1005` for mixed export assignment; tsc reports `TS2309`"
 
 [[expectations]]
 id = "difftsc/using_invalid"

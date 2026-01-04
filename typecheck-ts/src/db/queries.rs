@@ -32,6 +32,7 @@ use crate::parse_metrics;
 use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
 use crate::queries::parse as parser;
 use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
+use crate::triple_slash::{normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind};
 use crate::FileKey;
 use crate::{BodyId, DefId, ExprId, TypeId};
 use salsa::plumbing::current_revision;
@@ -91,6 +92,8 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   panic_if_cancelled(db);
   let lowered = lower_hir_for(db, file);
   let parsed = parse_for(db, file);
+  let source = file_text_for(db, file);
+  let triple_slash = scan_triple_slash_directives(source.as_ref());
   let mut specs: Vec<Arc<str>> = Vec::new();
   if let Some(lowered) = lowered.lowered.as_deref() {
     specs.reserve(lowered.hir.imports.len() + lowered.hir.exports.len());
@@ -99,6 +102,20 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   if let Some(ast) = parsed.ast.as_deref() {
     collect_type_only_module_specifier_values_from_ast(ast, &mut specs);
     collect_module_augmentation_specifier_values_from_ast(ast, &mut specs);
+  }
+  for reference in triple_slash.references.iter() {
+    let value = reference.value(source.as_ref());
+    if value.is_empty() {
+      continue;
+    }
+    match reference.kind {
+      TripleSlashReferenceKind::Path => {
+        let normalized = normalize_reference_path_specifier(value);
+        specs.push(Arc::<str>::from(normalized.as_ref()));
+      }
+      TripleSlashReferenceKind::Types => specs.push(Arc::<str>::from(value)),
+      TripleSlashReferenceKind::Lib => {}
+    }
   }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
@@ -1643,18 +1660,33 @@ impl std::fmt::Debug for TsSemantics {
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   panic_if_cancelled(db);
   let mut visited = AHashSet::new();
-  let mut queue: VecDeque<FileId> = db
+  let root_ids: Vec<FileId> = db
     .roots_input()
     .roots(db)
     .iter()
     .filter_map(|key| file_id_from_key(db, key))
     .collect();
+  let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
   visited.reserve(queue.len());
   // Always seed bundled/host libs by `FileId` to avoid losing them when a host
   // file shares the same `FileKey` as a bundled lib (two IDs, one key).
   let mut lib_files = db.lib_files();
   lib_files.sort_by_key(|id| id.0);
   queue.extend(lib_files);
+  let options = compiler_options(db);
+  if !options.types.is_empty() && !root_ids.is_empty() {
+    let mut type_names: Vec<&str> = options.types.iter().map(|s| s.as_str()).collect();
+    type_names.sort_unstable();
+    type_names.dedup();
+    for name in type_names {
+      panic_if_cancelled(db);
+      for root in &root_ids {
+        if let Some(target) = module_resolve_ref(db, *root, name) {
+          queue.push_back(target);
+        }
+      }
+    }
+  }
   while let Some(file) = queue.pop_front() {
     panic_if_cancelled(db);
     if !visited.insert(file) {

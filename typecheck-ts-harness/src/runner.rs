@@ -31,6 +31,7 @@ use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind};
+use typecheck_ts::triple_slash::{scan_triple_slash_directives, TripleSlashReferenceKind};
 use typecheck_ts::{FileKey, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
@@ -436,14 +437,9 @@ impl HarnessFileSet {
       name_to_index.insert(normalized_arc, idx);
     }
 
-    let is_node_modules = |name: &str| {
-      name.starts_with("node_modules/")
-        || name.contains("/node_modules/")
-        || name.contains("\\node_modules\\")
-    };
     let mut roots: Vec<_> = stored
       .iter()
-      .filter(|file| is_source_root(file.key.as_str()) && !is_node_modules(file.key.as_str()))
+      .filter(|file| is_source_root(file.key.as_str()) && !is_node_modules_path(file.key.as_str()))
       .map(|file| file.key.clone())
       .collect();
     roots.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
@@ -527,6 +523,12 @@ pub(crate) fn is_source_root(name: &str) -> bool {
     Some(b'x') => name.ends_with(".tsx") || name.ends_with(".jsx"),
     _ => false,
   }
+}
+
+fn is_node_modules_path(name: &str) -> bool {
+  name
+    .split(|c| c == '/' || c == '\\')
+    .any(|segment| segment == "node_modules")
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
@@ -1821,6 +1823,60 @@ pub(crate) fn build_tsc_request(
     files.insert(Arc::clone(&file.key.0), Arc::clone(&file.content));
   }
 
+  let mut options = options.clone();
+  let mut referenced_types: Vec<String> = Vec::new();
+  let mut referenced_libs: Vec<String> = Vec::new();
+  for root in file_set.inner.roots.iter() {
+    let Some(content) = file_set.content(root) else {
+      continue;
+    };
+    let directives = scan_triple_slash_directives(content.as_ref());
+    for reference in directives.references.iter() {
+      let value = reference.value(content.as_ref());
+      if value.is_empty() {
+        continue;
+      }
+      match reference.kind {
+        TripleSlashReferenceKind::Types => referenced_types.push(value.to_string()),
+        TripleSlashReferenceKind::Lib => referenced_libs.push(value.to_string()),
+        TripleSlashReferenceKind::Path => {}
+      }
+    }
+  }
+  referenced_types.sort();
+  referenced_types.dedup();
+  referenced_libs.sort();
+  referenced_libs.dedup();
+
+  if !referenced_types.is_empty() {
+    let entry = options
+      .entry("types".to_string())
+      .or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(array) = entry {
+      let mut merged: Vec<String> = array
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+      merged.extend(referenced_types);
+      merged.sort();
+      merged.dedup();
+      *array = merged.into_iter().map(Value::String).collect();
+    }
+  }
+
+  if !referenced_libs.is_empty() {
+    if let Some(Value::Array(array)) = options.get_mut("lib") {
+      let mut merged: Vec<String> = array
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+      merged.extend(referenced_libs);
+      merged.sort();
+      merged.dedup();
+      *array = merged.into_iter().map(Value::String).collect();
+    }
+  }
+
   // `HarnessFileSet::root_keys` already returns a deterministic, de-duplicated
   // list of roots. Use the cached root slice directly so we don't allocate an
   // intermediate `Vec<FileKey>` for every request.
@@ -1834,7 +1890,7 @@ pub(crate) fn build_tsc_request(
   TscRequest {
     root_names,
     files,
-    options: options.clone(),
+    options,
     diagnostics_only,
     type_queries: Vec::new(),
   }

@@ -242,6 +242,20 @@ pub const UNRESOLVED_MODULE: Code = Code::new(
   &[],
 );
 
+/// TC1007: Triple-slash `/// <reference lib="..." />` directive refers to an
+/// unknown or unsupported library name.
+///
+/// - Primary span: the lib name inside the triple-slash directive.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const UNKNOWN_LIB_REFERENCE: Code = Code::new(
+  "TC1007",
+  "unknown lib reference",
+  "lib name in a triple-slash reference directive",
+  &["primary: lib name span"],
+  &[],
+);
+
 /// TC1002: Export refers to a symbol that is not available.
 ///
 /// - Primary span: the named export specifier or `export * as ...` alias.

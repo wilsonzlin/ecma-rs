@@ -146,6 +146,8 @@ mod lower_metrics;
 mod parse_metrics;
 mod profile;
 mod program;
+#[doc(hidden)]
+pub mod triple_slash;
 #[cfg(feature = "serde")]
 mod snapshot;
 mod symbols;

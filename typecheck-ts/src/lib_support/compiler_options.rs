@@ -212,6 +212,7 @@ impl Default for CacheOptions {
 pub enum LibName {
   Es5,
   Es2015,
+  Es2015Promise,
   Es2016,
   Es2017,
   Es2018,
@@ -230,6 +231,7 @@ impl LibName {
     match self {
       LibName::Es5 => "lib.es5.d.ts",
       LibName::Es2015 => "lib.es2015.d.ts",
+      LibName::Es2015Promise => "lib.es2015.promise.d.ts",
       LibName::Es2016 => "lib.es2016.d.ts",
       LibName::Es2017 => "lib.es2017.d.ts",
       LibName::Es2018 => "lib.es2018.d.ts",
@@ -247,6 +249,7 @@ impl LibName {
     match self {
       LibName::Es5 => "es5",
       LibName::Es2015 => "es2015",
+      LibName::Es2015Promise => "es2015.promise",
       LibName::Es2016 => "es2016",
       LibName::Es2017 => "es2017",
       LibName::Es2018 => "es2018",
@@ -257,6 +260,25 @@ impl LibName {
       LibName::EsNext => "esnext",
       LibName::EsNextDisposable => "esnext.disposable",
       LibName::Dom => "dom",
+    }
+  }
+
+  pub fn from_option_name(raw: &str) -> Option<Self> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+      "es5" => Some(LibName::Es5),
+      "es2015" => Some(LibName::Es2015),
+      "es2015.promise" => Some(LibName::Es2015Promise),
+      "es2016" => Some(LibName::Es2016),
+      "es2017" => Some(LibName::Es2017),
+      "es2018" => Some(LibName::Es2018),
+      "es2019" => Some(LibName::Es2019),
+      "es2020" => Some(LibName::Es2020),
+      "es2021" => Some(LibName::Es2021),
+      "es2022" => Some(LibName::Es2022),
+      "esnext" => Some(LibName::EsNext),
+      "esnext.disposable" => Some(LibName::EsNextDisposable),
+      "dom" => Some(LibName::Dom),
+      _ => None,
     }
   }
 }

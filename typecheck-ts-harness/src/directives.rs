@@ -448,21 +448,7 @@ fn parse_module_kind(raw: &str) -> Option<ModuleKind> {
 }
 
 fn parse_lib_name(raw: &str) -> Option<LibName> {
-  match raw.trim().to_ascii_lowercase().as_str() {
-    "es5" => Some(LibName::Es5),
-    "es2015" => Some(LibName::Es2015),
-    "es2016" => Some(LibName::Es2016),
-    "es2017" => Some(LibName::Es2017),
-    "es2018" => Some(LibName::Es2018),
-    "es2019" => Some(LibName::Es2019),
-    "es2020" => Some(LibName::Es2020),
-    "es2021" => Some(LibName::Es2021),
-    "es2022" => Some(LibName::Es2022),
-    "esnext" => Some(LibName::EsNext),
-    "esnext.disposable" => Some(LibName::EsNextDisposable),
-    "dom" => Some(LibName::Dom),
-    _ => None,
-  }
+  LibName::from_option_name(raw)
 }
 
 #[cfg(test)]

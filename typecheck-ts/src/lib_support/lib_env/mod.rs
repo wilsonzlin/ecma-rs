@@ -77,6 +77,19 @@ fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
   }
 }
 
+pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
+  #[cfg(feature = "bundled-libs")]
+  {
+    Some(bundled::lib_file(name))
+  }
+
+  #[cfg(not(feature = "bundled-libs"))]
+  {
+    let _ = name;
+    None
+  }
+}
+
 #[cfg(feature = "bundled-libs")]
 mod bundled {
   use std::sync::Arc;
@@ -87,16 +100,21 @@ mod bundled {
   use super::super::LibSet;
   use crate::FileKey;
 
+  pub(super) fn lib_file(name: LibName) -> LibFile {
+    LibFile {
+      key: FileKey::new(format!("lib:{}", name.as_str())),
+      name: Arc::from(name.as_str()),
+      kind: FileKind::Dts,
+      text: Arc::from(text_for(&name)),
+    }
+  }
+
   pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
     lib_set
       .libs()
       .iter()
-      .map(|name| LibFile {
-        key: FileKey::new(format!("lib:{}", name.as_str())),
-        name: Arc::from(name.as_str()),
-        kind: FileKind::Dts,
-        text: Arc::from(text_for(name)),
-      })
+      .cloned()
+      .map(lib_file)
       .collect()
   }
 
@@ -109,6 +127,10 @@ mod bundled {
       LibName::Es2015 => include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/fixtures/libs/lib.es2015.d.ts"
+      )),
+      LibName::Es2015Promise => include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/fixtures/libs/lib.es2015.promise.d.ts"
       )),
       LibName::Es2016 => include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -179,10 +201,8 @@ pub fn collect_libs(
   mut host_libs: Vec<LibFile>,
   lib_manager: &LibManager,
 ) -> Vec<LibFile> {
-  if !options.no_default_lib {
-    let bundled = lib_manager.bundled_libs(options);
-    host_libs.extend(bundled.files);
-  }
+  let bundled = lib_manager.bundled_libs(options);
+  host_libs.extend(bundled.files);
   host_libs
 }
 
