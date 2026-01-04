@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::lib_support::{CompilerOptions, FileKind};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, ModuleKind};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 #[derive(Default)]
@@ -109,7 +109,10 @@ const y = x;
 #[test]
 fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_export_assignment()
 {
-  let options = CompilerOptions::default();
+  let options = CompilerOptions {
+    module: Some(ModuleKind::CommonJs),
+    ..CompilerOptions::default()
+  };
   // Keep bundled libs enabled so primitives like `number` are available without
   // requiring additional host-provided lib files.
 
@@ -163,7 +166,10 @@ export const z = y.x;
 
 #[test]
 fn import_equals_require_resolves_ambient_export_assignment_through_host_module_mapping() {
-  let options = CompilerOptions::default();
+  let options = CompilerOptions {
+    module: Some(ModuleKind::CommonJs),
+    ..CompilerOptions::default()
+  };
   // Keep bundled libs enabled so primitives like literal types are available without
   // requiring additional host-provided lib files.
 
