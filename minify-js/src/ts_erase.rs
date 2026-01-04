@@ -6,7 +6,7 @@ use parse_js::ast::class_or_object::{
 };
 use parse_js::ast::expr::jsx::*;
 use parse_js::ast::expr::lit::{LitArrElem, LitBoolExpr, LitNullExpr, LitObjExpr, LitStrExpr, LitTemplatePart};
-use parse_js::ast::expr::pat::{ArrPat, IdPat, ObjPat, Pat};
+use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, Pat};
 use parse_js::ast::expr::*;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::import_export::{ExportName, ExportNames, ImportNames, ModuleExportImportName};
@@ -28,6 +28,7 @@ const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
+type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type EnumDeclNode = Node<EnumDecl>;
 type NamespaceDeclNode = Node<NamespaceDecl>;
 type ModuleDeclNode = Node<ModuleDecl>;
@@ -62,6 +63,7 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
   #[visitor(
     IdExprNode(enter),
     IdPatNode(enter),
+    ClassOrFuncNameNode(enter),
     EnumDeclNode(enter),
     NamespaceDeclNode(enter),
     ModuleDeclNode(enter),
@@ -77,6 +79,10 @@ fn collect_all_identifier_strings(top_level: &mut Node<TopLevel>) -> HashSet<Str
     }
 
     fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+      self.names.insert(node.stx.name.clone());
+    }
+
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
       self.names.insert(node.stx.name.clone());
     }
 

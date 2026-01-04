@@ -324,3 +324,40 @@ fn preserves_merging_of_invalid_top_level_runtime_enums() {
     "expected two IIFEs targeting the same merged runtime enum binding. output: {code}"
   );
 }
+
+#[test]
+fn avoids_synthetic_namespace_param_collisions_with_function_decls() {
+  let src = r#"
+    eval("x");
+    function __minify_ts_namespace_static() {}
+    export namespace static { export const x = 1; }
+  "#;
+  let (code, parsed) = minify_ts_module(src);
+
+  // The namespace binding is synthesized, so it must not accidentally reuse an existing user
+  // function binding with the same name.
+  let local = find_exported_local_binding(&parsed, "static")
+    .expect("expected `export { <local> as static }` for runtime namespace");
+  assert_ne!(
+    local, "__minify_ts_namespace_static",
+    "expected TS erasure to avoid reusing the user function binding for the runtime namespace. output: {code}"
+  );
+  assert!(
+    local.starts_with("__minify_ts_namespace_static_"),
+    "expected TS erasure to disambiguate the synthesized namespace binding with a suffix, got `{local}`. output: {code}"
+  );
+  assert!(
+    code.contains("function __minify_ts_namespace_static"),
+    "expected user function decl to remain in output (eval disables DCE/renaming): {code}"
+  );
+  assert_eq!(
+    count_top_level_var_bindings(&parsed, &local),
+    1,
+    "expected a single synthesized var binding for the runtime namespace. output: {code}"
+  );
+  assert_eq!(
+    count_iifes_by_outer_name(&parsed, &local),
+    1,
+    "expected one namespace IIFE targeting the synthesized binding. output: {code}"
+  );
+}
