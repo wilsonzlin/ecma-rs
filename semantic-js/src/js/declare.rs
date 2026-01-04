@@ -14,6 +14,7 @@ use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
 use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
@@ -135,6 +136,14 @@ fn func_has_use_strict(func: &Func) -> bool {
     Some(FuncBody::Block(stmts)) => has_use_strict_directive(stmts),
     _ => false,
   }
+}
+
+fn func_has_simple_parameter_list(func: &Func) -> bool {
+  func.parameters.iter().all(|param| {
+    !param.stx.rest
+      && param.stx.default_value.is_none()
+      && matches!(param.stx.pattern.stx.pat.stx.as_ref(), Pat::Id(_))
+  })
 }
 
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode, file: FileId) -> JsSemantics {
@@ -820,6 +829,51 @@ impl DeclareVisitor {
     );
   }
 
+  fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
+    let disallow_duplicates = strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
+    if !disallow_duplicates {
+      return;
+    }
+
+    #[derive(Default, VisitorMut)]
+    #[visitor(IdPatNode(enter))]
+    struct ParamNameCollector {
+      seen: BTreeMap<String, TextRange>,
+      duplicates: Vec<(String, TextRange, TextRange)>,
+    }
+
+    impl ParamNameCollector {
+      fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+        let span = ident_range(node.loc, &node.stx.name);
+        if let Some(prev) = self.seen.get(&node.stx.name).copied() {
+          self
+            .duplicates
+            .push((node.stx.name.clone(), span, prev));
+        } else {
+          self.seen.insert(node.stx.name.clone(), span);
+        }
+      }
+    }
+
+    let mut collector = ParamNameCollector::default();
+    for param in func.stx.parameters.iter_mut() {
+      param.stx.pattern.drive_mut(&mut collector);
+    }
+
+    for (_name, span, prev) in collector.duplicates {
+      let mut diagnostic = Diagnostic::error(
+        "BIND0006",
+        "Duplicate parameter name not allowed in this context".to_string(),
+        Span::new(self.builder.file, span),
+      );
+      diagnostic.push_label(Label::secondary(
+        Span::new(self.builder.file, prev),
+        "previous parameter declared here",
+      ));
+      self.builder.diagnostics.push(diagnostic);
+    }
+  }
+
   fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
     let parent = self.current_scope();
     let id = self.builder.new_scope(parent, kind, span);
@@ -1442,6 +1496,7 @@ impl DeclareVisitor {
     let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
     self.strict_stack.push(strict);
     self.push_stmt_context(StmtContext::StatementList);
+    self.report_duplicate_parameters(node, strict);
 
     let kind = if node.stx.arrow {
       ScopeKind::ArrowFunction

@@ -1524,6 +1524,37 @@ fn module_import_restricted_identifier_is_reported() {
 }
 
 #[test]
+fn duplicate_parameters_in_strict_functions_are_reported() {
+  let source = "'use strict'; function f(a,a){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(98));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0006");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
+fn duplicate_parameters_in_sloppy_simple_functions_are_allowed() {
+  let source = "function f(a,a){}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(99));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn duplicate_parameters_in_arrow_functions_are_reported() {
+  let source = "const f = (a,a) => a;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(100));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0006");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
 fn class_name_is_available_inside_class_body() {
   let mut ast = parse("class C { static x = C; }").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(44));
