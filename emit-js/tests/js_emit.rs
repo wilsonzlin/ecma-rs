@@ -298,8 +298,8 @@ fn numeric_literal_member_access() {
 }
 
 #[test]
-fn emits_void_for_undefined_identifier() {
-  assert_emit_expr(id_expr("undefined"), "void 0");
+fn preserves_undefined_identifier() {
+  assert_emit_expr(id_expr("undefined"), "undefined");
 }
 
 #[test]

@@ -229,11 +229,6 @@ impl<'a> JsExprEmitter<'a> {
   }
 
   fn emit_id(&mut self, id: &Node<IdExpr>) -> JsEmitResult {
-    if id.stx.name == "undefined" {
-      self.out.write_keyword("void");
-      self.out.write_number("0");
-      return Ok(());
-    }
     self.out.write_identifier(&id.stx.name);
     Ok(())
   }

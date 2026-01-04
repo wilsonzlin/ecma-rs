@@ -135,11 +135,7 @@ where
 
   fn emit_id(&mut self, id: &Node<IdExpr>) -> EmitResult {
     with_node_context(id.loc, || {
-      if id.stx.name == "undefined" {
-        self.out.write_str("void 0")?;
-      } else {
-        self.out.write_str(&id.stx.name)?;
-      }
+      self.out.write_str(&id.stx.name)?;
       Ok(())
     })
   }

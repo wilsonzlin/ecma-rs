@@ -57,9 +57,9 @@ fn emits_import_meta_expression() {
 }
 
 #[test]
-fn emits_undefined_as_void_0() {
+fn preserves_undefined_identifier() {
   let expr = node(Expr::Id(node(IdExpr {
     name: "undefined".to_string(),
   })));
-  assert_eq!(emit(expr), "void 0");
+  assert_eq!(emit(expr), "undefined");
 }

@@ -81,13 +81,7 @@ pub fn expr_prec(expr: &Node<Expr>) -> Prec {
     Expr::Func(_) => PRIMARY_PRECEDENCE,
     Expr::Class(_) => PRIMARY_PRECEDENCE,
     Expr::Import(_) => CALL_MEMBER_PRECEDENCE,
-    Expr::Id(id) => {
-      if id.stx.name == "undefined" {
-        Prec::new(OPERATORS[&OperatorName::Void].precedence)
-      } else {
-        PRIMARY_PRECEDENCE
-      }
-    }
+    Expr::Id(_) => PRIMARY_PRECEDENCE,
     Expr::This(_)
     | Expr::Super(_)
     | Expr::NewTarget(_)
