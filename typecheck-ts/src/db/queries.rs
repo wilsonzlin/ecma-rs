@@ -1154,11 +1154,6 @@ pub mod body_check {
               .then(a.message.cmp(&b.message))
           });
           for diag in flow_diagnostics.into_iter() {
-            if matches!(meta.kind, HirBodyKind::TopLevel)
-              && diag.code.as_str() == codes::USE_BEFORE_ASSIGNMENT.as_str()
-            {
-              continue;
-            }
             if seen.insert(diag_key(&diag)) {
               result.diagnostics.push(diag);
             }

@@ -2164,7 +2164,9 @@ mod tests {
     assert_eq!(roots.len(), 2);
 
     let from = roots.last().unwrap();
-    let a_key = host.resolve(from, "a.ts").expect("a.ts should resolve");
+    let a_key = host
+      .resolve(from, "./a.ts")
+      .expect("./a.ts should resolve");
     assert!(roots.contains(&a_key));
     assert_eq!(&*host.file_text(&a_key).unwrap(), "second version");
   }

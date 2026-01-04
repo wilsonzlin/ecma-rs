@@ -106,7 +106,7 @@ export const x = 2;
   let program = Program::new(host, vec![file]);
   let diagnostics = program.check();
   assert!(
-    diagnostics.iter().any(|d| d.code.as_str() == "BIND1005"),
-    "expected BIND1005 for mixed export assignment, got {diagnostics:?}"
+    diagnostics.iter().any(|d| d.code.as_str() == "TS2309"),
+    "expected TS2309 for mixed export assignment, got {diagnostics:?}"
   );
 }

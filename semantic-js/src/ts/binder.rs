@@ -951,8 +951,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         .or(first_export_span)
         .unwrap_or_else(|| Span::new(file_id, TextRange::new(0, 0)));
       self.diagnostics.push(Diagnostic::error(
-        "BIND1005",
-        "export assignments cannot be combined with other exports",
+        "TS2309",
+        "an export assignment cannot be used in a module with other exported elements",
         span,
       ));
     }

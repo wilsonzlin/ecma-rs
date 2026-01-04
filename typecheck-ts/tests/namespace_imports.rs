@@ -10,7 +10,7 @@ fn resolves_types_from_namespace_imports_through_reexports() {
   host.insert(re_key.clone(), "export * from \"./m\";");
 
   let a_key = FileKey::new("a.ts");
-  let a_src = "import * as NS from \"./re\";\nlet v: NS.Foo;\nconst use = v.x;\n";
+  let a_src = "import * as NS from \"./re\";\nlet v!: NS.Foo;\nconst use = v.x;\n";
   host.insert(a_key.clone(), a_src);
 
   let program = Program::new(host, vec![a_key.clone()]);
@@ -100,7 +100,7 @@ fn resolves_qualified_types_from_named_imports() {
   );
 
   let a_key = FileKey::new("a.ts");
-  let a_src = "import { NS } from \"./m\";\nlet v: NS.Foo;\nconst use = v.x;\n";
+  let a_src = "import { NS } from \"./m\";\nlet v!: NS.Foo;\nconst use = v.x;\n";
   host.insert(a_key.clone(), a_src);
 
   let program = Program::new(host, vec![a_key.clone()]);

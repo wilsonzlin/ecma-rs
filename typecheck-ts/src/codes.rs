@@ -202,16 +202,29 @@ pub const MISSING_GLOBAL_PROPERTY: Code = Code::new(
   &[],
 );
 
-/// TC0009: Identifier may be used before it has been assigned.
+/// TS2454: Variable is used before it has been assigned.
 ///
 /// - Primary span: the identifier token being read.
 /// - Labels: primary only.
 /// - Notes: none.
 pub const USE_BEFORE_ASSIGNMENT: Code = Code::new(
-  "TC0009",
-  "identifier used before assignment",
+  "TS2454",
+  "variable used before assignment",
   "identifier reference that might not be assigned",
   &["primary: identifier reference"],
+  &[],
+);
+
+/// TS1202: Import assignment cannot be used when targeting ECMAScript modules.
+///
+/// - Primary span: the full `import x = require("...")` statement.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const IMPORT_ASSIGNMENT_IN_ESM: Code = Code::new(
+  "TS1202",
+  "import assignment not allowed for ECMAScript module targets",
+  "import assignment statement",
+  &["primary: import assignment statement"],
   &[],
 );
 

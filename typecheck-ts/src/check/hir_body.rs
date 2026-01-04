@@ -6357,7 +6357,10 @@ impl<'a> FlowBodyChecker<'a> {
                   .map(|id| self.eval_expr(id, &mut env).0)
                   .unwrap_or_else(|| self.store.primitive_ids().unknown);
                 self.bind_pat_with_mode(declarator.pat, init_ty, &mut env, mode);
-                let state = if declarator.init.is_some() {
+                let state = if declarator.init.is_some()
+                  || declarator.definite_assignment
+                  || matches!(var.kind, hir_js::VarDeclKind::Const)
+                {
                   InitState::Assigned
                 } else {
                   InitState::Unassigned
@@ -6467,7 +6470,10 @@ impl<'a> FlowBodyChecker<'a> {
               .map(|id| self.eval_expr(id, &mut env).0)
               .unwrap_or_else(|| self.store.primitive_ids().unknown);
             self.bind_pat_with_mode(declarator.pat, init_ty, &mut env, mode);
-            let state = if declarator.init.is_some() {
+            let state = if declarator.init.is_some()
+              || declarator.definite_assignment
+              || matches!(decl.kind, hir_js::VarDeclKind::Const)
+            {
               InitState::Assigned
             } else {
               InitState::Unassigned

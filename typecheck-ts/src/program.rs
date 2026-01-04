@@ -68,7 +68,9 @@ use crate::{FatalError, HostError, Ice, IceContext};
 pub(crate) mod check;
 
 use crate::lib_support::lib_env::{collect_libs, validate_libs};
-use crate::lib_support::{CacheMode, CacheOptions, CompilerOptions, FileKind, LibFile, LibManager};
+use crate::lib_support::{
+  CacheMode, CacheOptions, CompilerOptions, FileKind, LibFile, LibManager, ModuleKind, ScriptTarget,
+};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -4186,6 +4188,13 @@ struct CachedBodyCheckContext {
   context: Arc<BodyCheckContext>,
 }
 
+#[derive(Clone, Debug)]
+struct ImportAssignmentRequireRecord {
+  file: FileId,
+  span: TextRange,
+  target: ImportTarget,
+}
+
 struct ProgramState {
   analyzed: bool,
   snapshot_loaded: bool,
@@ -4228,6 +4237,7 @@ struct ProgramState {
   module_namespace_in_progress: HashSet<FileId>,
   namespace_member_index: Option<Arc<NamespaceMemberIndex>>,
   callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
+  import_assignment_requires: Vec<ImportAssignmentRequireRecord>,
   diagnostics: Vec<Diagnostic>,
   implicit_any_reported: HashSet<Span>,
   type_store: TypeStore,
@@ -4342,6 +4352,7 @@ impl ProgramState {
       module_namespace_in_progress: HashSet::new(),
       namespace_member_index: None,
       callable_overloads: HashMap::new(),
+      import_assignment_requires: Vec::new(),
       diagnostics: Vec::new(),
       implicit_any_reported: HashSet::new(),
       type_store,
@@ -5310,6 +5321,7 @@ impl ProgramState {
       self.check_cancelled()?;
       self.semantics = Some(Arc::clone(&ts_semantics.semantics));
       self.push_semantic_diagnostics(ts_semantics.diagnostics.as_ref().clone());
+      self.check_import_assignment_requires();
     }
     self.check_cancelled()?;
     self.resolve_reexports();
@@ -7861,6 +7873,51 @@ impl ProgramState {
     }
   }
 
+  fn check_import_assignment_requires(&mut self) {
+    // Match tsc's TS1202 behaviour: `import x = require("...")` is rejected when
+    // emitting ECMAScript modules, unless the referenced module uses an `export =`
+    // assignment (which still requires CommonJS-style interop).
+    let module = self.compiler_options.module.unwrap_or_else(|| match self.compiler_options.target {
+      ScriptTarget::Es3 | ScriptTarget::Es5 => ModuleKind::CommonJs,
+      _ => ModuleKind::Es2015,
+    });
+    let targets_ecmascript_modules = matches!(
+      module,
+      ModuleKind::Es2015
+        | ModuleKind::Es2020
+        | ModuleKind::Es2022
+        | ModuleKind::EsNext
+        | ModuleKind::Node16
+        | ModuleKind::NodeNext
+    );
+    if !targets_ecmascript_modules {
+      return;
+    }
+
+    let Some(semantics) = self.semantics.as_ref() else {
+      return;
+    };
+
+    let mut records = self.import_assignment_requires.clone();
+    records.sort_by_key(|record| (record.file.0, record.span.start, record.span.end));
+    for record in records {
+      let ImportTarget::File(target_file) = record.target else {
+        continue;
+      };
+      let has_export_assignment = semantics
+        .exports_of_opt(sem_ts::FileId(target_file.0))
+        .map(|exports| exports.contains_key("export="))
+        .unwrap_or(false);
+      if has_export_assignment {
+        continue;
+      }
+      self.diagnostics.push(codes::IMPORT_ASSIGNMENT_IN_ESM.error(
+        "Import assignment cannot be used when targeting ECMAScript modules.",
+        Span::new(record.file, record.span),
+      ));
+    }
+  }
+
   fn resolve_reexports(&mut self) {
     let mut changed = true;
     let mut files: Vec<FileId> = self.files.keys().copied().collect();
@@ -9247,6 +9304,11 @@ impl ProgramState {
                   specifier: module.clone(),
                 });
             let span = loc_to_span(file, stmt.loc).range;
+            self.import_assignment_requires.push(ImportAssignmentRequireRecord {
+              file,
+              span,
+              target: import_target.clone(),
+            });
             let name = import_equals.stx.name.clone();
             let symbol = self.alloc_symbol();
             let def_id = self.alloc_def();
@@ -11382,11 +11444,6 @@ impl ProgramState {
               .then(a.message.cmp(&b.message))
           });
           for diag in flow_diagnostics.into_iter() {
-            if matches!(meta.kind, HirBodyKind::TopLevel)
-              && diag.code.as_str() == codes::USE_BEFORE_ASSIGNMENT.as_str()
-            {
-              continue;
-            }
             if seen.insert(diag_key(&diag)) {
               result.diagnostics.push(diag);
             }

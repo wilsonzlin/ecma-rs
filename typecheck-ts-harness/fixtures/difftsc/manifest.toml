@@ -39,11 +39,6 @@ status = "xfail"
 reason = "Rust checker renders synthesized type parameter names (`T0`) and disagrees with tsc on marker type-at-location behavior."
 
 [[expectations]]
-id = "difftsc/import_equals_require"
-status = "xfail"
-reason = "Rust checker does not match tsc's `import = require()` restrictions/flow diagnostics."
-
-[[expectations]]
 id = "difftsc/intrinsic_string_mappings"
 status = "xfail"
 reason = "Rust checker does not yet support intrinsic string mapping types (`Uppercase`, etc.)."
@@ -66,7 +61,12 @@ reason = "Type-only export type facts differ from tsc baseline (tsc reports `any
 [[expectations]]
 id = "difftsc/namespace_reexport"
 status = "xfail"
-reason = "Rust checker does not yet report tsc's definite assignment (`TS2454`) diagnostics and marker typing differs."
+reason = "Rust checker marker typing differs for namespace re-exports."
+
+[[expectations]]
+id = "difftsc/narrowing_types"
+status = "xfail"
+reason = "Rust checker does not yet match tsc's flow-narrowed marker types (`typeof` narrowing reports `any`)."
 
 [[expectations]]
 id = "difftsc/this_param_dts"

@@ -37,7 +37,7 @@
 //! - `BIND1003`: unsupported export assignment expression or exports in a script
 //!   module
 //! - `BIND1004`: duplicate import binding
-//! - `BIND1005`: `export =` combined with other exports
+//! - `TS2309`: `export =` combined with other exports
 //! - `BIND1006`: conflicting `export as namespace` declarations across modules
 //!
 //! ## Determinism expectations

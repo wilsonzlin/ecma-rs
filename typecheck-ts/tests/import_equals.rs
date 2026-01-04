@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, ModuleKind};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
@@ -32,7 +32,9 @@ export const x = Foo;
 
 #[test]
 fn import_equals_require_aliases_module_namespace() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   let dep = FileKey::new("dep.ts");
   host.insert(dep, "export const value: number = 1;");
 
@@ -246,7 +248,9 @@ export const x = Foo;
 
 #[test]
 fn export_import_equals_require_is_exported() {
-  let mut host = MemoryHost::new();
+  let mut options = CompilerOptions::default();
+  options.module = Some(ModuleKind::CommonJs);
+  let mut host = MemoryHost::with_options(options);
   let dep = FileKey::new("dep.ts");
   host.insert(dep, "export const value: number = 1;");
 

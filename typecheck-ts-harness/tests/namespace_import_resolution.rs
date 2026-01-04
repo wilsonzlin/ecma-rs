@@ -44,7 +44,7 @@ fn resolves_qualified_types_through_namespace_imports() {
   host.insert(key_re.clone(), "export * from \"./m\";\n");
   host.insert(
     key_a.clone(),
-    "import * as NS from \"./re\";\nlet v: NS.Foo;\nv.x;\n",
+    "import * as NS from \"./re\";\nlet v!: NS.Foo;\nv.x;\n",
   );
   host.link(key_re.clone(), "./m", key_m.clone());
   host.link(key_a.clone(), "./re", key_re.clone());
