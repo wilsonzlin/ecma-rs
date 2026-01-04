@@ -22,8 +22,8 @@ fn construct_argument_constraint_errors_on_argument_span() {
   let diag = &diagnostics[0];
   assert_eq!(
     diag.code.as_str(),
-    codes::TYPE_MISMATCH.as_str(),
-    "expected TYPE_MISMATCH diagnostic, got {diagnostics:?}"
+    codes::ARGUMENT_TYPE_MISMATCH.as_str(),
+    "expected ARGUMENT_TYPE_MISMATCH diagnostic, got {diagnostics:?}"
   );
 
   let start = source
@@ -33,4 +33,3 @@ fn construct_argument_constraint_errors_on_argument_span() {
   assert_eq!(diag.primary.file, file_id);
   assert_eq!(diag.primary.range, TextRange::new(start, end));
 }
-
