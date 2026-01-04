@@ -286,9 +286,10 @@ fn caches_instantiations_for_same_def() {
   let mut subst = HashMap::new();
   subst.insert(t_param, primitives.boolean);
 
-  let mut cache = InstantiationCache::default();
-  let first = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
-  let second = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
+  let cache = InstantiationCache::default();
+  let sig_id = store.intern_signature(sig.clone());
+  let first = cache.instantiate_signature(&store, sig_id, &sig, &subst);
+  let second = cache.instantiate_signature(&store, sig_id, &sig, &subst);
   assert_eq!(first, second);
 }
 
@@ -310,6 +311,7 @@ fn instantiation_cache_evictions_are_bounded_and_deterministic() {
     max_entries: 2,
     shard_count: 1,
   });
+  let sig_id = store.intern_signature(sig.clone());
 
   for def in 0..16 {
     let mut subst = HashMap::new();
@@ -317,13 +319,13 @@ fn instantiation_cache_evictions_are_bounded_and_deterministic() {
       t_param,
       store.intern_type(TypeKind::NumberLiteral(OrderedFloat(def as f64))),
     );
-    let _ = cache.instantiate_signature(&store, DefId(def), &sig, &subst);
+    let _ = cache.instantiate_signature(&store, sig_id, &sig, &subst);
   }
 
   let mut subst = HashMap::new();
   subst.insert(t_param, primitives.string);
-  let first = cache.instantiate_signature(&store, DefId(99), &sig, &subst);
-  let second = cache.instantiate_signature(&store, DefId(99), &sig, &subst);
+  let first = cache.instantiate_signature(&store, sig_id, &sig, &subst);
+  let second = cache.instantiate_signature(&store, sig_id, &sig, &subst);
   assert_eq!(first, second);
 
   let stats = cache.stats();

@@ -28,9 +28,9 @@ use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
-  ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx,
-  Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander, TypeId, TypeKind,
-  TypeParamDecl, TypeStore,
+  EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData,
+  PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander,
+  TypeId, TypeKind, TypeParamDecl, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -45,7 +45,7 @@ use super::flow_narrow::{
 use super::caches::BodyCaches;
 use super::expr::{resolve_call, resolve_construct};
 use super::infer::infer_type_arguments_for_call;
-use super::instantiate::Substituter;
+use super::instantiate::{InstantiationCache, Substituter};
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 use crate::lib_support::JsxMode;
@@ -627,6 +627,8 @@ pub fn check_body_with_expander(
   let mut checker = Checker {
     store,
     relate,
+    eval_caches: caches.eval.clone(),
+    instantiation_cache: caches.instantiation.clone(),
     lowerer,
     type_resolver,
     jsx_mode,
@@ -738,6 +740,8 @@ struct JsxActualProps {
 struct Checker<'a> {
   store: Arc<TypeStore>,
   relate: RelateCtx<'a>,
+  eval_caches: EvaluatorCaches,
+  instantiation_cache: InstantiationCache,
   lowerer: TypeLowerer,
   type_resolver: Option<Arc<dyn TypeResolver>>,
   jsx_mode: Option<JsxMode>,
@@ -1522,6 +1526,7 @@ impl<'a> Checker<'a> {
           let resolution = resolve_construct(
             &self.store,
             &self.relate,
+            &self.instantiation_cache,
             callee_ty,
             &arg_types,
             None,
@@ -1596,6 +1601,7 @@ impl<'a> Checker<'a> {
           let mut resolution = resolve_call(
             &self.store,
             &self.relate,
+            &self.instantiation_cache,
             callee_base,
             &arg_types,
             None,
@@ -1634,6 +1640,7 @@ impl<'a> Checker<'a> {
                 let next = resolve_call(
                   &self.store,
                   &self.relate,
+                  &self.instantiation_cache,
                   callee_base,
                   &arg_types,
                   None,
@@ -4591,7 +4598,11 @@ impl<'a> Checker<'a> {
     }
 
     let adapter = Adapter { hook: expander };
-    let mut evaluator = TypeEvaluator::new(Arc::clone(&self.store), &adapter);
+    let mut evaluator = TypeEvaluator::with_caches(
+      Arc::clone(&self.store),
+      &adapter,
+      self.eval_caches.clone(),
+    );
     evaluator.evaluate(ty)
   }
 
@@ -5205,6 +5216,7 @@ struct FlowBodyChecker<'a> {
   store: Arc<TypeStore>,
   file: FileId,
   relate: RelateCtx<'a>,
+  instantiation_cache: InstantiationCache,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -5911,6 +5923,7 @@ impl<'a> FlowBodyChecker<'a> {
       store,
       file,
       relate,
+      instantiation_cache: InstantiationCache::default(),
       expr_types,
       pat_types,
       expr_spans,
@@ -7003,6 +7016,7 @@ impl<'a> FlowBodyChecker<'a> {
       resolve_construct(
         &self.store,
         &self.relate,
+        &self.instantiation_cache,
         callee_non_nullish,
         &arg_bases,
         None,
@@ -7014,6 +7028,7 @@ impl<'a> FlowBodyChecker<'a> {
       resolve_call(
         &self.store,
         &self.relate,
+        &self.instantiation_cache,
         callee_non_nullish,
         &arg_bases,
         this_arg,

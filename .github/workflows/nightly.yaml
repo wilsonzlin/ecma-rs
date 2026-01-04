@@ -85,26 +85,12 @@ jobs:
           cargo bench -p typecheck-ts-bench --bench body_alloc --locked > reports/typecheck-ts-body-alloc.json
           cargo bench -p typecheck-ts-bench --bench check_body_alloc --locked > reports/typecheck-ts-check-body-alloc.json
 
-      - name: Upload benchmark report
+      - name: Upload benchmark reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: typecheck-ts-bench
-          path: reports/typecheck-ts-bench.json
-
-      - name: Upload body allocation report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: typecheck-ts-body-alloc
-          path: reports/typecheck-ts-body-alloc.json
-
-      - name: Upload per-body allocation report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: typecheck-ts-check-body-alloc
-          path: reports/typecheck-ts-check-body-alloc.json
+          path: reports
 
   ts-conformance:
     runs-on: ubuntu-24.04

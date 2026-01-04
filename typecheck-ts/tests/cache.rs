@@ -80,7 +80,7 @@ fn instantiation_cache_eviction_is_deterministic() {
     type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
-  let def = DefId(42);
+  let sig_id = store.intern_signature(sig.clone());
 
   let config = CacheOptions {
     max_relation_cache_entries: 0,
@@ -107,7 +107,7 @@ fn instantiation_cache_eviction_is_deterministic() {
   let instantiate_all = |cache: &mut InstantiationCache| -> Vec<SignatureId> {
     substitutions
       .iter()
-      .map(|subst| cache.instantiate_signature(&store, def, &sig, subst))
+      .map(|subst| cache.instantiate_signature(&store, sig_id, &sig, subst))
       .collect()
   };
 
@@ -337,12 +337,12 @@ fn cache_stats_are_recorded_for_profiling() {
   };
   let mut subst = HashMap::new();
   subst.insert(t_param, primitives.number);
-  let mut instantiation = body.instantiation.clone();
-  let inst_def = DefId(7);
-  let instantiated = instantiation.instantiate_signature(&store, inst_def, &sig, &subst);
+  let instantiation = body.instantiation.clone();
+  let sig_id = store.intern_signature(sig.clone());
+  let instantiated = instantiation.instantiate_signature(&store, sig_id, &sig, &subst);
   assert_eq!(
     instantiated,
-    instantiation.instantiate_signature(&store, inst_def, &sig, &subst)
+    instantiation.instantiate_signature(&store, sig_id, &sig, &subst)
   );
 
   let stats = body.stats();

@@ -11,3 +11,8 @@ export function overload(value: string | number) {
 export function combine<A, B>(a: A[], b: B[]): Array<A | B> {
   return [...a, ...b];
 }
+
+// Exercise instantiation and overload selection with repeated calls so cache hit
+// rates are visible in the benchmark output.
+export const pickedA = pick(1, 2);
+export const pickedB = pick(1, 2);

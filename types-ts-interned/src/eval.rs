@@ -6,6 +6,7 @@ use crate::shape::{PropData, PropKey, Property, Shape};
 use crate::store::TypeStore;
 use ahash::{AHashMap, AHashSet};
 use ordered_float::OrderedFloat;
+use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -74,7 +75,7 @@ struct EvalKey {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RefKey {
   def: DefId,
-  args: Vec<TypeId>,
+  args: SmallVec<[TypeId; 4]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -228,7 +229,7 @@ impl EvaluatorCaches {
   pub fn get_ref(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     let key = RefKey {
       def,
-      args: args.to_vec(),
+      args: SmallVec::from_slice(args),
     };
     self.refs.get(&key)
   }
@@ -236,7 +237,7 @@ impl EvaluatorCaches {
   pub fn insert_ref(&self, def: DefId, args: &[TypeId], value: TypeId) {
     let key = RefKey {
       def,
-      args: args.to_vec(),
+      args: SmallVec::from_slice(args),
     };
     self.refs.insert(key, value);
   }
@@ -637,13 +638,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
-    let evaluated_args: Vec<_> = args
+    let evaluated_args: SmallVec<[TypeId; 4]> = args
       .into_iter()
       .map(|arg| self.evaluate_with_subst(arg, subst, depth + 1))
       .collect();
     let key = RefKey {
       def,
-      args: evaluated_args.clone(),
+      args: evaluated_args,
     };
     if let Some(cached) = self.caches.refs.get(&key) {
       // `refs` memoizes instantiated expansions, but callers may evolve the
@@ -664,17 +665,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if self.ref_in_progress.contains(&key) {
       return self.store.intern_type(TypeKind::Ref {
         def,
-        args: evaluated_args,
+        args: key.args.to_vec(),
       });
     }
     self.ref_in_progress.insert(key.clone());
     let expanded = self
       .expander
-      .expand(&self.store, def, &evaluated_args)
+      .expand(&self.store, def, &key.args)
       .map(|expanded| {
         let mut next_subst = subst.clone();
         for (idx, param) in expanded.params.iter().enumerate() {
-          if let Some(arg) = evaluated_args.get(idx) {
+          if let Some(arg) = key.args.get(idx) {
             next_subst = next_subst.with(*param, *arg);
           }
         }
@@ -683,7 +684,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       .unwrap_or_else(|| {
         self.store.intern_type(TypeKind::Ref {
           def,
-          args: evaluated_args,
+          args: key.args.to_vec(),
         })
       });
     self.ref_in_progress.remove(&key);

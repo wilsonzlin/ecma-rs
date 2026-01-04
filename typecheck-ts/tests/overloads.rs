@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use diagnostics::{FileId, Span, TextRange};
 use typecheck_ts::check::expr::resolve_call;
+use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::codes;
 use types_ts_interned::{
   Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
@@ -25,6 +26,7 @@ fn selects_literal_overload() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let click = store.intern_type(TypeKind::StringLiteral(store.intern_name("click")));
   let dom_ret = store.intern_type(TypeKind::StringLiteral(store.intern_name("dom")));
@@ -69,6 +71,7 @@ fn selects_literal_overload() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[click, handler],
     None,
@@ -87,6 +90,7 @@ fn infers_generic_return_type() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let t_param = types_ts_interned::TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -104,6 +108,7 @@ fn infers_generic_return_type() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.number],
     None,
@@ -122,6 +127,7 @@ fn reports_no_matching_overload_with_reasons() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let sig = Signature {
     params: vec![param("value", primitives.number, &store)],
@@ -137,6 +143,7 @@ fn reports_no_matching_overload_with_reasons() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.string],
     None,
@@ -163,6 +170,7 @@ fn selects_first_overload_on_tie() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let sig_a = Signature {
     params: vec![param("value", primitives.string, &store)],
@@ -186,6 +194,7 @@ fn selects_first_overload_on_tie() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.string],
     None,
@@ -205,6 +214,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -246,6 +256,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
   let string_resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     string_callable,
     &[primitives.number],
     None,
@@ -263,6 +274,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
   let number_resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     number_callable,
     &[primitives.string],
     None,
@@ -283,6 +295,7 @@ fn applies_default_type_argument_from_interned_signature() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -303,7 +316,17 @@ fn applies_default_type_argument_from_interned_signature() {
     Some(primitives.string)
   );
 
-  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span(), None);
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    &instantiation,
+    callable,
+    &[],
+    None,
+    None,
+    span(),
+    None,
+  );
   assert!(resolution.diagnostics.is_empty());
   let instantiated = resolution
     .signature
@@ -319,6 +342,7 @@ fn prefers_union_compatible_overload() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let union = store.union(vec![primitives.string, primitives.number]);
 
@@ -353,6 +377,7 @@ fn prefers_union_compatible_overload() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[union],
     None,
@@ -375,6 +400,7 @@ fn prefers_fixed_arity_over_rest() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let sig_rest = Signature {
     params: vec![
@@ -410,6 +436,7 @@ fn prefers_fixed_arity_over_rest() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.string, primitives.string],
     None,
@@ -428,6 +455,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let t_param = types_ts_interned::TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -455,6 +483,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.any],
     None,
@@ -473,6 +502,7 @@ fn uses_contextual_return_for_generic_inference() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+  let instantiation = InstantiationCache::default();
 
   let t_param = types_ts_interned::TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -490,6 +520,7 @@ fn uses_contextual_return_for_generic_inference() {
   let resolution = resolve_call(
     &store,
     &relate,
+    &instantiation,
     callable,
     &[primitives.any],
     None,

@@ -8,7 +8,7 @@ use types_ts_interned::{
 };
 
 use super::infer::infer_type_arguments_for_call;
-use super::instantiate::Substituter;
+use super::instantiate::InstantiationCache;
 use crate::codes;
 
 const MAX_NOTES: usize = 5;
@@ -150,6 +150,7 @@ struct CandidateOutcome {
 pub fn resolve_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -236,8 +237,8 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let mut substituter = Substituter::new(Arc::clone(store), inference.substitutions.clone());
-    let instantiated_id = substituter.substitute_signature(&original_sig);
+    let instantiated_id =
+      instantiation.instantiate_signature(store, sig_id, &original_sig, &inference.substitutions);
     let instantiated_sig = store.signature(instantiated_id);
 
     let arity = analyze_arity(store.as_ref(), &instantiated_sig);
@@ -356,6 +357,7 @@ pub fn resolve_overloads(
 pub fn resolve_construct_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -442,8 +444,8 @@ pub fn resolve_construct_overloads(
       continue;
     }
 
-    let mut substituter = Substituter::new(Arc::clone(store), inference.substitutions.clone());
-    let instantiated_id = substituter.substitute_signature(&original_sig);
+    let instantiated_id =
+      instantiation.instantiate_signature(store, sig_id, &original_sig, &inference.substitutions);
     let instantiated_sig = store.signature(instantiated_id);
 
     let arity = analyze_arity(store.as_ref(), &instantiated_sig);

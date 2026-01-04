@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use smallvec::SmallVec;
 use types_ts_interned::{
   CacheConfig, CacheStats, ObjectType, Shape, ShardedCache, Signature, SignatureId, TupleElem,
   TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
-use types_ts_interned::{DefId, ShapeId};
+use types_ts_interned::ShapeId;
 
 /// Performs type parameter substitution over [`TypeKind`] trees.
 ///
@@ -226,7 +227,13 @@ impl Substituter {
 /// Caches instantiations of a particular definition for repeated calls.
 #[derive(Clone, Debug)]
 pub struct InstantiationCache {
-  signature_cache: Arc<ShardedCache<(DefId, Vec<TypeId>), SignatureId>>,
+  signature_cache: Arc<ShardedCache<InstantiationKey, SignatureId>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct InstantiationKey {
+  sig: SignatureId,
+  args: SmallVec<[TypeId; 4]>,
 }
 
 impl Default for InstantiationCache {
@@ -242,12 +249,6 @@ impl InstantiationCache {
     }
   }
 
-  pub fn shared(cache: Arc<ShardedCache<(DefId, Vec<TypeId>), SignatureId>>) -> Self {
-    Self {
-      signature_cache: cache,
-    }
-  }
-
   pub fn stats(&self) -> CacheStats {
     self.signature_cache.stats()
   }
@@ -259,23 +260,21 @@ impl InstantiationCache {
   /// Instantiate a signature for a specific definition and type argument mapping,
   /// caching the result to avoid re-instantiating identical substitutions.
   pub fn instantiate_signature(
-    &mut self,
+    &self,
     store: &Arc<TypeStore>,
-    def: DefId,
+    sig_id: SignatureId,
     sig: &Signature,
     subst: &HashMap<TypeParamId, TypeId>,
   ) -> SignatureId {
-    let key_args: Vec<TypeId> = sig
-      .type_params
-      .iter()
-      .map(|tp| {
-        subst
-          .get(&tp.id)
-          .copied()
-          .unwrap_or(store.primitive_ids().unknown)
-      })
-      .collect();
-    let cache_key = (def, key_args);
+    if sig.type_params.is_empty() {
+      return sig_id;
+    }
+    let unknown = store.primitive_ids().unknown;
+    let mut key_args: SmallVec<[TypeId; 4]> = SmallVec::with_capacity(sig.type_params.len());
+    for tp in sig.type_params.iter() {
+      key_args.push(subst.get(&tp.id).copied().unwrap_or(unknown));
+    }
+    let cache_key = InstantiationKey { sig: sig_id, args: key_args };
     if let Some(hit) = self.signature_cache.get(&cache_key) {
       return hit;
     }

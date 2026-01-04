@@ -51,6 +51,12 @@ pub struct TypecheckSummary {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct AnalyzeSummary {
+  pub files: usize,
+  pub stats: QueryStats,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct TypeOfDefSummary {
   pub exports: usize,
   pub rendered_types: Vec<String>,
@@ -123,8 +129,10 @@ pub struct IncrementalEdit {
 
 pub fn parse_only(fixture: &Fixture) -> SyntaxResult<Node<TopLevel>> {
   let mut opts = ParseOptions::default();
-  if matches!(fixture.kind, FixtureKind::Tsx) {
-    opts.dialect = Dialect::Tsx;
+  match fixture.kind {
+    FixtureKind::Tsx => opts.dialect = Dialect::Tsx,
+    FixtureKind::Dts => opts.dialect = Dialect::Dts,
+    FixtureKind::Ts => {}
   }
   parse_with_options(fixture.source, opts)
 }
@@ -133,6 +141,7 @@ pub fn hir_kind(kind: FixtureKind) -> HirFileKind {
   match kind {
     FixtureKind::Tsx => HirFileKind::Tsx,
     FixtureKind::Ts => HirFileKind::Ts,
+    FixtureKind::Dts => HirFileKind::Dts,
   }
 }
 
@@ -143,6 +152,7 @@ fn fixture_filename(fixture: &Fixture) -> String {
     match fixture.kind {
       FixtureKind::Tsx => format!("{}.tsx", fixture.name),
       FixtureKind::Ts => format!("{}.ts", fixture.name),
+      FixtureKind::Dts => format!("{}.d.ts", fixture.name),
     }
   }
 }
@@ -249,6 +259,28 @@ pub fn typecheck_fixture_with_options(
 
 pub fn typecheck_module_graph(graph: &ModuleGraphFixture) -> TypecheckSummary {
   typecheck_module_graph_with_options(graph, CompilerOptions::default())
+}
+
+pub fn analyze_module_graph(graph: &ModuleGraphFixture) -> AnalyzeSummary {
+  analyze_module_graph_with_options(graph, CompilerOptions::default())
+}
+
+pub fn analyze_module_graph_with_options(
+  graph: &ModuleGraphFixture,
+  options: CompilerOptions,
+) -> AnalyzeSummary {
+  let entries = entries_from_graph(graph);
+  let host = BenchHost::with_options(entries, options);
+  let root = host
+    .key_for(graph.files[0].name)
+    .expect("module graph root should exist");
+  let program = Program::new(host, vec![root]);
+  let files = program.reachable_files();
+  let stats = program.query_stats();
+  AnalyzeSummary {
+    files: files.len(),
+    stats,
+  }
 }
 
 pub fn typecheck_module_graph_with_options(

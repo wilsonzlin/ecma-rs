@@ -3,12 +3,14 @@ use std::sync::Arc;
 use diagnostics::Span;
 use types_ts_interned::{RelateCtx, RelateTypeExpander, TypeId, TypeStore};
 
+use super::instantiate::InstantiationCache;
 use super::overload::{resolve_construct_overloads, resolve_overloads, CallResolution};
 
 /// Resolve a call expression against a callable type.
 pub fn resolve_call(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -19,6 +21,7 @@ pub fn resolve_call(
   resolve_overloads(
     store,
     relate,
+    instantiation,
     callee,
     args,
     this_arg,
@@ -32,6 +35,7 @@ pub fn resolve_call(
 pub fn resolve_construct(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  instantiation: &InstantiationCache,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -42,6 +46,7 @@ pub fn resolve_construct(
   resolve_construct_overloads(
     store,
     relate,
+    instantiation,
     callee,
     args,
     this_arg,

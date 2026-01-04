@@ -10837,11 +10837,27 @@ impl ProgramState {
           );
           let resolution = if call.is_new {
             resolve_construct(
-              &store, &relate, *callee_ty, &arg_tys, None, None, span, None,
+              &store,
+              &relate,
+              &caches.instantiation,
+              *callee_ty,
+              &arg_tys,
+              None,
+              None,
+              span,
+              None,
             )
           } else {
             resolve_call(
-              &store, &relate, *callee_ty, &arg_tys, this_arg, None, span, None,
+              &store,
+              &relate,
+              &caches.instantiation,
+              *callee_ty,
+              &arg_tys,
+              this_arg,
+              None,
+              span,
+              None,
             )
           };
           let mut ret_ty = resolution.return_type;

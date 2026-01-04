@@ -10,9 +10,9 @@ use typecheck_ts::CacheKind;
 use typecheck_ts::QueryKind;
 use typecheck_ts_bench::fixtures::{all_fixtures, module_graph_fixtures};
 use typecheck_ts_bench::pipeline::{
-  assignability_micro, bind_module_graph, check_body_named, check_body_with_warmups, hir_kind,
-  incremental_recheck, lower_to_hir, parse_and_lower, parse_only, summarize_hir,
-  type_of_exported_defs, typecheck_fixture, typecheck_module_graph, BodyCheckSummary,
+  analyze_module_graph, assignability_micro, bind_module_graph, check_body_named,
+  check_body_with_warmups, hir_kind, incremental_recheck, lower_to_hir, parse_and_lower, parse_only,
+  summarize_hir, type_of_exported_defs, typecheck_fixture, typecheck_module_graph, BodyCheckSummary,
   RelationStats, TypecheckSummary,
 };
 use typecheck_ts_bench::IncrementalEdit;
@@ -59,16 +59,16 @@ impl BenchDetail {
   }
 
   fn finalize(mut self, iterations: u64) -> Option<BenchDetail> {
-    if let (Some(hits), Some(misses)) = (
-      self.counters.get("relation_hits"),
-      self.counters.get("relation_misses"),
-    ) {
-      let lookups = *hits + *misses;
-      if lookups > 0 {
-        self.metrics.insert(
-          "relation_hit_rate".to_string(),
-          *hits as f64 / lookups as f64,
-        );
+    for cache in ["relation", "eval", "instantiation", "ref_expansion"] {
+      let hits = self.counters.get(&format!("{cache}_hits"));
+      let misses = self.counters.get(&format!("{cache}_misses"));
+      if let (Some(hits), Some(misses)) = (hits, misses) {
+        let lookups = *hits + *misses;
+        if lookups > 0 {
+          self
+            .metrics
+            .insert(format!("{cache}_hit_rate"), *hits as f64 / lookups as f64);
+        }
       }
     }
     if iterations > 0 {
@@ -183,6 +183,24 @@ fn detail_from_query_stats(stats: &typecheck_ts::QueryStats) -> BenchDetail {
     detail.add_counter("relation_evictions", relation.evictions);
     detail.add_counter("relation_insertions", relation.insertions);
   }
+  if let Some(eval) = stats.caches.get(&CacheKind::Eval) {
+    detail.add_counter("eval_hits", eval.hits);
+    detail.add_counter("eval_misses", eval.misses);
+    detail.add_counter("eval_evictions", eval.evictions);
+    detail.add_counter("eval_insertions", eval.insertions);
+  }
+  if let Some(refs) = stats.caches.get(&CacheKind::RefExpansion) {
+    detail.add_counter("ref_expansion_hits", refs.hits);
+    detail.add_counter("ref_expansion_misses", refs.misses);
+    detail.add_counter("ref_expansion_evictions", refs.evictions);
+    detail.add_counter("ref_expansion_insertions", refs.insertions);
+  }
+  if let Some(instantiation) = stats.caches.get(&CacheKind::Instantiation) {
+    detail.add_counter("instantiation_hits", instantiation.hits);
+    detail.add_counter("instantiation_misses", instantiation.misses);
+    detail.add_counter("instantiation_evictions", instantiation.evictions);
+    detail.add_counter("instantiation_insertions", instantiation.insertions);
+  }
   detail
 }
 
@@ -261,6 +279,20 @@ fn main() {
         detail.add_counter("exports", summary.exports as u64);
         detail.add_counter("globals", summary.globals as u64);
         detail.add_counter("diagnostics", summary.diagnostics as u64);
+        detail
+      },
+    ));
+  }
+
+  for graph in module_graphs {
+    results.push(measure(
+      format!("pipeline/typecheck_ts/analyze/{}", graph.name),
+      bind_iters,
+      || {
+        let summary = analyze_module_graph(graph);
+        black_box(summary.files);
+        let mut detail = detail_from_query_stats(&summary.stats);
+        detail.add_counter("files", summary.files as u64);
         detail
       },
     ));
@@ -377,6 +409,45 @@ fn main() {
       file: "project_text.ts",
       from: "const SEPARATOR = \":\";",
       to: "const SEPARATOR = \"-\";",
+    };
+    let mut full_total = Duration::ZERO;
+    let mut edit_total = Duration::ZERO;
+    let mut full_detail = BenchDetail::default();
+    let mut edit_detail = BenchDetail::default();
+    for _ in 0..incremental_iters {
+      let timings = incremental_recheck(project, &edit);
+      full_total += timings.full;
+      edit_total += timings.edit;
+      full_detail.merge(detail_from_typecheck(&timings.full_summary));
+      edit_detail.merge(detail_from_typecheck(&timings.edit_summary));
+      black_box((
+        timings.full_summary.diagnostics,
+        timings.edit_summary.diagnostics,
+      ));
+    }
+
+    results.push(BenchResult {
+      name: format!("incremental/full/{}", project.name),
+      iterations: incremental_iters,
+      total_nanos: duration_to_nanos(full_total),
+      details: full_detail.finalize(incremental_iters),
+    });
+    results.push(BenchResult {
+      name: format!("incremental/edit/{}", project.name),
+      iterations: incremental_iters,
+      total_nanos: duration_to_nanos(edit_total),
+      details: edit_detail.finalize(incremental_iters),
+    });
+  }
+
+  if let Some(project) = module_graphs
+    .iter()
+    .find(|g| g.name == "real_world/mini_project")
+  {
+    let edit = IncrementalEdit {
+      file: "real_world/mini_project/src/types.ts",
+      from: "completed: boolean;",
+      to: "completed: boolean | null;",
     };
     let mut full_total = Duration::ZERO;
     let mut edit_total = Duration::ZERO;
@@ -550,6 +621,12 @@ fn format_detail(detail: &BenchDetail, iterations: u64) -> Option<String> {
   }
   if let Some(hit_rate) = detail.metrics.get("relation_hit_rate") {
     parts.push(format!("relation_hit_rate={:.2}%", hit_rate * 100.0));
+  }
+  if let Some(hit_rate) = detail.metrics.get("eval_hit_rate") {
+    parts.push(format!("eval_hit_rate={:.2}%", hit_rate * 100.0));
+  }
+  if let Some(hit_rate) = detail.metrics.get("instantiation_hit_rate") {
+    parts.push(format!("instantiation_hit_rate={:.2}%", hit_rate * 100.0));
   }
   for stage in ["parse_ms", "lower_ms", "bind_ms", "check_body_ms"] {
     if let Some(ms) = detail.metrics.get(stage) {
