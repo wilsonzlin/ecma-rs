@@ -93,6 +93,12 @@ impl TdzFrame {
   }
 }
 
+#[derive(Debug, Default)]
+struct ParamTdzFrame {
+  params: HashSet<SymbolId>,
+  uninitialized: HashSet<SymbolId>,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ForInOfResolveContext {
   loop_scope: Option<ScopeId>,
@@ -142,7 +148,7 @@ struct ResolveVisitor<'a> {
   var_decl_mode_stack: Vec<VarDeclMode>,
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
-  param_tdz_stack: Vec<HashSet<SymbolId>>,
+  param_tdz_stack: Vec<ParamTdzFrame>,
   class_name_stack: Vec<Option<SymbolId>>,
   in_param_list: Vec<bool>,
   func_scope_stack: Vec<ScopeId>,
@@ -232,7 +238,7 @@ impl ResolveVisitor<'_> {
       if self
         .param_tdz_stack
         .last()
-        .is_some_and(|frame| frame.contains(&symbol))
+        .is_some_and(|frame| frame.uninitialized.contains(&symbol))
         && self.closure_of(use_scope) == self.closure_of(decl_scope)
       {
         return true;
@@ -262,7 +268,7 @@ impl ResolveVisitor<'_> {
       }
     }
     if let Some(frame) = self.param_tdz_stack.last_mut() {
-      frame.remove(&symbol);
+      frame.uninitialized.remove(&symbol);
     }
   }
 
@@ -337,16 +343,21 @@ impl ResolveVisitor<'_> {
       return None;
     };
     let func_scope = self.func_scope_stack.last().copied().unwrap_or(scope);
+    let param_symbols = self.param_tdz_stack.last().map(|frame| &frame.params);
 
     let mut current = Some(scope);
     while let Some(scope_id) = current {
       let scope_data = self.sem.scope(scope_id);
       if let Some(symbol) = scope_data.get(name_id) {
-        // Function parameter initializer expressions are evaluated before the
-        // function body's lexical declarations become visible. If name
-        // resolution finds a lexical binding in the function scope, skip it and
-        // continue searching outer scopes instead.
-        if scope_id == func_scope && self.is_lexical_symbol(symbol) {
+        // Default parameter initializers are evaluated in the parameter scope
+        // before the function body's `var`/function/lexical declarations become
+        // visible. If name resolution finds a binding in the function scope
+        // that is not a parameter binding, skip it and continue searching outer
+        // scopes instead.
+        if scope_id == func_scope {
+          if param_symbols.is_some_and(|symbols| symbols.contains(&symbol)) {
+            return Some(symbol);
+          }
           current = scope_data.parent;
           continue;
         }
@@ -663,7 +674,11 @@ impl ResolveVisitor<'_> {
     for param in node.stx.parameters.iter_mut() {
       param.stx.pattern.drive_mut(&mut collector);
     }
-    self.param_tdz_stack.push(collector.symbols);
+    let uninitialized = collector.symbols;
+    self.param_tdz_stack.push(ParamTdzFrame {
+      params: uninitialized.clone(),
+      uninitialized,
+    });
 
     self.push_scope_from_assoc(&node.assoc);
   }

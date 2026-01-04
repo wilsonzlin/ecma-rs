@@ -1219,6 +1219,50 @@ fn parameter_default_initializer_prefers_outer_binding() {
 }
 
 #[test]
+fn parameter_default_initializer_does_not_resolve_to_body_var_decls() {
+  let source = "function f(a = x) { var x = 1; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(88));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let x_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "x")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("x use");
+  assert_eq!(x_use.symbol, None);
+  assert!(!x_use.in_tdz);
+}
+
+#[test]
+fn parameter_default_initializer_does_not_resolve_to_body_function_decls() {
+  let source = "function f(a = g) { function g(){} }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(89));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let g_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "g")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("g use");
+  assert_eq!(g_use.symbol, None);
+  assert!(!g_use.in_tdz);
+}
+
+#[test]
 fn parameter_default_initializer_later_parameter_is_in_tdz() {
   let source = "function f(a = b, b = 1) {}";
   let mut ast = parse(source).unwrap();
