@@ -528,13 +528,21 @@ impl AstIndex {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter() {
           match &member.stx.typ {
-            ObjMemberType::Valued { val, .. } => match val {
-              ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
-              ClassOrObjVal::StaticBlock(block) => {
-                self.index_stmt_list(&block.stx.body, file, cancelled)
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                self.index_expr(expr, file, cancelled);
               }
-              _ => {}
-            },
+              match val {
+                ClassOrObjVal::Getter(getter) => self.index_function(&getter.stx.func, file, cancelled),
+                ClassOrObjVal::Setter(setter) => self.index_function(&setter.stx.func, file, cancelled),
+                ClassOrObjVal::Method(method) => self.index_function(&method.stx.func, file, cancelled),
+                ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
+                ClassOrObjVal::StaticBlock(block) => {
+                  self.index_stmt_list(&block.stx.body, file, cancelled)
+                }
+                ClassOrObjVal::Prop(None) | ClassOrObjVal::IndexSignature(_) => {}
+              }
+            }
             ObjMemberType::Rest { val } => self.index_expr(val, file, cancelled),
             ObjMemberType::Shorthand { .. } => {}
           }

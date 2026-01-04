@@ -83,6 +83,55 @@ fn infers_basic_literals_and_identifiers() {
 }
 
 #[test]
+fn object_literal_methods_have_checkable_bodies() {
+  let source = "const dog = { bark() { missing; } };";
+  let lowered = lower_from_source(source).expect("lower");
+  let (body_id, body) = lowered
+    .bodies
+    .iter()
+    .enumerate()
+    .find(|(_, b)| matches!(b.kind, BodyKind::Function))
+    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .expect("function body");
+
+  let ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
+  let store = TypeStore::new();
+  let caches = CheckerCaches::new(Default::default()).for_body();
+  let result = check_body(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    &ast_index,
+    Arc::clone(&store),
+    ScriptTarget::Es2015,
+    true,
+    &caches,
+    &HashMap::new(),
+    None,
+  );
+
+  let codes: Vec<_> = result.diagnostics().iter().map(|d| d.code.as_str()).collect();
+  assert!(
+    !codes.contains(&"ICE0002"),
+    "object literal method bodies should be checkable without ICE0002; got {codes:?}"
+  );
+  assert!(
+    codes.contains(&"TC0005"),
+    "expected unknown identifier diagnostic from method body; got {codes:?}"
+  );
+}
+
+#[test]
 fn local_variable_widening_respects_decl_mode() {
   let source = "function f() { let x = 1; const y = 1; return x + y; }";
   let lowered = lower_from_source(source).expect("lower");
