@@ -1,11 +1,12 @@
 use super::{OptCtx, Pass};
 use derive_visitor::{DriveMut, VisitorMut};
-use parse_js::ast::expr::lit::LitNullExpr;
-use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
+use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr};
+use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::ReturnStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
+use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use semantic_js::assoc::js::{resolved_symbol, scope_id};
 use semantic_js::js::SymbolId;
@@ -20,7 +21,9 @@ impl Pass for SemanticRewritePass {
   fn run(&mut self, cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
     let mut visitor = SemanticRewriteVisitor::new(cx);
     top.drive_mut(&mut visitor);
-    visitor.changed
+    let mut undefined_visitor = GlobalUndefinedToVoidZeroVisitor::new(cx);
+    top.drive_mut(&mut undefined_visitor);
+    visitor.changed || undefined_visitor.changed
   }
 }
 
@@ -77,6 +80,39 @@ impl<'a> SemanticRewriteVisitor<'a> {
     if let Some(expr) = replacement {
       self.changed = true;
       *node.stx = expr;
+    }
+  }
+}
+
+#[derive(VisitorMut)]
+#[visitor(ExprNode(exit))]
+struct GlobalUndefinedToVoidZeroVisitor<'a> {
+  cx: &'a OptCtx,
+  changed: bool,
+}
+
+impl<'a> GlobalUndefinedToVoidZeroVisitor<'a> {
+  fn new(cx: &'a OptCtx) -> Self {
+    Self { cx, changed: false }
+  }
+
+  fn is_disabled(&self, assoc: &parse_js::ast::node::NodeAssocData) -> bool {
+    scope_id(assoc)
+      .map(|scope| self.cx.disabled_scopes.contains(&scope))
+      .unwrap_or(false)
+  }
+
+  fn exit_expr_node(&mut self, node: &mut ExprNode) {
+    if self.is_disabled(&node.assoc) {
+      return;
+    }
+
+    let Expr::Id(id) = node.stx.as_ref() else {
+      return;
+    };
+    if id.stx.name == "undefined" && resolved_symbol(&id.assoc).is_none() {
+      self.changed = true;
+      *node.stx = build_void_zero(node.loc);
     }
   }
 }
@@ -141,6 +177,24 @@ fn build_loose_null_check(loc: Loc, name: String) -> Expr {
       operator: OperatorName::Equality,
       left: Node::new(loc, Expr::Id(Node::new(loc, IdExpr { name }))),
       right: Node::new(loc, Expr::LitNull(Node::new(loc, LitNullExpr {}))),
+    },
+  ))
+}
+
+fn build_void_zero(loc: Loc) -> Expr {
+  Expr::Unary(Node::new(
+    loc,
+    UnaryExpr {
+      operator: OperatorName::Void,
+      argument: Node::new(
+        loc,
+        Expr::LitNum(Node::new(
+          loc,
+          LitNumExpr {
+            value: JsNumber(0.0),
+          },
+        )),
+      ),
     },
   ))
 }

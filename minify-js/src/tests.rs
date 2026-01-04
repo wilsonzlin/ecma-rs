@@ -680,6 +680,19 @@ fn rewrites_return_undefined() {
 }
 
 #[test]
+fn rewrites_global_undefined_to_void_zero() {
+  let result = minified(TopLevelMode::Global, "g(undefined);");
+  assert_eq!(result, "g(void 0);");
+}
+
+#[test]
+fn direct_eval_disables_global_undefined_to_void_zero_rewrite() {
+  let src = "function f(){eval(\"x\");g(undefined);}";
+  let result = minified(TopLevelMode::Global, src);
+  assert_eq!(result, src);
+}
+
+#[test]
 fn does_not_rewrite_shadowed_undefined() {
   let result = minified(
     TopLevelMode::Global,
