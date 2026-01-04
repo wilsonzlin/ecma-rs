@@ -1456,15 +1456,7 @@ impl<'a> Checker<'a> {
           None => self.check_expr(init),
         };
         if let Some(annotation) = annotation {
-          let range_override = self
-            .index
-            .pats
-            .get(&pat_span)
-            .copied()
-            .map(|pat| unsafe { &*pat })
-            .map(|pat| self.binding_name_range(pat))
-            .unwrap_or(pat_span);
-          self.check_assignable(init, init_ty, annotation, Some(range_override));
+          self.check_assignable(init, init_ty, annotation, None);
         }
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
@@ -1971,8 +1963,7 @@ impl<'a> Checker<'a> {
       }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-          let pat_range = self.binding_name_range(&declarator.pattern.stx.pat);
-          self.check_assignable(init, init_ty, ann, Some(pat_range));
+          self.check_assignable(init, init_ty, ann, None);
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
@@ -2684,7 +2675,20 @@ impl<'a> Checker<'a> {
               }
               _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
             };
-            self.check_assignable(arg_expr, arg_ty, param_ty, None);
+            let assignable_ty = match arg_expr.stx.as_ref() {
+              AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+                let const_ty = const_arg_types.get(idx).copied().unwrap_or(arg_ty);
+                if !self.relate.is_assignable(arg_ty, param_ty)
+                  && self.relate.is_assignable(const_ty, param_ty)
+                {
+                  const_ty
+                } else {
+                  arg_ty
+                }
+              }
+              _ => arg_ty,
+            };
+            self.check_assignable(arg_expr, assignable_ty, param_ty, None);
           }
           if let TypeKind::Predicate {
             parameter: Some(param_name),
@@ -3858,6 +3862,7 @@ impl<'a> Checker<'a> {
           &self.relate,
           &sig,
           &args,
+          None,
           contextual_return_ty,
         );
         let mut substituter = Substituter::new(Arc::clone(&self.store), inference.substitutions);
@@ -6404,9 +6409,9 @@ impl<'a> Checker<'a> {
         self.store.type_kind(dst)
       );
     }
-    let range = range_override.unwrap_or_else(|| loc_to_range(self.file, expr.loc));
+    let base_range = range_override.unwrap_or_else(|| loc_to_range(self.file, expr.loc));
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
-      let mut property_mismatches = Vec::new();
+      let mut mismatched_props = Vec::new();
       for member in obj.stx.members.iter() {
         let (prop, key_loc) = match &member.stx.typ {
           ObjMemberType::Valued {
@@ -6422,18 +6427,19 @@ impl<'a> Checker<'a> {
           continue;
         }
         if !self.relate.is_assignable(prop_src, prop_dst) {
-          if let Some(loc) = key_loc {
-            let key_range = loc_to_range(self.file, loc);
-            let range = TextRange::new(
-              key_range.start,
-              key_range.start.saturating_add(prop.len() as u32),
-            );
-            property_mismatches.push(range);
-          }
+          mismatched_props.push((prop, key_loc));
         }
       }
-      if !property_mismatches.is_empty() {
-        for range in property_mismatches {
+
+      if !mismatched_props.is_empty() {
+        for (prop, key_loc) in mismatched_props {
+          let range = key_loc
+            .map(|loc| loc_to_range(self.file, loc))
+            .unwrap_or(base_range);
+          let range = TextRange::new(
+            range.start,
+            range.start.saturating_add(prop.len() as u32),
+          );
           self.diagnostics.push(codes::TYPE_MISMATCH.error(
             "type mismatch",
             Span {
@@ -6446,11 +6452,74 @@ impl<'a> Checker<'a> {
       }
     }
 
+    if let AstExpr::LitArr(arr) = expr.stx.as_ref() {
+      if arr
+        .stx
+        .elements
+        .iter()
+        .all(|elem| matches!(elem, parse_js::ast::expr::lit::LitArrElem::Single(_)))
+      {
+        let elems: Vec<_> = arr
+          .stx
+          .elements
+          .iter()
+          .filter_map(|elem| match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(expr) => Some(expr),
+            _ => None,
+          })
+          .collect();
+        let contexts = self.array_literal_context_candidates(dst, elems.len());
+        if let Some(context) = contexts.into_iter().next() {
+          let mut mismatched_elems: Vec<&Node<AstExpr>> = Vec::new();
+          match context {
+            ArrayLiteralContext::Tuple(expected_elems) => {
+              for (idx, elem) in elems.iter().enumerate() {
+                let expected_elem = expected_elems
+                  .get(idx)
+                  .map(|e| e.ty)
+                  .unwrap_or(prim.unknown);
+                if expected_elem == prim.unknown {
+                  continue;
+                }
+                let elem_ty = self.recorded_expr_type(elem.loc).unwrap_or(prim.unknown);
+                if elem_ty != prim.unknown && !self.relate.is_assignable(elem_ty, expected_elem) {
+                  mismatched_elems.push(elem);
+                }
+              }
+            }
+            ArrayLiteralContext::Array(expected_elem) => {
+              if expected_elem != prim.unknown {
+                for elem in elems.iter() {
+                  let elem_ty = self.recorded_expr_type(elem.loc).unwrap_or(prim.unknown);
+                  if elem_ty != prim.unknown && !self.relate.is_assignable(elem_ty, expected_elem) {
+                    mismatched_elems.push(elem);
+                  }
+                }
+              }
+            }
+          }
+
+          if !mismatched_elems.is_empty() {
+            for elem in mismatched_elems {
+              self.diagnostics.push(codes::TYPE_MISMATCH.error(
+                "type mismatch",
+                Span {
+                  file: self.file,
+                  range: loc_to_range(self.file, elem.loc),
+                },
+              ));
+            }
+            return;
+          }
+        }
+      }
+    }
+
     self.diagnostics.push(codes::TYPE_MISMATCH.error(
       "type mismatch",
       Span {
         file: self.file,
-        range,
+        range: base_range,
       },
     ));
   }

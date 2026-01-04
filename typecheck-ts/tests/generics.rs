@@ -38,7 +38,7 @@ fn infers_identity_function() {
   };
 
   let args = [CallArgType::new(primitives.number)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -65,7 +65,7 @@ fn infers_union_from_multiple_arguments() {
   };
 
   let args = [CallArgType::new(primitives.string), CallArgType::new(primitives.number)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, None);
   assert!(result.diagnostics.is_empty());
   let expected_union = store.union(vec![primitives.string, primitives.number]);
   assert_eq!(result.substitutions.get(&t_param), Some(&expected_union));
@@ -97,7 +97,7 @@ fn uses_default_type_argument_when_not_inferred() {
     type_params: vec![decl.clone()],
     this_param: None,
   };
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &[], None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &[], None, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
@@ -126,7 +126,7 @@ fn reports_constraint_violation() {
   };
 
   let args = [CallArgType::new(primitives.string)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -160,12 +160,12 @@ fn empty_object_constraint_allows_primitives_but_excludes_nullish() {
   };
 
   let ok_args = [CallArgType::new(primitives.number)];
-  let ok = infer_type_arguments_for_call(&store, &relate, &sig, &ok_args, None);
+  let ok = infer_type_arguments_for_call(&store, &relate, &sig, &ok_args, None, None);
   assert!(ok.diagnostics.is_empty());
   assert_eq!(ok.substitutions.get(&t_param), Some(&primitives.number));
 
   let bad_args = [CallArgType::new(primitives.null)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &bad_args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &bad_args, None, None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -235,7 +235,7 @@ fn infers_from_function_argument_structure() {
   ];
 
   let call_args = [CallArgType::new(args[0]), CallArgType::new(args[1])];
-  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &call_args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &call_args, None, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
   assert_eq!(result.substitutions.get(&u_param), Some(&primitives.string));
@@ -277,7 +277,7 @@ fn infers_from_contravariant_function_parameter() {
   });
 
   let args = [CallArgType::new(actual_cb)];
-  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &args, None);
+  let result = infer_type_arguments_for_call(&store, &relate, &generic_sig, &args, None, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -435,7 +435,7 @@ fn infers_from_contextual_return_in_call() {
   };
 
   let args = [CallArgType::new(primitives.unknown)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, Some(primitives.string));
+  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, Some(primitives.string));
 
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));

@@ -2905,7 +2905,7 @@ fn collect_stmt<'a>(
       let name_text = module_name_text(&module.stx.name);
       let name_id = names.intern(&name_text);
       let decl_ambient = ambient || module.stx.declare;
-      let exported = module.stx.export || parent.is_some();
+      let exported = module.stx.export || (!module_item && parent.is_some());
       let module_raw = RawNode::from(module);
       let mut desc = DefDescriptor::new(
         DefKind::Module,
@@ -2953,8 +2953,15 @@ fn collect_stmt<'a>(
             );
           }
         });
+        let has_export_assignment = body
+          .iter()
+          .any(|st| matches!(st.stx.as_ref(), AstStmt::ExportAssignmentDecl(_)));
+        // Match TypeScript's `export =` semantics: when a module has an export
+        // assignment, it behaves like a CommonJS module and does not implicitly
+        // export all declarations as named exports.
         let members_exported_by_default =
-          decl_ambient || matches!(module.stx.name, ModuleName::String(_));
+          (decl_ambient || matches!(module.stx.name, ModuleName::String(_)))
+            && !has_export_assignment;
         for desc in descriptors.iter_mut().skip(body_start) {
           // Ambient modules export their declarations without `export` modifiers.
           if desc.parent == Some(module_raw) && members_exported_by_default {
@@ -3683,7 +3690,7 @@ fn collect_namespace<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
+  module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
@@ -3708,7 +3715,13 @@ fn collect_namespace<'a>(
   desc.node = Some(ns_raw);
   // Nested namespaces (e.g. `namespace A.B {}`) are implicitly exported from
   // their containing namespace or module.
-  desc.is_exported = ns.stx.export || parent.is_some();
+  //
+  // Note: for external module declarations (`declare module "x" {}` / module
+  // augmentations), TypeScript does *not* implicitly export a top-level
+  // `namespace Foo` without an `export` modifier. However, nested namespaces
+  // (`namespace A.B {}`) are still implicitly exported from their containing
+  // namespace.
+  desc.is_exported = ns.stx.export || (!module_item && parent.is_some());
   desc.type_source = Some(TypeSource::Namespace);
   descriptors.push(desc);
   ctx.with_parent(Some(ns_raw), |ctx| match &ns.stx.body {

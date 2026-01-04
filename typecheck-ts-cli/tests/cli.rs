@@ -647,8 +647,8 @@ fn project_mode_discovers_files_and_resolves_paths() {
   assert!(
     diagnostics
       .iter()
-      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC0007")),
-    "expected type mismatch diagnostic (TC0007), got: {diagnostics:?}"
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TS2322")),
+    "expected type mismatch diagnostic (TS2322), got: {diagnostics:?}"
   );
   assert!(
     !diagnostics
@@ -848,7 +848,7 @@ fn project_mode_merges_compiler_options_from_extends() {
   assert!(
     inherit_diags
       .iter()
-      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TC0007")),
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TS2322")),
     "expected strictNullChecks assignment error from strict base config, got {inherit_diags:?}"
   );
 

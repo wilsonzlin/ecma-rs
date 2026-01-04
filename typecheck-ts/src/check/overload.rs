@@ -518,6 +518,7 @@ fn resolve_overload_set(
   let mut outcomes = Vec::with_capacity(candidates.len());
   for (order, sig_id) in candidates.into_iter().enumerate() {
     let original_sig = store.signature(sig_id);
+    let allow_const_args = const_args.is_some() && original_sig.type_params.iter().any(|tp| tp.const_);
     let mut outcome = CandidateOutcome {
       order,
       sig_id,
@@ -542,26 +543,13 @@ fn resolve_overload_set(
       continue;
     }
 
-    let mut effective_args = None;
-    if let Some(const_args) = const_args {
-      for idx in 0..args.len() {
-        if uses_const_arg(store.as_ref(), &outcome.instantiated_sig, &arity, idx) {
-          if effective_args.is_none() {
-            effective_args = Some(base_expanded_args.clone());
-          }
-          if let Some(slot) = effective_args.as_mut().and_then(|a| a.get_mut(idx)) {
-            slot.ty = const_args[idx];
-          }
-        }
-      }
-    }
-    let expanded_args = effective_args.as_deref().unwrap_or(&base_expanded_args);
-
+    let expanded_args = &base_expanded_args;
     let inference = infer_type_arguments_for_call(
       store,
       relate,
       &outcome.instantiated_sig,
       expanded_args,
+      const_args,
       contextual_return,
     );
     outcome.unknown_inferred = count_unknown(
@@ -628,6 +616,8 @@ fn resolve_overload_set(
       &arity,
       expanded_args,
       &call_arity,
+      allow_const_args,
+      const_args,
     );
     outcome.match_score = score;
     outcome.subtype = subtype;
@@ -1384,19 +1374,6 @@ fn expected_arg_type(
   }
 }
 
-fn uses_const_arg(store: &TypeStore, sig: &Signature, arity: &ArityInfo, index: usize) -> bool {
-  let Some(expected) = expected_arg_type(store, sig, arity, index) else {
-    return false;
-  };
-  let TypeKind::TypeParam(param_id) = store.type_kind(expected.ty) else {
-    return false;
-  };
-  sig
-    .type_params
-    .iter()
-    .any(|decl| decl.id == param_id && decl.const_)
-}
-
 fn check_arguments(
   store: &TypeStore,
   relate: &RelateCtx<'_>,
@@ -1404,6 +1381,8 @@ fn check_arguments(
   arity: &ArityInfo,
   args: &[CallArgType],
   call_arity: &CallArityInfo,
+  allow_const_args: bool,
+  const_args: Option<&[TypeId]>,
 ) -> (MatchScore, bool, Option<CandidateRejection>) {
   let primitives = store.primitive_ids();
   let mut score = MatchScore {
@@ -1413,7 +1392,7 @@ fn check_arguments(
     rest: 0,
   };
   let mut subtype = true;
-
+  let allow_const_args = allow_const_args && const_args.is_some();
   for (idx, arg) in args.iter().enumerate() {
     let expected = match expected_arg_type(store, sig, arity, idx) {
       Some(param) => param,
@@ -1450,7 +1429,27 @@ fn check_arguments(
       expected.ty
     };
 
-    if !relate.is_assignable(actual_ty, expected_ty) {
+    let arg_for_check = if !allow_const_args {
+      actual_ty
+    } else {
+      let const_raw = const_args
+        .and_then(|args| args.get(idx))
+        .copied()
+        .unwrap_or(arg.ty);
+      let const_actual = if arg.spread {
+        relate.spread_element_type(const_raw)
+      } else {
+        const_raw
+      };
+      if !relate.is_assignable(actual_ty, expected_ty) && relate.is_assignable(const_actual, expected_ty)
+      {
+        const_actual
+      } else {
+        actual_ty
+      }
+    };
+
+    if !relate.is_assignable(arg_for_check, expected_ty) {
       return (
         score,
         false,
@@ -1462,11 +1461,11 @@ fn check_arguments(
       );
     }
 
-    if !relate.is_assignable(expected_ty, actual_ty) {
+    if !relate.is_assignable(expected_ty, arg_for_check) {
       score.widen += 1;
     }
 
-    if actual_ty != expected_ty && !relate.is_strict_subtype(actual_ty, expected_ty) {
+    if arg_for_check != expected_ty && !relate.is_strict_subtype(arg_for_check, expected_ty) {
       subtype = false;
     }
   }

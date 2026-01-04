@@ -613,7 +613,9 @@ fn finalize_block(
       let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
       // Ambient namespaces/modules implicitly export their members. However,
       // `.d.ts` files that become modules via top-level module syntax (e.g.
-      // `export = Foo`) do *not* implicitly export top-level declarations.
+      // `export = Foo`) do *not* implicitly export top-level declarations. The
+      // same restriction applies to ambient module declarations containing an
+      // export assignment.
       //
       // `hir-js` nests some declarations under intermediate defs (e.g. var
       // bindings are children of `VarDeclarator` defs), so checking

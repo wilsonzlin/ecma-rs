@@ -5,4 +5,4 @@ const ys: number[] = [1, 2, 3];
 // expect-def-type: ys = number[]
 
 const bad: ("a" | "b")[] = ["a", "c"];
-// expect-diagnostic: TC0007 bad
+// expect-diagnostic: TS2322 "\"c\""

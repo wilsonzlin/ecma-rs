@@ -175,13 +175,13 @@ pub const EXCESS_PROPERTY: Code = Code::new(
   &[],
 );
 
-/// TC0007: Source type is not assignable to the target type.
+/// TS2322: Source type is not assignable to the target type.
 ///
 /// - Primary span: the source expression being assigned.
 /// - Labels: primary only.
 /// - Notes: none.
 pub const TYPE_MISMATCH: Code = Code::new(
-  "TC0007",
+  "TS2322",
   "type mismatch",
   "source expression being assigned",
   &["primary: source expression"],

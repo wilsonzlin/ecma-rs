@@ -34,6 +34,7 @@ pub fn infer_type_arguments_for_call(
   relate: &RelateCtx<'_>,
   sig: &Signature,
   args: &[CallArgType],
+  const_args: Option<&[TypeId]>,
   contextual_return: Option<TypeId>,
 ) -> InferenceResult {
   let decls: HashMap<TypeParamId, TypeParamDecl> = sig
@@ -51,7 +52,10 @@ pub fn infer_type_arguments_for_call(
     if let TypeKind::TypeParam(tp) = store.type_kind(sig.params[rest_index].ty) {
       if ctx.decls.contains_key(&tp) {
         let rest_args = args.get(rest_index..).unwrap_or(&[]);
-        let inferred = infer_variadic_rest_tuple(store.as_ref(), rest_args);
+        let rest_const_args = const_args.and_then(|types| types.get(rest_index..));
+        let readonly = ctx.decls.get(&tp).is_some_and(|decl| decl.const_);
+        let inferred =
+          infer_variadic_rest_tuple(store.as_ref(), rest_args, rest_const_args, readonly);
         ctx.add_bound(tp, Variance::Covariant, inferred);
         skip_from_index = Some(rest_index);
       }
@@ -65,32 +69,54 @@ pub fn infer_type_arguments_for_call(
     let Some(expected) = expected_arg_type_at(store.as_ref(), sig, idx) else {
       continue;
     };
-    let actual = if arg.spread {
+    let regular = if arg.spread {
       relate.spread_element_type(arg.ty)
     } else {
       arg.ty
     };
-    ctx.constrain(expected, actual, Variance::Covariant);
+    let const_ty = const_args
+      .and_then(|types| types.get(idx))
+      .copied()
+      .unwrap_or(arg.ty);
+    let const_ = if arg.spread {
+      relate.spread_element_type(const_ty)
+    } else {
+      const_ty
+    };
+    ctx.constrain(expected, ArgPair { regular, const_ }, Variance::Covariant);
   }
 
   if let Some(ret) = contextual_return {
-    ctx.constrain(sig.ret, ret, Variance::Covariant);
+    ctx.constrain(
+      sig.ret,
+      ArgPair {
+        regular: ret,
+        const_: ret,
+      },
+      Variance::Covariant,
+    );
   }
 
   let order: Vec<TypeParamId> = sig.type_params.iter().map(|tp| tp.id).collect();
   ctx.solve(&order)
 }
 
-fn infer_variadic_rest_tuple(store: &TypeStore, rest_args: &[CallArgType]) -> TypeId {
+fn infer_variadic_rest_tuple(
+  store: &TypeStore,
+  rest_args: &[CallArgType],
+  const_args: Option<&[TypeId]>,
+  readonly: bool,
+) -> TypeId {
   if let [only] = rest_args {
     if only.spread {
-      match store.type_kind(only.ty) {
+      let only_ty = const_args.and_then(|args| args.first()).copied().unwrap_or(only.ty);
+      match store.type_kind(only_ty) {
         // For `f<T extends any[]>(...args: T)` and `f(...arr)` where `arr` is a
         // non-tuple array, `tsc` infers `T` as the array type (not `[...T]`).
         TypeKind::Array { .. }
         // Tuple spreads are expanded by the caller (overload checker) when the
         // tuple type is known; but if a raw spread tuple arrives, preserve it.
-        | TypeKind::Tuple(_) => return only.ty,
+        | TypeKind::Tuple(_) => return only_ty,
         _ => {}
       }
     }
@@ -98,11 +124,15 @@ fn infer_variadic_rest_tuple(store: &TypeStore, rest_args: &[CallArgType]) -> Ty
 
   let elems: Vec<TupleElem> = rest_args
     .iter()
+    .enumerate()
     .map(|arg| TupleElem {
-      ty: arg.ty,
+      ty: const_args
+        .and_then(|args| args.get(arg.0))
+        .copied()
+        .unwrap_or(arg.1.ty),
       optional: false,
-      rest: arg.spread,
-      readonly: false,
+      rest: arg.1.spread,
+      readonly,
     })
     .collect();
   store.intern_type(TypeKind::Tuple(elems))
@@ -149,6 +179,12 @@ struct Bounds {
   upper: Vec<TypeId>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ArgPair {
+  regular: TypeId,
+  const_: TypeId,
+}
+
 struct InferenceContext<'a, 'h> {
   store: Arc<TypeStore>,
   relate: &'a RelateCtx<'h>,
@@ -170,25 +206,54 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
     }
   }
 
-  fn constrain(&mut self, param_ty: TypeId, arg_ty: TypeId, variance: Variance) {
-    if param_ty == arg_ty {
+  fn constrain(&mut self, param_ty: TypeId, arg: ArgPair, variance: Variance) {
+    if param_ty == arg.regular && param_ty == arg.const_ {
       return;
     }
 
     // Covariant inference distributes unions to gather candidates.
     if variance == Variance::Covariant {
-      if let TypeKind::Union(members) = self.store.type_kind(arg_ty) {
-        for member in members {
-          self.constrain(param_ty, member, variance);
+      match (self.store.type_kind(arg.regular), self.store.type_kind(arg.const_)) {
+        (TypeKind::Union(regular), TypeKind::Union(const_)) if regular.len() == const_.len() => {
+          for (regular, const_) in regular.into_iter().zip(const_) {
+            self.constrain(param_ty, ArgPair { regular, const_ }, variance);
+          }
+          return;
         }
-        return;
+        (TypeKind::Union(members), _) => {
+          for member in members {
+            self.constrain(
+              param_ty,
+              ArgPair {
+                regular: member,
+                const_: arg.const_,
+              },
+              variance,
+            );
+          }
+          return;
+        }
+        (_, TypeKind::Union(members)) => {
+          for member in members {
+            self.constrain(
+              param_ty,
+              ArgPair {
+                regular: arg.regular,
+                const_: member,
+              },
+              variance,
+            );
+          }
+          return;
+        }
+        _ => {}
       }
     }
 
     match self.store.type_kind(param_ty) {
       TypeKind::TypeParam(id) => {
-        if self.decls.contains_key(&id) {
-          self.add_bound(id, variance, arg_ty);
+        if let Some(decl) = self.decls.get(&id) {
+          self.add_bound(id, variance, if decl.const_ { arg.const_ } else { arg.regular });
         }
       }
       TypeKind::Union(mut options) => {
@@ -203,50 +268,154 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
           options.retain(|opt| !matches!(self.store.type_kind(*opt), TypeKind::TypeParam(_)));
         }
         for opt in options {
-          self.constrain(opt, arg_ty, variance);
+          self.constrain(opt, arg, variance);
         }
       }
       TypeKind::Intersection(options) => {
         for opt in options {
-          self.constrain(opt, arg_ty, variance);
+          self.constrain(opt, arg, variance);
         }
       }
-      TypeKind::Array { ty, .. } => match self.store.type_kind(arg_ty) {
-        TypeKind::Array { ty: arg_inner, .. } => self.constrain(ty, arg_inner, variance),
-        TypeKind::Tuple(elems) => {
-          for elem in elems {
-            let elem_ty = if elem.rest {
-              self.relate.spread_element_type(elem.ty)
-            } else {
-              elem.ty
-            };
-            self.constrain(ty, elem_ty, variance);
+      TypeKind::Array { ty, .. } => {
+        match (
+          self.store.type_kind(arg.regular),
+          self.store.type_kind(arg.const_),
+        ) {
+          (TypeKind::Array { ty: regular, .. }, TypeKind::Array { ty: const_, .. }) => {
+            self.constrain(ty, ArgPair { regular, const_ }, variance);
           }
-        }
-        _ => {}
-      },
-      TypeKind::Tuple(param_elems) => match self.store.type_kind(arg_ty) {
-        TypeKind::Tuple(arg_elems) => {
-          let mut arg_iter = arg_elems.into_iter();
-          for param_elem in param_elems {
-            if param_elem.rest {
-              let expected_elem_ty = self.relate.spread_element_type(param_elem.ty);
-              for arg_elem in arg_iter {
-                self.constrain(expected_elem_ty, arg_elem.ty, variance);
-              }
-              break;
-            }
-            if let Some(arg_elem) = arg_iter.next() {
-              self.constrain(param_elem.ty, arg_elem.ty, variance);
+          (TypeKind::Array { ty: regular, .. }, TypeKind::Tuple(const_elems)) => {
+            for elem in const_elems {
+              let const_ = if elem.rest {
+                self.relate.spread_element_type(elem.ty)
+              } else {
+                elem.ty
+              };
+              self.constrain(ty, ArgPair { regular, const_ }, variance);
             }
           }
+          (TypeKind::Tuple(regular_elems), TypeKind::Array { ty: const_, .. }) => {
+            for elem in regular_elems {
+              let regular = if elem.rest {
+                self.relate.spread_element_type(elem.ty)
+              } else {
+                elem.ty
+              };
+              self.constrain(ty, ArgPair { regular, const_ }, variance);
+            }
+          }
+          (TypeKind::Tuple(regular_elems), TypeKind::Tuple(const_elems)) => {
+            let prim = self.store.primitive_ids();
+            let len = std::cmp::max(regular_elems.len(), const_elems.len());
+            for idx in 0..len {
+              let regular = regular_elems
+                .get(idx)
+                .or_else(|| regular_elems.last())
+                .map(|e| {
+                  if e.rest {
+                    self.relate.spread_element_type(e.ty)
+                  } else {
+                    e.ty
+                  }
+                })
+                .unwrap_or(prim.unknown);
+              let const_ = const_elems
+                .get(idx)
+                .or_else(|| const_elems.last())
+                .map(|e| {
+                  if e.rest {
+                    self.relate.spread_element_type(e.ty)
+                  } else {
+                    e.ty
+                  }
+                })
+                .unwrap_or(regular);
+              self.constrain(ty, ArgPair { regular, const_ }, variance);
+            }
+          }
+          _ => {}
         }
-        _ => {}
       },
+      TypeKind::Tuple(param_elems) => {
+        let prim = self.store.primitive_ids();
+        let regular_tuple = match self.store.type_kind(arg.regular) {
+          TypeKind::Tuple(elems) => Some(elems),
+          _ => None,
+        };
+        let const_tuple = match self.store.type_kind(arg.const_) {
+          TypeKind::Tuple(elems) => Some(elems),
+          _ => None,
+        };
+
+        let arg_len = std::cmp::max(
+          regular_tuple.as_ref().map(|e| e.len()).unwrap_or(0),
+          const_tuple.as_ref().map(|e| e.len()).unwrap_or(0),
+        );
+        if arg_len == 0 {
+          return;
+        }
+
+        let tuple_elem_ty = |elem: &TupleElem| {
+          if elem.rest {
+            self.relate.spread_element_type(elem.ty)
+          } else {
+            elem.ty
+          }
+        };
+
+        let mut arg_index = 0usize;
+        for param_elem in param_elems {
+          if param_elem.rest {
+            let expected_elem_ty = self.relate.spread_element_type(param_elem.ty);
+            while arg_index < arg_len {
+              let regular = regular_tuple
+                .as_ref()
+                .and_then(|elems| elems.get(arg_index))
+                .map(|elem| tuple_elem_ty(elem))
+                .or_else(|| {
+                  const_tuple
+                    .as_ref()
+                    .and_then(|elems| elems.get(arg_index))
+                    .map(|elem| tuple_elem_ty(elem))
+                })
+                .unwrap_or(prim.unknown);
+              let const_ = const_tuple
+                .as_ref()
+                .and_then(|elems| elems.get(arg_index))
+                .map(|elem| tuple_elem_ty(elem))
+                .unwrap_or(regular);
+              self.constrain(expected_elem_ty, ArgPair { regular, const_ }, variance);
+              arg_index += 1;
+            }
+            break;
+          }
+          if arg_index >= arg_len {
+            break;
+          }
+          let regular = regular_tuple
+            .as_ref()
+            .and_then(|elems| elems.get(arg_index))
+            .map(|elem| tuple_elem_ty(elem))
+            .or_else(|| {
+              const_tuple
+                .as_ref()
+                .and_then(|elems| elems.get(arg_index))
+                .map(|elem| tuple_elem_ty(elem))
+            })
+            .unwrap_or(prim.unknown);
+          let const_ = const_tuple
+            .as_ref()
+            .and_then(|elems| elems.get(arg_index))
+            .map(|elem| tuple_elem_ty(elem))
+            .unwrap_or(regular);
+          self.constrain(param_elem.ty, ArgPair { regular, const_ }, variance);
+          arg_index += 1;
+        }
+      }
       TypeKind::Callable { overloads } => {
         if let TypeKind::Callable {
           overloads: arg_overloads,
-        } = self.store.type_kind(arg_ty)
+        } = self.store.type_kind(arg.regular)
         {
           if let (Some(param_sig), Some(arg_sig)) = (overloads.first(), arg_overloads.first()) {
             let param_sig = self.store.signature(*param_sig);
@@ -256,40 +425,80 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
         }
       }
       TypeKind::Ref { def, args } => {
-        if let TypeKind::Ref {
+        let TypeKind::Ref {
           def: arg_def,
           args: arg_args,
-        } = self.store.type_kind(arg_ty)
-        {
-          if def == arg_def {
-            for (param_arg, actual) in args.into_iter().zip(arg_args.into_iter()) {
-              self.constrain(param_arg, actual, variance);
-            }
+        } = self.store.type_kind(arg.regular)
+        else {
+          return;
+        };
+        if def != arg_def {
+          return;
+        }
+
+        let const_args = match self.store.type_kind(arg.const_) {
+          TypeKind::Ref { def: const_def, args } if const_def == def && args.len() == arg_args.len() => {
+            args
           }
+          _ => arg_args.clone(),
+        };
+
+        for ((param_arg, regular), const_) in args.into_iter().zip(arg_args.into_iter()).zip(const_args.into_iter()) {
+          self.constrain(
+            param_arg,
+            ArgPair {
+              regular,
+              const_,
+            },
+            variance,
+          );
         }
       }
       TypeKind::Object(obj_id) => {
-        if let TypeKind::Object(arg_obj) = self.store.type_kind(arg_ty) {
-          let param_shape = self.store.shape(self.store.object(obj_id).shape);
-          let arg_shape = self.store.shape(self.store.object(arg_obj).shape);
-          self.constrain_shapes(&param_shape, &arg_shape, variance);
-        }
+        let TypeKind::Object(arg_obj) = self.store.type_kind(arg.regular) else {
+          return;
+        };
+        let param_shape = self.store.shape(self.store.object(obj_id).shape);
+        let regular_shape = self.store.shape(self.store.object(arg_obj).shape);
+        let const_shape = match self.store.type_kind(arg.const_) {
+          TypeKind::Object(obj) => self.store.shape(self.store.object(obj).shape),
+          _ => regular_shape.clone(),
+        };
+        self.constrain_shapes(&param_shape, &regular_shape, &const_shape, variance);
       }
       _ => {}
     }
   }
 
-  fn constrain_shapes(&mut self, param_shape: &Shape, arg_shape: &Shape, variance: Variance) {
+  fn constrain_shapes(
+    &mut self,
+    param_shape: &Shape,
+    regular_shape: &Shape,
+    const_shape: &Shape,
+    variance: Variance,
+  ) {
     for prop in param_shape.properties.iter() {
-      if let Some(arg_prop) = arg_shape.properties.iter().find(|p| p.key == prop.key) {
-        self.constrain(prop.data.ty, arg_prop.data.ty, variance);
-      }
+      let regular_prop = regular_shape.properties.iter().find(|p| p.key == prop.key);
+      let const_prop = const_shape.properties.iter().find(|p| p.key == prop.key);
+      let Some(regular_prop) = regular_prop.or(const_prop) else {
+        continue;
+      };
+      let regular_ty = regular_prop.data.ty;
+      let const_ty = const_prop.map(|p| p.data.ty).unwrap_or(regular_ty);
+      self.constrain(
+        prop.data.ty,
+        ArgPair {
+          regular: regular_ty,
+          const_: const_ty,
+        },
+        variance,
+      );
     }
 
     for (param_sig, arg_sig) in param_shape
       .call_signatures
       .iter()
-      .zip(arg_shape.call_signatures.iter())
+      .zip(regular_shape.call_signatures.iter())
     {
       let p = self.store.signature(*param_sig);
       let a = self.store.signature(*arg_sig);
@@ -300,9 +509,23 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
   fn constrain_signature(&mut self, expected: &Signature, actual: &Signature, variance: Variance) {
     let param_variance = variance.flip();
     for (param, arg) in expected.params.iter().zip(actual.params.iter()) {
-      self.constrain(param.ty, arg.ty, param_variance);
+      self.constrain(
+        param.ty,
+        ArgPair {
+          regular: arg.ty,
+          const_: arg.ty,
+        },
+        param_variance,
+      );
     }
-    self.constrain(expected.ret, actual.ret, variance);
+    self.constrain(
+      expected.ret,
+      ArgPair {
+        regular: actual.ret,
+        const_: actual.ret,
+      },
+      variance,
+    );
   }
 
   fn contains_inferable_type_param(
