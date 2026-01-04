@@ -15,7 +15,6 @@ version = "0.6.0"
 [features]
 default = ["emit-minify"]
 emit-minify = ["emit-js", "hir-js"]
-emit-ast = ["emit-minify"]
 fuzzing = []
 
 [dependencies]

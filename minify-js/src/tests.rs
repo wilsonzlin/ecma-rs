@@ -738,6 +738,18 @@ fn hir_emitter_matches_ast_output() {
       "import * as ns from \"pkg\" with { type: \"json\" };export { a as b } from \"pkg\" with { type: \"json\" };ns;",
     ),
     (
+      "side-effect export-from statement",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "export {} from \"./side\";",
+    ),
+    (
+      "string-named import/export specifiers",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "import { \"a-b\" as c_d } from \"x\";export { c_d as \"e-f\" };",
+    ),
+    (
       "jsx element with nested arrow function",
       TopLevelMode::Module,
       Dialect::Jsx,
@@ -748,6 +760,12 @@ fn hir_emitter_matches_ast_output() {
       TopLevelMode::Module,
       Dialect::Js,
       "export default (value => ({computed: value ?? 0}));",
+    ),
+    (
+      "export default undefined literal",
+      TopLevelMode::Module,
+      Dialect::Js,
+      "export default undefined;",
     ),
     (
       "decorated export",

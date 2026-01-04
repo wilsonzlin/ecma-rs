@@ -9,6 +9,7 @@ mod options;
 
 use crate::il::inst::{Arg, BinOp, Const};
 use crate::{Program, ProgramFunction};
+use hir_js::{lower_file, FileKind as HirFileKind};
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNullExpr, LitNumExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
@@ -101,8 +102,9 @@ pub fn program_to_js(
   emit: emit_js::EmitOptions,
 ) -> Result<Vec<u8>, ProgramToJsError> {
   let ast = program_to_ast(program, decompile)?;
+  let lowered = lower_file(crate::SOURCE_FILE, HirFileKind::Js, &ast);
   let mut emitter = emit_js::Emitter::new(emit);
-  emit_js::emit_top_level_stmt(&mut emitter, ast.stx.as_ref()).map_err(ProgramToJsError::Emit)?;
+  emit_js::emit_hir_file(&mut emitter, &lowered).map_err(ProgramToJsError::Emit)?;
   Ok(emitter.into_bytes())
 }
 
