@@ -6207,13 +6207,29 @@ impl ProgramState {
     self.update_typecheck_roots(&roots);
   }
 
+  fn filter_skip_lib_check_diagnostics(&self, diagnostics: &mut Vec<Diagnostic>) {
+    if !self.compiler_options.skip_lib_check {
+      return;
+    }
+
+    diagnostics.retain(|diag| {
+      if self.file_kinds.get(&diag.primary.file) != Some(&FileKind::Dts) {
+        return true;
+      }
+      let code = diag.code.as_str();
+      !code.starts_with("TC") && !code.starts_with("BIND")
+    });
+  }
+
   fn program_diagnostics(
     &mut self,
     host: &Arc<dyn Host>,
     roots: &[FileKey],
   ) -> Result<Arc<[Diagnostic]>, FatalError> {
     if self.snapshot_loaded {
-      return Ok(Arc::from(self.diagnostics.clone().into_boxed_slice()));
+      let mut diagnostics = self.diagnostics.clone();
+      self.filter_skip_lib_check_diagnostics(&mut diagnostics);
+      return Ok(Arc::from(diagnostics));
     }
     self.check_cancelled()?;
     self.ensure_analyzed_result(host, roots)?;
@@ -6311,6 +6327,7 @@ impl ProgramState {
       ))
     });
     codes::normalize_diagnostics(&mut diagnostics);
+    self.filter_skip_lib_check_diagnostics(&mut diagnostics);
     Ok(Arc::from(diagnostics))
   }
 
