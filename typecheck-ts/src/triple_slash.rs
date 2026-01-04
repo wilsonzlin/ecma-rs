@@ -324,6 +324,15 @@ mod tests {
   }
 
   #[test]
+  fn handles_mixed_whitespace_and_self_closing_tag() {
+    let source = "///\t<reference\t lib = 'esnext'\t/>\n";
+    assert_eq!(
+      values(source),
+      vec![(TripleSlashReferenceKind::Lib, "esnext".to_string())]
+    );
+  }
+
+  #[test]
   fn parses_no_default_lib_flags() {
     let source = "/// <reference no-default-lib=\"true\" />\n";
     let directives = scan_triple_slash_directives(source);

@@ -5287,28 +5287,28 @@ impl ProgramState {
         match reference.kind {
           TripleSlashReferenceKind::Lib => {
             let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
-              self.push_program_diagnostic(codes::UNKNOWN_LIB_REFERENCE.error(
-                format!("unknown lib reference \"{value}\""),
+              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find lib definition file for \"{value}\""),
                 Span::new(file, reference.value_range),
               ));
               continue;
             };
-            if let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) {
-              self.process_libs(std::slice::from_ref(&lib_file), host, &mut queue)?;
-            } else {
-              self.push_program_diagnostic(codes::NO_LIBS_LOADED.error(
-                format!("unable to load bundled lib \"{value}\""),
+            let Some(lib_file) = crate::lib_support::lib_env::bundled_lib_file(lib_name) else {
+              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find lib definition file for \"{value}\""),
                 Span::new(file, reference.value_range),
               ));
-            }
+              continue;
+            };
+            self.process_libs(std::slice::from_ref(&lib_file), host, &mut queue)?;
           }
           TripleSlashReferenceKind::Path => {
             let normalized = normalize_reference_path_specifier(value);
             if let Some(target) = self.record_module_resolution(file, normalized.as_ref(), host) {
               queue.push_back(target);
             } else {
-              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-                format!("unresolved reference path \"{value}\""),
+              self.push_program_diagnostic(codes::FILE_NOT_FOUND.error(
+                format!("file \"{}\" not found", normalized.as_ref()),
                 Span::new(file, reference.value_range),
               ));
             }
@@ -5317,8 +5317,8 @@ impl ProgramState {
             if let Some(target) = record_type_package_resolution(self, file, value, host) {
               queue.push_back(target);
             } else {
-              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-                format!("unresolved reference types \"{value}\""),
+              self.push_program_diagnostic(codes::TYPE_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find type definition file for \"{value}\""),
                 Span::new(file, reference.value_range),
               ));
             }
@@ -7027,8 +7027,8 @@ impl ProgramState {
         match reference.kind {
           TripleSlashReferenceKind::Lib => {
             let Some(lib_name) = crate::lib_support::LibName::from_option_name(value) else {
-              self.push_program_diagnostic(codes::UNKNOWN_LIB_REFERENCE.error(
-                format!("unknown lib reference \"{value}\""),
+              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find lib definition file for \"{value}\""),
                 Span::new(file_id, reference.value_range),
               ));
               continue;
@@ -7039,8 +7039,8 @@ impl ProgramState {
                 pending.push_back(lib_file);
               }
             } else {
-              self.push_program_diagnostic(codes::NO_LIBS_LOADED.error(
-                format!("unable to load bundled lib \"{value}\""),
+              self.push_program_diagnostic(codes::LIB_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find lib definition file for \"{value}\""),
                 Span::new(file_id, reference.value_range),
               ));
             }
@@ -7051,8 +7051,8 @@ impl ProgramState {
             {
               queue.push_back(target);
             } else {
-              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-                format!("unresolved reference path \"{value}\""),
+              self.push_program_diagnostic(codes::FILE_NOT_FOUND.error(
+                format!("file \"{}\" not found", normalized.as_ref()),
                 Span::new(file_id, reference.value_range),
               ));
             }
@@ -7061,8 +7061,8 @@ impl ProgramState {
             if let Some(target) = self.record_module_resolution(file_id, value, host) {
               queue.push_back(target);
             } else {
-              self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
-                format!("unresolved reference types \"{value}\""),
+              self.push_program_diagnostic(codes::TYPE_DEFINITION_FILE_NOT_FOUND.error(
+                format!("cannot find type definition file for \"{value}\""),
                 Span::new(file_id, reference.value_range),
               ));
             }

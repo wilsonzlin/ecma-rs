@@ -109,11 +109,6 @@ status = "xfail"
 reason = "Type-only export facts differ: tsc reports `any` for exported interfaces while Rust returns the interface shape."
 
 [[expectations]]
-id = "difftsc/triple_slash_references"
-status = "xfail"
-reason = "tsc reports an additional global TS2688 diagnostic (file-less) for missing `types` references; Rust only reports file-spanned errors."
-
-[[expectations]]
 id = "difftsc/using_valid"
 status = "xfail"
 reason = "tsc rejects binding patterns in `using` declarations (TS1492); Rust currently allows destructuring patterns."

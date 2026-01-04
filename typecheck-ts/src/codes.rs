@@ -242,6 +242,40 @@ pub const UNRESOLVED_MODULE: Code = Code::new(
   &[],
 );
 
+/// TS6053: Triple-slash `reference path` target could not be found.
+///
+/// - Primary span: the path string inside the triple-slash directive (excluding quotes).
+/// - Labels: primary only.
+/// - Notes: none.
+pub const FILE_NOT_FOUND: Code =
+  Code::new("TS6053", "file not found", "reference path value", &["primary: reference path"], &[]);
+
+/// TS2688: Triple-slash `reference types` package could not be resolved.
+///
+/// - Primary span: the package name inside the triple-slash directive (excluding quotes).
+/// - Labels: primary only.
+/// - Notes: none.
+pub const TYPE_DEFINITION_FILE_NOT_FOUND: Code = Code::new(
+  "TS2688",
+  "cannot find type definition file",
+  "reference types value",
+  &["primary: reference types package"],
+  &[],
+);
+
+/// TS2726: Triple-slash `reference lib` target could not be found.
+///
+/// - Primary span: the lib name inside the triple-slash directive (excluding quotes).
+/// - Labels: primary only.
+/// - Notes: none.
+pub const LIB_DEFINITION_FILE_NOT_FOUND: Code = Code::new(
+  "TS2726",
+  "cannot find lib definition file",
+  "reference lib value",
+  &["primary: reference lib name"],
+  &[],
+);
+
 /// TC1007: Triple-slash `/// <reference lib="..." />` directive refers to an
 /// unknown or unsupported library name.
 ///
