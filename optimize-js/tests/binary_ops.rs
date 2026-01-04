@@ -3,7 +3,7 @@ mod common;
 
 use common::compile_source;
 use optimize_js::decompile::{lower_program, LoweredArg, LoweredInst};
-use optimize_js::il::inst::{BinOp, Const};
+use optimize_js::il::inst::{BinOp, Const, UnOp};
 use optimize_js::TopLevelMode;
 
 fn call_block_label_with_str_arg(
@@ -129,4 +129,94 @@ fn rem_and_exponent_assignments_are_lowered() {
 
   assert!(saw_mod, "expected BinOp::Mod for `x %= 2`");
   assert!(saw_exp, "expected BinOp::Exp for `x **= 3`");
+}
+
+#[test]
+fn bitwise_and_shift_operators_are_lowered() {
+  let src = "let x = unknownVar; console.log(x & 1, x | 1, x ^ 1, x << 2, x >> 2, x >>> 2);";
+
+  let program = compile_source(src, TopLevelMode::Module, false);
+  let lowered = lower_program(&program);
+
+  let mut saw_bitand = false;
+  let mut saw_bitor = false;
+  let mut saw_bitxor = false;
+  let mut saw_shl = false;
+  let mut saw_shr = false;
+  let mut saw_ushr = false;
+
+  for block in lowered.top_level.bblocks.iter() {
+    for inst in block.insts.iter() {
+      if let LoweredInst::Bin { op, .. } = inst {
+        saw_bitand |= *op == BinOp::BitAnd;
+        saw_bitor |= *op == BinOp::BitOr;
+        saw_bitxor |= *op == BinOp::BitXor;
+        saw_shl |= *op == BinOp::Shl;
+        saw_shr |= *op == BinOp::Shr;
+        saw_ushr |= *op == BinOp::UShr;
+      }
+    }
+  }
+
+  assert!(saw_bitand, "expected BinOp::BitAnd for `x & 1`");
+  assert!(saw_bitor, "expected BinOp::BitOr for `x | 1`");
+  assert!(saw_bitxor, "expected BinOp::BitXor for `x ^ 1`");
+  assert!(saw_shl, "expected BinOp::Shl for `x << 2`");
+  assert!(saw_shr, "expected BinOp::Shr for `x >> 2`");
+  assert!(saw_ushr, "expected BinOp::UShr for `x >>> 2`");
+}
+
+#[test]
+fn bitwise_and_shift_assignments_are_lowered() {
+  let src =
+    "let x = unknownVar; x &= 1; x |= 1; x ^= 1; x <<= 2; x >>= 2; x >>>= 2; console.log(x);";
+
+  let program = compile_source(src, TopLevelMode::Module, false);
+  let lowered = lower_program(&program);
+
+  let mut saw_bitand = false;
+  let mut saw_bitor = false;
+  let mut saw_bitxor = false;
+  let mut saw_shl = false;
+  let mut saw_shr = false;
+  let mut saw_ushr = false;
+
+  for block in lowered.top_level.bblocks.iter() {
+    for inst in block.insts.iter() {
+      if let LoweredInst::Bin { op, .. } = inst {
+        saw_bitand |= *op == BinOp::BitAnd;
+        saw_bitor |= *op == BinOp::BitOr;
+        saw_bitxor |= *op == BinOp::BitXor;
+        saw_shl |= *op == BinOp::Shl;
+        saw_shr |= *op == BinOp::Shr;
+        saw_ushr |= *op == BinOp::UShr;
+      }
+    }
+  }
+
+  assert!(saw_bitand, "expected BinOp::BitAnd for `x &= 1`");
+  assert!(saw_bitor, "expected BinOp::BitOr for `x |= 1`");
+  assert!(saw_bitxor, "expected BinOp::BitXor for `x ^= 1`");
+  assert!(saw_shl, "expected BinOp::Shl for `x <<= 2`");
+  assert!(saw_shr, "expected BinOp::Shr for `x >>= 2`");
+  assert!(saw_ushr, "expected BinOp::UShr for `x >>>= 2`");
+}
+
+#[test]
+fn unary_bitnot_is_lowered() {
+  let src = "let x = unknownVar; console.log(~x);";
+
+  let program = compile_source(src, TopLevelMode::Module, false);
+  let lowered = lower_program(&program);
+
+  let mut saw_bitnot = false;
+  for block in lowered.top_level.bblocks.iter() {
+    for inst in block.insts.iter() {
+      if let LoweredInst::Un { op, .. } = inst {
+        saw_bitnot |= *op == UnOp::BitNot;
+      }
+    }
+  }
+
+  assert!(saw_bitnot, "expected UnOp::BitNot for `~x`");
 }

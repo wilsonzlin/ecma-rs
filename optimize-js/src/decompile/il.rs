@@ -100,6 +100,9 @@ fn lower_builtin(path: &str) -> Node<Expr> {
 fn bin_operator(op: BinOp) -> OperatorName {
   match op {
     BinOp::Add => OperatorName::Addition,
+    BinOp::BitAnd => OperatorName::BitwiseAnd,
+    BinOp::BitOr => OperatorName::BitwiseOr,
+    BinOp::BitXor => OperatorName::BitwiseXor,
     BinOp::Div => OperatorName::Division,
     BinOp::Exp => OperatorName::Exponentiation,
     BinOp::Geq => OperatorName::GreaterThanOrEqual,
@@ -111,6 +114,9 @@ fn bin_operator(op: BinOp) -> OperatorName {
     BinOp::Mul => OperatorName::Multiplication,
     BinOp::NotLooseEq => OperatorName::Inequality,
     BinOp::NotStrictEq => OperatorName::StrictInequality,
+    BinOp::Shl => OperatorName::BitwiseLeftShift,
+    BinOp::Shr => OperatorName::BitwiseRightShift,
+    BinOp::UShr => OperatorName::BitwiseUnsignedRightShift,
     BinOp::StrictEq => OperatorName::StrictEquality,
     BinOp::Sub => OperatorName::Subtraction,
     BinOp::GetProp => panic!("GetProp is handled separately"),
@@ -120,6 +126,7 @@ fn bin_operator(op: BinOp) -> OperatorName {
 
 fn un_operator(op: UnOp) -> OperatorName {
   match op {
+    UnOp::BitNot => OperatorName::BitwiseNot,
     UnOp::Neg => OperatorName::UnaryNegation,
     UnOp::Not => OperatorName::LogicalNot,
     UnOp::Plus => OperatorName::UnaryPlus,

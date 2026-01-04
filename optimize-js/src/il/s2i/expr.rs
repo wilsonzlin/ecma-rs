@@ -176,6 +176,12 @@ impl<'p> HirSourceToInst<'p> {
             AssignOp::MulAssign => BinOp::Mul,
             AssignOp::DivAssign => BinOp::Div,
             AssignOp::RemAssign => BinOp::Mod,
+            AssignOp::ShiftLeftAssign => BinOp::Shl,
+            AssignOp::ShiftRightAssign => BinOp::Shr,
+            AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
+            AssignOp::BitAndAssign => BinOp::BitAnd,
+            AssignOp::BitOrAssign => BinOp::BitOr,
+            AssignOp::BitXorAssign => BinOp::BitXor,
             AssignOp::ExponentAssign => BinOp::Exp,
             _ => {
               return Err(unsupported_syntax(
@@ -241,6 +247,12 @@ impl<'p> HirSourceToInst<'p> {
             AssignOp::MulAssign => BinOp::Mul,
             AssignOp::DivAssign => BinOp::Div,
             AssignOp::RemAssign => BinOp::Mod,
+            AssignOp::ShiftLeftAssign => BinOp::Shl,
+            AssignOp::ShiftRightAssign => BinOp::Shr,
+            AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
+            AssignOp::BitAndAssign => BinOp::BitAnd,
+            AssignOp::BitOrAssign => BinOp::BitOr,
+            AssignOp::BitXorAssign => BinOp::BitXor,
             AssignOp::ExponentAssign => BinOp::Exp,
             _ => {
               return Err(unsupported_syntax(
@@ -444,12 +456,18 @@ impl<'p> HirSourceToInst<'p> {
 
     let op = match operator {
       BinaryOp::Add => BinOp::Add,
+      BinaryOp::BitAnd => BinOp::BitAnd,
+      BinaryOp::BitOr => BinOp::BitOr,
+      BinaryOp::BitXor => BinOp::BitXor,
       BinaryOp::Divide => BinOp::Div,
       BinaryOp::LessThan => BinOp::Lt,
       BinaryOp::LessEqual => BinOp::Leq,
       BinaryOp::Multiply => BinOp::Mul,
       BinaryOp::Remainder => BinOp::Mod,
       BinaryOp::Exponent => BinOp::Exp,
+      BinaryOp::ShiftLeft => BinOp::Shl,
+      BinaryOp::ShiftRight => BinOp::Shr,
+      BinaryOp::ShiftRightUnsigned => BinOp::UShr,
       BinaryOp::StrictEquality => BinOp::StrictEq,
       BinaryOp::StrictInequality => BinOp::NotStrictEq,
       BinaryOp::Subtract => BinOp::Sub,
@@ -550,6 +568,12 @@ impl<'p> HirSourceToInst<'p> {
         let arg = self.compile_expr(argument)?;
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Not, arg));
+        Ok(Arg::Var(tmp))
+      }
+      UnaryOp::BitNot => {
+        let arg = self.compile_expr(argument)?;
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::un(tmp, UnOp::BitNot, arg));
         Ok(Arg::Var(tmp))
       }
       UnaryOp::Minus => {

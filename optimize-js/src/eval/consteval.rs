@@ -190,6 +190,24 @@ pub fn coerce_to_num(v: &Const) -> f64 {
   }
 }
 
+// https://tc39.es/ecma262/multipage/abstract-operations.html#sec-toint32
+fn coerce_to_uint32(v: &Const) -> Option<u32> {
+  if matches!(v, BigInt(_)) {
+    return None;
+  }
+  let n = coerce_to_num(v);
+  if !n.is_finite() || n == 0.0 {
+    return Some(0);
+  }
+  let int = n.trunc();
+  let wrapped = int.rem_euclid(4294967296.0);
+  Some(wrapped as u32)
+}
+
+fn coerce_to_int32(v: &Const) -> Option<i32> {
+  coerce_to_uint32(v).map(|v| v as i32)
+}
+
 // https://developer.mozilla.org/en-US/docs/Glossary/Falsy
 pub fn coerce_to_bool(v: &Const) -> bool {
   match v {
@@ -274,6 +292,9 @@ pub fn maybe_eval_const_bin_expr(op: BinOp, a: &Const, b: &Const) -> Option<Cons
     (Div, Num(l), Str(r)) => Num(JN(js_div(l.0, coerce_str_to_num(r)))),
     (Div, Str(l), Num(r)) => Num(JN(js_div(coerce_str_to_num(l), r.0))),
     (Div, Str(l), Str(r)) => Num(JN(js_div(coerce_str_to_num(l), coerce_str_to_num(r)))),
+    (BitAnd, l, r) => Num(JN((coerce_to_int32(l)? & coerce_to_int32(r)?) as f64)),
+    (BitOr, l, r) => Num(JN((coerce_to_int32(l)? | coerce_to_int32(r)?) as f64)),
+    (BitXor, l, r) => Num(JN((coerce_to_int32(l)? ^ coerce_to_int32(r)?) as f64)),
     (Exp, Num(l), Num(r)) => Num(JN(l.0.powf(r.0))),
     (Exp, Num(l), Str(r)) => Num(JN(l.0.powf(coerce_str_to_num(r)))),
     (Exp, Str(l), Num(r)) => Num(JN(coerce_str_to_num(l).powf(r.0))),
@@ -293,6 +314,18 @@ pub fn maybe_eval_const_bin_expr(op: BinOp, a: &Const, b: &Const) -> Option<Cons
     (Mul, Str(l), Str(r)) => Num(JN(coerce_str_to_num(l) * coerce_str_to_num(r))),
     (NotLooseEq, l, r) => Bool(!js_loose_eq(l, r)),
     (NotStrictEq, l, r) => Bool(!js_strict_eq(l, r)),
+    (Shl, l, r) => {
+      let shift = (coerce_to_uint32(r)? & 0x1f) as u32;
+      Num(JN(coerce_to_int32(l)?.wrapping_shl(shift) as f64))
+    }
+    (Shr, l, r) => {
+      let shift = (coerce_to_uint32(r)? & 0x1f) as u32;
+      Num(JN(coerce_to_int32(l)?.wrapping_shr(shift) as f64))
+    }
+    (UShr, l, r) => {
+      let shift = (coerce_to_uint32(r)? & 0x1f) as u32;
+      Num(JN(coerce_to_uint32(l)?.wrapping_shr(shift) as f64))
+    }
     (StrictEq, l, r) => Bool(js_strict_eq(l, r)),
     (Sub, Num(l), Num(r)) => Num(JN(l.0 - r.0)),
     (Sub, Num(l), Str(r)) => Num(JN(l.0 - coerce_str_to_num(r))),
@@ -306,6 +339,7 @@ pub fn maybe_eval_const_bin_expr(op: BinOp, a: &Const, b: &Const) -> Option<Cons
 pub fn maybe_eval_const_un_expr(op: UnOp, a: &Const) -> Option<Const> {
   #[rustfmt::skip]
   let res = match (op, a) {
+    (BitNot, a) => Num(JN((!coerce_to_int32(a)?) as f64)),
     (Neg, Num(l)) => Num(JN(-l.0)),
     (Not, a) => Bool(!coerce_to_bool(a)),
     (Plus, BigInt(_)) => return None,

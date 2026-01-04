@@ -74,6 +74,9 @@ impl Debug for Arg {
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Serialize)]
 pub enum BinOp {
   Add,
+  BitAnd,
+  BitOr,
+  BitXor,
   Div, // Divide.
   Exp, // Exponentiate.
   Geq, // Greater than or equals to.
@@ -86,6 +89,9 @@ pub enum BinOp {
   Mul, // Multiply.
   NotLooseEq,
   NotStrictEq,
+  Shl,  // Shift left.
+  Shr,  // Shift right.
+  UShr, // Unsigned shift right.
   StrictEq,
   Sub, // Subtract.
   _Dummy,
@@ -95,6 +101,9 @@ impl Debug for BinOp {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     match self {
       Self::Add => write!(f, "+"),
+      Self::BitAnd => write!(f, "&"),
+      Self::BitOr => write!(f, "|"),
+      Self::BitXor => write!(f, "^"),
       Self::Div => write!(f, "/"),
       Self::Exp => write!(f, "**"),
       Self::Geq => write!(f, ">="),
@@ -107,6 +116,9 @@ impl Debug for BinOp {
       Self::Mul => write!(f, "*"),
       Self::NotLooseEq => write!(f, "!="),
       Self::NotStrictEq => write!(f, "!=="),
+      Self::Shl => write!(f, "<<"),
+      Self::Shr => write!(f, ">>"),
+      Self::UShr => write!(f, ">>>"),
       Self::StrictEq => write!(f, "==="),
       Self::Sub => write!(f, "-"),
       Self::_Dummy => write!(f, "_DUMMY"),
@@ -117,6 +129,7 @@ impl Debug for BinOp {
 /// These must all be pure; impure operations (e.g. prop assign) are separate insts.
 #[derive(PartialEq, Eq, Hash, Clone, Copy, Serialize)]
 pub enum UnOp {
+  BitNot,
   Neg,
   Not,
   Plus,
@@ -128,6 +141,7 @@ pub enum UnOp {
 impl Debug for UnOp {
   fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
     match self {
+      Self::BitNot => write!(f, "~"),
       Self::Neg => write!(f, "-"),
       Self::Not => write!(f, "!"),
       Self::Plus => write!(f, "+"),
