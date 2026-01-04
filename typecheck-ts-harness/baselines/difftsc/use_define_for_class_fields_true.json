@@ -23,7 +23,14 @@
       "end": 79,
       "category": "error",
       "message": "Property 'bar' is used before its initialization."
+    },
+    {
+      "code": 2729,
+      "file": "use_define_for_class_fields_true.ts",
+      "start": 186,
+      "end": 187,
+      "category": "error",
+      "message": "Property 'x' is used before its initialization."
     }
   ]
 }
-

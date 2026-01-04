@@ -94,6 +94,9 @@ pub struct AstIndex {
   pats: HashMap<TextRange, *const Node<AstPat>>,
   params: HashMap<TextRange, *const Node<ParamDecl>>,
   vars: HashMap<TextRange, VarInfo>,
+  class_field_initializers: HashMap<TextRange, ClassFieldInitializerInfo>,
+  classes: Vec<ClassInfo>,
+  classes_by_name: HashMap<String, usize>,
   functions: Vec<FunctionInfo>,
   class_static_blocks: Vec<ClassStaticBlockInfo>,
   class_field_param_props: HashMap<TextRange, Vec<String>>,
@@ -107,6 +110,29 @@ unsafe impl Sync for AstIndex {}
 struct VarInfo {
   initializer: Option<*const Node<AstExpr>>,
   type_annotation: Option<*const Node<parse_js::ast::type_expr::TypeExpr>>,
+}
+
+#[derive(Clone, Debug)]
+struct ClassInfo {
+  name: Option<String>,
+  extends: Option<String>,
+  instance_fields: Vec<ClassFieldDecl>,
+  static_fields: Vec<ClassFieldDecl>,
+  instance_param_props: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ClassFieldDecl {
+  name: String,
+  member_index: usize,
+  optional: bool,
+}
+
+#[derive(Clone, Copy)]
+struct ClassFieldInitializerInfo {
+  class_index: usize,
+  member_index: usize,
+  is_static: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -135,6 +161,9 @@ impl AstIndex {
       pats: HashMap::new(),
       params: HashMap::new(),
       vars: HashMap::new(),
+      class_field_initializers: HashMap::new(),
+      classes: Vec::new(),
+      classes_by_name: HashMap::new(),
       functions: Vec::new(),
       class_static_blocks: Vec::new(),
       class_field_param_props: HashMap::new(),
@@ -262,6 +291,21 @@ impl AstIndex {
         self.index_function(&func.stx.function, file, cancelled);
       }
       Stmt::ClassDecl(class_decl) => {
+        let class_name = class_decl
+          .stx
+          .name
+          .as_ref()
+          .map(|name| name.stx.name.clone());
+        let extends_name =
+          class_decl
+            .stx
+            .extends
+            .as_ref()
+            .and_then(|expr| match expr.stx.as_ref() {
+              AstExpr::Id(id) => Some(id.stx.name.clone()),
+              _ => None,
+            });
+        let class_index = self.register_class(class_name, extends_name);
         for decorator in class_decl.stx.decorators.iter() {
           self.index_expr(&decorator.stx.expression, file, cancelled);
         }
@@ -271,7 +315,7 @@ impl AstIndex {
         for implements in class_decl.stx.implements.iter() {
           self.index_expr(implements, file, cancelled);
         }
-        self.index_class_members_in_class(&class_decl.stx.members, file, cancelled);
+        self.index_class_members_in_class(&class_decl.stx.members, class_index, file, cancelled);
       }
       Stmt::NamespaceDecl(ns) => self.index_namespace(ns, file, cancelled),
       Stmt::ModuleDecl(module) => {
@@ -511,13 +555,28 @@ impl AstIndex {
         }
       }
       AstExpr::Class(class_expr) => {
+        let class_name = class_expr
+          .stx
+          .name
+          .as_ref()
+          .map(|name| name.stx.name.clone());
+        let extends_name =
+          class_expr
+            .stx
+            .extends
+            .as_ref()
+            .and_then(|expr| match expr.stx.as_ref() {
+              AstExpr::Id(id) => Some(id.stx.name.clone()),
+              _ => None,
+            });
+        let class_index = self.register_class(class_name, extends_name);
         for decorator in class_expr.stx.decorators.iter() {
           self.index_expr(&decorator.stx.expression, file, cancelled);
         }
         if let Some(extends) = class_expr.stx.extends.as_ref() {
           self.index_expr(extends, file, cancelled);
         }
-        self.index_class_members_in_class(&class_expr.stx.members, file, cancelled);
+        self.index_class_members_in_class(&class_expr.stx.members, class_index, file, cancelled);
       }
       AstExpr::Func(func) => self.index_function(&func.stx.func, file, cancelled),
       AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file, cancelled),
@@ -555,9 +614,25 @@ impl AstIndex {
     }
   }
 
+  fn register_class(&mut self, name: Option<String>, extends: Option<String>) -> usize {
+    let index = self.classes.len();
+    if let Some(name) = name.as_ref() {
+      self.classes_by_name.entry(name.clone()).or_insert(index);
+    }
+    self.classes.push(ClassInfo {
+      name,
+      extends,
+      instance_fields: Vec::new(),
+      static_fields: Vec::new(),
+      instance_param_props: Vec::new(),
+    });
+    index
+  }
+
   fn index_class_members_in_class(
     &mut self,
     members: &[Node<ClassMember>],
+    class_index: usize,
     file: FileId,
     cancelled: Option<&Arc<AtomicBool>>,
   ) {
@@ -591,27 +666,24 @@ impl AstIndex {
       param_props.sort();
       param_props.dedup();
     }
+    if let Some(info) = self.classes.get_mut(class_index) {
+      info.instance_param_props = param_props.clone();
+    }
 
     for (idx, member) in members.iter().enumerate() {
       if idx % 128 == 0 {
         Self::check_cancelled(cancelled);
       }
-      self.index_class_member(member, file, cancelled);
-      if param_props.is_empty() || member.stx.static_ {
-        continue;
-      }
-      if let ClassOrObjVal::Prop(Some(init)) = &member.stx.val {
-        let init_range = loc_to_range(file, init.loc);
-        self
-          .class_field_param_props
-          .insert(init_range, param_props.clone());
-      }
+      self.index_class_member(member, class_index, idx, &param_props, file, cancelled);
     }
   }
 
   fn index_class_member(
     &mut self,
     member: &Node<ClassMember>,
+    class_index: usize,
+    member_index: usize,
+    param_props: &[String],
     file: FileId,
     cancelled: Option<&Arc<AtomicBool>>,
   ) {
@@ -622,11 +694,42 @@ impl AstIndex {
       ClassOrObjKey::Computed(expr) => self.index_expr(expr, file, cancelled),
       ClassOrObjKey::Direct(_) => {}
     }
+    if let (ClassOrObjKey::Direct(key), ClassOrObjVal::Prop(_)) = (&member.stx.key, &member.stx.val)
+    {
+      if let Some(info) = self.classes.get_mut(class_index) {
+        let field = ClassFieldDecl {
+          name: key.stx.key.clone(),
+          member_index,
+          optional: member.stx.optional,
+        };
+        if member.stx.static_ {
+          info.static_fields.push(field);
+        } else {
+          info.instance_fields.push(field);
+        }
+      }
+    }
     match &member.stx.val {
       ClassOrObjVal::Getter(getter) => self.index_function(&getter.stx.func, file, cancelled),
       ClassOrObjVal::Setter(setter) => self.index_function(&setter.stx.func, file, cancelled),
       ClassOrObjVal::Method(method) => self.index_function(&method.stx.func, file, cancelled),
-      ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
+      ClassOrObjVal::Prop(Some(expr)) => {
+        let init_range = loc_to_range(file, expr.loc);
+        self.class_field_initializers.insert(
+          init_range,
+          ClassFieldInitializerInfo {
+            class_index,
+            member_index,
+            is_static: member.stx.static_,
+          },
+        );
+        if !param_props.is_empty() && !member.stx.static_ {
+          self
+            .class_field_param_props
+            .insert(init_range, param_props.to_vec());
+        }
+        self.index_expr(expr, file, cancelled);
+      }
       ClassOrObjVal::Prop(None) => {}
       ClassOrObjVal::IndexSignature(_) => {}
       ClassOrObjVal::StaticBlock(block) => {
@@ -639,6 +742,56 @@ impl AstIndex {
         self.index_stmt_list(&block.stx.body, file, cancelled);
       }
     }
+  }
+
+  fn class_field_initializer(&self, span: TextRange) -> Option<ClassFieldInitializerInfo> {
+    self.class_field_initializers.get(&span).copied()
+  }
+
+  fn field_declared_not_before(
+    &self,
+    class_index: usize,
+    member_index: usize,
+    name: &str,
+    is_static: bool,
+  ) -> bool {
+    let Some(info) = self.classes.get(class_index) else {
+      return false;
+    };
+    let fields = if is_static {
+      info.static_fields.as_slice()
+    } else {
+      info.instance_fields.as_slice()
+    };
+    fields
+      .iter()
+      .any(|field| !field.optional && field.name == name && field.member_index >= member_index)
+  }
+
+  fn instance_prop_declared_in_ancestor(&self, class_index: usize, name: &str) -> bool {
+    let mut current = self
+      .classes
+      .get(class_index)
+      .and_then(|info| info.extends.clone());
+    let mut visited = HashSet::<String>::new();
+    while let Some(base_name) = current.take() {
+      if !visited.insert(base_name.clone()) {
+        break;
+      }
+      let Some(base_index) = self.classes_by_name.get(&base_name).copied() else {
+        break;
+      };
+      let Some(base) = self.classes.get(base_index) else {
+        break;
+      };
+      if base.instance_fields.iter().any(|field| field.name == name)
+        || base.instance_param_props.iter().any(|prop| prop == name)
+      {
+        return true;
+      }
+      current = base.extends.clone();
+    }
+    false
   }
 
   fn index_pat(&mut self, pat: &Node<AstPat>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
@@ -773,8 +926,8 @@ pub fn check_body_with_expander(
     && body.exprs.is_empty()
     && body.stmts.is_empty()
     && body.pats.is_empty();
-  let esnext_define_class_fields =
-    use_define_for_class_fields && matches!(target, ScriptTarget::EsNext);
+  let native_define_class_fields =
+    use_define_for_class_fields && matches!(target, ScriptTarget::Es2022 | ScriptTarget::EsNext);
   let mut checker = Checker {
     store,
     relate,
@@ -810,8 +963,10 @@ pub fn check_body_with_expander(
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
     no_implicit_any,
-    esnext_define_class_fields,
+    use_define_for_class_fields,
+    native_define_class_fields,
     current_class_field_param_props: None,
+    class_field_initializer: None,
     file,
     ref_expander: relate_expander,
     contextual_fn_ty,
@@ -891,6 +1046,13 @@ struct JsxActualProps {
   has_spread: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ClassFieldInitializerContext {
+  class_index: usize,
+  member_index: usize,
+  is_static: bool,
+}
+
 struct Checker<'a> {
   store: Arc<TypeStore>,
   relate: RelateCtx<'a>,
@@ -926,8 +1088,10 @@ struct Checker<'a> {
   check_var_assignments: bool,
   widen_object_literals: bool,
   no_implicit_any: bool,
-  esnext_define_class_fields: bool,
+  use_define_for_class_fields: bool,
+  native_define_class_fields: bool,
   current_class_field_param_props: Option<&'a [String]>,
+  class_field_initializer: Option<ClassFieldInitializerContext>,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
@@ -985,6 +1149,44 @@ impl<'a> Checker<'a> {
       }
       AstPat::AssignTarget(_) => {}
     }
+  }
+
+  fn check_property_not_used_before_initialization(
+    &mut self,
+    obj: &Node<AstExpr>,
+    prop: &str,
+    span: TextRange,
+  ) {
+    let Some(ctx) = self.class_field_initializer else {
+      return;
+    };
+    if !matches!(obj.stx.as_ref(), AstExpr::This(_)) {
+      return;
+    }
+    if !self
+      .index
+      .field_declared_not_before(ctx.class_index, ctx.member_index, prop, ctx.is_static)
+    {
+      return;
+    }
+    if !ctx.is_static
+      && !self.use_define_for_class_fields
+      && self
+        .index
+        .instance_prop_declared_in_ancestor(ctx.class_index, prop)
+    {
+      return;
+    }
+
+    let prop_len = prop.len() as u32;
+    let start = span.end.saturating_sub(prop_len);
+    let prop_span = TextRange::new(start, span.end);
+    self
+      .diagnostics
+      .push(codes::PROPERTY_USED_BEFORE_INITIALIZATION.error(
+        format!("Property '{prop}' is used before its initialization."),
+        Span::new(self.file, prop_span),
+      ));
   }
 
   fn check_cancelled(&self) {
@@ -1122,7 +1324,25 @@ impl<'a> Checker<'a> {
       };
       self.check_cancelled();
       let expr = unsafe { &*expr };
+      let prev_props = self.current_class_field_param_props;
+      self.current_class_field_param_props = self
+        .index
+        .class_field_param_props
+        .get(&span)
+        .map(|props| props.as_slice());
+      let prev_field_init = self.class_field_initializer;
+      self.class_field_initializer =
+        self
+          .index
+          .class_field_initializer(span)
+          .map(|info| ClassFieldInitializerContext {
+            class_index: info.class_index,
+            member_index: info.member_index,
+            is_static: info.is_static,
+          });
       let _ = self.check_expr(expr);
+      self.class_field_initializer = prev_field_init;
+      self.current_class_field_param_props = prev_props;
       checked_any = true;
     }
 
@@ -1220,7 +1440,18 @@ impl<'a> Checker<'a> {
         .class_field_param_props
         .get(&body_range)
         .map(|props| props.as_slice());
+      let prev_field_init = self.class_field_initializer;
+      self.class_field_initializer =
+        self
+          .index
+          .class_field_initializer(body_range)
+          .map(|info| ClassFieldInitializerContext {
+            class_index: info.class_index,
+            member_index: info.member_index,
+            is_static: info.is_static,
+          });
       let _ = self.check_expr(expr);
+      self.class_field_initializer = prev_field_init;
       self.current_class_field_param_props = prev_props;
       return true;
     }
@@ -1809,6 +2040,12 @@ impl<'a> Checker<'a> {
       }
       AstExpr::Call(call) => self.check_call_expr(call, None),
       AstExpr::Member(mem) => {
+        let full_range = loc_to_range(self.file, mem.loc);
+        self.check_property_not_used_before_initialization(
+          &mem.stx.left,
+          &mem.stx.right,
+          full_range,
+        );
         let prim = self.store.primitive_ids();
         let obj_ty = self.check_expr(&mem.stx.left);
         let chain_optional =
@@ -1824,23 +2061,23 @@ impl<'a> Checker<'a> {
         } else {
           self.member_type(base_obj_ty, &mem.stx.right)
         };
-        if self.esnext_define_class_fields {
+        if self.native_define_class_fields {
           if let Some(props) = self.current_class_field_param_props {
             if matches!(mem.stx.left.stx.as_ref(), AstExpr::This(_))
               && props.iter().any(|name| name == &mem.stx.right)
             {
-              let full_range = loc_to_range(self.file, mem.loc);
               let name_len = mem.stx.right.len() as u32;
               let start = full_range.end.saturating_sub(name_len);
               let range = TextRange::new(start, full_range.end);
-              self.diagnostics.push(Diagnostic::error(
-                "TS2729",
-                format!(
-                  "Property '{}' is used before its initialization.",
-                  mem.stx.right
-                ),
-                Span::new(self.file, range),
-              ));
+              self
+                .diagnostics
+                .push(codes::PROPERTY_USED_BEFORE_INITIALIZATION.error(
+                  format!(
+                    "Property '{}' is used before its initialization.",
+                    mem.stx.right
+                  ),
+                  Span::new(self.file, range),
+                ));
             }
           }
         }

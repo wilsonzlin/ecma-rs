@@ -101,10 +101,14 @@ pub struct CompilerOptions {
   /// Whether class fields follow ECMAScript `define` semantics (`Object.defineProperty`)
   /// or legacy assignment semantics.
   ///
-  /// The checker currently models the initialization-order impact this option has
-  /// for constructor parameter properties (e.g. `constructor(public x: number)`)
-  /// when checking class field initializers, emitting `TS2729` in the same cases
-  /// as `tsc`.
+  /// The checker uses this option when diagnosing `this.x` reads inside class
+  /// field initializers:
+  /// - When targeting native class fields (ES2022/ESNext) and `useDefineForClassFields`
+  ///   is enabled, reading a constructor parameter property (e.g.
+  ///   `constructor(public x: number)`) from a field initializer reports `TS2729`.
+  /// - When `useDefineForClassFields` is disabled (assignment semantics),
+  ///   `TS2729` is suppressed if the property exists on a base class, matching
+  ///   `tsc`'s behavior.
   pub use_define_for_class_fields: bool,
   pub jsx: Option<JsxMode>,
   /// Cache sizing and sharing strategy for the checker.
