@@ -515,6 +515,23 @@ pub const INVALID_USING_INITIALIZER: Code = Code::new(
   &[],
 );
 
+/// TS1492: `using` declarations may not have binding patterns.
+///
+/// TypeScript currently restricts `using` / `await using` declarations to simple
+/// identifiers (no destructuring patterns). Emit the same diagnostic so difftsc
+/// can track parity.
+///
+/// - Primary span: the binding pattern.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const USING_BINDING_PATTERN: Code = Code::new(
+  "TS1492",
+  "using binding patterns are not allowed",
+  "binding pattern in the using declaration",
+  &["primary: using binding pattern"],
+  &[],
+);
+
 /// TS2852: `await using` statements are only allowed in async contexts.
 ///
 /// This aligns with the TypeScript compiler diagnostic emitted when an `await using`

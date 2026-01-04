@@ -1282,7 +1282,17 @@ impl<'a> Checker<'a> {
               "Property '{}' will overwrite the base property in '{}'. If this is intentional, add an initializer. Otherwise, add a 'declare' modifier or remove the redundant declaration.",
               field.name, base_name
             ),
-            Span::new(self.file, field.key_range),
+            Span::new(
+              self.file,
+              TextRange::new(
+                field.key_range.start,
+                field
+                  .key_range
+                  .start
+                  .saturating_add(field.name.len() as u32)
+                  .min(field.key_range.end),
+              ),
+            ),
           ));
       }
     }
@@ -2055,6 +2065,15 @@ impl<'a> Checker<'a> {
       } else {
         prim.unknown
       };
+
+      if matches!(decl.stx.mode, VarDeclMode::Using | VarDeclMode::AwaitUsing)
+        && !matches!(declarator.pattern.stx.pat.stx.as_ref(), AstPat::Id(_))
+      {
+        self.diagnostics.push(codes::USING_BINDING_PATTERN.error(
+          "'using' declarations may not have binding patterns.",
+          Span::new(self.file, loc_to_range(self.file, declarator.pattern.stx.pat.loc)),
+        ));
+      }
 
       if self.check_var_assignments {
         if let Some(init) = declarator.initializer.as_ref() {
