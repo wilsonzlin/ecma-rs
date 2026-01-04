@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,13 +29,24 @@ struct OffsetQuerySnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct TypeQuerySnapshot {
+  ty: TypeId,
+  kind: TypeKindSummary,
+  properties: Vec<typecheck_ts::PropertyInfo>,
+  call_signatures: Vec<typecheck_ts::SignatureInfo>,
+  construct_signatures: Vec<typecheck_ts::SignatureInfo>,
+  indexers: Vec<typecheck_ts::IndexerInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct SmokeSnapshot {
   diagnostics: Vec<typecheck_ts::Diagnostic>,
   files: Vec<FileId>,
   reachable_files: Vec<FileId>,
   exports: Vec<(FileId, typecheck_ts::ExportMap)>,
-  global_bindings: Vec<String>,
+  global_bindings: BTreeMap<String, typecheck_ts::SymbolBinding>,
   offsets: Vec<OffsetQuerySnapshot>,
+  types: Vec<TypeQuerySnapshot>,
 }
 
 #[derive(Clone, Debug)]
@@ -229,8 +241,7 @@ fn run_with_timeout(
     // are also total, deterministic, and cycle-safe for the generated inputs.
     let reachable = runner.reachable_files();
     let files = runner.files();
-    let global_bindings_map = runner.global_bindings();
-    let global_bindings = global_bindings_map.keys().cloned().collect::<Vec<_>>();
+    let global_bindings = (*runner.global_bindings()).clone();
 
     let mut exports = Vec::new();
     let mut offsets = Vec::new();
@@ -285,6 +296,27 @@ fn run_with_timeout(
       }
     }
 
+    let mut types_seen: BTreeSet<TypeId> = BTreeSet::new();
+    for snapshot in offsets.iter() {
+      if let Some(ty) = snapshot.ty {
+        types_seen.insert(ty);
+      }
+      if let Some(ty) = snapshot.expr_ty {
+        types_seen.insert(ty);
+      }
+    }
+    let mut types = Vec::new();
+    for ty in types_seen {
+      types.push(TypeQuerySnapshot {
+        ty,
+        kind: runner.type_kind(ty),
+        properties: runner.properties_of(ty),
+        call_signatures: runner.call_signatures(ty),
+        construct_signatures: runner.construct_signatures(ty),
+        indexers: runner.indexers(ty),
+      });
+    }
+
     SmokeSnapshot {
       diagnostics,
       files,
@@ -292,6 +324,7 @@ fn run_with_timeout(
       exports,
       global_bindings,
       offsets,
+      types,
     }
   });
 
