@@ -254,6 +254,30 @@ impl<'p> HirSourceToInst<'p> {
     Ok(())
   }
 
+  fn compile_do_while_stmt(
+    &mut self,
+    test: ExprId,
+    body: StmtId,
+    _span: Loc,
+  ) -> OptimizeResult<()> {
+    let loop_entry_label = self.c_label.bump();
+    let loop_continue_label = self.c_label.bump();
+    let after_loop_label = self.c_label.bump();
+    self.out.push(Inst::label(loop_entry_label));
+    self.break_stack.push(after_loop_label);
+    self.continue_stack.push(loop_continue_label);
+    self.compile_stmt(body)?;
+    self.continue_stack.pop();
+    self.break_stack.pop();
+    self.out.push(Inst::label(loop_continue_label));
+    let test_arg = self.compile_expr(test)?;
+    self
+      .out
+      .push(Inst::cond_goto(test_arg, loop_entry_label, after_loop_label));
+    self.out.push(Inst::label(after_loop_label));
+    Ok(())
+  }
+
   fn compile_while_stmt(&mut self, test: ExprId, body: StmtId, _span: Loc) -> OptimizeResult<()> {
     let before_test_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
@@ -328,6 +352,7 @@ impl<'p> HirSourceToInst<'p> {
       } => self.compile_if_stmt(span, *test, *consequent, *alternate),
       StmtKind::Var(decl) => self.compile_var_decl(decl),
       StmtKind::While { test, body } => self.compile_while_stmt(*test, *body, span),
+      StmtKind::DoWhile { test, body } => self.compile_do_while_stmt(*test, *body, span),
       StmtKind::Debugger => Err(unsupported_syntax_range(
         stmt.span,
         "debugger statements are not supported",
