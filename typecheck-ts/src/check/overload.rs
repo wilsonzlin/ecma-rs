@@ -165,9 +165,11 @@ impl MatchScore {
 
 #[derive(Debug, Clone)]
 struct CandidateOutcome {
+  order: usize,
   sig_id: SignatureId,
   instantiated_sig: Signature,
   instantiated_id: SignatureId,
+  subtype: bool,
   match_score: MatchScore,
   unknown_inferred: usize,
   return_rank: usize,
@@ -282,9 +284,9 @@ fn resolve_overload_set(
       };
       let mut seen_sig = HashSet::new();
       candidates.retain(|sig| seen_sig.insert(*sig));
-      candidates.sort();
     }
   }
+  reorder_candidates_by_literal_types(store.as_ref(), &mut candidates);
 
   if candidates.is_empty() {
     let message = match kind {
@@ -306,12 +308,14 @@ fn resolve_overload_set(
   }
 
   let mut outcomes = Vec::with_capacity(candidates.len());
-  for sig_id in candidates {
+  for (order, sig_id) in candidates.into_iter().enumerate() {
     let original_sig = store.signature(sig_id);
     let mut outcome = CandidateOutcome {
+      order,
       sig_id,
       instantiated_sig: original_sig,
       instantiated_id: sig_id,
+      subtype: false,
       match_score: MatchScore::worst(),
       unknown_inferred: 0,
       return_rank: usize::MAX,
@@ -402,9 +406,10 @@ fn resolve_overload_set(
       }
     }
 
-    let (score, mismatch) =
+    let (score, subtype, mismatch) =
       check_arguments(store.as_ref(), relate, &outcome.instantiated_sig, &arity, args);
     outcome.match_score = score;
+    outcome.subtype = subtype;
     outcome.rejection = mismatch;
     outcomes.push(outcome);
   }
@@ -443,41 +448,7 @@ fn resolve_overload_set(
 
   applicable.sort_by_key(|candidate| fallback_rank_key(candidate, contextual_applied));
 
-  let best_key_no_id = rank_key_no_id(applicable[0], contextual_applied);
-  let best_candidates: Vec<&CandidateOutcome> = applicable
-    .iter()
-    .copied()
-    .filter(|candidate| rank_key_no_id(candidate, contextual_applied) == best_key_no_id)
-    .collect();
-
-  if best_candidates.len() > 1 {
-    let diag = build_ambiguous_diagnostic(store.as_ref(), span, &best_candidates);
-    let mut ret_types: Vec<TypeId> = best_candidates
-      .iter()
-      .map(|candidate| candidate.instantiated_sig.ret)
-      .collect();
-    ret_types.sort();
-    ret_types.dedup();
-    let ret = if ret_types.is_empty() {
-      primitives.unknown
-    } else if ret_types.len() == 1 {
-      ret_types[0]
-    } else {
-      store.union(ret_types)
-    };
-    let contextual_signature = best_candidates
-      .iter()
-      .min_by_key(|candidate| candidate.sig_id)
-      .map(|candidate| candidate.instantiated_id);
-    return CallResolution {
-      return_type: ret,
-      signature: None,
-      contextual_signature,
-      diagnostics: vec![diag],
-    };
-  }
-
-  let best = best_candidates[0];
+  let best = applicable[0];
   CallResolution {
     return_type: best.instantiated_sig.ret,
     signature: Some(best.instantiated_id),
@@ -528,6 +499,43 @@ fn signature_shape_key(sig: &Signature) -> SignatureShapeKey {
     sig.type_params.clone(),
     sig.this_param,
   )
+}
+
+fn reorder_candidates_by_literal_types(store: &TypeStore, candidates: &mut Vec<SignatureId>) {
+  let mut specialized = Vec::new();
+  let mut other = Vec::new();
+  for sig_id in candidates.drain(..) {
+    let sig = store.signature(sig_id);
+    if signature_has_literal_types(store, &sig) {
+      specialized.push(sig_id);
+    } else {
+      other.push(sig_id);
+    }
+  }
+  specialized.extend(other);
+  *candidates = specialized;
+}
+
+fn signature_has_literal_types(store: &TypeStore, sig: &Signature) -> bool {
+  sig
+    .params
+    .iter()
+    .any(|param| type_contains_literal_type(store, param.ty))
+}
+
+fn type_contains_literal_type(store: &TypeStore, ty: TypeId) -> bool {
+  match store.type_kind(ty) {
+    TypeKind::StringLiteral(_)
+    | TypeKind::NumberLiteral(_)
+    | TypeKind::BooleanLiteral(_)
+    | TypeKind::BigIntLiteral(_)
+    | TypeKind::TemplateLiteral(_)
+    | TypeKind::UniqueSymbol => true,
+    TypeKind::Union(members) | TypeKind::Intersection(members) => members
+      .iter()
+      .any(|member| type_contains_literal_type(store, *member)),
+    _ => false,
+  }
 }
 
 fn dedup_signatures_by_shape(store: &TypeStore, sigs: Vec<SignatureId>) -> Vec<SignatureId> {
@@ -876,13 +884,14 @@ fn is_obviously_empty_intersection(store: &TypeStore, ty: TypeId) -> bool {
 fn rank_key_no_id(
   candidate: &CandidateOutcome,
   contextual_applied: bool,
-) -> (MatchScore, usize, usize, usize) {
+) -> (u8, MatchScore, usize, usize, usize) {
   let return_rank = if contextual_applied {
     candidate.return_rank
   } else {
     0
   };
   (
+    if candidate.subtype { 0 } else { 1 },
     candidate.match_score,
     candidate.unknown_inferred,
     return_rank,
@@ -893,10 +902,17 @@ fn rank_key_no_id(
 fn fallback_rank_key(
   candidate: &CandidateOutcome,
   contextual_applied: bool,
-) -> (MatchScore, usize, usize, usize, SignatureId) {
-  let (score, unknown_inferred, return_rank, params_len) =
+) -> (u8, MatchScore, usize, usize, usize, usize) {
+  let (subtype, score, unknown_inferred, return_rank, params_len) =
     rank_key_no_id(candidate, contextual_applied);
-  (score, unknown_inferred, return_rank, params_len, candidate.sig_id)
+  (
+    subtype,
+    score,
+    unknown_inferred,
+    return_rank,
+    params_len,
+    candidate.order,
+  )
 }
 
 fn collect_construct_signatures(
@@ -1065,13 +1081,14 @@ fn check_arguments(
   sig: &Signature,
   arity: &ArityInfo,
   args: &[TypeId],
-) -> (MatchScore, Option<CandidateRejection>) {
+) -> (MatchScore, bool, Option<CandidateRejection>) {
   let mut score = MatchScore {
     widen: 0,
     any_like: 0,
     type_param: 0,
     rest: 0,
   };
+  let mut subtype = true;
 
   for (idx, arg) in args.iter().enumerate() {
     let expected = match expected_arg_type(sig, arity, idx) {
@@ -1079,6 +1096,7 @@ fn check_arguments(
       None => {
         return (
           MatchScore::worst(),
+          false,
           Some(CandidateRejection::Arity {
             min: arity.min,
             max: arity.max,
@@ -1099,6 +1117,7 @@ fn check_arguments(
     if !relate.is_assignable(*arg, expected.ty) {
       return (
         score,
+        false,
         Some(CandidateRejection::ArgumentType {
           index: idx,
           arg: *arg,
@@ -1110,9 +1129,13 @@ fn check_arguments(
     if !relate.is_assignable(expected.ty, *arg) {
       score.widen += 1;
     }
+
+    if *arg != expected.ty && !relate.is_strict_subtype(*arg, expected.ty) {
+      subtype = false;
+    }
   }
 
-  (score, None)
+  (score, subtype, None)
 }
 
 fn count_unknown(
