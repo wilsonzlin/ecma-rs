@@ -8,6 +8,7 @@ pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> optimize
 }
 
 #[cfg(feature = "typed")]
+#[allow(dead_code)]
 pub fn compile_source_typed(source: &str, mode: TopLevelMode, debug: bool) -> optimize_js::Program {
   compile_hir_typed(source, mode, debug).expect("compile typed source")
 }

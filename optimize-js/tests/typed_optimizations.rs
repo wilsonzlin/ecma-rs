@@ -81,6 +81,23 @@ fn typed_null_check_is_folded_when_operand_cannot_be_nullish() {
 }
 
 #[test]
+fn typed_null_check_strict_inequality_is_folded_when_operand_cannot_be_nullish() {
+  let src = r#"
+    if (console !== null) {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_if_condition_literal_false_elides_then_branch() {
   let src = r#"
     if (alwaysFalse()) {
@@ -124,6 +141,24 @@ fn typed_typeof_check_is_folded_when_operand_type_is_known() {
     }
   "#;
   let expected_src = "console.log(1);";
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_typeof_check_strict_inequality_is_folded_when_operand_type_is_known() {
+  let src = r#"
+    let s: string = "x";
+    if (typeof s !== "string") {
+      console.log(1);
+    } else {
+      console.log(2);
+    }
+  "#;
+  let expected_src = "console.log(2);";
 
   let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
   let expected_program = compile_source(expected_src, TopLevelMode::Module, false);

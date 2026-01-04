@@ -303,24 +303,24 @@ impl<'p> HirSourceToInst<'p> {
       return self.compile_logical_expr(span, operator, left, right);
     }
 
-    if operator == BinaryOp::StrictEquality {
-      let left_expr = &self.body.exprs[left.0 as usize];
-      let right_expr = &self.body.exprs[right.0 as usize];
-      let left_nullish = matches!(
-        left_expr.kind,
-        ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
-      );
-      let right_nullish = matches!(
-        right_expr.kind,
-        ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
-      );
+    let left_expr = &self.body.exprs[left.0 as usize];
+    let right_expr = &self.body.exprs[right.0 as usize];
+    let left_nullish = matches!(
+      left_expr.kind,
+      ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
+    );
+    let right_nullish = matches!(
+      right_expr.kind,
+      ExprKind::Literal(hir_js::Literal::Null | hir_js::Literal::Undefined)
+    );
 
+    if matches!(operator, BinaryOp::StrictEquality | BinaryOp::StrictInequality) {
       if (left_nullish && self.expr_excludes_nullish(right))
         || (right_nullish && self.expr_excludes_nullish(left))
       {
         let _ = self.compile_expr(left)?;
         let _ = self.compile_expr(right)?;
-        return Ok(Arg::Const(Const::Bool(false)));
+        return Ok(Arg::Const(Const::Bool(operator == BinaryOp::StrictInequality)));
       }
 
       let typeof_left = match left_expr.kind {
@@ -338,11 +338,13 @@ impl<'p> HirSourceToInst<'p> {
         _ => None,
       };
 
-      if let Some(((typeof_expr, typeof_operand), typeof_on_left)) = match (typeof_left, typeof_right) {
-        (Some((expr, operand)), None) => Some(((expr, operand), true)),
-        (None, Some((expr, operand))) => Some(((expr, operand), false)),
-        _ => None,
-      } {
+      if let Some(((typeof_expr, typeof_operand), typeof_on_left)) =
+        match (typeof_left, typeof_right) {
+          (Some((expr, operand)), None) => Some(((expr, operand), true)),
+          (None, Some((expr, operand))) => Some(((expr, operand), false)),
+          _ => None,
+        }
+      {
         let literal = if typeof_on_left {
           match &right_expr.kind {
             ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
@@ -357,10 +359,12 @@ impl<'p> HirSourceToInst<'p> {
         if let Some(literal) = literal {
           if let Some(known) = self.typeof_string_expr(typeof_operand) {
             let _ = self.compile_expr(typeof_expr)?;
-            return Ok(Arg::Const(Const::Bool(known == literal)));
+            let eq = known == literal;
+            let value = if operator == BinaryOp::StrictEquality { eq } else { !eq };
+            return Ok(Arg::Const(Const::Bool(value)));
           }
         }
-      };
+      }
     }
 
     if matches!(
@@ -384,8 +388,11 @@ impl<'p> HirSourceToInst<'p> {
       BinaryOp::LessThan => BinOp::Lt,
       BinaryOp::Multiply => BinOp::Mul,
       BinaryOp::StrictEquality => BinOp::StrictEq,
+      BinaryOp::StrictInequality => BinOp::NotStrictEq,
       BinaryOp::Subtract => BinOp::Sub,
       BinaryOp::GreaterThan => BinOp::Gt,
+      BinaryOp::Equality if left_nullish || right_nullish => BinOp::LooseEq,
+      BinaryOp::Inequality if left_nullish || right_nullish => BinOp::NotLooseEq,
       _ => {
         return Err(unsupported_syntax(
           span,
