@@ -982,15 +982,27 @@ impl<'a> Parser<'a> {
       return self.construct_signature(ctx);
     }
 
-    // Check for get/set accessors
-    // But don't treat get/set as accessor keywords if followed by ? (optional method)
-    let is_get = self.peek().typ == TT::KeywordGet
-      && self.peek_n::<2>()[1].typ != TT::Question
-      && self.consume_if(TT::KeywordGet).is_match();
-    let is_set = !is_get
-      && self.peek().typ == TT::KeywordSet
-      && self.peek_n::<2>()[1].typ != TT::Question
-      && self.consume_if(TT::KeywordSet).is_match();
+    // Disambiguate `get`/`set` accessors from methods named `get`/`set`.
+    //
+    // Accessor signatures look like:
+    //   get foo(): T;
+    //   set foo(v: T);
+    //
+    // but methods may also be named `get` / `set`:
+    //   get(key: K): V;
+    //   get<T>(path: string): Promise<T>;
+    //
+    // Treat `get`/`set` as accessor keywords only when they are followed by a
+    // property key and then `(`. Otherwise, allow them to be parsed as ordinary
+    // property keys.
+    let is_get = self.is_accessor_signature_start(ctx, TT::KeywordGet);
+    let is_set = !is_get && self.is_accessor_signature_start(ctx, TT::KeywordSet);
+
+    if is_get {
+      self.consume(); // `get`
+    } else if is_set {
+      self.consume(); // `set`
+    }
 
     // Parse property key
     let key = self.type_property_key(ctx)?;
@@ -1036,6 +1048,28 @@ impl<'a> Parser<'a> {
         }
       }
     }
+  }
+
+  fn is_accessor_signature_start(&mut self, ctx: ParseCtx, keyword: TT) -> bool {
+    if self.peek().typ != keyword {
+      return false;
+    }
+
+    // `get?(): T` / `set?(): T` are optional methods, not accessors.
+    if self.peek_n::<2>()[1].typ == TT::Question {
+      return false;
+    }
+
+    let checkpoint = self.checkpoint();
+    self.consume(); // `get` / `set`
+
+    let is_accessor = match self.type_property_key(ctx) {
+      Ok(_) => self.peek().typ == TT::ParenthesisOpen,
+      Err(_) => false,
+    };
+
+    self.restore_checkpoint(checkpoint);
+    is_accessor
   }
 
   /// Parse property signature

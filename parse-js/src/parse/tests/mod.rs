@@ -1,5 +1,6 @@
 mod expr;
 mod stmt;
+mod type_member;
 
 use super::Parser;
 use crate::lex::LexMode;
