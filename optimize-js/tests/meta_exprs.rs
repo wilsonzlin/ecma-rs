@@ -26,7 +26,10 @@ fn import_meta_is_supported() {
 
 #[test]
 fn new_target_is_supported() {
-  let src = "(() => { console.log(new.target); })();";
+  // `new.target` is only valid when there is an active `new.target` binding.
+  // A non-arrow function expression provides that binding (even when called
+  // without `new`).
+  let src = "(function () { console.log(new.target); })();";
   let program = compile_source(src, TopLevelMode::Module, false);
 
   let found = program.functions.iter().any(|func| {

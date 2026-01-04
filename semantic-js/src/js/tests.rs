@@ -1612,6 +1612,52 @@ fn sloppy_mode_allows_strict_reserved_words() {
 }
 
 #[test]
+fn new_target_at_top_level_is_reported() {
+  let source = "new.target;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(121));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0014");
+  assert_eq!(slice_range(source, &diagnostics[0]), "new.target");
+}
+
+#[test]
+fn new_target_in_top_level_arrow_is_reported() {
+  let source = "(() => new.target)();";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(122));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0014");
+  assert_eq!(slice_range(source, &diagnostics[0]), "new.target");
+}
+
+#[test]
+fn new_target_in_function_is_allowed() {
+  let source = "function f(){ return new.target; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(123));
+  assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn new_target_in_class_field_initializer_is_allowed() {
+  let source = "class C { x = new.target; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(124));
+  assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn new_target_in_class_computed_key_is_reported() {
+  let source = "class C { [new.target](){ } }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(125));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0014");
+  assert_eq!(slice_range(source, &diagnostics[0]), "new.target");
+}
+
+#[test]
 fn strict_octal_literal_is_reported() {
   let source = "'use strict'; 010;";
   let mut ast = parse(source).unwrap();

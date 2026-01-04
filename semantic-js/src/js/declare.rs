@@ -11,7 +11,10 @@ use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
+use parse_js::ast::class_or_object::ClassMember;
+use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::class_or_object::ClassOrObjMemberDirectKey;
+use parse_js::ast::class_or_object::ClassOrObjVal;
 use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -23,6 +26,7 @@ use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::NewTarget;
 use parse_js::ast::expr::UnaryExpr;
 use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
@@ -68,6 +72,7 @@ type CallExprNode = Node<CallExpr>;
 type CatchBlockNode = Node<CatchBlock>;
 type ClassOrObjMemberDirectKeyNode = Node<ClassOrObjMemberDirectKey>;
 type ClassStaticBlockNode = Node<ClassStaticBlock>;
+type ClassMemberNode = Node<ClassMember>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
 type BreakStmtNode = Node<BreakStmt>;
@@ -89,6 +94,7 @@ type SwitchBranchNode = Node<SwitchBranch>;
 type SwitchStmtNode = Node<SwitchStmt>;
 type DoWhileStmtNode = Node<DoWhileStmt>;
 type LitNumExprNode = Node<LitNumExpr>;
+type NewTargetNode = Node<NewTarget>;
 type UnaryExprNode = Node<UnaryExpr>;
 type UnaryPostfixExprNode = Node<UnaryPostfixExpr>;
 type WhileStmtNode = Node<WhileStmt>;
@@ -605,12 +611,24 @@ enum StmtContext {
   SingleStatement { allow_regular_function: bool },
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ClassMemberPhase {
+  BeforeKey,
+  InKey { depth: usize },
+  BeforeVal,
+  InVal { depth: usize },
+  Done,
+}
+
 #[derive(VisitorMut)]
 #[visitor(
   BinaryExprNode(enter),
   BlockStmtNode,
   BreakStmtNode(enter),
   CatchBlockNode,
+  ClassMemberNode(enter, exit),
+  ClassOrObjKey(enter, exit),
+  ClassOrObjVal(enter, exit),
   ClassOrObjMemberDirectKeyNode(enter),
   ClassDeclNode,
   ClassExprNode,
@@ -635,6 +653,7 @@ enum StmtContext {
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
   LitNumExprNode(enter),
+  NewTargetNode(enter),
   UnaryExprNode(enter),
   UnaryPostfixExprNode(enter),
   VarDeclNode,
@@ -649,7 +668,9 @@ struct DeclareVisitor {
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
   strict_stack: Vec<bool>,
+  new_target_stack: Vec<bool>,
   stmt_context_stack: Vec<StmtContext>,
+  class_member_phase_stack: Vec<ClassMemberPhase>,
   switch_scope_stack: Vec<(ScopeId, bool)>,
   for_in_of_stack: Vec<ForInOfContext>,
   for_in_of_lhs_scope_stack: Vec<Option<ScopeId>>,
@@ -670,7 +691,9 @@ impl DeclareVisitor {
       in_pattern_decl: vec![false],
       top_level_mode: mode,
       strict_stack: vec![strict],
+      new_target_stack: vec![false],
       stmt_context_stack: vec![StmtContext::StatementList],
+      class_member_phase_stack: Vec::new(),
       switch_scope_stack: Vec::new(),
       for_in_of_stack: Vec::new(),
       for_in_of_lhs_scope_stack: Vec::new(),
@@ -803,6 +826,10 @@ impl DeclareVisitor {
     *self.strict_stack.last().unwrap_or(&false)
   }
 
+  fn new_target_allowed(&self) -> bool {
+    *self.new_target_stack.last().unwrap_or(&false)
+  }
+
   fn current_stmt_context(&self) -> StmtContext {
     *self
       .stmt_context_stack
@@ -883,6 +910,14 @@ impl DeclareVisitor {
     self.builder.diagnostics.push(Diagnostic::error(
       "BIND0013",
       "Unexpected strict mode reserved word".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
+  fn report_invalid_new_target(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0014",
+      "new.target expression is not allowed here".to_string(),
       Span::new(self.builder.file, range),
     ));
   }
@@ -1129,12 +1164,12 @@ impl DeclareVisitor {
 
   fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
     if let Some(escape) = assoc.get::<InvalidTemplateEscapeSequence>() {
-      let range = TextRange::new(escape.0.0 as u32, escape.0.1 as u32);
+      let range = TextRange::new(escape.0 .0 as u32, escape.0 .1 as u32);
       self.report_invalid_template_escape_sequence(range);
     }
     if self.is_strict() {
       if let Some(escape) = assoc.get::<LegacyOctalEscapeSequence>() {
-        let range = TextRange::new(escape.0.0 as u32, escape.0.1 as u32);
+        let range = TextRange::new(escape.0 .0 as u32, escape.0 .1 as u32);
         self.report_strict_octal_escape_sequence(range);
       }
     }
@@ -1165,6 +1200,90 @@ impl DeclareVisitor {
     let end = node.loc.end_u32();
     let start = end.saturating_sub(label.len() as u32);
     self.report_strict_reserved_word(TextRange::new(start, end));
+  }
+
+  fn enter_class_member_node(&mut self, _node: &mut ClassMemberNode) {
+    self
+      .class_member_phase_stack
+      .push(ClassMemberPhase::BeforeKey);
+  }
+
+  fn exit_class_member_node(&mut self, _node: &mut ClassMemberNode) {
+    self.class_member_phase_stack.pop();
+  }
+
+  fn enter_class_or_obj_key(&mut self, _node: &mut ClassOrObjKey) {
+    let Some(phase) = self.class_member_phase_stack.last_mut() else {
+      return;
+    };
+
+    match phase {
+      ClassMemberPhase::BeforeKey => {
+        *phase = ClassMemberPhase::InKey { depth: 1 };
+      }
+      ClassMemberPhase::InKey { depth } => {
+        *depth += 1;
+      }
+      _ => {}
+    }
+  }
+
+  fn exit_class_or_obj_key(&mut self, _node: &mut ClassOrObjKey) {
+    let Some(phase) = self.class_member_phase_stack.last_mut() else {
+      return;
+    };
+
+    match phase {
+      ClassMemberPhase::InKey { depth } => {
+        if *depth <= 1 {
+          *phase = ClassMemberPhase::BeforeVal;
+        } else {
+          *depth -= 1;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn enter_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
+    let Some(phase) = self.class_member_phase_stack.last_mut() else {
+      return;
+    };
+
+    match phase {
+      ClassMemberPhase::BeforeVal => {
+        self.new_target_stack.push(true);
+        *phase = ClassMemberPhase::InVal { depth: 1 };
+      }
+      ClassMemberPhase::InVal { depth } => {
+        *depth += 1;
+      }
+      _ => {}
+    }
+  }
+
+  fn exit_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
+    let Some(phase) = self.class_member_phase_stack.last_mut() else {
+      return;
+    };
+
+    match phase {
+      ClassMemberPhase::InVal { depth } => {
+        if *depth <= 1 {
+          self.new_target_stack.pop();
+          *phase = ClassMemberPhase::Done;
+        } else {
+          *depth -= 1;
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn enter_new_target_node(&mut self, node: &mut NewTargetNode) {
+    if !self.new_target_allowed() {
+      self.report_invalid_new_target(range_of(node));
+    }
   }
 
   fn enter_binary_expr_node(&mut self, node: &mut BinaryExprNode) {
@@ -1768,6 +1887,12 @@ impl DeclareVisitor {
   fn enter_func_node(&mut self, node: &mut FuncNode) {
     let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
     self.strict_stack.push(strict);
+    let new_target_allowed = if node.stx.arrow {
+      self.new_target_allowed()
+    } else {
+      true
+    };
+    self.new_target_stack.push(new_target_allowed);
     self.push_stmt_context(StmtContext::StatementList);
     self.report_duplicate_parameters(node, strict);
 
@@ -1783,6 +1908,7 @@ impl DeclareVisitor {
   fn exit_func_node(&mut self, _node: &mut FuncNode) {
     self.pop_scope();
     self.pop_decl_target();
+    self.new_target_stack.pop();
     self.strict_stack.pop();
     self.pop_stmt_context();
   }
