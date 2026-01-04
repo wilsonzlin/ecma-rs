@@ -473,10 +473,13 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
       let Some(rep) = annex_b_block_to_var.get(sym).copied() else {
         continue;
       };
-      let group_name = renames
+      let mut group_name = renames
         .get(&rep)
         .cloned()
         .or_else(|| usage.symbol_names.get(&rep).cloned());
+      if group_name.is_none() {
+        group_name = usage.symbol_names.get(sym).cloned();
+      }
       if let Some(name) = group_name {
         used.insert(name);
       }
@@ -858,6 +861,45 @@ mod tests {
     let block_name = renames.get(&block_sym).expect("block rename");
     let var_name = renames.get(&var_sym).expect("var rename");
     assert_eq!(block_name, var_name);
+  }
+
+  #[test]
+  fn annex_b_block_function_in_global_script_is_not_renamed() {
+    let source = "if(true){function a(){}let x=1;x;a}";
+    let mut ast = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Js,
+        source_type: SourceType::Script,
+      },
+    )
+    .expect("parse");
+    let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(0));
+    assert!(diagnostics.is_empty());
+
+    let (&block_sym, &var_sym) = sem
+      .annex_b_function_decls
+      .iter()
+      .next()
+      .expect("expected annex b linkage");
+
+    let x_name = sem.name_id("x").expect("x name id");
+    let x_sym = sem
+      .scopes
+      .iter()
+      .find_map(|(_, scope)| scope.symbols.get(&x_name).copied())
+      .expect("x symbol");
+
+    let usage = collect_usages(&mut ast, &sem, TopLevelMode::Global);
+    let renames = assign_names(&sem, &usage);
+
+    // The hoisted `var` binding is global and not renameable in `global` mode,
+    // so the block binding must retain its original identifier.
+    assert!(!renames.contains_key(&block_sym));
+    assert!(!renames.contains_key(&var_sym));
+
+    let x_name = renames.get(&x_sym).expect("x rename");
+    assert_eq!(x_name, "b");
   }
 
   #[test]

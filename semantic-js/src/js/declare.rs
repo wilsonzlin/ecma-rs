@@ -612,9 +612,7 @@ impl DeclareVisitor {
   fn process_annex_b_block_functions(&mut self) {
     let functions = std::mem::take(&mut self.annex_b_block_functions);
     for func in functions {
-      let Some(closure_scope) = func.closure_scope else {
-        continue;
-      };
+      let closure_scope = func.closure_scope;
 
       // Annex B hoisting is suppressed if any enclosing lexical environment
       // between the function's block and the nearest variable scope already
@@ -627,7 +625,7 @@ impl DeclareVisitor {
         .and_then(|scope| scope.parent);
       let mut suppressed = false;
       while let Some(scope_id) = current {
-        if scope_id == closure_scope {
+        if closure_scope.is_some_and(|closure| closure == scope_id) {
           break;
         }
         if let Some(scope) = self.builder.scopes.get(&scope_id) {
@@ -650,6 +648,30 @@ impl DeclareVisitor {
       if suppressed {
         continue;
       }
+
+      let Some(closure_scope) = closure_scope else {
+        // Global scripts still create a `var` binding for Annex B block
+        // functions, but in `TopLevelMode::Global` we intentionally do not
+        // surface global bindings as renameable symbols. Create a synthetic
+        // symbol ID to link the block binding so downstream renamers can keep
+        // the original identifier text.
+        let global_scope = self.builder.top_scope;
+        let global_symbol = symbol_id_for(self.builder.file, global_scope, func.name);
+        self
+          .builder
+          .symbols
+          .entry(global_symbol)
+          .or_insert(SymbolData {
+            name: func.name,
+            decl_scope: global_scope,
+            flags: SymbolFlags::hoisted(),
+          });
+        self
+          .builder
+          .annex_b_function_decls
+          .insert(func.block_symbol, global_symbol);
+        continue;
+      };
 
       // If the nearest variable scope already has a non-hoisted binding
       // (parameters or lexical declarations), hoisting is suppressed.
