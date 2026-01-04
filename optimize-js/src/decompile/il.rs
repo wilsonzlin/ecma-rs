@@ -13,8 +13,8 @@ use parse_js::ast::expr::lit::{
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
-  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr, TaggedTemplateExpr,
-  UnaryExpr,
+  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, ImportExpr, MemberExpr,
+  TaggedTemplateExpr, UnaryExpr,
 };
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
@@ -585,6 +585,22 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
       function: tag_expr,
       parts,
     })));
+    return match tgt {
+      Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+      None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+    };
+  }
+
+  if spreads.is_empty()
+    && matches!(this_arg, Arg::Const(Const::Undefined))
+    && matches!(callee_arg, Arg::Builtin(path) if path == "import")
+    && (args.len() == 1 || args.len() == 2)
+  {
+    let module = lower_arg(var_namer, fn_emitter, &args[0]);
+    let attributes = args
+      .get(1)
+      .map(|arg| lower_arg(var_namer, fn_emitter, arg));
+    let expr = node(Expr::Import(node(ImportExpr { module, attributes })));
     return match tgt {
       Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
       None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),

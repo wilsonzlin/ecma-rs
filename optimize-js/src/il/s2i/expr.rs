@@ -1056,6 +1056,25 @@ impl<'p> HirSourceToInst<'p> {
         ));
         Ok(Arg::Var(tmp))
       }
+      ExprKind::ImportCall {
+        argument,
+        attributes,
+      } => {
+        let mut args = Vec::new();
+        args.push(self.compile_expr(*argument)?);
+        if let Some(attrs) = attributes {
+          args.push(self.compile_expr(*attrs)?);
+        }
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin("import".to_string()),
+          Arg::Const(Const::Undefined),
+          args,
+          Vec::new(),
+        ));
+        Ok(Arg::Var(tmp))
+      }
       ExprKind::Ident(name) => self.compile_id_expr(expr_id, *name),
       ExprKind::Literal(lit) => self.literal_arg(span, lit),
       ExprKind::This => Ok(Arg::Builtin("this".to_string())),
