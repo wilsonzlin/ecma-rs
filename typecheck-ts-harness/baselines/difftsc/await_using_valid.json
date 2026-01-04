@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -34,7 +35,6 @@
     }
   ],
   "type_facts": {
-    "exports": [],
     "markers": [
       {
         "file": "await_using_valid.ts",

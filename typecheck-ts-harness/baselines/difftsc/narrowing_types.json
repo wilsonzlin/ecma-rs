@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -15,7 +16,16 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 18048,
+      "file": "narrowing_types.ts",
+      "start": 2073,
+      "end": 2074,
+      "category": "error",
+      "message": "'x' is possibly 'undefined'."
+    }
+  ],
   "type_facts": {
     "exports": [
       {
@@ -107,14 +117,14 @@
         "offset": 1317,
         "line": 68,
         "column": 12,
-        "type": "number | undefined"
+        "type": "any"
       },
       {
         "file": "narrowing_types.ts",
         "offset": 1389,
         "line": 72,
         "column": 9,
-        "type": "number | undefined"
+        "type": "any"
       },
       {
         "file": "narrowing_types.ts",

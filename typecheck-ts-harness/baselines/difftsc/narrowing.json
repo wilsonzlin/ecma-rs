@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -15,5 +16,14 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [
+    {
+      "code": 18048,
+      "file": "narrowing.ts",
+      "start": 1295,
+      "end": 1296,
+      "category": "error",
+      "message": "'x' is possibly 'undefined'."
+    }
+  ]
 }

@@ -188,6 +188,24 @@ pub const TYPE_MISMATCH: Code = Code::new(
   &[],
 );
 
+/// TS2345: Argument of type is not assignable to parameter of type.
+///
+/// `typecheck-ts` reports the more specific TS2345 code for call/new argument
+/// checks, matching `tsc`'s behavior. The underlying message is still a general
+/// "type mismatch" and is normalized by the harness, but the numeric code is
+/// used by difftsc to track parity.
+///
+/// - Primary span: the argument expression being checked.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const ARGUMENT_TYPE_MISMATCH: Code = Code::new(
+  "TS2345",
+  "argument type mismatch",
+  "argument expression being checked",
+  &["primary: argument expression"],
+  &[],
+);
+
 /// TC0008: Property access on a global that does not declare the property.
 ///
 /// - Primary span: zero-length placeholder at the start of the file flagged by

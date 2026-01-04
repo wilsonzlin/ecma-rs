@@ -19,6 +19,21 @@ status = "xfail"
 reason = "Rust checker does not yet support variance annotations (`in`/`out`)."
 
 [[expectations]]
+id = "difftsc/narrowing"
+status = "xfail"
+reason = "tsc emits TS18048 for optional chaining + nullish coalescing narrowing; Rust checker currently does not report this diagnostic."
+
+[[expectations]]
+id = "difftsc/narrowing_types"
+status = "xfail"
+reason = "tsc emits TS18048 for optional chaining + nullish coalescing narrowing and reports different type query results; Rust checker currently differs."
+
+[[expectations]]
+id = "difftsc/rest_inference"
+status = "xfail"
+reason = "tsc rejects heterogeneous rest inference for `collect<T>(...args: T[])` (TS2345) and infers `collected` as number[]; Rust allows unions and emits no diagnostic."
+
+[[expectations]]
 id = "difftsc/await_using_valid"
 status = "xfail"
 reason = "Rust checker does not yet match tsc's `AsyncDisposable` validation; tsc reports TS2416/TS2851 diagnostics."
@@ -42,11 +57,6 @@ reason = "tsc disallows `export =`/`import = require()` when targeting ECMAScrip
 id = "difftsc/export_assignment_require"
 status = "xfail"
 reason = "tsc disallows `export =`/`import = require()` when targeting ECMAScript modules (TS1203/TS1202); Rust does not yet enforce these restrictions."
-
-[[expectations]]
-id = "difftsc/triple_slash_references"
-status = "xfail"
-reason = "tsc emits a file-less TS2688 diagnostic for missing triple-slash `types` references; Rust only reports the in-file diagnostic."
 
 [[expectations]]
 id = "difftsc/using_valid"

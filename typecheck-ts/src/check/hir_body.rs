@@ -1572,7 +1572,7 @@ impl<'a> Checker<'a> {
           None => self.check_expr(init),
         };
         if let Some(annotation) = annotation {
-          self.check_assignable(init, init_ty, annotation, None);
+          self.check_assignable(init, init_ty, annotation, Some(pat_span));
         }
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
@@ -2081,7 +2081,8 @@ impl<'a> Checker<'a> {
       }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-          self.check_assignable(init, init_ty, ann, None);
+          let pat_range = loc_to_range(self.file, declarator.pattern.stx.pat.loc);
+          self.check_assignable(init, init_ty, ann, Some(pat_range));
         }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
@@ -2761,7 +2762,13 @@ impl<'a> Checker<'a> {
                 .unwrap_or(param_ty),
               _ => param_ty,
             };
-            self.check_assignable(&arg.stx.value, arg_ty, expected, None);
+            self.check_assignable_with_code(
+              &arg.stx.value,
+              arg_ty,
+              expected,
+              None,
+              &codes::ARGUMENT_TYPE_MISMATCH,
+            );
           }
           reported_assignability = self.diagnostics.len() > before;
         }
@@ -2807,7 +2814,13 @@ impl<'a> Checker<'a> {
               }
               _ => arg_ty,
             };
-            self.check_assignable(arg_expr, assignable_ty, param_ty, None);
+            self.check_assignable_with_code(
+              arg_expr,
+              assignable_ty,
+              param_ty,
+              None,
+              &codes::ARGUMENT_TYPE_MISMATCH,
+            );
           }
           if let TypeKind::Predicate {
             parameter: Some(param_name),
@@ -3214,7 +3227,13 @@ impl<'a> Checker<'a> {
               .unwrap_or(param_ty),
             _ => param_ty,
           };
-          self.check_assignable(&arg.stx.value, arg_ty, expected, None);
+          self.check_assignable_with_code(
+            &arg.stx.value,
+            arg_ty,
+            expected,
+            None,
+            &codes::ARGUMENT_TYPE_MISMATCH,
+          );
         }
         reported_assignability = self.diagnostics.len() > before;
       }
@@ -3246,10 +3265,16 @@ impl<'a> Checker<'a> {
             }
             _ => arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown),
           };
-          self.check_assignable(arg_expr, arg_ty, param_ty, None);
+            self.check_assignable_with_code(
+              arg_expr,
+              arg_ty,
+              param_ty,
+              None,
+              &codes::ARGUMENT_TYPE_MISMATCH,
+            );
+          }
         }
       }
-    }
     let contextual_sig = resolution
       .signature
       .or(resolution.contextual_signature)
@@ -6489,6 +6514,17 @@ impl<'a> Checker<'a> {
     dst: TypeId,
     range_override: Option<TextRange>,
   ) {
+    self.check_assignable_with_code(expr, src, dst, range_override, &codes::TYPE_MISMATCH);
+  }
+
+  fn check_assignable_with_code(
+    &mut self,
+    expr: &Node<AstExpr>,
+    src: TypeId,
+    dst: TypeId,
+    range_override: Option<TextRange>,
+    base_code: &codes::Code,
+  ) {
     let prim = self.store.primitive_ids();
     if matches!(self.store.type_kind(src), TypeKind::Any | TypeKind::Unknown)
       || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
@@ -6638,7 +6674,7 @@ impl<'a> Checker<'a> {
       }
     }
 
-    self.diagnostics.push(codes::TYPE_MISMATCH.error(
+    self.diagnostics.push(base_code.error(
       "type mismatch",
       Span {
         file: self.file,

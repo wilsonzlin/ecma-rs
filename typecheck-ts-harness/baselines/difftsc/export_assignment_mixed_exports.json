@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -32,5 +33,19 @@
       "category": "error",
       "message": "An export assignment cannot be used in a module with other exported elements."
     }
-  ]
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "export_assignment_mixed_exports.ts",
+        "name": "export=",
+        "type": "1"
+      },
+      {
+        "file": "export_assignment_mixed_exports.ts",
+        "name": "x",
+        "type": "2"
+      }
+    ]
+  }
 }

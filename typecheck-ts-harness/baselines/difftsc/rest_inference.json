@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -15,13 +16,22 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [],
+  "diagnostics": [
+    {
+      "code": 2345,
+      "file": "rest_inference.ts",
+      "start": 100,
+      "end": 113,
+      "category": "error",
+      "message": "Argument of type 'string' is not assignable to parameter of type 'number'."
+    }
+  ],
   "type_facts": {
     "exports": [
       {
         "file": "rest_inference.ts",
         "name": "collected",
-        "type": "(string | number)[]"
+        "type": "number[]"
       },
       {
         "file": "rest_inference.ts",
@@ -36,14 +46,13 @@
       {
         "file": "rest_inference.ts",
         "name": "paired",
-        "type": "{ a: number; b: string; }"
+        "type": "{ a: number; b: string }"
       },
       {
         "file": "rest_inference.ts",
         "name": "tuple",
         "type": "[number, string]"
       }
-    ],
-    "markers": []
+    ]
   }
 }

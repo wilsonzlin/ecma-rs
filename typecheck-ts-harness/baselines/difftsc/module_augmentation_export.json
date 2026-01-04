@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -15,6 +16,19 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": []
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "pkg.ts",
+        "name": "x",
+        "type": "1"
+      },
+      {
+        "file": "pkg.ts",
+        "name": "y",
+        "type": "string"
+      }
+    ]
+  }
 }
-

@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": true,
       "noUncheckedIndexedAccess": false,
@@ -25,5 +26,14 @@
       "category": "error",
       "message": "Type 'string' is not assignable to type 'number'."
     }
-  ]
+  ],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "m.d.ts",
+        "name": "f",
+        "type": "({ x: number }, number) => number"
+      }
+    ]
+  }
 }

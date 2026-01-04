@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -21,7 +22,7 @@
       {
         "file": "lib.d.ts",
         "name": "f",
-        "type": "{ (x: string): 1; (x: number): 2 }"
+        "type": "{ (number) => 2; (string) => 1 }"
       }
     ],
     "markers": [

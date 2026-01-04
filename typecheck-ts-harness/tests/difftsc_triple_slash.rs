@@ -74,6 +74,7 @@ fn difftsc_triple_slash_cases_match_baselines() {
   for name in [
     "triple_slash_no_default_lib",
     "triple_slash_path_imported",
+    "triple_slash_references",
     "triple_slash_types_imported",
     "triple_slash_lib_imported",
   ] {

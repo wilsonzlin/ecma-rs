@@ -4,6 +4,7 @@
     "typescript_version": "5.9.3",
     "options": {
       "exactOptionalPropertyTypes": false,
+      "moduleResolution": 2,
       "noEmit": true,
       "noImplicitAny": false,
       "noUncheckedIndexedAccess": false,
@@ -12,21 +13,10 @@
       "strictFunctionTypes": true,
       "strictNullChecks": true,
       "target": 2,
-      "types": [
-        "missing-triple-slash-types"
-      ],
       "useDefineForClassFields": true
     }
   },
   "diagnostics": [
-    {
-      "code": 2688,
-      "file": null,
-      "start": 0,
-      "end": 0,
-      "category": "error",
-      "message": "Cannot find type definition file for 'missing-triple-slash-types'.\n  The file is in the program because:\n    Entry point of type library 'missing-triple-slash-types' specified in compilerOptions"
-    },
     {
       "code": 6053,
       "file": "triple_slash_references.ts",
