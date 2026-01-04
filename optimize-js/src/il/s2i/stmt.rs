@@ -4,9 +4,10 @@ use crate::unsupported_syntax_range;
 use crate::util::counter::Counter;
 use crate::OptimizeResult;
 use crate::ProgramCompiler;
+use crate::TextRange;
 use hir_js::{
-  Body, BodyId, BodyKind, ExprId, ForInit, NameId, ObjectKey, PatId, PatKind, StmtId, StmtKind,
-  VarDecl, VarDeclarator,
+  Body, BodyId, BodyKind, ExprId, ExprKind, ForHead, ForInit, NameId, ObjectKey, PatId, PatKind,
+  StmtId, StmtKind, VarDecl, VarDeclarator,
 };
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
@@ -148,6 +149,29 @@ impl<'p> HirSourceToInst<'p> {
         };
         self.out.push(inst);
       }
+      PatKind::AssignTarget(expr_id) => {
+        let expr = &self.body.exprs[expr_id.0 as usize];
+        let inst = match &expr.kind {
+          ExprKind::Member(member) => {
+            if member.optional {
+              return Err(unsupported_syntax_range(
+                expr.span,
+                "optional chaining in assignment target",
+              ));
+            }
+            let obj = self.compile_expr(member.object)?;
+            let prop = key_arg(self, &member.property)?;
+            Inst::prop_assign(obj, prop, rval.clone())
+          }
+          other => {
+            return Err(unsupported_syntax_range(
+              expr.span,
+              format!("unsupported assignment target {other:?}"),
+            ))
+          }
+        };
+        self.out.push(inst);
+      }
       _ => {
         return Err(unsupported_syntax_range(
           self.body.pats[pat.0 as usize].span,
@@ -168,6 +192,128 @@ impl<'p> HirSourceToInst<'p> {
       self.out.push(Inst::var_assign(tmp, rval));
       self.compile_destructuring(*pat, Arg::Var(tmp))?;
     }
+    Ok(())
+  }
+
+  fn compile_for_head(&mut self, span: TextRange, head: &ForHead, value: Arg) -> OptimizeResult<()> {
+    match head {
+      ForHead::Pat(pat) => self.compile_destructuring(*pat, value),
+      ForHead::Var(decl) => {
+        if decl.declarators.len() != 1 {
+          return Err(unsupported_syntax_range(
+            span,
+            "for-in/of variable declarations must have a single declarator",
+          ));
+        }
+        self.compile_destructuring(decl.declarators[0].pat, value)
+      }
+    }
+  }
+
+  fn compile_for_in_of_stmt(
+    &mut self,
+    span: TextRange,
+    left: &ForHead,
+    right: ExprId,
+    body: StmtId,
+    is_for_of: bool,
+    await_: bool,
+    label: Option<NameId>,
+  ) -> OptimizeResult<()> {
+    if await_ {
+      return Err(unsupported_syntax_range(
+        span,
+        "for-await-of statements are not supported",
+      ));
+    }
+    if !is_for_of {
+      return Err(unsupported_syntax_range(span, "for-in statements are not supported"));
+    }
+
+    let iterable_tmp_var = self.c_temp.bump();
+    let iterable_arg = self.compile_expr(right)?;
+    self
+      .out
+      .push(Inst::var_assign(iterable_tmp_var, iterable_arg));
+
+    let iterator_method_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::bin(
+      iterator_method_tmp_var,
+      Arg::Var(iterable_tmp_var),
+      BinOp::GetProp,
+      Arg::Builtin("Symbol.iterator".to_string()),
+    ));
+
+    let iterator_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::call(
+      iterator_tmp_var,
+      Arg::Var(iterator_method_tmp_var),
+      Arg::Var(iterable_tmp_var),
+      Vec::new(),
+      Vec::new(),
+    ));
+
+    let loop_entry_label = self.c_label.bump();
+    let after_loop_label = self.c_label.bump();
+    self.out.push(Inst::label(loop_entry_label));
+
+    let next_method_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::bin(
+      next_method_tmp_var,
+      Arg::Var(iterator_tmp_var),
+      BinOp::GetProp,
+      Arg::Const(Const::Str("next".to_string())),
+    ));
+    let next_result_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::call(
+      next_result_tmp_var,
+      Arg::Var(next_method_tmp_var),
+      Arg::Var(iterator_tmp_var),
+      Vec::new(),
+      Vec::new(),
+    ));
+
+    let done_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::bin(
+      done_tmp_var,
+      Arg::Var(next_result_tmp_var),
+      BinOp::GetProp,
+      Arg::Const(Const::Str("done".to_string())),
+    ));
+    self.out.push(Inst::cond_goto(
+      Arg::Var(done_tmp_var),
+      after_loop_label,
+      DUMMY_LABEL,
+    ));
+
+    let value_tmp_var = self.c_temp.bump();
+    self.out.push(Inst::bin(
+      value_tmp_var,
+      Arg::Var(next_result_tmp_var),
+      BinOp::GetProp,
+      Arg::Const(Const::Str("value".to_string())),
+    ));
+    self.compile_for_head(span, left, Arg::Var(value_tmp_var))?;
+
+    self.break_stack.push(after_loop_label);
+    self.continue_stack.push(loop_entry_label);
+    if let Some(label) = label {
+      self.label_stack.push(LabeledLoopTarget {
+        label,
+        break_target: after_loop_label,
+        continue_target: loop_entry_label,
+      });
+    }
+    let res = self.compile_stmt(body);
+    if label.is_some() {
+      self.label_stack.pop();
+    }
+    self.continue_stack.pop();
+    self.break_stack.pop();
+    res?;
+
+    self.out.push(Inst::goto(loop_entry_label));
+    self.out.push(Inst::label(after_loop_label));
     Ok(())
   }
 
@@ -483,6 +629,21 @@ impl<'p> HirSourceToInst<'p> {
             update,
             body,
           } => self.compile_for_stmt(span, &init, &test, &update, body, Some(*label)),
+          StmtKind::ForIn {
+            left,
+            right,
+            body,
+            is_for_of,
+            await_,
+          } => self.compile_for_in_of_stmt(
+            stmt.span,
+            &left,
+            right,
+            body,
+            is_for_of,
+            await_,
+            Some(*label),
+          ),
           _ => Err(unsupported_syntax_range(
             stmt.span,
             "labeled statements are only supported for loops",
@@ -517,6 +678,13 @@ impl<'p> HirSourceToInst<'p> {
         update,
         body,
       } => self.compile_for_stmt(span, init, test, update, *body, None),
+      StmtKind::ForIn {
+        left,
+        right,
+        body,
+        is_for_of,
+        await_,
+      } => self.compile_for_in_of_stmt(stmt.span, left, *right, *body, *is_for_of, *await_, None),
       StmtKind::If {
         test,
         consequent,
