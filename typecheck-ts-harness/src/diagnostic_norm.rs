@@ -1,6 +1,6 @@
 use crate::multifile::normalize_name_into;
-use crate::tsc_codes::rust_code_matches_tsc;
 use crate::tsc::TscDiagnostic;
+use crate::tsc_codes::rust_code_matches_tsc;
 use serde::{Deserialize, Serialize};
 use typecheck_ts::{Diagnostic, FileId, Severity};
 

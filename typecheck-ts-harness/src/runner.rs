@@ -2106,7 +2106,9 @@ mod tests {
   fn diff_matches_rust_internal_tc_code_with_tsc_numeric_code() {
     let rust = vec![NormalizedDiagnostic {
       engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
-      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("TC0007".into())),
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+        "TC0007".into(),
+      )),
       file: Some("a.ts".into()),
       start: 0,
       end: 1,
@@ -2220,9 +2222,7 @@ mod tests {
     assert_eq!(roots.len(), 2);
 
     let from = roots.last().unwrap();
-    let a_key = host
-      .resolve(from, "./a.ts")
-      .expect("./a.ts should resolve");
+    let a_key = host.resolve(from, "./a.ts").expect("./a.ts should resolve");
     assert!(roots.contains(&a_key));
     assert_eq!(&*host.file_text(&a_key).unwrap(), "second version");
   }

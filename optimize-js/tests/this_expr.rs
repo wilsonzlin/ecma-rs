@@ -19,4 +19,3 @@ fn this_expression_is_supported() {
 
   assert!(js.contains("this"), "expected `this` in output: {js}");
 }
-

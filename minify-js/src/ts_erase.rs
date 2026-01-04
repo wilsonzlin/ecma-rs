@@ -113,7 +113,9 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
   //
   // When lowering runtime namespaces to JS, we must avoid synthesizing binding identifiers
   // (e.g. `var class;` / `function(class){}`) that are invalid in the output mode.
-  if matches!(top_level_mode, TopLevelMode::Module) && matches!(name, "package" | "eval" | "arguments") {
+  if matches!(top_level_mode, TopLevelMode::Module)
+    && matches!(name, "package" | "eval" | "arguments")
+  {
     // `package`, `eval`, and `arguments` are invalid binding identifiers in strict mode but are not
     // tokenized as keywords by the lexer.
     return false;
@@ -502,7 +504,9 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
   names
 }
 
-fn collect_namespace_body_binding_names_for_synthetic_param(body: &NamespaceBody) -> HashSet<String> {
+fn collect_namespace_body_binding_names_for_synthetic_param(
+  body: &NamespaceBody,
+) -> HashSet<String> {
   match body {
     NamespaceBody::Block(stmts) => {
       let mut names = collect_top_level_value_bindings(stmts);
@@ -1223,7 +1227,9 @@ fn rewrite_enum_member_refs(
         self.collect_pat_declared(&param.stx.pattern.stx.pat, &mut scope);
       }
       if let Some(name) = func_name {
-        if self.member_names.contains(name) || name == self.enum_name || name == self.enum_source_name
+        if self.member_names.contains(name)
+          || name == self.enum_name
+          || name == self.enum_source_name
         {
           scope.insert(name.to_string());
         }

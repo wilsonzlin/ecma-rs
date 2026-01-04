@@ -10,16 +10,14 @@ fn hir_emits_undefined_identifier() {
 
 #[test]
 fn hir_preserves_undefined_in_member_expressions() {
-  let lowered =
-    lower_from_source_with_kind(FileKind::Js, "undefined.toString();").expect("lower");
+  let lowered = lower_from_source_with_kind(FileKind::Js, "undefined.toString();").expect("lower");
   let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
   assert_eq!(emitted, "undefined.toString();");
 }
 
 #[test]
 fn hir_parenthesizes_void_0_in_member_expressions() {
-  let lowered =
-    lower_from_source_with_kind(FileKind::Js, "(void 0).toString();").expect("lower");
+  let lowered = lower_from_source_with_kind(FileKind::Js, "(void 0).toString();").expect("lower");
   let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
   assert_eq!(emitted, "(void 0).toString();");
 }

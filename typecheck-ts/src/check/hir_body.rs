@@ -1015,7 +1015,8 @@ impl<'a> Checker<'a> {
     }
     matched_blocks.sort_by_key(|block| (block.span.start, block.span.end));
     matched_blocks.dedup_by_key(|block| (block.span.start, block.span.end, block.block));
-    let static_block_spans: Vec<TextRange> = matched_blocks.iter().map(|block| block.span).collect();
+    let static_block_spans: Vec<TextRange> =
+      matched_blocks.iter().map(|block| block.span).collect();
 
     for block in matched_blocks.iter() {
       self.check_cancelled();
@@ -1565,7 +1566,9 @@ impl<'a> Checker<'a> {
         if let Some(init) = declarator.initializer.as_ref() {
           match decl.stx.mode {
             VarDeclMode::Using => self.check_using_initializer(init, init_ty, "Disposable"),
-            VarDeclMode::AwaitUsing => self.check_using_initializer(init, init_ty, "AsyncDisposable"),
+            VarDeclMode::AwaitUsing => {
+              self.check_using_initializer(init, init_ty, "AsyncDisposable")
+            }
             _ => {}
           }
         }
@@ -1621,16 +1624,23 @@ impl<'a> Checker<'a> {
     let Some(def) = resolver.resolve_type_name(&[required.to_string()]) else {
       return;
     };
-    let required_ty = self.store.intern_type(TypeKind::Ref { def, args: Vec::new() });
+    let required_ty = self.store.intern_type(TypeKind::Ref {
+      def,
+      args: Vec::new(),
+    });
     // `using`/`await using` declarations ignore nullish values at runtime.
-    let required_ty = self.store.union(vec![required_ty, prim.null, prim.undefined]);
+    let required_ty = self
+      .store
+      .union(vec![required_ty, prim.null, prim.undefined]);
     if self.relate.is_assignable(init_ty, required_ty) {
       return;
     }
-    self.diagnostics.push(codes::INVALID_USING_INITIALIZER.error(
-      format!("initializer must be assignable to `{required}`"),
-      Span::new(self.file, loc_to_range(self.file, init.loc)),
-    ));
+    self
+      .diagnostics
+      .push(codes::INVALID_USING_INITIALIZER.error(
+        format!("initializer must be assignable to `{required}`"),
+        Span::new(self.file, loc_to_range(self.file, init.loc)),
+      ));
   }
 
   fn check_namespace(&mut self, ns: &Node<NamespaceDecl>) {
@@ -2110,22 +2120,22 @@ impl<'a> Checker<'a> {
     if resolution.diagnostics.is_empty() {
       if let Some(sig_id) = resolution.signature {
         let sig = self.store.signature(sig_id);
-            if let Some(arg_exprs) = arg_exprs {
-              for (idx, arg) in arg_exprs.iter().enumerate() {
-                if let Some(param) = sig.params.get(idx) {
-                  let arg_expr = &arg.stx.value;
+        if let Some(arg_exprs) = arg_exprs {
+          for (idx, arg) in arg_exprs.iter().enumerate() {
+            if let Some(param) = sig.params.get(idx) {
+              let arg_expr = &arg.stx.value;
               let arg_ty = match arg_expr.stx.as_ref() {
                 AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
                   self.check_expr_with_expected(arg_expr, param.ty)
                 }
                 _ => arg_types.get(idx).copied().unwrap_or(prim.unknown),
-                  };
-                  self.check_assignable(arg_expr, arg_ty, param.ty, None);
-                }
-              }
+              };
+              self.check_assignable(arg_expr, arg_ty, param.ty, None);
             }
           }
         }
+      }
+    }
     resolution.return_type
   }
 
@@ -7300,13 +7310,8 @@ impl<'a> FlowBodyChecker<'a> {
             }
           }
           _ => {
-            let (yes, no) = narrow_by_discriminant_path(
-              target_ty,
-              &path,
-              &lit,
-              &self.store,
-              self.ref_expander,
-            );
+            let (yes, no) =
+              narrow_by_discriminant_path(target_ty, &path, &lit, &self.store, self.ref_expander);
             if has_nested_optional {
               let key = FlowKey::root(target);
               if negate {
@@ -7368,13 +7373,8 @@ impl<'a> FlowBodyChecker<'a> {
             }
           }
           _ => {
-            let (yes, no) = narrow_by_discriminant_path(
-              target_ty,
-              &path,
-              &lit,
-              &self.store,
-              self.ref_expander,
-            );
+            let (yes, no) =
+              narrow_by_discriminant_path(target_ty, &path, &lit, &self.store, self.ref_expander);
             if has_nested_optional {
               let key = FlowKey::root(target);
               if negate {
@@ -8048,8 +8048,9 @@ impl<'a> FlowBodyChecker<'a> {
     if let Some(binding) = self.ident_binding(object) {
       return Some((binding, vec![segment], object));
     }
-    if let ExprKind::Member(MemberExpr { object, property, .. }) =
-      &self.body.exprs[object.0 as usize].kind
+    if let ExprKind::Member(MemberExpr {
+      object, property, ..
+    }) = &self.body.exprs[object.0 as usize].kind
     {
       let (binding, mut segments, root_expr) = self.member_path_target(*object, property)?;
       segments.push(segment);
@@ -8083,8 +8084,7 @@ impl<'a> FlowBodyChecker<'a> {
       TypeKind::Union(members) => {
         let mut narrowed = Vec::new();
         for member in members {
-          let filtered =
-            self.narrow_object_by_path_assignability(member, path, required_prop_ty);
+          let filtered = self.narrow_object_by_path_assignability(member, path, required_prop_ty);
           if filtered != prim.never {
             narrowed.push(filtered);
           }
@@ -8135,7 +8135,12 @@ impl<'a> FlowBodyChecker<'a> {
   fn discriminant_member(
     &self,
     expr_id: ExprId,
-  ) -> Option<(FlowBindingId, Vec<PathSegment>, ExprId, Vec<Vec<PathSegment>>)> {
+  ) -> Option<(
+    FlowBindingId,
+    Vec<PathSegment>,
+    ExprId,
+    Vec<Vec<PathSegment>>,
+  )> {
     let (binding, segments, root_expr) = self.member_chain_target(expr_id)?;
     let mut path = Vec::with_capacity(segments.len());
     let mut optional_bases = Vec::new();
@@ -9091,13 +9096,7 @@ impl<'a> FlowBodyChecker<'a> {
         ..
       } => {
         let lit = self.literal_value(test)?;
-        let (yes, no) = narrow_by_discriminant_path(
-          ty,
-          path,
-          &lit,
-          &self.store,
-          self.ref_expander,
-        );
+        let (yes, no) = narrow_by_discriminant_path(ty, path, &lit, &self.store, self.ref_expander);
         if optional_bases.is_empty() {
           Some((yes, no))
         } else {

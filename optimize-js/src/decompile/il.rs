@@ -528,7 +528,9 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 1 {
     if let (Arg::Builtin(path), Arg::Const(Const::Str(regex))) = (callee_arg, &args[0]) {
       if path == INTERNAL_REGEX_CALLEE {
-        let expr = node(Expr::LitRegex(node(LitRegexExpr { value: regex.clone() })));
+        let expr = node(Expr::LitRegex(node(LitRegexExpr {
+          value: regex.clone(),
+        })));
         return match tgt {
           Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
           None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),

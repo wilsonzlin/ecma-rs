@@ -107,7 +107,8 @@ const y = x;
 }
 
 #[test]
-fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_export_assignment() {
+fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_export_assignment()
+{
   let options = CompilerOptions::default();
   // Keep bundled libs enabled so primitives like `number` are available without
   // requiring additional host-provided lib files.

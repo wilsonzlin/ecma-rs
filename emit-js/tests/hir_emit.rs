@@ -54,6 +54,17 @@ fn roundtrip_matrix() {
   let cases = [
     (
       FileKind::Js,
+      // IIFE at statement start must stay parseable after emission.
+      "(function(){return 1;})()",
+    ),
+    (
+      FileKind::Js,
+      // Member expressions starting with an object literal need statement-start
+      // disambiguation (`({}).x`, not `{}` as a block statement).
+      "({a:1}).a;",
+    ),
+    (
+      FileKind::Js,
       "function add(a,b){ return a + b * 2; }",
     ),
     (

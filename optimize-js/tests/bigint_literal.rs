@@ -19,4 +19,3 @@ fn bigint_literals_are_supported() {
 
   assert!(js.contains("1n"), "expected BigInt literal in output: {js}");
 }
-

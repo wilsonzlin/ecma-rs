@@ -293,12 +293,10 @@ fn resolve_overload_set(
       OverloadKind::Call => "expression is not callable",
       OverloadKind::Construct => "expression is not constructable",
     };
-    let diag = codes::NO_OVERLOAD
-      .error(message, span)
-      .with_note(format!(
-        "callee has type {}",
-        TypeDisplay::new(store, callee)
-      ));
+    let diag = codes::NO_OVERLOAD.error(message, span).with_note(format!(
+      "callee has type {}",
+      TypeDisplay::new(store, callee)
+    ));
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
@@ -423,7 +421,12 @@ fn resolve_overload_set(
     fallback.sort_by_key(|candidate| fallback_rank_key(candidate, false));
     let (ret, contextual_signature) = fallback
       .first()
-      .map(|candidate| (candidate.instantiated_sig.ret, Some(candidate.instantiated_id)))
+      .map(|candidate| {
+        (
+          candidate.instantiated_sig.ret,
+          Some(candidate.instantiated_id),
+        )
+      })
       .unwrap_or((primitives.unknown, None));
     return CallResolution {
       return_type: ret,
@@ -573,14 +576,12 @@ fn union_common_signatures(
   for member in members.iter().copied() {
     let mut sigs = Vec::new();
     match kind {
-      OverloadKind::Call => collect_signatures(store, member, &mut sigs, &mut HashSet::new(), expander),
-      OverloadKind::Construct => collect_construct_signatures(
-        store,
-        member,
-        &mut sigs,
-        &mut HashSet::new(),
-        expander,
-      ),
+      OverloadKind::Call => {
+        collect_signatures(store, member, &mut sigs, &mut HashSet::new(), expander)
+      }
+      OverloadKind::Construct => {
+        collect_construct_signatures(store, member, &mut sigs, &mut HashSet::new(), expander)
+      }
     }
     if sigs.is_empty() {
       return Vec::new();
@@ -639,7 +640,8 @@ fn intersect_signature_sets(
 
   for lhs in lhs_info.iter() {
     for rhs in rhs_info.iter() {
-      let Some(sig) = intersect_signatures(store, &lhs.sig, &lhs.arity, &rhs.sig, &rhs.arity) else {
+      let Some(sig) = intersect_signatures(store, &lhs.sig, &lhs.arity, &rhs.sig, &rhs.arity)
+      else {
         continue;
       };
       let key = signature_shape_key(&sig);
@@ -660,20 +662,22 @@ fn intersect_signature_sets(
   for key in order {
     let ret = *by_shape.get(&key).expect("key should exist");
     let (params, type_params, this_param) = key;
-    out.push(store.intern_signature(Signature {
-      params: params
-        .into_iter()
-        .map(|(ty, optional, rest)| Param {
-          name: None,
-          ty,
-          optional,
-          rest,
-        })
-        .collect(),
-      ret,
-      type_params,
-      this_param,
-    }));
+    out.push(
+      store.intern_signature(Signature {
+        params: params
+          .into_iter()
+          .map(|(ty, optional, rest)| Param {
+            name: None,
+            ty,
+            optional,
+            rest,
+          })
+          .collect(),
+        ret,
+        type_params,
+        this_param,
+      }),
+    );
   }
 
   out.sort();

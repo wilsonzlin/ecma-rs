@@ -25,6 +25,8 @@ fn array_literals_are_supported() {
     !js.contains("__optimize_js_array_hole"),
     "internal array hole helper leaked into output: {js}"
   );
-  assert!(js.contains("[1,,2]"), "expected array literal in output: {js}");
+  assert!(
+    js.contains("[1,,2]"),
+    "expected array literal in output: {js}"
+  );
 }
-

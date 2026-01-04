@@ -49,5 +49,8 @@ fn new_expressions_are_lowered_without_internal_helpers() {
     !js.contains("__optimize_js_new"),
     "internal new helper leaked into output: {js}"
   );
-  assert!(js.contains("new"), "expected new expression in output: {js}");
+  assert!(
+    js.contains("new"),
+    "expected new expression in output: {js}"
+  );
 }

@@ -33,4 +33,3 @@ fn hir_emit_parse_lower_emit_is_stable() {
   let emitted2 = emit_hir_file_to_string(&second_lowered, emit_opts).expect("re-emit");
   assert_eq!(emitted1, emitted2);
 }
-

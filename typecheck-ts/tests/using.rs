@@ -28,7 +28,10 @@ using x = new D();
 
   let program = Program::new(host, vec![file]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }
 
 #[test]
@@ -79,9 +82,7 @@ function bad() {
     .find(|diag| diag.code.as_str() == codes::AWAIT_USING_REQUIRES_ASYNC_CONTEXT.as_str())
     .unwrap_or_else(|| panic!("expected TS2852 diagnostic, got {diagnostics:?}"));
 
-  let start = source
-    .find("await using")
-    .expect("await using in source") as u32;
+  let start = source.find("await using").expect("await using in source") as u32;
   let end = start + "await".len() as u32;
   assert_eq!(diag.primary.file, file_id);
   assert_eq!(diag.primary.range, TextRange::new(start, end));
@@ -113,5 +114,8 @@ async function ok() {
 
   let program = Program::new(host, vec![file]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }

@@ -2185,8 +2185,14 @@ impl<'a> RelateCtx<'a> {
         // APIs where the expected type includes a `this` parameter but common
         // call sites (arrow functions) omit it.
         let any_this = self.store.primitive_ids().any;
-        let related =
-          self.relate_internal(*d, any_this, RelationKind::Assignable, mode, record, depth + 1);
+        let related = self.relate_internal(
+          *d,
+          any_this,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if record {
           children.push(related.reason);
         }

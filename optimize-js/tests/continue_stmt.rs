@@ -28,4 +28,3 @@ fn continue_statements_are_supported() {
 
   parse_js::parse(js).expect("emitted JS should parse");
 }
-

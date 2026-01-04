@@ -23,4 +23,3 @@ fn triple_slash_types_resolves_via_at_types_fallback() {
     "expected triple-slash type reference to resolve via @types fallback, got {diagnostics:?}"
   );
 }
-

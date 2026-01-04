@@ -110,12 +110,7 @@ mod bundled {
   }
 
   pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
-    lib_set
-      .libs()
-      .iter()
-      .cloned()
-      .map(lib_file)
-      .collect()
+    lib_set.libs().iter().cloned().map(lib_file).collect()
   }
 
   fn text_for(name: &LibName) -> &'static str {

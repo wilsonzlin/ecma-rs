@@ -900,6 +900,16 @@ fn with_statement_does_not_rewrite_undefined_property() {
 }
 
 #[test]
+fn with_statement_keeps_undefined_in_nested_functions() {
+  let src = "with({undefined:1}){(function(){return undefined;})()}";
+  let result = minified(TopLevelMode::Global, src);
+  assert!(
+    result.contains("return undefined"),
+    "expected `undefined` to be preserved inside nested functions in with bodies\nsrc:\n{src}\noutput:\n{result}"
+  );
+}
+
+#[test]
 fn test_direct_eval_disables_renaming() {
   let src = "function f(){let x;eval(\"x\");}";
   let result = minified(TopLevelMode::Global, src);

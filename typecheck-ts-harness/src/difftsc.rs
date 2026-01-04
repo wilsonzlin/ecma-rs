@@ -1712,10 +1712,7 @@ fn collect_marker_type_facts(
         let mut offset = marker.offset as usize;
         while offset > 0
           && offset < bytes.len()
-          && matches!(
-            bytes[offset],
-            b' ' | b'\t' | b'/' | b'*' | b'^' | b'?'
-          )
+          && matches!(bytes[offset], b' ' | b'\t' | b'/' | b'*' | b'^' | b'?')
         {
           offset -= 1;
         }

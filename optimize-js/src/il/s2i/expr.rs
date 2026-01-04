@@ -967,11 +967,16 @@ impl<'p> HirSourceToInst<'p> {
               shorthand: _,
             } => {
               if *method {
-                return Err(unsupported_syntax(span, "object method literals are not supported"));
+                return Err(unsupported_syntax(
+                  span,
+                  "object method literals are not supported",
+                ));
               }
               match key {
                 hir_js::ObjectKey::Computed(expr) => {
-                  args.push(Arg::Builtin(Self::INTERNAL_OBJECT_COMPUTED_MARKER.to_string()));
+                  args.push(Arg::Builtin(
+                    Self::INTERNAL_OBJECT_COMPUTED_MARKER.to_string(),
+                  ));
                   args.push(self.compile_expr(*expr)?);
                 }
                 hir_js::ObjectKey::Ident(name) => {
@@ -990,7 +995,9 @@ impl<'p> HirSourceToInst<'p> {
               args.push(self.compile_expr(*value)?);
             }
             hir_js::ObjectProperty::Spread(expr) => {
-              args.push(Arg::Builtin(Self::INTERNAL_OBJECT_SPREAD_MARKER.to_string()));
+              args.push(Arg::Builtin(
+                Self::INTERNAL_OBJECT_SPREAD_MARKER.to_string(),
+              ));
               args.push(self.compile_expr(*expr)?);
               args.push(Arg::Const(Const::Undefined));
             }

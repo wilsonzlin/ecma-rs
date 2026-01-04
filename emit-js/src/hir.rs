@@ -461,7 +461,7 @@ fn emit_export_default(
       let body = ctx
         .body(*body)
         .ok_or_else(|| EmitError::unsupported("export default body missing"))?;
-      let needs_parens = expr_stmt_needs_parens(ctx.expr(body, *expr));
+      let needs_parens = expr_stmt_needs_parens(ctx, body, *expr);
       if needs_parens {
         em.write_punct("(");
       }
@@ -1120,7 +1120,7 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
   let stmt = ctx.stmt(body, stmt_id);
   match &stmt.kind {
     StmtKind::Expr(expr) => {
-      let needs_parens = expr_stmt_needs_parens(ctx.expr(body, *expr));
+      let needs_parens = expr_stmt_needs_parens(ctx, body, *expr);
       if needs_parens {
         em.write_punct("(");
       }
@@ -2118,11 +2118,273 @@ fn emit_assign_operator(em: &mut Emitter, op: AssignOp) {
   em.write_punct(text);
 }
 
-fn expr_stmt_needs_parens(expr: &Expr) -> bool {
-  matches!(
-    expr.kind,
-    ExprKind::Object(_) | ExprKind::FunctionExpr { .. } | ExprKind::ClassExpr { .. }
-  )
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StmtStartKeyword {
+  Async,
+  Await,
+  Class,
+  Declare,
+  Enum,
+  Function,
+  Import,
+  Interface,
+  Let,
+  Module,
+  Namespace,
+  Type,
+  Using,
+  Abstract,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StmtStartToken {
+  At,
+  BraceOpen,
+  BracketOpen,
+  ParenthesisOpen,
+  TemplateStart,
+  StringLiteral,
+  Keyword(StmtStartKeyword),
+  Identifier,
+  Other,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct StmtStartTokenPrefix {
+  first: StmtStartToken,
+  second: Option<StmtStartToken>,
+}
+
+fn expr_stmt_needs_parens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  // The parse-js AST printer wraps arrow function expressions when used as
+  // expression statements / `export default` expressions. Match that behaviour
+  // so `minify-js` HIR-vs-AST emission parity stays exact.
+  if expr_is_arrow_function(ctx, body, expr_id) {
+    return true;
+  }
+  let prefix = expr_stmt_tokens(ctx, body, expr_id);
+  match prefix.first {
+    StmtStartToken::At => true,
+    StmtStartToken::BraceOpen => true,
+    StmtStartToken::Keyword(StmtStartKeyword::Function | StmtStartKeyword::Class) => true,
+    StmtStartToken::Keyword(StmtStartKeyword::Async) => matches!(
+      prefix.second,
+      Some(StmtStartToken::Keyword(StmtStartKeyword::Function))
+    ),
+    StmtStartToken::Keyword(StmtStartKeyword::Abstract) => matches!(
+      prefix.second,
+      Some(StmtStartToken::Keyword(StmtStartKeyword::Class))
+    ),
+    StmtStartToken::Keyword(StmtStartKeyword::Let | StmtStartKeyword::Using) => matches!(
+      prefix.second,
+      Some(StmtStartToken::BraceOpen | StmtStartToken::BracketOpen | StmtStartToken::Identifier)
+    ),
+    StmtStartToken::Keyword(StmtStartKeyword::Await) => matches!(
+      prefix.second,
+      Some(StmtStartToken::Keyword(StmtStartKeyword::Using))
+    ),
+    StmtStartToken::Keyword(StmtStartKeyword::Import) => {
+      !matches!(prefix.second, Some(StmtStartToken::ParenthesisOpen))
+    }
+    StmtStartToken::Keyword(
+      StmtStartKeyword::Interface | StmtStartKeyword::Type | StmtStartKeyword::Enum,
+    ) => true,
+    StmtStartToken::Keyword(StmtStartKeyword::Namespace | StmtStartKeyword::Module) => matches!(
+      prefix.second,
+      Some(StmtStartToken::Identifier | StmtStartToken::StringLiteral)
+    ),
+    StmtStartToken::Keyword(StmtStartKeyword::Declare) => {
+      !matches!(prefix.second, Some(StmtStartToken::TemplateStart))
+    }
+    _ => false,
+  }
+}
+
+fn expr_is_arrow_function(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> bool {
+  match &ctx.expr(body, expr_id).kind {
+    ExprKind::FunctionExpr { is_arrow: true, .. } => true,
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => expr_is_arrow_function(ctx, body, *expr),
+    _ => false,
+  }
+}
+
+fn expr_stmt_tokens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId) -> StmtStartTokenPrefix {
+  let expr = ctx.expr(body, expr_id);
+  match &expr.kind {
+    ExprKind::Ident(name) => prefix(token_from_identifier(ctx.name(*name)), None),
+    ExprKind::Literal(Literal::String(_)) => prefix(StmtStartToken::StringLiteral, None),
+    ExprKind::Object(_) => prefix(StmtStartToken::BraceOpen, None),
+    ExprKind::Array(_) => prefix(StmtStartToken::BracketOpen, None),
+    ExprKind::FunctionExpr {
+      body: body_id,
+      is_arrow,
+      ..
+    } => {
+      if *is_arrow {
+        // Arrow functions are allowed at the start of expression statements.
+        prefix(StmtStartToken::ParenthesisOpen, None)
+      } else {
+        let func = ctx
+          .body(*body_id)
+          .and_then(|body| body.function.as_ref())
+          .expect("function metadata missing for function expression");
+        if func.async_ {
+          prefix(
+            StmtStartToken::Keyword(StmtStartKeyword::Async),
+            Some(StmtStartToken::Keyword(StmtStartKeyword::Function)),
+          )
+        } else {
+          prefix(StmtStartToken::Keyword(StmtStartKeyword::Function), None)
+        }
+      }
+    }
+    ExprKind::ClassExpr { def, .. } => {
+      let has_decorators = ctx.def(*def).is_some_and(|def| !def.decorators.is_empty());
+      if has_decorators {
+        prefix(
+          StmtStartToken::At,
+          Some(StmtStartToken::Keyword(StmtStartKeyword::Class)),
+        )
+      } else {
+        prefix(StmtStartToken::Keyword(StmtStartKeyword::Class), None)
+      }
+    }
+    ExprKind::ImportCall { .. } => prefix(
+      StmtStartToken::Keyword(StmtStartKeyword::Import),
+      Some(StmtStartToken::ParenthesisOpen),
+    ),
+    ExprKind::ImportMeta => prefix(
+      StmtStartToken::Keyword(StmtStartKeyword::Import),
+      Some(StmtStartToken::Other),
+    ),
+    ExprKind::Member(member) => match member.property {
+      ObjectKey::Computed(_) => prefix_with_fallback(
+        ctx,
+        body,
+        member.object,
+        if member.optional {
+          StmtStartToken::Other
+        } else {
+          StmtStartToken::BracketOpen
+        },
+      ),
+      _ => prefix_with_fallback(ctx, body, member.object, StmtStartToken::Other),
+    },
+    ExprKind::Call(call) => {
+      if call.is_new {
+        // `new` expressions start with the `new` keyword; they can safely appear as
+        // expression statements without extra parentheses.
+        prefix(
+          StmtStartToken::Other,
+          Some(expr_stmt_tokens(ctx, body, call.callee).first),
+        )
+      } else {
+        prefix_with_fallback(
+          ctx,
+          body,
+          call.callee,
+          if call.optional {
+            StmtStartToken::Other
+          } else {
+            StmtStartToken::ParenthesisOpen
+          },
+        )
+      }
+    }
+    ExprKind::Binary { left, .. } => prefix_with_fallback(ctx, body, *left, StmtStartToken::Other),
+    ExprKind::Conditional { test, .. } => {
+      prefix_with_fallback(ctx, body, *test, StmtStartToken::Other)
+    }
+    ExprKind::TaggedTemplate { tag, .. } => {
+      prefix_with_fallback(ctx, body, *tag, StmtStartToken::TemplateStart)
+    }
+    ExprKind::Template(_) => prefix(StmtStartToken::TemplateStart, None),
+    ExprKind::Await { expr } => {
+      let arg_prefix = expr_stmt_tokens(ctx, body, *expr);
+      prefix(
+        StmtStartToken::Keyword(StmtStartKeyword::Await),
+        Some(arg_prefix.first),
+      )
+    }
+    ExprKind::Unary {
+      op: UnaryOp::Await,
+      expr,
+    } => {
+      let arg_prefix = expr_stmt_tokens(ctx, body, *expr);
+      prefix(
+        StmtStartToken::Keyword(StmtStartKeyword::Await),
+        Some(arg_prefix.first),
+      )
+    }
+    ExprKind::Unary { expr, .. }
+    | ExprKind::Update { expr, .. }
+    | ExprKind::Yield {
+      expr: Some(expr), ..
+    } => prefix(
+      StmtStartToken::Other,
+      Some(expr_stmt_tokens(ctx, body, *expr).first),
+    ),
+    ExprKind::Yield { expr: None, .. } => prefix(StmtStartToken::Other, None),
+    ExprKind::TypeAssertion { expr, .. }
+    | ExprKind::NonNull { expr }
+    | ExprKind::Satisfies { expr, .. } => expr_stmt_tokens(ctx, body, *expr),
+    ExprKind::Assignment { target, .. } => pat_stmt_tokens(ctx, body, *target),
+    _ => prefix(StmtStartToken::Other, None),
+  }
+}
+
+fn pat_stmt_tokens(ctx: &HirContext<'_>, body: &Body, pat_id: PatId) -> StmtStartTokenPrefix {
+  let pat = ctx.pat(body, pat_id);
+  match &pat.kind {
+    PatKind::Ident(name) => prefix(token_from_identifier(ctx.name(*name)), None),
+    PatKind::Array(_) => prefix(StmtStartToken::BracketOpen, None),
+    PatKind::Object(_) => prefix(StmtStartToken::BraceOpen, None),
+    PatKind::AssignTarget(expr) => expr_stmt_tokens(ctx, body, *expr),
+    PatKind::Rest(inner) => pat_stmt_tokens(ctx, body, **inner),
+    PatKind::Assign { target, .. } => pat_stmt_tokens(ctx, body, *target),
+  }
+}
+
+fn prefix(first: StmtStartToken, second: Option<StmtStartToken>) -> StmtStartTokenPrefix {
+  StmtStartTokenPrefix { first, second }
+}
+
+fn prefix_with_fallback(
+  ctx: &HirContext<'_>,
+  body: &Body,
+  expr_id: ExprId,
+  fallback: StmtStartToken,
+) -> StmtStartTokenPrefix {
+  let prefix = expr_stmt_tokens(ctx, body, expr_id);
+  if prefix.second.is_some() {
+    prefix
+  } else {
+    StmtStartTokenPrefix {
+      first: prefix.first,
+      second: Some(fallback),
+    }
+  }
+}
+
+fn token_from_identifier(name: &str) -> StmtStartToken {
+  match name {
+    "let" => StmtStartToken::Keyword(StmtStartKeyword::Let),
+    "using" => StmtStartToken::Keyword(StmtStartKeyword::Using),
+    "await" => StmtStartToken::Keyword(StmtStartKeyword::Await),
+    "abstract" => StmtStartToken::Keyword(StmtStartKeyword::Abstract),
+    "import" => StmtStartToken::Keyword(StmtStartKeyword::Import),
+    "interface" => StmtStartToken::Keyword(StmtStartKeyword::Interface),
+    "type" => StmtStartToken::Keyword(StmtStartKeyword::Type),
+    "enum" => StmtStartToken::Keyword(StmtStartKeyword::Enum),
+    "namespace" => StmtStartToken::Keyword(StmtStartKeyword::Namespace),
+    "module" => StmtStartToken::Keyword(StmtStartKeyword::Module),
+    "declare" => StmtStartToken::Keyword(StmtStartKeyword::Declare),
+    "class" => StmtStartToken::Keyword(StmtStartKeyword::Class),
+    "function" => StmtStartToken::Keyword(StmtStartKeyword::Function),
+    _ => StmtStartToken::Identifier,
+  }
 }
 
 fn arrow_concise_body_needs_parens(expr: &Expr) -> bool {

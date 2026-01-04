@@ -42,5 +42,8 @@ fn new_target_is_supported() {
     })
   });
 
-  assert!(found, "expected `new.target` to be lowered in function body");
+  assert!(
+    found,
+    "expected `new.target` to be lowered in function body"
+  );
 }

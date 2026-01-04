@@ -284,7 +284,10 @@ impl<'p> HirSourceToInst<'p> {
       }
       StmtKind::Break(_) => {
         if !matches!(&stmt.kind, StmtKind::Break(None)) {
-          return Err(unsupported_syntax_range(stmt.span, "labeled break is not supported"));
+          return Err(unsupported_syntax_range(
+            stmt.span,
+            "labeled break is not supported",
+          ));
         }
         let target = self
           .break_stack
@@ -301,11 +304,10 @@ impl<'p> HirSourceToInst<'p> {
             "labeled continue is not supported",
           ));
         }
-        let target = self
-          .continue_stack
-          .last()
-          .copied()
-          .ok_or_else(|| unsupported_syntax_range(stmt.span, "continue statement outside loop"))?;
+        let target =
+          self.continue_stack.last().copied().ok_or_else(|| {
+            unsupported_syntax_range(stmt.span, "continue statement outside loop")
+          })?;
         self.out.push(Inst::goto(target));
         Ok(())
       }

@@ -50,9 +50,6 @@ use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
-use crate::triple_slash::{
-  normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
-};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::{FileOrigin, FileRegistry};
 use crate::profile::{
@@ -61,6 +58,9 @@ use crate::profile::{
 #[cfg(feature = "serde")]
 use crate::snapshot::{
   DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
+};
+use crate::triple_slash::{
+  normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
 };
 use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
@@ -3201,7 +3201,8 @@ impl ProgramTypeResolver {
     } = &self.semantics.symbols().symbol(symbol).origin
     {
       let origin = sem_ts::ModuleRef::Ambient(specifier.clone());
-      if let Some(def) = self.resolve_export_path_in_module_ref(origin.clone(), &path[1..], final_ns)
+      if let Some(def) =
+        self.resolve_export_path_in_module_ref(origin.clone(), &path[1..], final_ns)
       {
         return Some(def);
       }
@@ -3211,7 +3212,9 @@ impl ProgramTypeResolver {
         segments.extend_from_slice(&path[1..]);
         return self.resolve_export_path_in_module_ref(origin, &segments, final_ns);
       }
-      if let Some(export_assignment) = export_assignment_path_for_ambient_module(&self.semantics, specifier) {
+      if let Some(export_assignment) =
+        export_assignment_path_for_ambient_module(&self.semantics, specifier)
+      {
         let mut combined = export_assignment;
         combined.extend_from_slice(&path[1..]);
         if let Some(def) =
@@ -5239,9 +5242,7 @@ impl ProgramState {
         self.check_cancelled()?;
         let mut resolved_any = false;
         for root in root_ids.iter().copied() {
-          if let Some(target) =
-            record_type_package_resolution(self, root, name.as_str(), host)
-          {
+          if let Some(target) = record_type_package_resolution(self, root, name.as_str(), host) {
             resolved_any = true;
             queue.push_back(target);
           }
@@ -6988,7 +6989,8 @@ impl ProgramState {
           }
           TripleSlashReferenceKind::Path => {
             let normalized = normalize_reference_path_specifier(value);
-            if let Some(target) = self.record_module_resolution(file_id, normalized.as_ref(), host) {
+            if let Some(target) = self.record_module_resolution(file_id, normalized.as_ref(), host)
+            {
               queue.push_back(target);
             } else {
               self.push_program_diagnostic(codes::UNRESOLVED_MODULE.error(
@@ -8073,10 +8075,14 @@ impl ProgramState {
     // Match tsc's TS1202 behaviour: `import x = require("...")` is rejected when
     // emitting ECMAScript modules, unless the referenced module uses an `export =`
     // assignment (which still requires CommonJS-style interop).
-    let module = self.compiler_options.module.unwrap_or_else(|| match self.compiler_options.target {
-      ScriptTarget::Es3 | ScriptTarget::Es5 => ModuleKind::CommonJs,
-      _ => ModuleKind::Es2015,
-    });
+    let module =
+      self
+        .compiler_options
+        .module
+        .unwrap_or_else(|| match self.compiler_options.target {
+          ScriptTarget::Es3 | ScriptTarget::Es5 => ModuleKind::CommonJs,
+          _ => ModuleKind::Es2015,
+        });
     let targets_ecmascript_modules = matches!(
       module,
       ModuleKind::Es2015
@@ -9500,11 +9506,13 @@ impl ProgramState {
                   specifier: module.clone(),
                 });
             let span = loc_to_span(file, stmt.loc).range;
-            self.import_assignment_requires.push(ImportAssignmentRequireRecord {
-              file,
-              span,
-              target: import_target.clone(),
-            });
+            self
+              .import_assignment_requires
+              .push(ImportAssignmentRequireRecord {
+                file,
+                span,
+                target: import_target.clone(),
+              });
             let name = import_equals.stx.name.clone();
             let symbol = self.alloc_symbol();
             let def_id = self.alloc_def();
@@ -10770,24 +10778,24 @@ impl ProgramState {
           });
       }
 
-       let var_info = state.def_data.get(&def).and_then(|def_data| {
-         if let DefKind::Var(var) = &def_data.kind {
-           Some((def_data.file, def_data.span, var.typ))
-         } else {
-           None
-         }
-       });
-       if let Some((file, span, var_typ)) = var_info {
-         // `VarData::typ` is populated during binding using the legacy `TypeStore`
-         // (it cannot represent intersections, indexed access types, etc).
-         // Prefer lowering the declared annotation into the interned store when
-         // we can find it in the parsed AST so we preserve rich key types such
-         // as `(string | symbol) & string` for index signatures.
-         let ty = state.declared_type_for_span(file, span).or(var_typ);
-         if let Some(ty) = ty {
-           return Some(canon_or_convert(state, store, cache, ty));
-         }
-       }
+      let var_info = state.def_data.get(&def).and_then(|def_data| {
+        if let DefKind::Var(var) = &def_data.kind {
+          Some((def_data.file, def_data.span, var.typ))
+        } else {
+          None
+        }
+      });
+      if let Some((file, span, var_typ)) = var_info {
+        // `VarData::typ` is populated during binding using the legacy `TypeStore`
+        // (it cannot represent intersections, indexed access types, etc).
+        // Prefer lowering the declared annotation into the interned store when
+        // we can find it in the parsed AST so we preserve rich key types such
+        // as `(string | symbol) & string` for index signatures.
+        let ty = state.declared_type_for_span(file, span).or(var_typ);
+        if let Some(ty) = ty {
+          return Some(canon_or_convert(state, store, cache, ty));
+        }
+      }
 
       let import_target = state.def_data.get(&def).and_then(|data| {
         if let DefKind::Import(import) = &data.kind {
@@ -13009,35 +13017,37 @@ impl ProgramState {
       _ => None,
     };
 
-    let resolve_export_path =
-      |mut module: sem_ts::ModuleRef, segments: &[String], final_ns: sem_ts::Namespace| -> Option<DefId> {
-        for (idx, segment) in segments.iter().enumerate() {
-          let is_last = idx + 1 == segments.len();
-          let ns = if is_last {
-            final_ns
-          } else {
-            sem_ts::Namespace::NAMESPACE
-          };
-          let symbol = match &module {
-            sem_ts::ModuleRef::File(file) => semantics.resolve_export(*file, segment, ns)?,
-            sem_ts::ModuleRef::Ambient(spec) => semantics
-              .exports_of_ambient_module(spec)?
-              .get(segment)?
-              .symbol_for(ns, semantics.symbols())?,
-            sem_ts::ModuleRef::Unresolved(_) => return None,
-          };
-          if is_last {
-            return pick_def(symbol, final_ns)
-              .or_else(|| pick_def(symbol, sem_ts::Namespace::NAMESPACE))
-              .or_else(|| pick_def(symbol, sem_ts::Namespace::VALUE));
-          }
-          module = match &semantics.symbols().symbol(symbol).origin {
-            sem_ts::SymbolOrigin::Import { from, .. } => from.clone(),
-            _ => return None,
-          };
+    let resolve_export_path = |mut module: sem_ts::ModuleRef,
+                               segments: &[String],
+                               final_ns: sem_ts::Namespace|
+     -> Option<DefId> {
+      for (idx, segment) in segments.iter().enumerate() {
+        let is_last = idx + 1 == segments.len();
+        let ns = if is_last {
+          final_ns
+        } else {
+          sem_ts::Namespace::NAMESPACE
+        };
+        let symbol = match &module {
+          sem_ts::ModuleRef::File(file) => semantics.resolve_export(*file, segment, ns)?,
+          sem_ts::ModuleRef::Ambient(spec) => semantics
+            .exports_of_ambient_module(spec)?
+            .get(segment)?
+            .symbol_for(ns, semantics.symbols())?,
+          sem_ts::ModuleRef::Unresolved(_) => return None,
+        };
+        if is_last {
+          return pick_def(symbol, final_ns)
+            .or_else(|| pick_def(symbol, sem_ts::Namespace::NAMESPACE))
+            .or_else(|| pick_def(symbol, sem_ts::Namespace::VALUE));
         }
-        None
-      };
+        module = match &semantics.symbols().symbol(symbol).origin {
+          sem_ts::SymbolOrigin::Import { from, .. } => from.clone(),
+          _ => return None,
+        };
+      }
+      None
+    };
 
     let Some(origin) = module_ref else {
       let mut current = pick_def(symbol, sem_ts::Namespace::NAMESPACE)
@@ -13077,7 +13087,11 @@ impl ProgramState {
     self
       .resolve_ambient_import_alias_target_in_namespace(specifier, path, sem_ts::Namespace::VALUE)
       .or_else(|| {
-        self.resolve_ambient_import_alias_target_in_namespace(specifier, path, sem_ts::Namespace::TYPE)
+        self.resolve_ambient_import_alias_target_in_namespace(
+          specifier,
+          path,
+          sem_ts::Namespace::TYPE,
+        )
       })
       .or_else(|| {
         self.resolve_ambient_import_alias_target_in_namespace(

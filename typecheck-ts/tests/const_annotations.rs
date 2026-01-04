@@ -8,10 +8,7 @@ fn const_type_annotation_overrides_literal_initializer() {
 const init: string = "";
 export const result = init;
 "#;
-  host.insert(
-    file.clone(),
-    source,
-  );
+  host.insert(file.clone(), source);
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
@@ -49,7 +46,9 @@ export const result = init;
     .find("result = init")
     .map(|idx| idx as u32 + "result = ".len() as u32)
     .expect("offset for init usage");
-  let init_use_ty = program.type_at(file_id, init_offset).expect("type at init usage");
+  let init_use_ty = program
+    .type_at(file_id, init_offset)
+    .expect("type at init usage");
   assert_eq!(
     program.display_type(init_use_ty).to_string(),
     "string",

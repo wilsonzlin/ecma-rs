@@ -26,4 +26,3 @@ fn regex_literals_are_supported() {
     "expected regex literal in output: {js}"
   );
 }
-

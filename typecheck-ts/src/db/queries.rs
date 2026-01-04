@@ -32,7 +32,9 @@ use crate::parse_metrics;
 use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
 use crate::queries::parse as parser;
 use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
-use crate::triple_slash::{normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind};
+use crate::triple_slash::{
+  normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
+};
 use crate::FileKey;
 use crate::{BodyId, DefId, ExprId, TypeId};
 use salsa::plumbing::current_revision;
@@ -1073,19 +1075,19 @@ pub mod body_check {
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
               let flow_literal_on_primitive = matches!(
                 (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
-                (types_ts_interned::TypeKind::Number, types_ts_interned::TypeKind::NumberLiteral(_))
-                  | (
-                    types_ts_interned::TypeKind::String,
-                    types_ts_interned::TypeKind::StringLiteral(_),
-                  )
-                  | (
-                    types_ts_interned::TypeKind::Boolean,
-                    types_ts_interned::TypeKind::BooleanLiteral(_),
-                  )
-                  | (
-                    types_ts_interned::TypeKind::BigInt,
-                    types_ts_interned::TypeKind::BigIntLiteral(_),
-                  )
+                (
+                  types_ts_interned::TypeKind::Number,
+                  types_ts_interned::TypeKind::NumberLiteral(_)
+                ) | (
+                  types_ts_interned::TypeKind::String,
+                  types_ts_interned::TypeKind::StringLiteral(_),
+                ) | (
+                  types_ts_interned::TypeKind::Boolean,
+                  types_ts_interned::TypeKind::BooleanLiteral(_),
+                ) | (
+                  types_ts_interned::TypeKind::BigInt,
+                  types_ts_interned::TypeKind::BigIntLiteral(_),
+                )
               );
               if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.expr_types[idx] = *ty;
@@ -1101,19 +1103,19 @@ pub mod body_check {
                 relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
               let flow_literal_on_primitive = matches!(
                 (ctx.store.type_kind(existing), ctx.store.type_kind(*ty)),
-                (types_ts_interned::TypeKind::Number, types_ts_interned::TypeKind::NumberLiteral(_))
-                  | (
-                    types_ts_interned::TypeKind::String,
-                    types_ts_interned::TypeKind::StringLiteral(_),
-                  )
-                  | (
-                    types_ts_interned::TypeKind::Boolean,
-                    types_ts_interned::TypeKind::BooleanLiteral(_),
-                  )
-                  | (
-                    types_ts_interned::TypeKind::BigInt,
-                    types_ts_interned::TypeKind::BigIntLiteral(_),
-                  )
+                (
+                  types_ts_interned::TypeKind::Number,
+                  types_ts_interned::TypeKind::NumberLiteral(_)
+                ) | (
+                  types_ts_interned::TypeKind::String,
+                  types_ts_interned::TypeKind::StringLiteral(_),
+                ) | (
+                  types_ts_interned::TypeKind::Boolean,
+                  types_ts_interned::TypeKind::BooleanLiteral(_),
+                ) | (
+                  types_ts_interned::TypeKind::BigInt,
+                  types_ts_interned::TypeKind::BigIntLiteral(_),
+                )
               );
               if existing == prim.unknown || (narrower && !flow_literal_on_primitive) {
                 result.pat_types[idx] = *ty;

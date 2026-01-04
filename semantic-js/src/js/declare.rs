@@ -1391,6 +1391,37 @@ impl DeclareVisitor {
   }
 }
 
+fn mark_dynamic(sem: &mut JsSemantics, scope: ScopeId, direct_eval: bool) {
+  let mut current = Some(scope);
+  while let Some(scope_id) = current {
+    let Some(data) = sem.scopes.get_mut(&scope_id) else {
+      break;
+    };
+    data.is_dynamic = true;
+    if direct_eval {
+      data.has_direct_eval = true;
+    }
+    if data.kind.is_closure() {
+      break;
+    }
+    current = data.parent;
+  }
+}
+
+#[derive(VisitorMut)]
+#[visitor(NodeAssocData(enter))]
+struct WithBodyDynamicMarker<'a> {
+  sem: &'a mut JsSemantics,
+}
+
+impl WithBodyDynamicMarker<'_> {
+  fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
+    if let Some(scope) = scope_id(assoc) {
+      mark_dynamic(self.sem, scope, false);
+    }
+  }
+}
+
 #[derive(VisitorMut)]
 #[visitor(CallExprNode(exit), WithStmtNode(enter))]
 struct DynamicScopeVisitor<'a> {
@@ -1398,32 +1429,23 @@ struct DynamicScopeVisitor<'a> {
 }
 
 impl DynamicScopeVisitor<'_> {
-  fn mark_dynamic(&mut self, scope: ScopeId, direct_eval: bool) {
-    let mut current = Some(scope);
-    while let Some(scope_id) = current {
-      let Some(data) = self.sem.scopes.get_mut(&scope_id) else {
-        break;
-      };
-      data.is_dynamic = true;
-      if direct_eval {
-        data.has_direct_eval = true;
-      }
-      if data.kind.is_closure() {
-        break;
-      }
-      current = data.parent;
-    }
-  }
-
   fn enter_with_stmt_node(&mut self, node: &mut WithStmtNode) {
     if let Some(scope) = scope_id(&node.assoc) {
-      self.mark_dynamic(scope, false);
+      mark_dynamic(self.sem, scope, false);
     }
     if let Stmt::Block(block) = node.stx.body.stx.as_ref() {
       if let Some(body_scope) = scope_id(&block.assoc) {
-        self.mark_dynamic(body_scope, false);
+        mark_dynamic(self.sem, body_scope, false);
       }
     }
+
+    // Scopes created within the `with (...) { ... }` body inherit the dynamic
+    // scope chain (the object environment record becomes part of their outer
+    // environment). Mark them dynamic too so downstream consumers avoid
+    // semantics-changing rewrites in nested functions.
+    let sem = &mut *self.sem;
+    let mut marker = WithBodyDynamicMarker { sem };
+    node.stx.body.drive_mut(&mut marker);
   }
 
   fn exit_call_expr_node(&mut self, node: &mut CallExprNode) {
@@ -1434,7 +1456,7 @@ impl DynamicScopeVisitor<'_> {
       if callee.stx.name == "eval" {
         if let Some(scope) = scope_id(&node.assoc) {
           if self.sem.resolve_name_in_scope(scope, "eval").is_none() {
-            self.mark_dynamic(scope, true);
+            mark_dynamic(self.sem, scope, true);
           }
         }
       }

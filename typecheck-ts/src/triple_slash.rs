@@ -203,7 +203,9 @@ fn parse_reference_directive(
         kind: TripleSlashReferenceKind::Lib,
         value_range: range,
       });
-    } else if eq_ignore_ascii_case(name_bytes, b"no-default-lib") || eq_ignore_ascii_case(name_bytes, b"nolib") {
+    } else if eq_ignore_ascii_case(name_bytes, b"no-default-lib")
+      || eq_ignore_ascii_case(name_bytes, b"nolib")
+    {
       out.no_default_lib = parse_bool_value(value);
     }
   }
