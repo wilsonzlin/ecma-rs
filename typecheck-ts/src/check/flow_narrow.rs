@@ -359,6 +359,7 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
     | TypeKind::Tuple(_)
     | TypeKind::Callable { .. } => (ty, primitives.never),
     TypeKind::Ref { .. }
+    | TypeKind::Intrinsic { .. }
     | TypeKind::TypeParam(_)
     | TypeKind::Infer { .. }
     | TypeKind::Intersection(_)

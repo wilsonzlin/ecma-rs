@@ -435,7 +435,9 @@ pub mod body_check {
   use parse_js::ast::node::Node;
   use parse_js::ast::stx::TopLevel;
   use semantic_js::ts as sem_ts;
-  use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
+  use types_ts_interned::{
+    IntrinsicKind, RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore,
+  };
 
   use crate::check::caches::{CheckerCacheStats, CheckerCaches};
   use crate::check::hir_body::{
@@ -506,6 +508,7 @@ pub mod body_check {
     pub no_implicit_any: bool,
     pub interned_def_types: HashMap<DefId, InternedTypeId>,
     pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+    pub interned_intrinsics: HashMap<DefId, IntrinsicKind>,
     pub asts: HashMap<FileId, Arc<Node<TopLevel>>>,
     pub lowered: HashMap<FileId, Arc<hir_js::LowerResult>>,
     pub body_info: HashMap<BodyId, BodyInfo>,
@@ -679,6 +682,13 @@ pub mod body_check {
     fn type_of_def(&self, def: types_ts_interned::DefId) -> Option<InternedTypeId> {
       self
         .interned_def_types
+        .get(&crate::api::DefId(def.0))
+        .copied()
+    }
+
+    fn intrinsic_kind(&self, def: types_ts_interned::DefId) -> Option<IntrinsicKind> {
+      self
+        .interned_intrinsics
         .get(&crate::api::DefId(def.0))
         .copied()
     }

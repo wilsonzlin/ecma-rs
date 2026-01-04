@@ -4,8 +4,8 @@ use std::sync::Arc;
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  Accessibility, DefId, EvaluatorCaches, Indexer, PropKey, Signature, SignatureId, TypeEvaluator,
-  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
+  Accessibility, DefId, EvaluatorCaches, Indexer, IntrinsicKind, PropKey, Signature, SignatureId,
+  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 /// Summary of a type's top-level shape without exposing the full `TypeKind`
@@ -456,6 +456,10 @@ fn summarize_kind(store: &TypeStore, ty: TypeId) -> TypeKindSummary {
     TypeKind::TemplateLiteral(_) => TypeKindSummary::TemplateLiteral,
     TypeKind::IndexedAccess { .. } => TypeKindSummary::IndexedAccess,
     TypeKind::KeyOf(_) => TypeKindSummary::KeyOf,
+    TypeKind::Intrinsic { kind, ty } => match kind {
+      IntrinsicKind::NoInfer => summarize_kind(store, ty),
+      _ => TypeKindSummary::String,
+    },
   }
 }
 

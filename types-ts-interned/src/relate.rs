@@ -1262,6 +1262,11 @@ impl<'a> RelateCtx<'a> {
       // any source but are only assignable to top types when used as sources.
       (_, TypeKind::TypeParam(_)) => Some(true),
       (TypeKind::TypeParam(_), _) => Some(matches!(dst, TypeKind::Any | TypeKind::Unknown)),
+      // String-mapping intrinsics are always string-like as sources. When used
+      // as destinations they behave like unresolved type parameters (accepting
+      // any source) to avoid spurious incompatibilities in generic contexts.
+      (TypeKind::Intrinsic { .. }, TypeKind::String) => Some(true),
+      (_, TypeKind::Intrinsic { .. }) => Some(true),
       (TypeKind::Any, _) | (_, TypeKind::Any) => Some(true),
       (TypeKind::Unknown, TypeKind::Unknown) => Some(true),
       (_, TypeKind::Unknown) => Some(true),

@@ -629,6 +629,13 @@ impl TypeLowerer {
     let type_args = self.lower_type_arguments(&reference.stx.type_arguments);
     match &reference.stx.name {
       TypeEntityName::Identifier(name) => {
+        // TypeScript `intrinsic` marker used by lib declarations (e.g.
+        // `type Uppercase<S extends string> = intrinsic;`). We treat it as an
+        // opaque type during lowering so that the program can detect intrinsic
+        // aliases without emitting an "unresolved type reference" diagnostic.
+        if name == "intrinsic" && type_args.is_empty() {
+          return self.store.primitive_ids().unknown;
+        }
         if let Some(id) = self.lookup_type_param(name) {
           if !type_args.is_empty() {
             self.push_diag(

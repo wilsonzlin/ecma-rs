@@ -49,6 +49,7 @@ pub use ids::TypeId;
 pub use ids::TypeParamId;
 pub use kind::MappedModifier;
 pub use kind::MappedType;
+pub use kind::IntrinsicKind;
 pub use kind::TemplateChunk;
 pub use kind::TemplateLiteralType;
 pub use kind::TupleElem;

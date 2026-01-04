@@ -6,7 +6,8 @@ use crate::program::{BodyCheckResult, BuiltinTypes, DefData, TypeStore};
 use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
 use crate::{BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
-  TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
+  IntrinsicKind, TypeId, TypeId as InternedTypeId, TypeParamId,
+  TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
@@ -15,7 +16,7 @@ use types_ts_interned::{
 /// 32-bit public `SymbolId` representation; symbol identifiers are now stored as
 /// full `u64` values and imports record their original specifier for ambient
 /// module resolution.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 12;
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 13;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
@@ -105,6 +106,7 @@ pub struct ProgramSnapshot {
   pub interned_def_types: Vec<(DefId, InternedTypeId)>,
   pub enum_value_types: Vec<(DefId, InternedTypeId)>,
   pub interned_type_params: Vec<(DefId, Vec<TypeParamId>)>,
+  pub interned_intrinsics: Vec<(DefId, IntrinsicKind)>,
   pub value_def_map: Vec<(DefId, DefId)>,
   pub builtin: BuiltinTypes,
   pub next_def: u32,

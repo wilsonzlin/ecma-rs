@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::thread::ThreadId;
 use types_ts_interned::{
-  DefId, EvaluatorCaches, ExpandedType, RelateTypeExpander, TypeEvaluator, TypeExpander, TypeId,
-  TypeKind, TypeParamId, TypeStore,
+  DefId, EvaluatorCaches, ExpandedType, IntrinsicKind, RelateTypeExpander, TypeEvaluator,
+  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -72,6 +72,7 @@ pub struct ProgramTypeExpander<'a> {
   store: Arc<TypeStore>,
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+  intrinsics: &'a HashMap<DefId, IntrinsicKind>,
   class_instances: &'a HashMap<DefId, TypeId>,
   caches: EvaluatorCaches,
   guard: RefRecursionGuard,
@@ -82,6 +83,7 @@ impl<'a> ProgramTypeExpander<'a> {
     store: Arc<TypeStore>,
     def_types: &'a HashMap<DefId, TypeId>,
     type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+    intrinsics: &'a HashMap<DefId, IntrinsicKind>,
     class_instances: &'a HashMap<DefId, TypeId>,
     caches: EvaluatorCaches,
   ) -> Self {
@@ -89,6 +91,7 @@ impl<'a> ProgramTypeExpander<'a> {
       store,
       def_types,
       type_params,
+      intrinsics,
       class_instances,
       caches,
       guard: RefRecursionGuard::new(),
@@ -109,7 +112,18 @@ impl<'a> ProgramTypeExpander<'a> {
 }
 
 impl<'a> TypeExpander for ProgramTypeExpander<'a> {
-  fn expand(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<ExpandedType> {
+  fn expand(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<ExpandedType> {
+    debug_assert!(std::ptr::eq(store, self.store.as_ref()));
+
+    if let Some(kind) = self.intrinsics.get(&def).copied() {
+      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
+      return Some(ExpandedType {
+        params: Vec::new(),
+        ty,
+      });
+    }
+
     self.expanded(def)
   }
 }
@@ -120,6 +134,13 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
 
     if let Some(cached) = self.caches.get_ref(def, args) {
       return Some(cached);
+    }
+
+    if let Some(kind) = self.intrinsics.get(&def).copied() {
+      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
+      self.caches.insert_ref(def, args, ty);
+      return Some(ty);
     }
 
     let key = RefKey::new(def, args);

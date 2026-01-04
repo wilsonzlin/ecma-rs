@@ -1,0 +1,109 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "intrinsics.ts",
+        "name": "capitalize",
+        "type": "\"Hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "lower",
+        "type": "\"hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "noInfer",
+        "type": "\"x\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "template",
+        "type": "`FOO${Uppercase<string>}BAR`"
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "uncapitalize",
+        "type": "\"hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "union",
+        "type": "\"A\" | \"B\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "name": "upper",
+        "type": "\"HELLO\""
+      }
+    ],
+    "markers": [
+      {
+        "file": "intrinsics.ts",
+        "offset": 16,
+        "line": 0,
+        "column": 16,
+        "type": "\"HELLO\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 86,
+        "line": 3,
+        "column": 16,
+        "type": "\"hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 156,
+        "line": 6,
+        "column": 16,
+        "type": "\"Hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 232,
+        "line": 9,
+        "column": 16,
+        "type": "\"hello\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 312,
+        "line": 12,
+        "column": 16,
+        "type": "\"A\" | \"B\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 408,
+        "line": 15,
+        "column": 16,
+        "type": "`FOO${Uppercase<string>}BAR`"
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 493,
+        "line": 18,
+        "column": 16,
+        "type": "\"x\""
+      }
+    ]
+  }
+}

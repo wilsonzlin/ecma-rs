@@ -1,6 +1,8 @@
 use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::ids::{DefId, ObjectId, TypeId, TypeParamId};
-use crate::kind::{MappedModifier, MappedType, TemplateChunk, TemplateLiteralType, TypeKind};
+use crate::kind::{
+  IntrinsicKind, MappedModifier, MappedType, TemplateChunk, TemplateLiteralType, TypeKind,
+};
 use crate::relate::RelateCtx;
 use crate::shape::{PropData, PropKey, Property, Shape};
 use crate::store::TypeStore;
@@ -376,6 +378,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         .spans
         .into_iter()
         .any(|chunk| self.has_free_type_param(chunk.ty, bound, visited, depth + 1)),
+      TypeKind::Intrinsic { ty, .. } => self.has_free_type_param(ty, bound, visited, depth + 1),
       TypeKind::IndexedAccess { obj, index } => {
         self.has_free_type_param(obj, bound, visited, depth + 1)
           || self.has_free_type_param(index, bound, visited, depth + 1)
@@ -576,6 +579,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       ),
       TypeKind::Mapped(mapped) => self.evaluate_mapped(mapped, subst, depth + 1),
       TypeKind::TemplateLiteral(tpl) => self.evaluate_template_literal(tpl, subst, depth + 1),
+      TypeKind::Intrinsic { kind, ty } => self.evaluate_intrinsic(kind, ty, subst, depth + 1),
       TypeKind::IndexedAccess { obj, index } => {
         self.evaluate_indexed_access(obj, index, subst, depth + 1)
       }
@@ -649,11 +653,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if let Some(cached) = self.caches.refs.get(&key) {
       // `refs` memoizes instantiated expansions, but callers may evolve the
       // underlying definition tables over time (e.g. lazy type loading in a
-      // query-based program). In that situation a cached expansion might still
-      // contain unresolved references that are now expandable. Re-evaluate
-      // cached reference results once to avoid permanently "sticking" to a
-      // partially-expanded ref chain.
-      if matches!(self.store.type_kind(cached), TypeKind::Ref { .. }) {
+      // query-based program) or populate ref caches from partially-expanded
+      // contexts (such as relation checks that only expand through a `Ref`
+      // boundary). In that situation a cached expansion might still contain
+      // operators that are now reducible (e.g. `Uppercase<"a">` -> `"A"`).
+      //
+      // Re-evaluate cached reference results once to avoid permanently
+      // "sticking" to a partially-expanded ref chain.
+      if matches!(
+        self.store.type_kind(cached),
+        TypeKind::Ref { .. } | TypeKind::Intrinsic { .. }
+      ) {
         let evaluated = self.evaluate_with_subst(cached, subst, depth + 1);
         if evaluated != cached {
           self.caches.refs.insert(key, evaluated);
@@ -899,6 +909,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::KeyOf(inner) => {
         self.conditional_is_indeterminate_operand_inner(inner, subst, depth + 1, visited)
       }
+      TypeKind::Intrinsic { .. } => true,
       _ => false,
     }
   }
@@ -1153,6 +1164,103 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             spans: evaluated_spans,
           }))
       }
+    }
+  }
+
+  fn evaluate_intrinsic(
+    &mut self,
+    kind: IntrinsicKind,
+    ty: TypeId,
+    subst: &Substitution,
+    depth: usize,
+  ) -> TypeId {
+    let primitives = self.store.primitive_ids();
+    let evaluated = self.evaluate_with_subst(ty, subst, depth + 1);
+
+    match kind {
+      IntrinsicKind::NoInfer => return evaluated,
+      _ => {}
+    }
+
+    match self.store.type_kind(evaluated) {
+      TypeKind::Never => primitives.never,
+      TypeKind::Any => primitives.any,
+      // These intrinsics are defined with `extends string`, but we can still see
+      // `unknown` during error recovery. Mirror TypeScript's behaviour by
+      // widening to `string`.
+      TypeKind::Unknown => primitives.string,
+      TypeKind::Union(members) => {
+        let mut out = Vec::with_capacity(members.len());
+        for member in members {
+          out.push(self.evaluate_intrinsic(kind, member, subst, depth + 1));
+        }
+        self.store.union(out)
+      }
+      TypeKind::StringLiteral(id) => {
+        let mapped = apply_string_mapping(kind, &self.store.name(id));
+        let name = self.store.intern_name(mapped);
+        self.store.intern_type(TypeKind::StringLiteral(name))
+      }
+      TypeKind::TemplateLiteral(tpl) => {
+        let TemplateLiteralType { head, spans } = tpl;
+
+        match kind {
+          IntrinsicKind::Uppercase => {
+            let tpl = TemplateLiteralType {
+              head: head.to_uppercase(),
+              spans: spans
+                .into_iter()
+                .map(|span| TemplateChunk {
+                  literal: span.literal.to_uppercase(),
+                  ty: self.evaluate_intrinsic(kind, span.ty, subst, depth + 1),
+                })
+                .collect(),
+            };
+            self.store.intern_type(TypeKind::TemplateLiteral(tpl))
+          }
+          IntrinsicKind::Lowercase => {
+            let tpl = TemplateLiteralType {
+              head: head.to_lowercase(),
+              spans: spans
+                .into_iter()
+                .map(|span| TemplateChunk {
+                  literal: span.literal.to_lowercase(),
+                  ty: self.evaluate_intrinsic(kind, span.ty, subst, depth + 1),
+                })
+                .collect(),
+            };
+            self.store.intern_type(TypeKind::TemplateLiteral(tpl))
+          }
+          IntrinsicKind::Capitalize => {
+            let mut spans = spans;
+            if head.is_empty() {
+              if let Some(first) = spans.first_mut() {
+                first.ty = self.evaluate_intrinsic(kind, first.ty, subst, depth + 1);
+              }
+            }
+            let tpl = TemplateLiteralType {
+              head: capitalize_string(&head),
+              spans,
+            };
+            self.store.intern_type(TypeKind::TemplateLiteral(tpl))
+          }
+          IntrinsicKind::Uncapitalize => {
+            let mut spans = spans;
+            if head.is_empty() {
+              if let Some(first) = spans.first_mut() {
+                first.ty = self.evaluate_intrinsic(kind, first.ty, subst, depth + 1);
+              }
+            }
+            let tpl = TemplateLiteralType {
+              head: uncapitalize_string(&head),
+              spans,
+            };
+            self.store.intern_type(TypeKind::TemplateLiteral(tpl))
+          }
+          IntrinsicKind::NoInfer => unreachable!("handled above"),
+        }
+      }
+      _ => self.store.intern_type(TypeKind::Intrinsic { kind, ty: evaluated }),
     }
   }
 
@@ -1745,6 +1853,40 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
       TypeKind::Never => TemplateStringComputation::Finite(Vec::new()),
       _ => TemplateStringComputation::Infinite,
+    }
+  }
+}
+
+fn apply_string_mapping(kind: IntrinsicKind, value: &str) -> String {
+  match kind {
+    IntrinsicKind::Uppercase => value.to_uppercase(),
+    IntrinsicKind::Lowercase => value.to_lowercase(),
+    IntrinsicKind::Capitalize => capitalize_string(value),
+    IntrinsicKind::Uncapitalize => uncapitalize_string(value),
+    IntrinsicKind::NoInfer => value.to_string(),
+  }
+}
+
+fn capitalize_string(value: &str) -> String {
+  let mut chars = value.chars();
+  match chars.next() {
+    None => String::new(),
+    Some(first) => {
+      let mut out: String = first.to_uppercase().collect();
+      out.push_str(chars.as_str());
+      out
+    }
+  }
+}
+
+fn uncapitalize_string(value: &str) -> String {
+  let mut chars = value.chars();
+  match chars.next() {
+    None => String::new(),
+    Some(first) => {
+      let mut out: String = first.to_lowercase().collect();
+      out.push_str(chars.as_str());
+      out
     }
   }
 }

@@ -55,6 +55,40 @@ pub struct TemplateChunk {
   pub ty: TypeId,
 }
 
+#[derive(
+  Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord,
+)]
+pub enum IntrinsicKind {
+  Uppercase,
+  Lowercase,
+  Capitalize,
+  Uncapitalize,
+  NoInfer,
+}
+
+impl IntrinsicKind {
+  pub fn from_name(name: &str) -> Option<Self> {
+    match name {
+      "Uppercase" => Some(Self::Uppercase),
+      "Lowercase" => Some(Self::Lowercase),
+      "Capitalize" => Some(Self::Capitalize),
+      "Uncapitalize" => Some(Self::Uncapitalize),
+      "NoInfer" => Some(Self::NoInfer),
+      _ => None,
+    }
+  }
+
+  pub fn as_str(&self) -> &'static str {
+    match self {
+      Self::Uppercase => "Uppercase",
+      Self::Lowercase => "Lowercase",
+      Self::Capitalize => "Capitalize",
+      Self::Uncapitalize => "Uncapitalize",
+      Self::NoInfer => "NoInfer",
+    }
+  }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TupleElem {
   pub ty: TypeId,
@@ -122,6 +156,10 @@ pub enum TypeKind {
   },
   Mapped(MappedType),
   TemplateLiteral(TemplateLiteralType),
+  Intrinsic {
+    kind: IntrinsicKind,
+    ty: TypeId,
+  },
   IndexedAccess {
     obj: TypeId,
     index: TypeId,
@@ -174,6 +212,7 @@ impl TypeKind {
       TypeKind::IndexedAccess { .. } => 30,
       TypeKind::KeyOf(_) => 31,
       TypeKind::EmptyObject => 32,
+      TypeKind::Intrinsic { .. } => 33,
     }
   }
 }

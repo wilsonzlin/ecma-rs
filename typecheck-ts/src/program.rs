@@ -248,15 +248,24 @@ impl serde::Serialize for TypeDisplay {
 struct ProgramTypeExpander<'a> {
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+  intrinsics: &'a HashMap<DefId, tti::IntrinsicKind>,
 }
 
 impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
   fn expand(
     &self,
-    _store: &tti::TypeStore,
+    store: &tti::TypeStore,
     def: DefId,
-    _args: &[TypeId],
+    args: &[TypeId],
   ) -> Option<tti::ExpandedType> {
+    if let Some(kind) = self.intrinsics.get(&def).copied() {
+      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let ty = store.intern_type(tti::TypeKind::Intrinsic { kind, ty: operand });
+      return Some(tti::ExpandedType {
+        params: Vec::new(),
+        ty,
+      });
+    }
     let ty = *self.def_types.get(&def)?;
     let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
     Some(tti::ExpandedType { params, ty })
@@ -1115,6 +1124,7 @@ impl Program {
             Arc::clone(store),
             &state.interned_def_types,
             &state.interned_type_params,
+            &state.interned_intrinsics,
             &state.interned_class_instances,
             caches.eval.clone(),
           );
@@ -1404,6 +1414,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1528,6 +1539,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1566,6 +1578,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1599,6 +1612,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1633,6 +1647,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1663,6 +1678,7 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
+        intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1714,13 +1730,13 @@ impl Program {
         .map(|(id, data)| (tti::DefId(id.0), data.name.clone()))
         .collect::<HashMap<_, _>>();
       let (store, ty) = display_type_from_state(&state, ty);
+      let can_evaluate = state
+        .interned_store
+        .as_ref()
+        .map(|interned| Arc::ptr_eq(interned, &store))
+        .unwrap_or(false);
       let ty = match store.type_kind(ty) {
         tti::TypeKind::Mapped(mapped) => {
-          let can_evaluate = state
-            .interned_store
-            .as_ref()
-            .map(|interned| Arc::ptr_eq(interned, &store))
-            .unwrap_or(false);
           if !can_evaluate {
             ty
           } else {
@@ -1735,10 +1751,11 @@ impl Program {
               ty
             } else {
               let caches = state.checker_caches.for_body();
-              let expander = ProgramTypeExpander {
-                def_types: &state.interned_def_types,
-                type_params: &state.interned_type_params,
-              };
+               let expander = ProgramTypeExpander {
+                 def_types: &state.interned_def_types,
+                 type_params: &state.interned_type_params,
+                 intrinsics: &state.interned_intrinsics,
+               };
               let queries =
                 TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
               let evaluated = queries.evaluate(ty);
@@ -1760,6 +1777,40 @@ impl Program {
               }
             }
           }
+        }
+        tti::TypeKind::Intrinsic { .. } if can_evaluate => {
+          let caches = state.checker_caches.for_body();
+          let expander = ProgramTypeExpander {
+            def_types: &state.interned_def_types,
+            type_params: &state.interned_type_params,
+            intrinsics: &state.interned_intrinsics,
+          };
+          let queries =
+            TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
+          let evaluated = queries.evaluate(ty);
+          let evaluated = state.prefer_named_refs_in_store(&store, evaluated);
+          if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+            state.cache_stats.merge(&caches.stats());
+          }
+          evaluated
+        }
+        tti::TypeKind::Ref { def, .. }
+          if can_evaluate && state.interned_intrinsics.contains_key(&DefId(def.0)) =>
+        {
+          let caches = state.checker_caches.for_body();
+          let expander = ProgramTypeExpander {
+            def_types: &state.interned_def_types,
+            type_params: &state.interned_type_params,
+            intrinsics: &state.interned_intrinsics,
+          };
+          let queries =
+            TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
+          let evaluated = queries.evaluate(ty);
+          let evaluated = state.prefer_named_refs_in_store(&store, evaluated);
+          if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+            state.cache_stats.merge(&caches.stats());
+          }
+          evaluated
         }
         _ => ty,
       };
@@ -2246,6 +2297,12 @@ impl Program {
       .map(|(def, params)| (*def, params.clone()))
       .collect();
     interned_type_params.sort_by_key(|(def, _)| def.0);
+    let mut interned_intrinsics: Vec<_> = state
+      .interned_intrinsics
+      .iter()
+      .map(|(def, kind)| (*def, *kind))
+      .collect();
+    interned_intrinsics.sort_by_key(|(def, _)| def.0);
 
     let canonical_defs_map = match state.canonical_defs() {
       Ok(map) => map,
@@ -2305,6 +2362,7 @@ impl Program {
       interned_def_types,
       enum_value_types: Vec::new(),
       interned_type_params,
+      interned_intrinsics,
       value_def_map: Vec::new(),
       builtin: state.builtin,
       next_def: state.next_def,
@@ -2406,6 +2464,7 @@ impl Program {
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
+      state.interned_intrinsics = snapshot.interned_intrinsics.into_iter().collect();
       state.root_ids = snapshot.roots.clone();
       state.lib_diagnostics.clear();
       if let Some(store) = state.interned_store.clone() {
@@ -4004,6 +4063,7 @@ struct ProgramState {
   interned_def_types: HashMap<DefId, tti::TypeId>,
   interned_named_def_types: HashMap<tti::TypeId, DefId>,
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+  interned_intrinsics: HashMap<DefId, tti::IntrinsicKind>,
   interned_class_instances: HashMap<DefId, tti::TypeId>,
   value_defs: HashMap<DefId, DefId>,
   builtin: BuiltinTypes,
@@ -4117,6 +4177,7 @@ impl ProgramState {
       interned_def_types: HashMap::new(),
       interned_named_def_types: HashMap::new(),
       interned_type_params: HashMap::new(),
+      interned_intrinsics: HashMap::new(),
       interned_class_instances: HashMap::new(),
       value_defs: HashMap::new(),
       builtin,
@@ -4292,6 +4353,7 @@ impl ProgramState {
       no_implicit_any: self.compiler_options.no_implicit_any,
       interned_def_types: self.interned_def_types.clone(),
       interned_type_params: self.interned_type_params.clone(),
+      interned_intrinsics: self.interned_intrinsics.clone(),
       asts: self.asts.clone(),
       lowered: self
         .hir_lowered
@@ -5125,11 +5187,37 @@ impl ProgramState {
     self.interned_def_types.clear();
     self.interned_named_def_types.clear();
     self.interned_type_params.clear();
+    self.interned_intrinsics.clear();
     self.rebuild_module_namespace_defs();
     self.rebuild_callable_overloads();
     self.check_cancelled()?;
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
+
+    fn type_expr_is_intrinsic_marker(
+      arenas: &hir_js::TypeArenas,
+      names: &hir_js::NameInterner,
+      mut type_expr: hir_js::TypeExprId,
+    ) -> bool {
+      loop {
+        let Some(expr) = arenas.type_exprs.get(type_expr.0 as usize) else {
+          return false;
+        };
+        match &expr.kind {
+          hir_js::TypeExprKind::Parenthesized(inner) => {
+            type_expr = *inner;
+          }
+          hir_js::TypeExprKind::TypeRef(type_ref) => {
+            if !type_ref.type_args.is_empty() {
+              return false;
+            }
+            return matches!(&type_ref.name, hir_js::TypeName::Ident(id) if names.resolve(*id) == Some("intrinsic"));
+          }
+          _ => return false,
+        }
+      }
+    }
+
     for (def, ty) in self.interned_def_types.iter() {
       def_types.insert(*def, *ty);
     }
@@ -5295,6 +5383,18 @@ impl ProgramState {
         let Some(mapped) = target_def else {
           continue;
         };
+
+        if let hir_js::DefTypeInfo::TypeAlias { type_expr, .. } = info {
+          if let Some(name) = lowered.names.resolve(def.name) {
+            if let Some(kind) = tti::IntrinsicKind::from_name(name) {
+              if let Some(arenas) = lowered.type_arenas(def.id) {
+                if type_expr_is_intrinsic_marker(arenas, &lowered.names, *type_expr) {
+                  self.interned_intrinsics.insert(mapped, kind);
+                }
+              }
+            }
+          }
+        }
 
         match info {
           hir_js::DefTypeInfo::Class { .. } => {
@@ -10518,6 +10618,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),
       );
@@ -10809,6 +10910,7 @@ impl ProgramState {
         Arc::clone(store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),
       );
@@ -10895,6 +10997,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_intrinsics,
         &self.interned_class_instances,
         caches.eval.clone(),
       );

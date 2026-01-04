@@ -1333,6 +1333,18 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
+    // TypeScript `intrinsic` marker used by lib declarations (e.g. `type Uppercase<S extends string> = intrinsic;`).
+    // Treat it as an opaque type during lowering so that we can detect and
+    // replace intrinsic aliases later without emitting an "unknown identifier"
+    // diagnostic for the marker itself.
+    if reference.type_args.is_empty() {
+      if let TypeName::Ident(name_id) = &reference.name {
+        if names.resolve(*name_id) == Some("intrinsic") {
+          return self.store.primitive_ids().unknown;
+        }
+      }
+    }
+
     if let Some(resolved) = self.resolve_type_name(&reference.name, names, None) {
       return self.store.intern_type(TypeKind::Ref {
         def: resolved,

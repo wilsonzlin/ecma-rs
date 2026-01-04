@@ -670,6 +670,10 @@ impl TypeStore {
         }
         TypeKind::TemplateLiteral(tpl)
       }
+      TypeKind::Intrinsic { kind, ty } => TypeKind::Intrinsic {
+        kind,
+        ty: self.canon(ty),
+      },
       TypeKind::IndexedAccess { obj, index } => TypeKind::IndexedAccess {
         obj: self.canon(obj),
         index: self.canon(index),
@@ -972,6 +976,9 @@ impl TypeStore {
             idx += 1;
           }
         })
+      }
+      (TypeKind::Intrinsic { kind: a_k, ty: a_t }, TypeKind::Intrinsic { kind: b_k, ty: b_t }) => {
+        a_k.cmp(&b_k).then_with(|| self.type_cmp(a_t, b_t))
       }
       (
         TypeKind::IndexedAccess {
@@ -1305,6 +1312,11 @@ impl TypeStore {
         json!({ "kind": "indexed", "obj": obj.0.to_string(), "index": index.0.to_string() })
       }
       TypeKind::KeyOf(inner) => json!({ "kind": "keyof", "ty": inner.0.to_string() }),
+      TypeKind::Intrinsic { kind, ty } => json!({
+        "kind": "intrinsic",
+        "name": kind.as_str(),
+        "ty": ty.0.to_string()
+      }),
     }
   }
 }

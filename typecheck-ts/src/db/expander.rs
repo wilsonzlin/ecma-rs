@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use types_ts_interned::{
-  DefId, EvaluatorCaches, ExpandedType, RelateTypeExpander, TypeExpander, TypeId, TypeKind,
-  TypeParamId, TypeStore,
+  DefId, EvaluatorCaches, ExpandedType, IntrinsicKind, RelateTypeExpander, TypeExpander, TypeId,
+  TypeKind, TypeParamId, TypeStore,
 };
 
 use crate::expand::{instantiate_expanded, RefKey, RefRecursionGuard};
@@ -26,6 +26,11 @@ pub trait TypeExpanderDb: Send + Sync {
 
   /// Fully inferred type of the definition, if available.
   fn type_of_def(&self, _def: DefId) -> Option<TypeId> {
+    None
+  }
+
+  /// Intrinsic kind for a definition, if it represents a lib `intrinsic` alias.
+  fn intrinsic_kind(&self, _def: DefId) -> Option<IntrinsicKind> {
     None
   }
 
@@ -70,8 +75,18 @@ impl<'db> DbTypeExpander<'db> {
 }
 
 impl<'db> TypeExpander for DbTypeExpander<'db> {
-  fn expand(&self, store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<ExpandedType> {
+  fn expand(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<ExpandedType> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
+
+    if let Some(kind) = self.db.intrinsic_kind(def) {
+      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
+      return Some(ExpandedType {
+        params: Vec::new(),
+        ty,
+      });
+    }
+
     self.expanded(def)
   }
 }
@@ -81,6 +96,13 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
     if let Some(cached) = self.caches.get_ref(def, args) {
       return Some(cached);
+    }
+
+    if let Some(kind) = self.db.intrinsic_kind(def) {
+      let operand = args.first().copied().unwrap_or_else(|| store.primitive_ids().unknown);
+      let ty = store.intern_type(TypeKind::Intrinsic { kind, ty: operand });
+      self.caches.insert_ref(def, args, ty);
+      return Some(ty);
     }
     let expanded = match self.expanded(def) {
       Some(expanded) => expanded,
