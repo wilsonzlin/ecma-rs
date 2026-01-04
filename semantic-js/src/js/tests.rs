@@ -478,3 +478,43 @@ fn reports_tdz_errors_and_sorts_deterministically() {
   assert_eq!(slice_range(source, &diagnostics[1]), "a");
   assert!(diagnostics[0].primary.range.start < diagnostics[1].primary.range.start);
 }
+
+#[test]
+fn class_name_is_available_inside_class_body() {
+  let mut ast = parse("class C { static x = C; }").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(44));
+  assert!(
+    diagnostics.is_empty(),
+    "expected class body to be able to reference class name, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn class_name_is_in_tdz_in_extends_clause() {
+  let source = "class C extends C {}";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(45));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "C");
+}
+
+#[test]
+fn class_expression_name_is_available_inside_class_body() {
+  let mut ast = parse("const x = class C { static y = C; };").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(46));
+  assert!(
+    diagnostics.is_empty(),
+    "expected class expression body to be able to reference class name, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn class_expression_name_is_in_tdz_in_extends_clause() {
+  let source = "const x = class C extends C {};";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(47));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "C");
+}

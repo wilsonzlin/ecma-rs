@@ -507,8 +507,8 @@ impl DeclareVisitor {
         name,
         DeclContext {
           target: DeclTarget::IfNotGlobal,
-          flags: SymbolFlags::default(),
-          lexical: false,
+          flags: SymbolFlags::lexical_tdz(),
+          lexical: true,
         },
       );
     }

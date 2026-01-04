@@ -2,6 +2,7 @@ use super::{JsSemantics, ScopeId, SymbolId};
 use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
+use parse_js::ast::class_or_object::ClassMember;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::Func;
@@ -45,6 +46,7 @@ pub(crate) fn resolve_with_diagnostics(
 
 type BlockStmtNode = Node<BlockStmt>;
 type CatchBlockNode = Node<CatchBlock>;
+type ClassMemberNode = Node<ClassMember>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
 type ForBodyNode = Node<ForBody>;
@@ -83,6 +85,7 @@ impl TdzFrame {
   CatchBlockNode(enter, exit),
   ClassDeclNode(enter, exit),
   ClassExprNode(enter, exit),
+  ClassMemberNode(enter),
   ForBodyNode(enter, exit),
   ForInOfLhs(enter, exit),
   FuncExprNode(enter, exit),
@@ -103,6 +106,7 @@ struct ResolveVisitor<'a> {
   var_decl_mode_stack: Vec<VarDeclMode>,
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
+  class_name_stack: Vec<Option<SymbolId>>,
 }
 
 impl ResolveVisitor<'_> {
@@ -119,6 +123,7 @@ impl ResolveVisitor<'_> {
       var_decl_mode_stack: Vec::new(),
       pending_active: Vec::new(),
       pending_symbols: Vec::new(),
+      class_name_stack: Vec::new(),
     }
   }
 
@@ -239,13 +244,12 @@ impl ResolveVisitor<'_> {
   }
 
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
-    let has_lexical_name = node
+    let symbol = node
       .stx
       .name
       .as_ref()
-      .and_then(|name| declared_symbol(&name.assoc))
-      .map(|sym| self.is_lexical_symbol(sym));
-    let active = has_lexical_name.unwrap_or(false);
+      .and_then(|name| declared_symbol(&name.assoc));
+    let active = symbol.map(|sym| self.is_lexical_symbol(sym)).unwrap_or(false);
     self.push_pending(active);
     if active {
       if let Some(name) = &mut node.stx.name {
@@ -254,20 +258,51 @@ impl ResolveVisitor<'_> {
         }
       }
     }
+    self.class_name_stack.push(if active { symbol } else { None });
     self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_class_decl_node(&mut self, node: &mut ClassDeclNode) {
     self.pop_scope_from_assoc(&node.assoc);
     self.pop_pending();
+    self.class_name_stack.pop();
   }
 
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
+    let symbol = node
+      .stx
+      .name
+      .as_ref()
+      .and_then(|name| declared_symbol(&name.assoc));
+    let active = symbol.map(|sym| self.is_lexical_symbol(sym)).unwrap_or(false);
+    self.push_pending(active);
+    if active {
+      if let Some(name) = &mut node.stx.name {
+        if let Some(sym) = declared_symbol(&name.assoc) {
+          self.record_pending(sym);
+        }
+      }
+    }
+    self.class_name_stack.push(if active { symbol } else { None });
     self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_class_expr_node(&mut self, node: &mut ClassExprNode) {
     self.pop_scope_from_assoc(&node.assoc);
+    self.pop_pending();
+    self.class_name_stack.pop();
+  }
+
+  fn enter_class_member_node(&mut self, _node: &mut ClassMemberNode) {
+    let symbol = self
+      .class_name_stack
+      .last_mut()
+      .and_then(|entry| entry.take());
+    if let Some(symbol) = symbol {
+      // Class bindings are in TDZ during the `extends` clause, but initialized
+      // before evaluating class body elements such as static fields/blocks.
+      self.mark_initialized(symbol);
+    }
   }
 
   fn enter_for_body_node(&mut self, node: &mut ForBodyNode) {
