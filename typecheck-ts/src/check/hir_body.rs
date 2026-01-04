@@ -30,7 +30,7 @@ use semantic_js::ts::SymbolId;
 use types_ts_interned::{
   EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData,
   PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander,
-  TypeId, TypeKind, TypeParamDecl, TypeStore,
+  TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -979,6 +979,7 @@ pub fn check_body_with_expander(
     return_types: Vec::new(),
     index: ast_index,
     scopes: vec![Scope::default()],
+    type_param_scopes: Vec::new(),
     namespace_scopes: HashMap::new(),
     expected_return: None,
     body_kind: body.kind,
@@ -1104,6 +1105,7 @@ struct Checker<'a> {
   return_types: Vec<TypeId>,
   index: &'a AstIndex,
   scopes: Vec<Scope>,
+  type_param_scopes: Vec<Vec<TypeParamDecl>>,
   namespace_scopes: HashMap<String, Scope>,
   expected_return: Option<TypeId>,
   body_kind: BodyKind,
@@ -1124,6 +1126,32 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
+  fn type_param_constraint(&self, param: TypeParamId) -> Option<TypeId> {
+    for scope in self.type_param_scopes.iter().rev() {
+      if let Some(decl) = scope.iter().find(|decl| decl.id == param) {
+        return decl.constraint;
+      }
+    }
+    None
+  }
+
+  fn expand_callable_type(&self, ty: TypeId) -> TypeId {
+    let mut current = self.expand_ref(ty);
+    let mut seen = HashSet::new();
+    while seen.insert(current) {
+      match self.store.type_kind(current) {
+        TypeKind::TypeParam(param) => {
+          let Some(constraint) = self.type_param_constraint(param) else {
+            break;
+          };
+          current = self.expand_ref(constraint);
+        }
+        _ => break,
+      }
+    }
+    current
+  }
+
   fn binding_name_range(&self, pat: &Node<AstPat>) -> TextRange {
     match pat.stx.as_ref() {
       AstPat::Id(id) => {
@@ -1315,6 +1343,7 @@ impl<'a> Checker<'a> {
         self.lowerer.push_type_param_scope();
         has_type_params = true;
         type_param_decls = self.lower_type_params(params);
+        self.type_param_scopes.push(type_param_decls.clone());
       }
       let contextual_sig = self.contextual_signature();
       let annotated_return = func_node
@@ -1331,6 +1360,7 @@ impl<'a> Checker<'a> {
       self.bind_params(func_node, &type_param_decls, contextual_sig.as_ref());
       self.check_function_body(func_node);
       if has_type_params {
+        self.type_param_scopes.pop();
         self.lowerer.pop_type_param_scope();
       }
       self.expected_return = prev_return;
@@ -1465,6 +1495,7 @@ impl<'a> Checker<'a> {
         }
       }
       if has_type_params {
+        self.type_param_scopes.pop();
         self.lowerer.pop_type_param_scope();
       }
       return true;
@@ -1559,6 +1590,7 @@ impl<'a> Checker<'a> {
       self.lowerer.push_type_param_scope();
       has_type_params = true;
       type_param_decls = self.lower_type_params(params);
+      self.type_param_scopes.push(type_param_decls.clone());
     }
     fn bind_missing(
       checker: &mut Checker<'_>,
@@ -2284,6 +2316,7 @@ impl<'a> Checker<'a> {
     } else {
       callee_ty
     };
+    let callee_base = self.expand_callable_type(callee_base);
 
     let all_candidate_sigs =
       callable_signatures_with_expander(self.store.as_ref(), callee_base, self.ref_expander);
@@ -2774,6 +2807,7 @@ impl<'a> Checker<'a> {
       _ => (&un.stx.argument, None, expr_loc),
     };
     let callee_ty = self.check_expr(callee_expr);
+    let callee_ty = self.expand_callable_type(callee_ty);
     let arg_exprs = arg_exprs.unwrap_or(&[]);
     let all_candidate_sigs =
       construct_signatures_with_expander(self.store.as_ref(), callee_ty, self.ref_expander);
@@ -5741,7 +5775,7 @@ impl<'a> Checker<'a> {
   }
 
   fn first_callable_signature(&self, ty: TypeId) -> Option<Signature> {
-    let ty = self.expand_ref(ty);
+    let ty = self.expand_callable_type(ty);
     match self.store.type_kind(ty) {
       TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
       TypeKind::Object(obj) => {
@@ -5767,6 +5801,9 @@ impl<'a> Checker<'a> {
       }
       match checker.store.type_kind(ty) {
         TypeKind::Callable { .. } => Some(ty),
+        TypeKind::TypeParam(param) => checker
+          .type_param_constraint(param)
+          .and_then(|constraint| inner(checker, constraint, seen)),
         TypeKind::Object(obj) => {
           let shape = checker.store.shape(checker.store.object(obj).shape);
           if shape.call_signatures.is_empty() {
