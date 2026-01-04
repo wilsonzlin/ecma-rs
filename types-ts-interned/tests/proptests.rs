@@ -7,8 +7,8 @@ use proptest::prelude::*;
 use proptest::strategy::{BoxedStrategy, LazyJust, Strategy};
 use types_ts_interned::{
   DefId, ExpandedType, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  RelateCtx, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
-  TypeId, TypeKind, TypeParamId, TypeStore,
+  RelateCtx, RelateHooks, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem,
+  TypeEvaluator, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 fn small_string() -> impl Strategy<Value = String> {
@@ -25,7 +25,10 @@ fn mapped_modifier_strategy() -> impl Strategy<Value = MappedModifier> {
   ]
 }
 
-fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
+fn arbitrary_type_with_ref_strategy<S>(store: Arc<TypeStore>, ref_def: S) -> BoxedStrategy<TypeId>
+where
+  S: Strategy<Value = u32> + Clone + 'static,
+{
   let primitives = store.primitive_ids();
   let bool_lit_store = store.clone();
   let number_lit_store = store.clone();
@@ -78,6 +81,7 @@ fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
       let indexed_store = store.clone();
       let keyof_store = store.clone();
       let ref_store = store.clone();
+      let ref_def = ref_def.clone();
 
       prop_oneof![
         prop::collection::vec(inner.clone(), 1..4)
@@ -215,7 +219,7 @@ fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
         inner
           .clone()
           .prop_map(move |ty| keyof_store.intern_type(TypeKind::KeyOf(ty))),
-        (any::<u32>(), prop::collection::vec(inner.clone(), 0..3)).prop_map(move |(def, args)| {
+        (ref_def, prop::collection::vec(inner.clone(), 0..3)).prop_map(move |(def, args)| {
           ref_store.intern_type(TypeKind::Ref {
             def: DefId(def),
             args,
@@ -224,6 +228,14 @@ fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
       ]
     })
     .boxed()
+}
+
+fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
+  arbitrary_type_with_ref_strategy(store, any::<u32>())
+}
+
+fn arbitrary_type_with_ref_limit(store: Arc<TypeStore>, defs: u32) -> BoxedStrategy<TypeId> {
+  arbitrary_type_with_ref_strategy(store, 0u32..defs)
 }
 
 fn store_with_type() -> impl Strategy<Value = (Arc<TypeStore>, TypeId)> {
@@ -237,6 +249,48 @@ fn store_with_pairs() -> impl Strategy<Value = (Arc<TypeStore>, Vec<(TypeId, Typ
   LazyJust::new(TypeStore::new).prop_flat_map(|store| {
     let pair = (arbitrary_type(store.clone()), arbitrary_type(store.clone()));
     prop::collection::vec(pair, 1..4).prop_map(move |pairs| (store.clone(), pairs))
+  })
+}
+
+fn store_with_cyclic_pairs(
+  def_count: std::ops::Range<u32>,
+) -> impl Strategy<Value = (Arc<TypeStore>, Vec<(DefId, TypeId)>, Vec<(TypeId, TypeId)>)> {
+  LazyJust::new(TypeStore::new).prop_flat_map(move |store| {
+    def_count.clone().prop_flat_map(move |count| {
+      let store = store.clone();
+      let root = arbitrary_type_with_ref_limit(store.clone(), count);
+      let defs = prop::collection::vec(root.clone(), count as usize..(count as usize + 1))
+        .prop_map(move |defs| {
+          defs
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| (DefId(idx as u32), ty))
+            .collect::<Vec<_>>()
+        });
+      let pair = (root.clone(), root.clone());
+      let pairs = prop::collection::vec(pair, 1..8);
+      (defs, pairs).prop_map(move |(defs, pairs)| (store.clone(), defs, pairs))
+    })
+  })
+}
+
+fn store_with_cyclic_graph(
+  def_count: std::ops::Range<u32>,
+) -> impl Strategy<Value = (Arc<TypeStore>, TypeId, Vec<(DefId, TypeId)>)> {
+  LazyJust::new(TypeStore::new).prop_flat_map(move |store| {
+    def_count.clone().prop_flat_map(move |count| {
+      let store = store.clone();
+      let root = arbitrary_type_with_ref_limit(store.clone(), count);
+      let defs = prop::collection::vec(root.clone(), count as usize..(count as usize + 1))
+        .prop_map(move |defs| {
+          defs
+            .into_iter()
+            .enumerate()
+            .map(|(idx, ty)| (DefId(idx as u32), ty))
+            .collect::<Vec<_>>()
+        });
+      (root, defs).prop_map(move |(root, defs)| (store.clone(), root, defs))
+    })
   })
 }
 
@@ -276,6 +330,106 @@ impl types_ts_interned::TypeExpander for StaticExpander {
   }
 }
 
+impl types_ts_interned::RelateTypeExpander for StaticExpander {
+  fn expand_ref(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<TypeId> {
+    self
+      .defs
+      .iter()
+      .find(|(id, _)| *id == def)
+      .map(|(_, ty)| *ty)
+  }
+}
+
+fn store_with_recursive_operator_graph(
+) -> impl Strategy<Value = (Arc<TypeStore>, TypeId, Vec<(DefId, TypeId)>)> {
+  LazyJust::new(TypeStore::new).prop_flat_map(|store| {
+    (
+      small_string(),
+      small_string(),
+      any::<bool>(),
+      mapped_modifier_strategy(),
+      mapped_modifier_strategy(),
+    )
+      .prop_map(move |(head, suffix, distributive, readonly, optional)| {
+        let primitives = store.primitive_ids();
+
+        let def0_ref = store.intern_type(TypeKind::Ref {
+          def: DefId(0),
+          args: Vec::new(),
+        });
+        let def1_ref = store.intern_type(TypeKind::Ref {
+          def: DefId(1),
+          args: Vec::new(),
+        });
+        let def2_ref = store.intern_type(TypeKind::Ref {
+          def: DefId(2),
+          args: Vec::new(),
+        });
+
+        // A small recursive conditional type: `type D0 = D0 extends string ? D1 : D2`.
+        let def0 = store.intern_type(TypeKind::Conditional {
+          check: def0_ref,
+          extends: primitives.string,
+          true_ty: def1_ref,
+          false_ty: def2_ref,
+          distributive,
+        });
+
+        // A mapped type that depends on `keyof D2`.
+        let param = TypeParamId(0);
+        let def1 = store.intern_type(TypeKind::Mapped(MappedType {
+          param,
+          source: store.intern_type(TypeKind::KeyOf(def2_ref)),
+          value: def0_ref,
+          readonly,
+          optional,
+          name_type: None,
+          as_type: None,
+        }));
+
+        // A recursive template-literal type: `type D2 = `${head}${D2}${suffix}``.
+        let def2 = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+          head,
+          spans: vec![TemplateChunk {
+            literal: suffix,
+            ty: def2_ref,
+          }],
+        }));
+
+        let defs = vec![(DefId(0), def0), (DefId(1), def1), (DefId(2), def2)];
+        (store.clone(), def0_ref, defs)
+      })
+  })
+}
+
+#[test]
+fn expand_ref_no_progress_cycle_does_not_overflow() {
+  // Regression test for a common "no progress" reference cycle:
+  // `type A = A;` (or equivalently an expander that expands `A` to `A`).
+  //
+  // Historically this kind of cycle risks infinite recursion in `expand_ref`
+  // callers if recursion guards are missing.
+  let store = TypeStore::new();
+
+  let self_ref = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: Vec::new(),
+  });
+  let defs = vec![(DefId(0), self_ref)];
+  let expander = StaticExpander { defs };
+
+  let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+  let evaluated = evaluator.evaluate(self_ref);
+  assert_eq!(store.canon(evaluated), store.canon(self_ref));
+
+  let hooks = RelateHooks {
+    expander: Some(&expander),
+    is_same_origin_private_member: None,
+  };
+  let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+  assert!(ctx.is_assignable(self_ref, self_ref));
+}
+
 proptest! {
   #![proptest_config(ProptestConfig::with_cases(64))]
 
@@ -300,6 +454,35 @@ proptest! {
     }
 
     let fresh_ctx = RelateCtx::new(store.clone(), store.options());
+    for ((src, dst), expect) in pairs.iter().zip(expected.iter()) {
+      prop_assert_eq!(fresh_ctx.is_assignable(*src, *dst), *expect);
+    }
+  }
+
+  #[test]
+  fn relation_engine_terminates_on_cyclic_graphs((store, defs, pairs) in store_with_cyclic_pairs(1..6)) {
+    let expander = StaticExpander { defs: defs.clone() };
+    let hooks = RelateHooks {
+      expander: Some(&expander),
+      is_same_origin_private_member: None,
+    };
+    let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+    let mut expected = Vec::new();
+    for (src, dst) in pairs.iter() {
+      expected.push(ctx.is_assignable(*src, *dst));
+    }
+
+    for ((src, dst), expect) in pairs.iter().zip(expected.iter()) {
+      prop_assert_eq!(ctx.is_assignable(*src, *dst), *expect);
+      prop_assert_eq!(ctx.explain_assignable(*src, *dst).result, *expect);
+    }
+
+    // Ensure determinism is maintained with fresh caches as well.
+    let hooks = RelateHooks {
+      expander: Some(&expander),
+      is_same_origin_private_member: None,
+    };
+    let fresh_ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
     for ((src, dst), expect) in pairs.iter().zip(expected.iter()) {
       prop_assert_eq!(fresh_ctx.is_assignable(*src, *dst), *expect);
     }
@@ -333,5 +516,28 @@ proptest! {
       let _ = ctx.is_assignable(src, dst);
       prop_assert!(ctx.step_count() < 20_000);
     }
+  }
+
+  #[test]
+  fn evaluator_terminates_on_cyclic_graphs((store, root, defs) in store_with_cyclic_graph(1..6)) {
+    let expander = StaticExpander { defs: defs.clone() };
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+    let first = evaluator.evaluate(root);
+    let second = evaluator.evaluate(root);
+    prop_assert_eq!(store.canon(first), store.canon(second));
+
+    for (_, ty) in defs {
+      let mut eval = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+      let _ = eval.evaluate(ty);
+    }
+  }
+
+  #[test]
+  fn evaluator_handles_recursive_conditional_mapped_and_template_types((store, root, defs) in store_with_recursive_operator_graph()) {
+    let expander = StaticExpander { defs: defs.clone() };
+    let mut evaluator = TypeEvaluator::new(store.clone(), &expander).with_depth_limit(128);
+    let first = evaluator.evaluate(root);
+    let second = evaluator.evaluate(root);
+    prop_assert_eq!(store.canon(first), store.canon(second));
   }
 }

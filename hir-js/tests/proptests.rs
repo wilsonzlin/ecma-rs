@@ -52,6 +52,13 @@ proptest! {
   }
 
   #[test]
+  fn lowering_is_deterministic(src in arb_source()) {
+    let first = lower_from_source(&src).map_err(|err| format!("{err:?}"));
+    let second = lower_from_source(&src).map_err(|err| format!("{err:?}"));
+    prop_assert_eq!(first, second);
+  }
+
+  #[test]
   fn spans_stay_within_source(src in arb_structured_program()) {
     let limit = src.len() as u32;
     if let Ok(result) = lower_from_source(&src) {
