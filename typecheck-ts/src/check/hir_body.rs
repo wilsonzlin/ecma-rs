@@ -1996,7 +1996,35 @@ impl<'a> Checker<'a> {
     let mut callee_for_resolution = callee_base;
     let sigs_for_context = {
       let base_for_context = if has_spread {
-        candidate_sigs.clone()
+        let sigs_without_excess_props: Vec<_> = all_candidate_sigs
+          .iter()
+          .copied()
+          .filter(|sig_id| {
+            let sig = self.store.signature(*sig_id);
+            call
+              .stx
+              .arguments
+              .iter()
+              .enumerate()
+              .take_while(|(_, arg)| !arg.stx.spread)
+              .all(|(idx, arg)| {
+                let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) else {
+                  return false;
+                };
+                !self.has_contextual_excess_properties(&arg.stx.value, param_ty)
+              })
+          })
+          .collect();
+
+        if sigs_without_excess_props.is_empty() {
+          candidate_sigs.clone()
+        } else {
+          candidate_sigs = sigs_without_excess_props;
+          callee_for_resolution = self.store.intern_type(TypeKind::Callable {
+            overloads: candidate_sigs.clone(),
+          });
+          candidate_sigs.clone()
+        }
       } else {
         let sigs_by_arity: Vec<_> = all_candidate_sigs
           .iter()
