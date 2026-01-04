@@ -119,6 +119,7 @@ struct ClassInfo {
   instance_fields: Vec<ClassFieldDecl>,
   static_fields: Vec<ClassFieldDecl>,
   instance_param_props: Vec<String>,
+  instance_member_names: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -625,6 +626,7 @@ impl AstIndex {
       instance_fields: Vec::new(),
       static_fields: Vec::new(),
       instance_param_props: Vec::new(),
+      instance_member_names: HashSet::new(),
     });
     index
   }
@@ -668,6 +670,9 @@ impl AstIndex {
     }
     if let Some(info) = self.classes.get_mut(class_index) {
       info.instance_param_props = param_props.clone();
+      for prop in param_props.iter() {
+        info.instance_member_names.insert(prop.clone());
+      }
     }
 
     for (idx, member) in members.iter().enumerate() {
@@ -693,6 +698,16 @@ impl AstIndex {
     match &member.stx.key {
       ClassOrObjKey::Computed(expr) => self.index_expr(expr, file, cancelled),
       ClassOrObjKey::Direct(_) => {}
+    }
+    if let ClassOrObjKey::Direct(key) = &member.stx.key {
+      let name = key.stx.key.clone();
+      let is_constructor_method =
+        name == "constructor" && matches!(member.stx.val, ClassOrObjVal::Method(_));
+      if !member.stx.static_ && !is_constructor_method {
+        if let Some(info) = self.classes.get_mut(class_index) {
+          info.instance_member_names.insert(name);
+        }
+      }
     }
     if let (ClassOrObjKey::Direct(key), ClassOrObjVal::Prop(_)) = (&member.stx.key, &member.stx.val)
     {
@@ -784,9 +799,7 @@ impl AstIndex {
       let Some(base) = self.classes.get(base_index) else {
         break;
       };
-      if base.instance_fields.iter().any(|field| field.name == name)
-        || base.instance_param_props.iter().any(|prop| prop == name)
-      {
+      if base.instance_member_names.contains(name) {
         return true;
       }
       current = base.extends.clone();
@@ -2493,7 +2506,8 @@ impl<'a> Checker<'a> {
             let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
               continue;
             };
-            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index)
+            else {
               continue;
             };
             let arg_ty = arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown);
@@ -2524,7 +2538,8 @@ impl<'a> Checker<'a> {
             let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
               continue;
             };
-            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+            let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index)
+            else {
               continue;
             };
             let arg_expr = &arg.stx.value;
@@ -2553,7 +2568,9 @@ impl<'a> Checker<'a> {
               .find(|(_, p)| p.name == Some(param_name))
               .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
             if let Some((param_idx, _)) = target {
-              if let Some(arg_idx) = param_index_map.iter().position(|idx| *idx == Some(param_idx))
+              if let Some(arg_idx) = param_index_map
+                .iter()
+                .position(|idx| *idx == Some(param_idx))
               {
                 if let Some(arg) = call.stx.arguments.get(arg_idx) {
                   if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
@@ -2563,7 +2580,8 @@ impl<'a> Checker<'a> {
               }
             }
           }
-          if !has_spread && !signature_allows_arg_count(self.store.as_ref(), &sig, arg_types.len()) {
+          if !has_spread && !signature_allows_arg_count(self.store.as_ref(), &sig, arg_types.len())
+          {
             self
               .diagnostics
               .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
