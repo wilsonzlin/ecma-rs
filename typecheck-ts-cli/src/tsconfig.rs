@@ -8,7 +8,6 @@ use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct ProjectConfig {
-  pub tsconfig_path: PathBuf,
   pub root_dir: PathBuf,
   pub compiler_options: CompilerOptions,
   pub base_url: Option<PathBuf>,
@@ -118,7 +117,6 @@ pub fn load_project_config(project: &Path) -> Result<ProjectConfig, String> {
     .filter(|s| !s.is_empty());
 
   Ok(ProjectConfig {
-    tsconfig_path,
     root_dir,
     compiler_options,
     base_url,
