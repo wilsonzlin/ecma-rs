@@ -139,7 +139,6 @@ struct ClassFieldInitializerInfo {
 #[derive(Clone, Copy)]
 struct FunctionInfo {
   func_span: TextRange,
-  body_span: TextRange,
   func: *const Node<Func>,
 }
 
@@ -391,16 +390,9 @@ impl AstIndex {
     cancelled: Option<&Arc<AtomicBool>>,
   ) {
     let func_span = loc_to_range(file, func.loc);
-    if let Some(body) = &func.stx.body {
-      let body_span = match body {
-        FuncBody::Block(block) => {
-          span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc))
-        }
-        FuncBody::Expression(expr) => loc_to_range(file, expr.loc),
-      };
+    if func.stx.body.is_some() {
       self.functions.push(FunctionInfo {
         func_span,
-        body_span,
         func: func as *const _,
       });
     }
@@ -2538,9 +2530,11 @@ impl<'a> Checker<'a> {
             let arity = arr.stx.elements.len();
             let mut expected_elems = Vec::with_capacity(arity);
             for offset in 0..arity {
-              let Some(param_ty) =
-                expected_arg_type_at(self.store.as_ref(), &sig, param_index.saturating_add(offset))
-              else {
+              let Some(param_ty) = expected_arg_type_at(
+                self.store.as_ref(),
+                &sig,
+                param_index.saturating_add(offset),
+              ) else {
                 expected_elems.clear();
                 break;
               };
