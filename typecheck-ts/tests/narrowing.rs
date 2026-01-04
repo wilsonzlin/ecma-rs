@@ -795,6 +795,42 @@ function f(x) {
 }
 
 #[test]
+fn optional_chain_base_narrowing_does_not_escape_branch() {
+  let src = r#"
+function f(x) {
+  if (x.meta?.kind) {
+    // no-op
+  }
+  return x.meta;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let meta = obj_type(&store, &[("kind", prim.string)]);
+  let x_obj = obj_type(&store, &[("meta", store.union(vec![meta, prim.undefined]))]);
+  let mut initial = HashMap::new();
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_obj);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let expected = store.union(vec![meta, prim.undefined]);
+  assert_eq!(
+    TypeDisplay::new(&store, res.return_types()[0]).to_string(),
+    TypeDisplay::new(&store, expected).to_string()
+  );
+}
+
+#[test]
 fn optional_member_adds_undefined() {
   let src = r#"function g(x: {v: number} | null) { const y = x?.v; return y; }"#;
   let lowered = lower_from_source(src).expect("lower");

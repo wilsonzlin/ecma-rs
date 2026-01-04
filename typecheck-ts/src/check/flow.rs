@@ -209,6 +209,20 @@ impl Env {
   /// reaching flows.
   pub fn merge_from(&mut self, other: &Env, store: &TypeStore) -> bool {
     let mut changed = false;
+    // Property-path keys represent refinements that only hold along specific
+    // control-flow paths. When joining environments, keep a property key only
+    // if *every* predecessor tracked it; otherwise drop it and fall back to
+    // deriving types from the root binding.
+    //
+    // This avoids leaking narrowings from a single branch (e.g. `if (x.y?.z)`)
+    // into the join point.
+    let before = self.vars.len();
+    self
+      .vars
+      .retain(|key, _| key.segments.is_empty() || other.vars.contains_key(key));
+    if self.vars.len() != before {
+      changed = true;
+    }
     for (name, ty) in other.vars.iter() {
       match self.vars.get_mut(name) {
         Some(existing) => {
@@ -219,8 +233,10 @@ impl Env {
           }
         }
         None => {
-          self.vars.insert(name.clone(), *ty);
-          changed = true;
+          if name.segments.is_empty() {
+            self.vars.insert(name.clone(), *ty);
+            changed = true;
+          }
         }
       }
     }
