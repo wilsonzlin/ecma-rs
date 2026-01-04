@@ -669,6 +669,132 @@ function f(x: {kind:"a"}|{kind:"b"}|null) {
 }
 
 #[test]
+fn optional_chain_nested_truthiness_narrows_base() {
+  let src = r#"
+function f(x) {
+  if (x.meta?.kind) {
+    return x.meta.value;
+  }
+  return "no";
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let meta = obj_type(&store, &[("kind", prim.string), ("value", prim.string)]);
+  let meta_opt = store.union(vec![meta, prim.undefined]);
+  let x_obj = obj_type(&store, &[("meta", meta_opt)]);
+  let mut initial = HashMap::new();
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_obj);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "\"no\"");
+}
+
+#[test]
+fn optional_chain_nested_discriminant_narrows_base() {
+  let src = r#"
+function f(x) {
+  if (x.meta?.kind === "foo") {
+    return x.meta.value;
+  }
+  return "no";
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+
+  let meta_foo = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let meta_bar = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
+  let meta_foo_opt = store.union(vec![meta_foo, prim.undefined]);
+  let meta_bar_opt = store.union(vec![meta_bar, prim.undefined]);
+
+  let foo_obj = obj_type(&store, &[("meta", meta_foo_opt)]);
+  let bar_obj = obj_type(&store, &[("meta", meta_bar_opt)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "\"no\"");
+}
+
+#[test]
+fn switch_optional_chain_nested_discriminant_narrows_base() {
+  let src = r#"
+function f(x) {
+  switch (x.meta?.kind) {
+    case "foo":
+      return x.meta.value;
+    default:
+      return "no";
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+  let meta_foo = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let meta_bar = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
+  let meta_foo_opt = store.union(vec![meta_foo, prim.undefined]);
+  let meta_bar_opt = store.union(vec![meta_bar, prim.undefined]);
+
+  let foo_obj = obj_type(&store, &[("meta", meta_foo_opt)]);
+  let bar_obj = obj_type(&store, &[("meta", meta_bar_opt)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "\"no\"");
+}
+
+#[test]
 fn optional_member_adds_undefined() {
   let src = r#"function g(x: {v: number} | null) { const y = x?.v; return y; }"#;
   let lowered = lower_from_source(src).expect("lower");

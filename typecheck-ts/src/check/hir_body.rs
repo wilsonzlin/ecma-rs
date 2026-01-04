@@ -5561,7 +5561,7 @@ enum BindingMode {
 }
 
 struct OptionalChainInfo {
-  base: FlowBindingId,
+  base: FlowKey,
   base_ty: TypeId,
   result_ty: Option<TypeId>,
 }
@@ -5574,6 +5574,7 @@ enum SwitchDiscriminant {
   Member {
     name: FlowBindingId,
     path: Vec<PathSegment>,
+    optional_bases: Vec<Vec<PathSegment>>,
     ty: TypeId,
   },
   Typeof {
@@ -6883,11 +6884,11 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Call(call) => {
         let ret_ty = self.eval_call(expr_id, call, env, &mut facts);
         if call.optional {
-          if let Some(name) = self.optional_chain_root(call.callee) {
+          if let Some(key) = self.flow_key_for_expr(call.callee) {
             let (non_nullish, _) =
               narrow_non_nullish(self.expr_types[call.callee.0 as usize], &self.store);
             if non_nullish != prim.never {
-              facts.truthy.insert(FlowKey::root(name), non_nullish);
+              facts.truthy.insert(key, non_nullish);
             }
           }
           self.store.union(vec![ret_ty, prim.undefined])
@@ -6924,20 +6925,30 @@ impl<'a> FlowBodyChecker<'a> {
           };
           let prop_ty = match (
             self.ident_binding(mem.object),
-            self.member_property_name(&mem.property),
+            self.member_path_segment(&mem.property),
           ) {
-            (Some(binding), Some(prop)) => {
-              let key = FlowKey::root(binding).with_segment(PathSegment::String(prop));
-              env
-                .get_path(&key)
-                .unwrap_or_else(|| self.member_type(obj_ty_for_member, mem))
+            (Some(binding), Some(segment)) => {
+              let key = FlowKey::root(binding).with_segment(segment);
+              let derived = self.member_type(obj_ty_for_member, mem);
+              match env.get_path(&key) {
+                Some(stored) => {
+                  let (overlap, _) =
+                    narrow_by_assignability(stored, derived, &self.store, &self.relate);
+                  if overlap == prim.never {
+                    derived
+                  } else {
+                    overlap
+                  }
+                }
+                None => derived,
+              }
             }
             _ => self.member_type(obj_ty_for_member, mem),
           };
           if mem.optional {
-            if let Some(name) = self.optional_chain_root(mem.object) {
+            if let Some(key) = self.flow_key_for_expr(mem.object) {
               if obj_non_nullish != prim.never {
-                facts.truthy.insert(FlowKey::root(name), obj_non_nullish);
+                facts.truthy.insert(key, obj_non_nullish);
               }
             }
             if obj_nullish != prim.never {
@@ -7181,12 +7192,16 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
-    if let Some((target, path, object_expr)) = self.discriminant_member(left) {
+    if let Some((target, path, object_expr, optional_bases)) = self.discriminant_member(left) {
       if let Some(lit) = self.literal_value(right) {
+        self.optional_chain_equality_facts(left, right_ty, negate, out);
+        self.optional_chain_equality_facts(right, left_ty, negate, out);
+
         let target_ty = env
           .get(target)
           .or_else(|| self.initial.get(&target).copied())
           .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
+        let has_nested_optional = !optional_bases.is_empty();
         if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
@@ -7198,7 +7213,13 @@ impl<'a> FlowBodyChecker<'a> {
           for seg in path.iter() {
             flow_key = flow_key.with_segment(seg.clone());
           }
-          if negate {
+          if has_nested_optional && !matches!(lit, LiteralValue::Null | LiteralValue::Undefined) {
+            if negate {
+              out.falsy.insert(flow_key, prop_yes);
+            } else {
+              out.truthy.insert(flow_key, prop_yes);
+            }
+          } else if negate {
             out.truthy.insert(flow_key.clone(), prop_no);
             out.falsy.insert(flow_key, prop_yes);
           } else {
@@ -7224,18 +7245,31 @@ impl<'a> FlowBodyChecker<'a> {
               &self.store,
               self.ref_expander,
             );
-            apply_narrowing(out, negate, target, yes, no);
+            if has_nested_optional {
+              let key = FlowKey::root(target);
+              if negate {
+                out.falsy.insert(key, yes);
+              } else {
+                out.truthy.insert(key, yes);
+              }
+            } else {
+              apply_narrowing(out, negate, target, yes, no);
+            }
             return;
           }
         }
       }
     }
-    if let Some((target, path, object_expr)) = self.discriminant_member(right) {
+    if let Some((target, path, object_expr, optional_bases)) = self.discriminant_member(right) {
       if let Some(lit) = self.literal_value(left) {
+        self.optional_chain_equality_facts(left, right_ty, negate, out);
+        self.optional_chain_equality_facts(right, left_ty, negate, out);
+
         let target_ty = env
           .get(target)
           .or_else(|| self.initial.get(&target).copied())
           .unwrap_or_else(|| self.expr_types[object_expr.0 as usize]);
+        let has_nested_optional = !optional_bases.is_empty();
         if let Some(prop_ty) = self.object_prop_type_path(target_ty, &path) {
           let (prop_yes, prop_no) = match lit {
             LiteralValue::Null | LiteralValue::Undefined => {
@@ -7247,7 +7281,13 @@ impl<'a> FlowBodyChecker<'a> {
           for seg in path.iter() {
             flow_key = flow_key.with_segment(seg.clone());
           }
-          if negate {
+          if has_nested_optional && !matches!(lit, LiteralValue::Null | LiteralValue::Undefined) {
+            if negate {
+              out.falsy.insert(flow_key, prop_yes);
+            } else {
+              out.truthy.insert(flow_key, prop_yes);
+            }
+          } else if negate {
             out.truthy.insert(flow_key.clone(), prop_no);
             out.falsy.insert(flow_key, prop_yes);
           } else {
@@ -7273,7 +7313,16 @@ impl<'a> FlowBodyChecker<'a> {
               &self.store,
               self.ref_expander,
             );
-            apply_narrowing(out, negate, target, yes, no);
+            if has_nested_optional {
+              let key = FlowKey::root(target);
+              if negate {
+                out.falsy.insert(key, yes);
+              } else {
+                out.truthy.insert(key, yes);
+              }
+            } else {
+              apply_narrowing(out, negate, target, yes, no);
+            }
             return;
           }
         }
@@ -7489,7 +7538,7 @@ impl<'a> FlowBodyChecker<'a> {
       } else {
         &mut out.truthy
       };
-      target.insert(FlowKey::root(info.base), non_nullish_base);
+      target.insert(info.base.clone(), non_nullish_base);
       return;
     }
 
@@ -7502,7 +7551,7 @@ impl<'a> FlowBodyChecker<'a> {
           } else {
             &mut out.truthy
           };
-          target.insert(FlowKey::root(info.base), nullish_base);
+          target.insert(info.base.clone(), nullish_base);
         }
       }
     }
@@ -7512,7 +7561,7 @@ impl<'a> FlowBodyChecker<'a> {
     let prim = self.store.primitive_ids();
     match &self.body.exprs[expr.0 as usize].kind {
       ExprKind::Member(mem) if mem.optional => {
-        let base = self.optional_chain_root(mem.object)?;
+        let base = self.flow_key_for_expr(mem.object)?;
         let base_ty = self.expr_types[mem.object.0 as usize];
         let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
         let result_ty = Some(if non_nullish == prim.never {
@@ -7527,7 +7576,7 @@ impl<'a> FlowBodyChecker<'a> {
         })
       }
       ExprKind::Call(call) if call.optional => {
-        let base = self.optional_chain_root(call.callee)?;
+        let base = self.flow_key_for_expr(call.callee)?;
         let base_ty = self.expr_types[call.callee.0 as usize];
         Some(OptionalChainInfo {
           base,
@@ -7539,13 +7588,19 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn optional_chain_root(&self, expr_id: ExprId) -> Option<FlowBindingId> {
-    match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => self.ident_binding(expr_id),
-      ExprKind::Member(mem) => self.optional_chain_root(mem.object),
-      ExprKind::Call(call) => self.optional_chain_root(call.callee),
-      _ => None,
+  fn flow_key_for_expr(&self, expr_id: ExprId) -> Option<FlowKey> {
+    if let Some(binding) = self.ident_binding(expr_id) {
+      return Some(FlowKey::root(binding));
     }
+    if let ExprKind::Member(mem) = &self.body.exprs[expr_id.0 as usize].kind {
+      let (binding, segments, _) = self.member_path_target(mem.object, &mem.property)?;
+      let mut key = FlowKey::root(binding);
+      for seg in segments {
+        key = key.with_segment(seg);
+      }
+      return Some(key);
+    }
+    None
   }
 
   fn excludes_nullish(&self, ty: TypeId) -> bool {
@@ -7828,17 +7883,49 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
+  fn member_chain_target(
+    &self,
+    expr_id: ExprId,
+  ) -> Option<(FlowBindingId, Vec<(PathSegment, bool)>, ExprId)> {
+    let ExprKind::Member(MemberExpr {
+      object,
+      property,
+      optional,
+    }) = &self.body.exprs[expr_id.0 as usize].kind
+    else {
+      return None;
+    };
+    let segment = self.member_path_segment(property)?;
+    if let Some(binding) = self.ident_binding(*object) {
+      return Some((binding, vec![(segment, *optional)], *object));
+    }
+    if matches!(
+      &self.body.exprs[object.0 as usize].kind,
+      ExprKind::Member(_)
+    ) {
+      let (binding, mut segments, root_expr) = self.member_chain_target(*object)?;
+      segments.push((segment, *optional));
+      return Some((binding, segments, root_expr));
+    }
+    None
+  }
+
   fn discriminant_member(
     &self,
     expr_id: ExprId,
-  ) -> Option<(FlowBindingId, Vec<PathSegment>, ExprId)> {
-    if let ExprKind::Member(MemberExpr {
-      object, property, ..
-    }) = &self.body.exprs[expr_id.0 as usize].kind
-    {
-      return self.member_path_target(*object, property);
+  ) -> Option<(FlowBindingId, Vec<PathSegment>, ExprId, Vec<Vec<PathSegment>>)> {
+    let (binding, segments, root_expr) = self.member_chain_target(expr_id)?;
+    let mut path = Vec::with_capacity(segments.len());
+    let mut optional_bases = Vec::new();
+    let mut prefix: Vec<PathSegment> = Vec::new();
+    for (idx, (segment, optional)) in segments.iter().enumerate() {
+      if *optional && idx > 0 {
+        optional_bases.push(prefix.clone());
+      }
+      path.push(segment.clone());
+      prefix.push(segment.clone());
     }
-    None
+    Some((binding, path, root_expr, optional_bases))
   }
 
   fn typeof_comparison(
@@ -8776,15 +8863,24 @@ impl<'a> FlowBodyChecker<'a> {
         let lit = self.literal_value(test)?;
         Some(narrow_by_literal(ty, &lit, &self.store))
       }
-      SwitchDiscriminant::Member { path, .. } => {
+      SwitchDiscriminant::Member {
+        path,
+        optional_bases,
+        ..
+      } => {
         let lit = self.literal_value(test)?;
-        Some(narrow_by_discriminant_path(
+        let (yes, no) = narrow_by_discriminant_path(
           ty,
           path,
           &lit,
           &self.store,
           self.ref_expander,
-        ))
+        );
+        if optional_bases.is_empty() {
+          Some((yes, no))
+        } else {
+          Some((yes, ty))
+        }
       }
       SwitchDiscriminant::Typeof { .. } => match self.literal_value(test) {
         Some(LiteralValue::String(value)) => Some(narrow_by_typeof(ty, &value, &self.store)),
@@ -8815,7 +8911,7 @@ impl<'a> FlowBodyChecker<'a> {
         }
         None
       }
-      ExprKind::Member(mem) => self.switch_member_target(mem, env),
+      ExprKind::Member(_) => self.switch_member_target(discriminant, env),
       ExprKind::Ident(_) => {
         self
           .ident_binding(discriminant)
@@ -8828,19 +8924,45 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn switch_member_target(&self, mem: &MemberExpr, env: &Env) -> Option<SwitchDiscriminant> {
-    let (binding, path, root_expr) = self.member_path_target(mem.object, &mem.property)?;
+  fn switch_member_target(&self, expr: ExprId, env: &Env) -> Option<SwitchDiscriminant> {
+    let (binding, path, root_expr, optional_bases) = self.discriminant_member(expr)?;
     let obj_ty = env
       .get(binding)
       .unwrap_or_else(|| self.expr_types[root_expr.0 as usize]);
     Some(SwitchDiscriminant::Member {
       name: binding,
       path,
+      optional_bases,
       ty: obj_ty,
     })
   }
 
   fn apply_switch_result(&mut self, target: &SwitchDiscriminant, narrowed: TypeId, env: &mut Env) {
     env.set(target.name(), narrowed);
+    let prim = self.store.primitive_ids();
+    if let SwitchDiscriminant::Member {
+      name,
+      optional_bases,
+      ..
+    } = target
+    {
+      for base_path in optional_bases.iter() {
+        if base_path.is_empty() {
+          continue;
+        }
+        let Some(base_ty) = self.object_prop_type_path(narrowed, base_path) else {
+          continue;
+        };
+        let (non_nullish, _) = narrow_non_nullish(base_ty, &self.store);
+        if non_nullish == prim.never {
+          continue;
+        }
+        let mut key = FlowKey::root(*name);
+        for seg in base_path.iter() {
+          key = key.with_segment(seg.clone());
+        }
+        env.set_path(key, non_nullish);
+      }
+    }
   }
 }
