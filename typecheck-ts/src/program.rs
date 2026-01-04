@@ -100,7 +100,7 @@ pub trait Host: Send + Sync + 'static {
 
 /// Export entry for [`ExportMap`].
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportEntry {
   /// Symbol backing the export.
   pub symbol: semantic_js::SymbolId,

@@ -36,7 +36,7 @@ pub struct SymbolOccurrence {
 /// Binding metadata for a symbol, including its canonical `semantic-js` symbol
 /// identifier, optional backing definition, and optional type.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolBinding {
   pub symbol: semantic_js::SymbolId,
   pub def: Option<DefId>,
@@ -45,7 +45,7 @@ pub struct SymbolBinding {
 
 /// Symbol metadata exposed via [`Program::symbol_info`].
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolInfo {
   pub symbol: semantic_js::SymbolId,
   pub def: Option<DefId>,

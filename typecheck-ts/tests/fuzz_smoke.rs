@@ -3,7 +3,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{codes, semantic_js, BodyId, ExprId, FileId, FileKey, MemoryHost, Program, TypeId};
+use typecheck_ts::{
+  codes, semantic_js, BodyId, ExprId, FileId, FileKey, MemoryHost, Program, SymbolInfo,
+  TypeId, TypeKindSummary,
+};
 
 #[derive(Clone, Debug)]
 struct Project {
@@ -17,15 +20,20 @@ struct OffsetQuerySnapshot {
   file: FileId,
   offset: u32,
   symbol: Option<semantic_js::SymbolId>,
+  symbol_info: Option<SymbolInfo>,
   expr: Option<(BodyId, ExprId)>,
   ty: Option<TypeId>,
+  kind: Option<TypeKindSummary>,
+  expr_ty: Option<TypeId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct SmokeSnapshot {
   diagnostics: Vec<typecheck_ts::Diagnostic>,
+  files: Vec<FileId>,
   reachable_files: Vec<FileId>,
-  exports: Vec<(FileId, Vec<String>)>,
+  exports: Vec<(FileId, typecheck_ts::ExportMap)>,
+  global_bindings: Vec<String>,
   offsets: Vec<OffsetQuerySnapshot>,
 }
 
@@ -220,15 +228,16 @@ fn run_with_timeout(
     // Exercise a handful of query entry points after checking to ensure they
     // are also total, deterministic, and cycle-safe for the generated inputs.
     let reachable = runner.reachable_files();
-    let _ = runner.files();
-    let _ = runner.global_bindings();
+    let files = runner.files();
+    let global_bindings_map = runner.global_bindings();
+    let global_bindings = global_bindings_map.keys().cloned().collect::<Vec<_>>();
 
     let mut exports = Vec::new();
     let mut offsets = Vec::new();
 
     for file in reachable.iter().copied() {
       let export_map = runner.exports_of(file);
-      exports.push((file, export_map.keys().cloned().collect::<Vec<_>>()));
+      exports.push((file, export_map));
 
       let defs = runner.definitions_in_file(file);
       for def in defs.into_iter().take(16) {
@@ -257,15 +266,20 @@ fn run_with_timeout(
             continue;
           };
           let symbol = runner.symbol_at(file, offset_u32);
-          if let Some(symbol) = symbol {
-            let _ = runner.symbol_info(symbol);
-          }
+          let symbol_info = symbol.and_then(|symbol| runner.symbol_info(symbol));
+          let expr = runner.expr_at(file, offset_u32);
+          let expr_ty = expr.map(|(body, expr)| runner.type_of_expr(body, expr));
+          let ty = runner.type_at(file, offset_u32);
+          let kind = ty.map(|ty| runner.type_kind(ty));
           offsets.push(OffsetQuerySnapshot {
             file,
             offset: offset_u32,
             symbol,
-            expr: runner.expr_at(file, offset_u32),
-            ty: runner.type_at(file, offset_u32),
+            symbol_info,
+            expr,
+            ty,
+            kind,
+            expr_ty,
           });
         }
       }
@@ -273,8 +287,10 @@ fn run_with_timeout(
 
     SmokeSnapshot {
       diagnostics,
+      files,
       reachable_files: reachable,
       exports,
+      global_bindings,
       offsets,
     }
   });
