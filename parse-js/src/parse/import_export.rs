@@ -12,6 +12,7 @@ use crate::ast::import_export::ExportNames;
 use crate::ast::import_export::ImportName;
 use crate::ast::import_export::ImportNames;
 use crate::ast::import_export::ModuleExportImportName;
+use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::ExportDefaultExprStmt;
@@ -24,6 +25,7 @@ use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::KEYWORDS_MAPPING;
+use crate::lex::LexMode;
 use crate::parse::stmt::decl::VarDeclParseMode;
 use crate::token::TT;
 
@@ -57,9 +59,14 @@ impl<'a> Parser<'a> {
     is_export: bool,
   ) -> SyntaxResult<(ModuleExportImportName, Node<IdPat>)> {
     let t0 = self.peek();
+    let mut target_escape = None;
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
-      TT::LiteralString => (ModuleExportImportName::Str(self.lit_str_val()?), true),
+      TT::LiteralString => {
+        let (_, name, escape_loc) = self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+        target_escape = escape_loc;
+        (ModuleExportImportName::Str(name), true)
+      },
       t if is_valid_pattern_identifier(t, ctx.rules) => (ModuleExportImportName::Ident(self.consume_as_string()), false),
       // `default` is special: in exports it can be used without alias, but in imports it requires an alias
       TT::KeywordDefault if is_export => (ModuleExportImportName::Ident(self.consume_as_string()), false),
@@ -67,13 +74,18 @@ impl<'a> Parser<'a> {
       t if KEYWORDS_MAPPING.contains_key(&t) => (ModuleExportImportName::Ident(self.consume_as_string()), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
-    let alias = if self.consume_if(TT::KeywordAs).is_match() {
+    let mut alias = if self.consume_if(TT::KeywordAs).is_match() {
       let t_alias = self.peek();
       if is_export && t_alias.typ == TT::LiteralString {
         // ES2022: arbitrary module namespace identifiers - allow string literals
         // for *exported* names.
-        let name = self.lit_str_val()?;
-        Node::new(t_alias.loc, IdPat { name })
+        let (loc, name, escape_loc) =
+          self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+        let mut alias = Node::new(loc, IdPat { name });
+        if let Some(escape_loc) = escape_loc {
+          alias.assoc.set(LegacyOctalEscapeSequence(escape_loc));
+        }
+        alias
       } else if is_export && KEYWORDS_MAPPING.contains_key(&t_alias.typ) {
         // Exported names are `IdentifierName`s, so allow keywords like `return`/`await`.
         self.consume();
@@ -100,6 +112,11 @@ impl<'a> Parser<'a> {
         },
       )
     };
+    if let Some(target_escape) = target_escape {
+      if alias.assoc.get::<LegacyOctalEscapeSequence>().is_none() {
+        alias.assoc.set(LegacyOctalEscapeSequence(target_escape));
+      }
+    }
     Ok((target, alias))
   }
 
@@ -237,7 +254,8 @@ impl<'a> Parser<'a> {
     if default.is_some() || names.is_some() {
       self.require(TT::KeywordFrom)?;
     }
-    let module = self.lit_str_val()?;
+    let (_, module, module_escape) =
+      self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
 
     // Import attributes / assertions:
     // - import ... from "module" with { type: "json" }
@@ -265,7 +283,7 @@ impl<'a> Parser<'a> {
     }
 
     let loc = self.since_checkpoint(&start);
-    let import_stmt = Node::new(
+    let mut import_stmt = Node::new(
       loc,
       ImportStmt {
         type_only,
@@ -275,6 +293,11 @@ impl<'a> Parser<'a> {
         attributes,
       },
     );
+    if let Some(module_escape) = module_escape {
+      import_stmt
+        .assoc
+        .set(LegacyOctalEscapeSequence(module_escape));
+    }
     Ok(import_stmt.into_wrapped())
   }
 
@@ -339,7 +362,8 @@ impl<'a> Parser<'a> {
   }
 
   pub fn export_list_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportListStmt>> {
-    self.with_loc(|p| {
+    let mut from_escape = None;
+    let mut node = self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
       // TypeScript: export type
       let type_only = if p.consume_if(TT::KeywordType).is_match() {
@@ -386,7 +410,14 @@ impl<'a> Parser<'a> {
               alias,
             })
           })?;
-          let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
+          let from = if p.consume_if(TT::KeywordFrom).is_match() {
+            let (_, from, escape_loc) =
+              p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+            from_escape = escape_loc;
+            Some(from)
+          } else {
+            None
+          };
           if from.is_none() {
             // Local exports must refer to local bindings, which cannot be string
             // literals. Only re-exports (`export { ... } from "mod"`) may use
@@ -408,8 +439,13 @@ impl<'a> Parser<'a> {
             // ES2022: arbitrary module namespace identifiers - allow string literals
             let t = p.peek();
             if t.typ == TT::LiteralString {
-              let name = p.lit_str_val()?;
-              Ok(Node::new(t.loc, IdPat { name }))
+              let (loc, name, escape_loc) =
+                p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+              let mut alias = Node::new(loc, IdPat { name });
+              if let Some(escape_loc) = escape_loc {
+                alias.assoc.set(LegacyOctalEscapeSequence(escape_loc));
+              }
+              Ok(alias)
             } else if KEYWORDS_MAPPING.contains_key(&t.typ) {
               p.consume();
               Ok(Node::new(
@@ -423,7 +459,9 @@ impl<'a> Parser<'a> {
             }
           })?;
           p.require(TT::KeywordFrom)?;
-          let from = p.lit_str_val()?;
+          let (_, from, escape_loc) =
+            p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+          from_escape = escape_loc;
           (ExportNames::All(alias), Some(from))
         }
         _ => return Err(t.error(SyntaxErrorType::ExpectedNotFound)),
@@ -452,7 +490,11 @@ impl<'a> Parser<'a> {
         from,
         attributes,
       })
-    })
+    })?;
+    if let Some(from_escape) = from_escape {
+      node.assoc.set(LegacyOctalEscapeSequence(from_escape));
+    }
+    Ok(node)
   }
 
   pub fn export_default_expr_stmt(

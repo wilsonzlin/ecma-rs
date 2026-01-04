@@ -19,6 +19,7 @@ use crate::ast::expr::lit::LitTemplateExpr;
 use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
+use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::Node;
@@ -301,6 +302,70 @@ fn decode_literal(raw: &str, allow_line_terminators: bool) -> Result<String, Lit
     }
   }
   Ok(norm)
+}
+
+fn find_legacy_escape_sequence(raw: &str) -> Option<(usize, usize)> {
+  let bytes = raw.as_bytes();
+  let mut i = 0;
+  while i < bytes.len() {
+    if bytes[i] != b'\\' {
+      i += 1;
+      continue;
+    }
+    if i + 1 >= bytes.len() {
+      break;
+    }
+    match bytes[i + 1] {
+      b'0' => {
+        if i + 2 >= bytes.len() {
+          i += 2;
+          continue;
+        }
+        let next = bytes[i + 2];
+        if !next.is_ascii_digit() {
+          // `\0` (null escape) is permitted; only `\0` followed by a decimal
+          // digit counts as a legacy escape sequence.
+          i += 2;
+          continue;
+        }
+        if next == b'8' || next == b'9' {
+          return Some((i, 3));
+        }
+        let mut len = 2;
+        let mut digits = 1;
+        let mut j = i + 2;
+        while digits < 3 && j < bytes.len() {
+          let c = bytes[j];
+          if !(b'0'..=b'7').contains(&c) {
+            break;
+          }
+          len += 1;
+          digits += 1;
+          j += 1;
+        }
+        return Some((i, len));
+      }
+      b'1'..=b'7' => {
+        let mut len = 2;
+        let mut digits = 1;
+        let mut j = i + 2;
+        while digits < 3 && j < bytes.len() {
+          let c = bytes[j];
+          if !(b'0'..=b'7').contains(&c) {
+            break;
+          }
+          len += 1;
+          digits += 1;
+          j += 1;
+        }
+        return Some((i, len));
+      }
+      b'8' | b'9' => return Some((i, 2)),
+      _ => {}
+    }
+    i += 2;
+  }
+  None
 }
 
 fn literal_error_to_syntax(
@@ -753,10 +818,12 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
-    self.with_loc(|p| {
-      let value = p.lit_str_val()?;
-      Ok(LitStrExpr { value })
-    })
+    let (loc, value, escape_loc) = self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+    let mut node = Node::new(loc, LitStrExpr { value });
+    if let Some(escape_loc) = escape_loc {
+      node.assoc.set(LegacyOctalEscapeSequence(escape_loc));
+    }
+    Ok(node)
   }
 
   /// Parses a literal string and returns the raw string value normalized (e.g. escapes decoded).
@@ -766,6 +833,15 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_str_val_with_mode(&mut self, mode: LexMode) -> SyntaxResult<String> {
+    self
+      .lit_str_val_with_mode_and_legacy_escape(mode)
+      .map(|(_, value, _)| value)
+  }
+
+  pub(crate) fn lit_str_val_with_mode_and_legacy_escape(
+    &mut self,
+    mode: LexMode,
+  ) -> SyntaxResult<(Loc, String, Option<Loc>)> {
     let peek = self.peek_with_mode(mode);
     let t = if matches!(peek.typ, TT::LiteralString | TT::Invalid)
       && self
@@ -789,13 +865,16 @@ impl<'a> Parser<'a> {
       t.loc.1
     };
     let body = self.bytes(Loc(body_start, body_end));
+    let escape_loc = find_legacy_escape_sequence(body)
+      .map(|(offset, len)| Loc(body_start + offset, body_start + offset + len));
+
     if mode == LexMode::JsxTag {
       if !has_closing {
         return Err(
           Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
         );
       }
-      return Ok(body.to_string());
+      return Ok((t.loc, body.to_string(), escape_loc));
     }
     let decoded = decode_literal(body, false).map_err(|err| {
       literal_error_to_syntax(
@@ -810,7 +889,7 @@ impl<'a> Parser<'a> {
         Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
       );
     }
-    Ok(decoded)
+    Ok((t.loc, decoded, escape_loc))
   }
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {

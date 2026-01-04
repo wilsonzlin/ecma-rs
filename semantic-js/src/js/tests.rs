@@ -1604,6 +1604,26 @@ fn strict_octal_literal_property_key_is_reported() {
 }
 
 #[test]
+fn strict_octal_escape_in_string_literal_is_reported() {
+  let source = "'use strict'; \"\\1\";";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(109));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0011");
+  assert_eq!(slice_range(source, &diagnostics[0]), "\\1");
+}
+
+#[test]
+fn strict_octal_escape_in_property_key_is_reported() {
+  let source = "'use strict'; ({\"\\1\": 1});";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(110));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0011");
+  assert_eq!(slice_range(source, &diagnostics[0]), "\\1");
+}
+
+#[test]
 fn duplicate_parameters_in_strict_functions_are_reported() {
   let source = "'use strict'; function f(a,a){}";
   let mut ast = parse(source).unwrap();

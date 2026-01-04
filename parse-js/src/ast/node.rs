@@ -46,6 +46,16 @@ pub struct LegacyOctalNumberLiteral;
 #[derive(Clone, Copy, Debug)]
 pub struct LeadingZeroDecimalLiteral;
 
+/// Marker attached to a string literal token (or a node derived from one) when
+/// its raw source contained a legacy escape sequence that is forbidden in strict
+/// mode (e.g. `"\1"`, `"\08"`, or `"\8"`).
+///
+/// Stores the span of the first offending escape sequence so downstream passes
+/// can report a precise diagnostic without needing access to the raw source
+/// text.
+#[derive(Clone, Copy, Debug)]
+pub struct LegacyOctalEscapeSequence(pub Loc);
+
 impl NodeAssocData {
   pub fn is_empty(&self) -> bool {
     self.items.is_empty()

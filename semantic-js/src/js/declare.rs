@@ -27,6 +27,7 @@ use parse_js::ast::expr::UnaryPostfixExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::LeadingZeroDecimalLiteral;
+use parse_js::ast::node::LegacyOctalEscapeSequence;
 use parse_js::ast::node::LegacyOctalNumberLiteral;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
@@ -885,6 +886,14 @@ impl DeclareVisitor {
     ));
   }
 
+  fn report_strict_octal_escape_sequence(&mut self, range: TextRange) {
+    self.builder.diagnostics.push(Diagnostic::error(
+      "BIND0011",
+      "Octal escape sequences are not allowed in strict mode.".to_string(),
+      Span::new(self.builder.file, range),
+    ));
+  }
+
   fn report_duplicate_parameters(&mut self, func: &mut FuncNode, strict: bool) {
     let disallow_duplicates =
       strict || func.stx.arrow || !func_has_simple_parameter_list(&func.stx);
@@ -1075,6 +1084,12 @@ impl DeclareVisitor {
   }
 
   fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
+    if self.is_strict() {
+      if let Some(escape) = assoc.get::<LegacyOctalEscapeSequence>() {
+        let range = TextRange::new(escape.0.0 as u32, escape.0.1 as u32);
+        self.report_strict_octal_escape_sequence(range);
+      }
+    }
     assoc.set(self.current_scope());
   }
 }
