@@ -712,6 +712,32 @@ fn avoids_synthetic_namespace_param_collisions_with_user_bindings() {
 }
 
 #[test]
+fn lowers_dotted_namespaces_with_strict_reserved_identifier_package_to_parseable_js() {
+  // `package` is reserved in strict mode but is not tokenized as a keyword by the lexer.
+  let src = r#"
+    export namespace A.package {
+      eval("x");
+      export const x = 1;
+    }
+    console.log(A["package"].x);
+  "#;
+  let (code, _parsed) = minify_ts_module(src);
+
+  assert!(
+    code.contains("\"package\""),
+    "expected reserved namespace segment to be accessed via a string key: {code}"
+  );
+  assert!(
+    !code.contains("var package"),
+    "lowering should not introduce a `var package` binding (invalid strict mode JS): {code}"
+  );
+  assert!(
+    !code.contains("function(package"),
+    "lowering should not introduce a `function(package)` parameter (invalid strict mode JS): {code}"
+  );
+}
+
+#[test]
 fn lowers_exported_enums_with_strict_reserved_names_inside_namespaces_to_parseable_js() {
   let src = r#"
     export namespace A {
