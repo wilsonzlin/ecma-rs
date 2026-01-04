@@ -669,6 +669,30 @@ fn direct_eval_in_outer_scope_does_not_disable_dce_in_inner_arrow() {
 }
 
 #[test]
+fn direct_eval_disables_undefined_rewrites_in_descendant_scopes() {
+  // Direct `eval` can introduce new bindings in the surrounding scope at
+  // runtime. Nested functions close over that environment record, so rewrites
+  // that assume `undefined` is the global value are not sound in descendants.
+  let result = minified(
+    TopLevelMode::Global,
+    r#"function f(){eval("var undefined=1");return()=>undefined;}"#,
+  );
+  assert_eq!(
+    result,
+    r#"function f(){eval("var undefined=1");return()=>undefined;}"#
+  );
+
+  let result = minified(
+    TopLevelMode::Global,
+    r#"function f(){eval("var undefined=1");return function(){return undefined;};}"#,
+  );
+  assert_eq!(
+    result,
+    r#"function f(){eval("var undefined=1");return function(){return undefined;};}"#
+  );
+}
+
+#[test]
 fn removes_unused_var_decls_with_pure_initializers() {
   let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
   assert_eq!(result, "console.log(2);");

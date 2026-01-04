@@ -10337,11 +10337,7 @@ impl ProgramState {
         continue;
       };
       if matches!(meta.kind, HirBodyKind::TopLevel)
-        && self
-          .files
-          .get(&meta.file)
-          .and_then(|state| state.top_body)
-          == Some(parent)
+        && self.files.get(&meta.file).and_then(|state| state.top_body) == Some(parent)
       {
         break;
       }

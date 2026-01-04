@@ -404,8 +404,13 @@ fn resolve_overload_set(
       }
     }
 
-    let (score, subtype, mismatch) =
-      check_arguments(store.as_ref(), relate, &outcome.instantiated_sig, &arity, args);
+    let (score, subtype, mismatch) = check_arguments(
+      store.as_ref(),
+      relate,
+      &outcome.instantiated_sig,
+      &arity,
+      args,
+    );
     outcome.match_score = score;
     outcome.subtype = subtype;
     outcome.rejection = mismatch;

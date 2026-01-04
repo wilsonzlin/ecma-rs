@@ -49,9 +49,26 @@ impl<'a> SemanticRewriteVisitor<'a> {
   }
 
   fn is_disabled(&self, assoc: &parse_js::ast::node::NodeAssocData) -> bool {
-    scope_id(assoc)
-      .map(|scope| self.cx.disabled_scopes.contains(&scope))
-      .unwrap_or(false)
+    let Some(scope) = scope_id(assoc) else {
+      return false;
+    };
+    if self.cx.disabled_scopes.contains(&scope) {
+      return true;
+    }
+
+    // `eval` in an ancestor scope can introduce new bindings into the parent
+    // environment record at runtime. Nested functions close over that record, so
+    // rewrites that assume global `undefined` is unshadowed (e.g. `return
+    // undefined;` → `return;`) are not safe in descendant scopes either.
+    let sem = self.cx.sem();
+    let mut current = sem.scope(scope).parent;
+    while let Some(scope_id) = current {
+      if sem.scope(scope_id).has_direct_eval {
+        return true;
+      }
+      current = sem.scope(scope_id).parent;
+    }
+    false
   }
 
   fn exit_return_stmt_node(&mut self, node: &mut ReturnStmtNode) {
@@ -97,9 +114,24 @@ impl<'a> GlobalUndefinedToVoidZeroVisitor<'a> {
   }
 
   fn is_disabled(&self, assoc: &parse_js::ast::node::NodeAssocData) -> bool {
-    scope_id(assoc)
-      .map(|scope| self.cx.disabled_scopes.contains(&scope))
-      .unwrap_or(false)
+    let Some(scope) = scope_id(assoc) else {
+      return false;
+    };
+    if self.cx.disabled_scopes.contains(&scope) {
+      return true;
+    }
+
+    // See `SemanticRewriteVisitor::is_disabled` for why descendant scopes of
+    // `eval` hazards must also be excluded from `undefined` rewrites.
+    let sem = self.cx.sem();
+    let mut current = sem.scope(scope).parent;
+    while let Some(scope_id) = current {
+      if sem.scope(scope_id).has_direct_eval {
+        return true;
+      }
+      current = sem.scope(scope_id).parent;
+    }
+    false
   }
 
   fn exit_expr_node(&mut self, node: &mut ExprNode) {
