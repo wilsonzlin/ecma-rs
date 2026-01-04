@@ -127,6 +127,55 @@ export const x: 1 = foo;
 }
 
 #[test]
+fn import_equals_require_allows_namespace_members_through_ambient_export_assignment() {
+  let mut host = MemoryHost::new();
+  host.add_lib(LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare module "dep" {
+  declare function Foo(): 1;
+  declare namespace Foo {
+    export interface Bar {
+      x: number;
+    }
+  }
+  export = Foo;
+}
+"#,
+    ),
+  });
+
+  let main = FileKey::new("main.ts");
+  host.insert(
+    main.clone(),
+    r#"
+import Foo = require("dep");
+
+export const x = Foo();
+
+const y: Foo.Bar = { x: 123 };
+export const z = y.x;
+"#,
+  );
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let file_id = program.file_id(&main).expect("file id for main.ts");
+  let exports = program.exports_of(file_id);
+  let z = exports.get("z").expect("export z");
+  let z_ty = z
+    .type_id
+    .or_else(|| z.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported z");
+  assert_eq!(program.display_type(z_ty).to_string(), "number");
+}
+
+#[test]
 fn ambient_module_exports_resolve_through_import_equals_require_type_members() {
   let mut host = MemoryHost::new();
   host.add_lib(LibFile {
