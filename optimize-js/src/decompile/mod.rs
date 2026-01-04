@@ -12,7 +12,7 @@ use crate::{Program, ProgramFunction};
 use hir_js::{lower_file, FileKind as HirFileKind};
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNullExpr, LitNumExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
+use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{
@@ -189,7 +189,12 @@ fn bool_expr(value: bool) -> Node<Expr> {
 }
 
 fn void_0_expr() -> Node<Expr> {
-  identifier("undefined".to_string())
+  node(Expr::Unary(node(UnaryExpr {
+    operator: OperatorName::Void,
+    argument: node(Expr::LitNum(node(LitNumExpr {
+      value: JsNumber(0.0),
+    }))),
+  })))
 }
 
 fn num_expr(value: u32) -> Node<Expr> {
