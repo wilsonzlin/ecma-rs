@@ -518,3 +518,51 @@ fn class_expression_name_is_in_tdz_in_extends_clause() {
   assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
   assert_eq!(slice_range(source, &diagnostics[0]), "C");
 }
+
+#[test]
+fn parameter_default_initializer_does_not_resolve_to_body_lexicals() {
+  let source = "function f(a = b) { let b = 1; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(48));
+  assert!(
+    diagnostics.is_empty(),
+    "expected default parameter initializer to ignore body lexicals, got {diagnostics:?}"
+  );
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let b_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "b")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("b use");
+  assert_eq!(b_use.symbol, None);
+  assert!(!b_use.in_tdz);
+}
+
+#[test]
+fn parameter_default_initializer_prefers_outer_binding() {
+  let source = "let b = 2; function f(a = b) { let b = 1; }";
+  let mut ast = parse(source).unwrap();
+  let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(49));
+  assert!(
+    diagnostics.is_empty(),
+    "expected default parameter initializer to resolve to outer binding, got {diagnostics:?}"
+  );
+
+  let outer_b = sem
+    .resolve_name_in_scope(sem.top_scope(), "b")
+    .expect("outer binding");
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let b_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "b")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("b use");
+  assert_eq!(b_use.symbol, Some(outer_b));
+  assert!(!b_use.in_tdz);
+}

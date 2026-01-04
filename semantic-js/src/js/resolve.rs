@@ -5,7 +5,7 @@ use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::class_or_object::ClassMember;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
-use parse_js::ast::func::Func;
+use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
@@ -52,6 +52,7 @@ type ClassExprNode = Node<ClassExpr>;
 type ForBodyNode = Node<ForBody>;
 type FuncExprNode = Node<FuncExpr>;
 type FuncNode = Node<Func>;
+type FuncBodyNode = FuncBody;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type VarDeclNode = Node<VarDecl>;
@@ -89,6 +90,7 @@ impl TdzFrame {
   ForBodyNode(enter, exit),
   ForInOfLhs(enter, exit),
   FuncExprNode(enter, exit),
+  FuncBodyNode(enter),
   FuncNode(enter, exit),
   IdExprNode(enter),
   IdPatNode(enter),
@@ -107,6 +109,8 @@ struct ResolveVisitor<'a> {
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
   class_name_stack: Vec<Option<SymbolId>>,
+  in_param_list: Vec<bool>,
+  func_scope_stack: Vec<ScopeId>,
 }
 
 impl ResolveVisitor<'_> {
@@ -124,6 +128,8 @@ impl ResolveVisitor<'_> {
       pending_active: Vec::new(),
       pending_symbols: Vec::new(),
       class_name_stack: Vec::new(),
+      in_param_list: Vec::new(),
+      func_scope_stack: Vec::new(),
     }
   }
 
@@ -208,7 +214,7 @@ impl ResolveVisitor<'_> {
 
   fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str, range: TextRange) {
     if let Some(scope) = scope_id(assoc) {
-      let symbol = self.sem.resolve_name_in_scope(scope, name);
+      let symbol = self.resolve_name_for_use(scope, name);
       let in_tdz = symbol.map_or(false, |sym| self.symbol_in_tdz(sym));
       let should_report_tdz = self.file.is_some() && in_tdz && symbol.is_some();
       self.mark(assoc, symbol, in_tdz);
@@ -223,6 +229,36 @@ impl ResolveVisitor<'_> {
     } else {
       self.mark(assoc, None, false);
     }
+  }
+
+  fn resolve_name_for_use(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    if !self.in_param_list.last().copied().unwrap_or(false) {
+      return self.sem.resolve_name_in_scope(scope, name);
+    }
+
+    let Some(name_id) = self.sem.name_id(name) else {
+      return None;
+    };
+    let func_scope = self.func_scope_stack.last().copied().unwrap_or(scope);
+
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      let scope_data = self.sem.scope(scope_id);
+      if let Some(symbol) = scope_data.get(name_id) {
+        // Function parameter initializer expressions are evaluated before the
+        // function body's lexical declarations become visible. If name
+        // resolution finds a lexical binding in the function scope, skip it and
+        // continue searching outer scopes instead.
+        if scope_id == func_scope && self.is_lexical_symbol(symbol) {
+          current = scope_data.parent;
+          continue;
+        }
+        return Some(symbol);
+      }
+      current = scope_data.parent;
+    }
+
+    None
   }
 }
 
@@ -337,11 +373,23 @@ impl ResolveVisitor<'_> {
   }
 
   fn enter_func_node(&mut self, node: &mut FuncNode) {
+    if let Some(scope) = scope_id(&node.assoc) {
+      self.func_scope_stack.push(scope);
+    }
+    self.in_param_list.push(true);
     self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_func_node(&mut self, node: &mut FuncNode) {
     self.pop_scope_from_assoc(&node.assoc);
+    self.in_param_list.pop();
+    self.func_scope_stack.pop();
+  }
+
+  fn enter_func_body_node(&mut self, _node: &mut FuncBodyNode) {
+    if let Some(flag) = self.in_param_list.last_mut() {
+      *flag = false;
+    }
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
