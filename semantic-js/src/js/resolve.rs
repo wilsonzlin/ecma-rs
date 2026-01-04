@@ -9,7 +9,9 @@ use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
-use parse_js::ast::stmt::decl::{ClassDecl, ParamDecl, VarDecl, VarDeclMode, VarDeclarator};
+use parse_js::ast::stmt::decl::{
+  ClassDecl, ParamDecl, PatDecl, VarDecl, VarDeclMode, VarDeclarator,
+};
 use parse_js::ast::stmt::{
   BlockStmt, CatchBlock, ForBody, ForInOfLhs, ForInStmt, ForOfStmt, ForTripleStmt, SwitchBranch,
   SwitchStmt,
@@ -63,6 +65,7 @@ type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ObjPatPropNode = Node<ObjPatProp>;
 type ParamDeclNode = Node<ParamDecl>;
+type PatDeclNode = Node<PatDecl>;
 type VarDeclNode = Node<VarDecl>;
 type VarDeclaratorNode = VarDeclarator;
 type SwitchBranchNode = Node<SwitchBranch>;
@@ -128,6 +131,7 @@ struct ForInOfResolveContext {
   IdPatNode(enter),
   ObjPatPropNode(enter, exit),
   ParamDeclNode(enter, exit),
+  PatDeclNode(enter, exit),
   SwitchStmtNode(enter, exit),
   SwitchBranchNode(enter),
   VarDeclNode(enter, exit),
@@ -156,6 +160,8 @@ struct ResolveVisitor<'a> {
   switch_scope_stack: Vec<(Option<ScopeId>, bool)>,
   for_in_of_stack: Vec<ForInOfResolveContext>,
   for_triple_scope_stack: Vec<Option<ScopeId>>,
+  catch_param_next_pat_decl: Vec<bool>,
+  catch_param_pat_decl_stack: Vec<bool>,
 }
 
 impl ResolveVisitor<'_> {
@@ -184,6 +190,8 @@ impl ResolveVisitor<'_> {
       switch_scope_stack: Vec::new(),
       for_in_of_stack: Vec::new(),
       for_triple_scope_stack: Vec::new(),
+      catch_param_next_pat_decl: Vec::new(),
+      catch_param_pat_decl_stack: Vec::new(),
     }
   }
 
@@ -390,10 +398,36 @@ impl ResolveVisitor<'_> {
 
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.push_scope_from_assoc(&node.assoc);
+    self
+      .catch_param_next_pat_decl
+      .push(node.stx.parameter.is_some());
   }
 
   fn exit_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.pop_scope_from_assoc(&node.assoc);
+    self.catch_param_next_pat_decl.pop();
+  }
+
+  fn enter_pat_decl_node(&mut self, _node: &mut PatDeclNode) {
+    let is_catch_param = self
+      .catch_param_next_pat_decl
+      .last()
+      .copied()
+      .unwrap_or(false);
+    if is_catch_param {
+      if let Some(flag) = self.catch_param_next_pat_decl.last_mut() {
+        *flag = false;
+      }
+      self.push_pending(true);
+    }
+    self.catch_param_pat_decl_stack.push(is_catch_param);
+  }
+
+  fn exit_pat_decl_node(&mut self, _node: &mut PatDeclNode) {
+    let is_catch_param = self.catch_param_pat_decl_stack.pop().unwrap_or(false);
+    if is_catch_param {
+      self.pop_pending();
+    }
   }
 
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {

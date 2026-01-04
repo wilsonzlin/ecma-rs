@@ -589,6 +589,27 @@ fn catch_parameter_conflicts_with_lexical_decl() {
 }
 
 #[test]
+fn catch_destructuring_default_initializer_can_reference_prior_binding() {
+  let source = "function f(){ try{throw {}}catch({a, b=a}){ b; } }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(94));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn catch_destructuring_default_initializer_later_binding_is_in_tdz() {
+  let source = "function f(){ try{throw {}}catch({a=b, b}){} }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(95));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "b");
+}
+
+#[test]
 fn catch_parameter_does_not_suppress_script_block_function_hoisting() {
   use crate::assoc::js::resolved_symbol;
   use parse_js::ast::expr::pat::ClassOrFuncName;

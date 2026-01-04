@@ -879,10 +879,13 @@ impl DeclareVisitor {
 
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.push_scope(ScopeKind::Block, range_of(node));
-    // Catch parameters are lexical but initialized immediately (no TDZ).
+    // Catch parameters are lexical bindings. They behave like other lexical
+    // bindings during destructuring initialization (default initializers can
+    // observe TDZ-like ordering), but are fully initialized before the catch
+    // body executes.
     self.push_decl_context(
       DeclTarget::IfNotGlobal,
-      SymbolFlags::default(),
+      SymbolFlags::lexical_tdz(),
       true,
       false,
       false,
