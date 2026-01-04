@@ -100,6 +100,13 @@ pub struct CompilerOptions {
   pub strict_function_types: bool,
   pub exact_optional_property_types: bool,
   pub no_unchecked_indexed_access: bool,
+  /// Whether class fields follow ECMAScript `define` semantics (`Object.defineProperty`)
+  /// or legacy assignment semantics.
+  ///
+  /// The checker currently models the initialization-order impact this option has
+  /// for constructor parameter properties (e.g. `constructor(public x: number)`)
+  /// when checking class field initializers, emitting `TS2729` in the same cases
+  /// as `tsc`.
   pub use_define_for_class_fields: bool,
   pub jsx: Option<JsxMode>,
   /// Cache sizing and sharing strategy for the checker.

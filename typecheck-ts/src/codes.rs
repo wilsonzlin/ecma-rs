@@ -228,6 +228,19 @@ pub const IMPORT_ASSIGNMENT_IN_ESM: Code = Code::new(
   &[],
 );
 
+/// TS2729: Property is used before it has been initialized.
+///
+/// - Primary span: the property name within a `this.x` access in a class field initializer.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const PROPERTY_USED_BEFORE_INITIALIZATION: Code = Code::new(
+  "TS2729",
+  "property used before initialization",
+  "property name within a class field initializer",
+  &["primary: property name"],
+  &[],
+);
+
 /// TC1001: Module specifier could not be resolved.
 ///
 /// - Primary span: the module specifier in an import/export statement or a
