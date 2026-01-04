@@ -550,7 +550,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       file_kind,
       ModuleKind::Module,
       false,
-      false,
+      true,
       &module.decls,
       &module.type_imports,
       &module.imports,

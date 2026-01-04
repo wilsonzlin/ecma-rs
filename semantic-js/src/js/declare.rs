@@ -891,6 +891,14 @@ impl DeclareVisitor {
     ctx: DeclContext,
     span: TextRange,
   ) -> Option<(SymbolId, ScopeId)> {
+    if self.is_strict() && (name == "eval" || name == "arguments") {
+      self.builder.diagnostics.push(Diagnostic::error(
+        "BIND0005",
+        "Unexpected eval or arguments in strict mode".to_string(),
+        Span::new(self.builder.file, span),
+      ));
+    }
+
     let name_id = self.builder.intern_name(name);
 
     if ctx.catch_param && self.builder.scope_kind(self.current_scope()) == ScopeKind::Block {
@@ -1065,6 +1073,10 @@ impl DeclareVisitor {
     if !self.in_statement_list() {
       self.report_invalid_class_declaration(node);
     }
+    // Class bodies are always strict mode, and restricted identifiers like
+    // `eval`/`arguments` are invalid even when the surrounding script is
+    // non-strict.
+    self.strict_stack.push(true);
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
         name,
@@ -1078,8 +1090,6 @@ impl DeclareVisitor {
         },
       );
     }
-    // Class bodies are always strict mode.
-    self.strict_stack.push(true);
     self.push_scope(ScopeKind::Class, range_of(node));
   }
 

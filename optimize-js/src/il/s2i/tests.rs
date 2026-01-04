@@ -173,7 +173,7 @@ fn direct_eval_is_unsupported() {
 #[test]
 fn shadowed_eval_is_allowed() {
   let source = r#"const f = (eval) => { let x = 1; eval("x"); };"#;
-  compile_source(source, TopLevelMode::Module, false).expect("shadowed eval should compile");
+  compile_source(source, TopLevelMode::Global, false).expect("shadowed eval should compile");
 }
 
 #[test]
