@@ -11,6 +11,7 @@ use crate::assoc::js::{scope_id, DeclaredSymbol};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
+use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::pat::Pat;
@@ -30,8 +31,8 @@ use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::BlockStmt;
 use parse_js::ast::stmt::CatchBlock;
 use parse_js::ast::stmt::ForBody;
-use parse_js::ast::stmt::ForInStmt;
 use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stmt::ForInStmt;
 use parse_js::ast::stmt::ForOfStmt;
 use parse_js::ast::stmt::ForTripleStmt;
 use parse_js::ast::stmt::ForTripleStmtInit;
@@ -46,6 +47,7 @@ use std::collections::{BTreeMap, BTreeSet};
 type BlockStmtNode = Node<BlockStmt>;
 type CallExprNode = Node<CallExpr>;
 type CatchBlockNode = Node<CatchBlock>;
+type ClassStaticBlockNode = Node<ClassStaticBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
 type FuncDeclNode = Node<FuncDecl>;
@@ -287,6 +289,28 @@ fn closure_lexical_names(file: FileId, func: &Func) -> BTreeSet<NameId> {
   visitor.names
 }
 
+fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
+  for stmt in stmts.iter() {
+    let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+      break;
+    };
+    let Expr::LitStr(lit) = expr_stmt.stx.expr.stx.as_ref() else {
+      break;
+    };
+    if lit.stx.value == "use strict" {
+      return true;
+    }
+  }
+  false
+}
+
+fn func_has_use_strict(func: &Func) -> bool {
+  match &func.body {
+    Some(FuncBody::Block(stmts)) => has_use_strict_directive(stmts),
+    _ => false,
+  }
+}
+
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode, file: FileId) -> JsSemantics {
   let (sem, _) = declare_with_diagnostics(top_level, mode, file);
   sem
@@ -297,7 +321,8 @@ pub(crate) fn declare_with_diagnostics(
   mode: TopLevelMode,
   file: FileId,
 ) -> (JsSemantics, Vec<Diagnostic>) {
-  let mut visitor = DeclareVisitor::new(mode, file, range_of(top_level));
+  let strict = mode == TopLevelMode::Module || has_use_strict_directive(&top_level.stx.body);
+  let mut visitor = DeclareVisitor::new(mode, file, range_of(top_level), strict);
   top_level.drive_mut(&mut visitor);
   let (mut sem, diagnostics) = visitor.finish();
   mark_dynamic_scopes(top_level, &mut sem);
@@ -694,6 +719,7 @@ struct ForInOfContext {
   CatchBlockNode,
   ClassDeclNode,
   ClassExprNode,
+  ClassStaticBlockNode(enter, exit),
   ForBodyNode,
   ForInStmtNode(enter, exit),
   ForInOfLhs,
@@ -716,6 +742,7 @@ struct DeclareVisitor {
   decl_target_stack: Vec<DeclContext>,
   in_pattern_decl: Vec<bool>,
   top_level_mode: TopLevelMode,
+  strict_stack: Vec<bool>,
   closure_lexical_names_stack: Vec<BTreeSet<NameId>>,
   switch_scope_stack: Vec<(ScopeId, bool)>,
   for_in_of_stack: Vec<ForInOfContext>,
@@ -725,7 +752,7 @@ struct DeclareVisitor {
 }
 
 impl DeclareVisitor {
-  fn new(mode: TopLevelMode, file: FileId, span: TextRange) -> Self {
+  fn new(mode: TopLevelMode, file: FileId, span: TextRange, strict: bool) -> Self {
     let builder = SemanticsBuilder::new(mode, file, span);
     let top_scope = builder.top_scope;
     Self {
@@ -734,6 +761,7 @@ impl DeclareVisitor {
       decl_target_stack: Vec::new(),
       in_pattern_decl: vec![false],
       top_level_mode: mode,
+      strict_stack: vec![strict],
       closure_lexical_names_stack: Vec::new(),
       switch_scope_stack: Vec::new(),
       for_in_of_stack: Vec::new(),
@@ -749,6 +777,10 @@ impl DeclareVisitor {
 
   fn current_scope(&self) -> ScopeId {
     *self.scope_stack.last().unwrap()
+  }
+
+  fn is_strict(&self) -> bool {
+    *self.strict_stack.last().unwrap_or(&false)
   }
 
   fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
@@ -813,7 +845,7 @@ impl DeclareVisitor {
       .iter()
       .rev()
       .copied()
-      .find(|id| self.builder.scope_kind(*id).is_closure())
+      .find(|id| self.builder.scope_kind(*id).is_var_scope())
   }
 
   fn declare_with_target(
@@ -842,7 +874,7 @@ impl DeclareVisitor {
             .builder
             .record_block_var_decl(scope_id, name_id, name, span);
         }
-        if kind.is_closure() {
+        if kind.is_var_scope() {
           break;
         }
       }
@@ -938,14 +970,19 @@ impl DeclareVisitor {
         },
       );
     }
+    // Class bodies are always strict mode.
+    self.strict_stack.push(true);
     self.push_scope(ScopeKind::Class, range_of(node));
   }
 
   fn exit_class_decl_node(&mut self, _node: &mut ClassDeclNode) {
     self.pop_scope();
+    self.strict_stack.pop();
   }
 
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
+    // Class bodies are always strict mode.
+    self.strict_stack.push(true);
     self.push_scope(ScopeKind::Class, range_of(node));
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
@@ -963,6 +1000,15 @@ impl DeclareVisitor {
   }
 
   fn exit_class_expr_node(&mut self, _node: &mut ClassExprNode) {
+    self.pop_scope();
+    self.strict_stack.pop();
+  }
+
+  fn enter_class_static_block_node(&mut self, node: &mut ClassStaticBlockNode) {
+    self.push_scope(ScopeKind::StaticBlock, range_of(node));
+  }
+
+  fn exit_class_static_block_node(&mut self, _node: &mut ClassStaticBlockNode) {
     self.pop_scope();
   }
 
@@ -1159,7 +1205,23 @@ impl DeclareVisitor {
         return;
       }
 
-      // Non-module script: block-level functions are still `var` scoped but they
+      if scope_kind == ScopeKind::Block && self.is_strict() {
+        // Strict mode: block-level functions are block-scoped declarations.
+        self.declare_class_or_func_name(
+          name,
+          DeclContext {
+            target: DeclTarget::IfNotGlobal,
+            flags: SymbolFlags::hoisted(),
+            lexical: true,
+            block_lexical: true,
+            block_var: false,
+            catch_param: false,
+          },
+        );
+        return;
+      }
+
+      // Non-strict script: block-level functions are `var` scoped but still
       // participate in block-level early errors (e.g. they conflict with
       // `var`/`let`/`const` declarations in the same block).
       if scope_kind == ScopeKind::Block {
@@ -1240,6 +1302,9 @@ impl DeclareVisitor {
   }
 
   fn enter_func_node(&mut self, node: &mut FuncNode) {
+    let strict = self.is_strict() || func_has_use_strict(node.stx.as_ref());
+    self.strict_stack.push(strict);
+
     let lexicals = if self.top_level_mode == TopLevelMode::Global {
       closure_lexical_names(self.builder.file, node.stx.as_ref())
     } else {
@@ -1260,6 +1325,7 @@ impl DeclareVisitor {
     self.pop_scope();
     self.pop_decl_target();
     self.closure_lexical_names_stack.pop();
+    self.strict_stack.pop();
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {

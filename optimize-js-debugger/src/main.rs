@@ -295,6 +295,7 @@ fn scope_kind_string(kind: &ProgramScopeKind) -> &'static str {
     ProgramScopeKind::Global => "global",
     ProgramScopeKind::Module => "module",
     ProgramScopeKind::Class => "class",
+    ProgramScopeKind::StaticBlock => "static_block",
     ProgramScopeKind::NonArrowFunction => "non_arrow_function",
     ProgramScopeKind::ArrowFunction => "arrow_function",
     ProgramScopeKind::Block => "block",

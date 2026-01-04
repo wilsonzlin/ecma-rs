@@ -134,6 +134,11 @@ pub enum ScopeKind {
   Global,
   Module,
   Class,
+  /// Class static initialization blocks (`static { ... }`).
+  ///
+  /// These blocks are always strict mode and introduce their own `var` scope,
+  /// so `var` and function declarations do **not** leak outside the block.
+  StaticBlock,
   NonArrowFunction,
   ArrowFunction,
   Block,
@@ -146,6 +151,10 @@ impl ScopeKind {
       self,
       ScopeKind::Module | ScopeKind::NonArrowFunction | ScopeKind::ArrowFunction
     )
+  }
+
+  pub(crate) fn is_var_scope(&self) -> bool {
+    self.is_closure() || *self == ScopeKind::StaticBlock
   }
 }
 

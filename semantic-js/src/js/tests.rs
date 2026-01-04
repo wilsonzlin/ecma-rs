@@ -296,6 +296,65 @@ fn class_name_is_visible_inside_static_block() {
 }
 
 #[test]
+fn static_block_lexicals_do_not_leak_to_sibling_members() {
+  let mut ast = parse("class C { static { let a = 1; } static m(){ a; } }").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(78));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  assert_eq!(collect.id_exprs, vec![("a".to_string(), None)]);
+}
+
+#[test]
+fn static_block_vars_do_not_leak_to_sibling_members() {
+  let mut ast = parse("class C { static { var a = 1; } static m(){ a; } }").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(79));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  assert_eq!(collect.id_exprs, vec![("a".to_string(), None)]);
+}
+
+#[test]
+fn static_blocks_have_independent_scopes() {
+  let mut ast = parse("class C { static { let a = 1; } static { let a = 2; } }").unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(80));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+  let decls: Vec<_> = collect
+    .id_pats
+    .iter()
+    .filter(|(name, _, is_decl)| name == "a" && *is_decl)
+    .filter_map(|(_, sym, _)| *sym)
+    .collect();
+  assert_eq!(decls.len(), 2);
+  assert_ne!(decls[0], decls[1]);
+}
+
+#[test]
+fn static_block_tdz_is_reported() {
+  let source = "class C { static { a; let a = 1; } }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(81));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0003");
+  assert_eq!(slice_range(source, &diagnostics[0]), "a");
+}
+
+#[test]
 fn class_name_in_extends_is_in_tdz() {
   let source = "class Foo extends Foo{}";
   let mut ast = parse(source).unwrap();
@@ -387,6 +446,53 @@ fn block_function_is_lexical_in_modules() {
   let source = "function outer(){ if(true){ function foo(){} foo; } foo; }";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(59));
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let mut collector = FooCollector::default();
+  ast.drive_mut(&mut collector);
+  let decl = collector.decl.expect("expected foo declaration symbol");
+
+  collector.uses.sort_by_key(|(loc, _)| loc.0);
+  assert_eq!(collector.uses.len(), 2);
+  assert_eq!(collector.uses[0].1, Some(decl));
+  assert_eq!(collector.uses[1].1, None);
+}
+
+#[test]
+fn strict_script_block_function_is_block_scoped() {
+  use crate::assoc::js::resolved_symbol;
+  use parse_js::ast::expr::pat::ClassOrFuncName;
+  use parse_js::loc::Loc;
+
+  type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+
+  #[derive(Default, VisitorMut)]
+  #[visitor(IdExprNode(enter), ClassOrFuncNameNode(enter))]
+  struct FooCollector {
+    decl: Option<SymbolId>,
+    uses: Vec<(Loc, Option<SymbolId>)>,
+  }
+
+  impl FooCollector {
+    fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
+      if node.stx.name == "foo" {
+        self.decl = declared_symbol(&node.assoc);
+      }
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      if node.stx.name == "foo" {
+        self.uses.push((node.loc, resolved_symbol(&node.assoc)));
+      }
+    }
+  }
+
+  let source = "function outer(){ \"use strict\"; if(true){ function foo(){} foo; } foo; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(82));
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
@@ -590,7 +696,10 @@ fn script_block_function_var_conflict_is_reported() {
 fn switch_case_lexicals_are_not_visible_outside_switch() {
   let mut ast = parse("switch(0){case 0: let a = 1; break;} a;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(70));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -612,7 +721,10 @@ fn switch_case_lexicals_do_not_conflict_with_outer_let() {
   let source = "switch(0){case 0: let a = 1; break;} let a = 2;";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(71));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }
 
 #[test]
@@ -620,7 +732,10 @@ fn switch_discriminant_prefers_outer_binding() {
   let source = "let a = 0; switch(a){case 0: let a = 1; break;}";
   let mut ast = parse(source).unwrap();
   let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(72));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let outer = sem
     .resolve_name_in_scope(sem.top_scope(), "a")
@@ -642,7 +757,10 @@ fn switch_discriminant_does_not_resolve_to_case_lexicals() {
   let source = "switch(a){case 0: let a = 1; break;}";
   let mut ast = parse(source).unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(73));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -658,7 +776,10 @@ fn switch_discriminant_does_not_resolve_to_case_lexicals() {
 fn for_of_lexicals_are_not_visible_outside_loop() {
   let mut ast = parse("for (let a of [1]) {} a;").unwrap();
   let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(74));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -687,7 +808,10 @@ fn for_of_rhs_prefers_outer_binding() {
   let source = "let a = 0; for (let a of [a]) { a; } a;";
   let mut ast = parse(source).unwrap();
   let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(75));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let outer = sem
     .resolve_name_in_scope(sem.top_scope(), "a")
@@ -722,7 +846,10 @@ fn for_of_body_can_shadow_loop_binding() {
   let source = "for (let a of [1]) { let a = 2; a; }";
   let mut ast = parse(source).unwrap();
   let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(76));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -776,7 +903,10 @@ fn for_triple_let_shadows_outer_without_conflict() {
   let source = "let i = 0; for (let i = 0; i < 1; i++) { } i;";
   let mut ast = parse(source).unwrap();
   let (sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Module, FileId(77));
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let outer = sem
     .resolve_name_in_scope(sem.top_scope(), "i")

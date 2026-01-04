@@ -2,6 +2,7 @@ use super::{JsSemantics, ScopeId, SymbolId};
 use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
+use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal};
 use parse_js::ast::expr::pat::{ArrPatElem, IdPat, ObjPatProp};
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
@@ -51,6 +52,7 @@ type BlockStmtNode = Node<BlockStmt>;
 type CatchBlockNode = Node<CatchBlock>;
 type ArrPatElemNode = ArrPatElem;
 type ClassMemberNode = Node<ClassMember>;
+type ClassStaticBlockNode = Node<ClassStaticBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
 type ForBodyNode = Node<ForBody>;
@@ -103,6 +105,7 @@ struct ForInOfResolveContext {
   CatchBlockNode(enter, exit),
   ClassDeclNode(enter, exit),
   ClassMemberNode(enter, exit),
+  ClassStaticBlockNode(enter, exit),
   ClassExprNode(enter, exit),
   ClassOrObjKey(enter, exit),
   ClassOrObjVal(enter, exit),
@@ -419,6 +422,14 @@ impl ResolveVisitor<'_> {
     self.class_name_stack.pop();
   }
 
+  fn enter_class_static_block_node(&mut self, node: &mut ClassStaticBlockNode) {
+    self.push_scope_from_assoc(&node.assoc);
+  }
+
+  fn exit_class_static_block_node(&mut self, node: &mut ClassStaticBlockNode) {
+    self.pop_scope_from_assoc(&node.assoc);
+  }
+
   fn enter_class_member_node(&mut self, _node: &mut ClassMemberNode) {
     self.class_member_depth += 1;
   }
@@ -470,9 +481,10 @@ impl ResolveVisitor<'_> {
 
   fn enter_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
     let Some(outer) = scope_id(&node.assoc) else {
-      self
-        .for_in_of_stack
-        .push(ForInOfResolveContext { loop_scope: None, lhs_active: false });
+      self.for_in_of_stack.push(ForInOfResolveContext {
+        loop_scope: None,
+        lhs_active: false,
+      });
       return;
     };
 
@@ -522,9 +534,10 @@ impl ResolveVisitor<'_> {
 
   fn enter_for_of_stmt_node(&mut self, node: &mut ForOfStmtNode) {
     let Some(outer) = scope_id(&node.assoc) else {
-      self
-        .for_in_of_stack
-        .push(ForInOfResolveContext { loop_scope: None, lhs_active: false });
+      self.for_in_of_stack.push(ForInOfResolveContext {
+        loop_scope: None,
+        lhs_active: false,
+      });
       return;
     };
 
