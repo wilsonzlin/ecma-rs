@@ -42,7 +42,7 @@ export const x: T = 1;
     program
       .display_type(program.type_of_def_interned(x_def))
       .to_string(),
-    "T"
+    "number"
   );
 
   let t_def = program
