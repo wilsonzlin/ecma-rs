@@ -22,6 +22,7 @@ impl<'p> HirSourceToInst<'p> {
   const INTERNAL_INSTANCEOF_CALLEE: &'static str = "__optimize_js_instanceof";
   const INTERNAL_DELETE_CALLEE: &'static str = "__optimize_js_delete";
   const INTERNAL_NEW_CALLEE: &'static str = "__optimize_js_new";
+  const INTERNAL_REGEX_CALLEE: &'static str = "__optimize_js_regex";
 
   pub fn temp_var_arg(&mut self, f: impl FnOnce(u32) -> Inst) -> Arg {
     let tgt = self.c_temp.bump();
@@ -86,7 +87,7 @@ impl<'p> HirSourceToInst<'p> {
     self.classify_symbol(symbol, name)
   }
 
-  fn literal_arg(&self, span: Loc, lit: &hir_js::Literal) -> OptimizeResult<Arg> {
+  fn literal_arg(&mut self, span: Loc, lit: &hir_js::Literal) -> OptimizeResult<Arg> {
     Ok(match lit {
       hir_js::Literal::Boolean(v) => Arg::Const(Const::Bool(*v)),
       hir_js::Literal::Number(v) => {
@@ -100,11 +101,16 @@ impl<'p> HirSourceToInst<'p> {
           .ok_or_else(|| unsupported_syntax(span, format!("invalid bigint literal {v:?}")))?;
         Arg::Const(Const::BigInt(value))
       }
-      other => {
-        return Err(unsupported_syntax(
-          span,
-          format!("unsupported literal {other:?}"),
-        ))
+      hir_js::Literal::Regex(v) => {
+        let tmp = self.c_temp.bump();
+        self.out.push(Inst::call(
+          tmp,
+          Arg::Builtin(Self::INTERNAL_REGEX_CALLEE.to_string()),
+          Arg::Const(Const::Undefined),
+          vec![Arg::Const(Const::Str(v.clone()))],
+          Vec::new(),
+        ));
+        Arg::Var(tmp)
       }
     })
   }

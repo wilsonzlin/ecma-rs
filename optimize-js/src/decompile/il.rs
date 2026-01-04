@@ -4,7 +4,9 @@ use crate::symbol::semantics::SymbolId;
 use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
 use num_bigint::BigInt;
-use parse_js::ast::expr::lit::{LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitStrExpr};
+use parse_js::ast::expr::lit::{
+  LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitRegexExpr, LitStrExpr,
+};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
   BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr, UnaryExpr,
@@ -398,6 +400,7 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
   const INTERNAL_INSTANCEOF_CALLEE: &str = "__optimize_js_instanceof";
   const INTERNAL_DELETE_CALLEE: &str = "__optimize_js_delete";
   const INTERNAL_NEW_CALLEE: &str = "__optimize_js_new";
+  const INTERNAL_REGEX_CALLEE: &str = "__optimize_js_regex";
 
   if inst.t != InstTyp::Call {
     return None;
@@ -426,6 +429,18 @@ pub fn lower_call_inst<V: VarNamer, F: FnEmitter>(
         Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
         None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
       };
+    }
+  }
+
+  if spreads.is_empty() && matches!(this_arg, Arg::Const(Const::Undefined)) && args.len() == 1 {
+    if let (Arg::Builtin(path), Arg::Const(Const::Str(regex))) = (callee_arg, &args[0]) {
+      if path == INTERNAL_REGEX_CALLEE {
+        let expr = node(Expr::LitRegex(node(LitRegexExpr { value: regex.clone() })));
+        return match tgt {
+          Some(tgt) => Some(var_binding(var_namer, tgt, expr, target_init)),
+          None => Some(node(Stmt::Expr(node(ExprStmt { expr })))),
+        };
+      }
     }
   }
 
