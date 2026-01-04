@@ -95,7 +95,7 @@ fn formats_complex_object_shape() {
   let formatted = format!("{}", store.display(object_ty));
   assert_eq!(
     formatted,
-    "{ public readonly a: string; b?: number; [string]: number; (arg: boolean) => symbol }",
+    "{ public readonly a: string; b?: number; [string]: number; (arg: boolean): symbol }",
   );
 }
 
@@ -278,7 +278,7 @@ fn formats_new_type_variants() {
   });
   assert_eq!(
     format!("{}", store.display(ro_array)),
-    "readonly (number | string)[]"
+    "readonly (string | number)[]"
   );
 
   let tuple = store.intern_type(TypeKind::Tuple(vec![

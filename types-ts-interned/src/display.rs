@@ -299,7 +299,7 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Callable { overloads } => {
         if overloads.len() == 1 {
           let sig = self.store.signature(overloads[0]);
-          return self.fmt_call_signature(&sig, f);
+          return self.fmt_signature(&sig, f);
         }
         write!(f, "{{")?;
         let mut first = true;
@@ -465,7 +465,58 @@ impl<'a> TypeDisplay<'a> {
     }
     self.store.type_cmp(a, b)
   }
- 
+  
+  fn fmt_signature(&self, sig: &crate::signature::Signature, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    if !sig.type_params.is_empty() {
+      write!(f, "<")?;
+      let mut iter = sig.type_params.iter().peekable();
+      while let Some(param) = iter.next() {
+        self.fmt_type_param_id(param.id, f)?;
+        if let Some(constraint) = param.constraint {
+          write!(f, " extends ")?;
+          self.fmt_type(constraint, f)?;
+        }
+        if let Some(default) = param.default {
+          write!(f, " = ")?;
+          self.fmt_type(default, f)?;
+        }
+        if iter.peek().is_some() {
+          write!(f, ", ")?;
+        }
+      }
+      write!(f, ">")?;
+    }
+
+    write!(f, "(")?;
+    let mut needs_comma = false;
+    if let Some(this_param) = sig.this_param {
+      write!(f, "this: ")?;
+      self.fmt_type(this_param, f)?;
+      needs_comma = true;
+    }
+    for (idx, param) in sig.params.iter().enumerate() {
+      if needs_comma {
+        write!(f, ", ")?;
+      }
+      if param.rest {
+        write!(f, "...")?;
+      }
+      if let Some(name) = param.name {
+        self.fmt_name(name, f)?;
+      } else {
+        write!(f, "arg{idx}")?;
+      }
+      if param.optional {
+        write!(f, "?")?;
+      }
+      write!(f, ": ")?;
+      self.fmt_type(param.ty, f)?;
+      needs_comma = true;
+    }
+    write!(f, ") => ")?;
+    self.fmt_type(sig.ret, f)
+  }
+
   fn fmt_call_signature(
     &self,
     sig: &crate::signature::Signature,
@@ -520,7 +571,7 @@ impl<'a> TypeDisplay<'a> {
       needs_comma = true;
     }
 
-    write!(f, ") => ")?;
+    write!(f, "): ")?;
     self.fmt_type(sig.ret, f)
   }
 
