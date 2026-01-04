@@ -105,3 +105,51 @@ const y = x;
   let rendered = program.display_type(program.type_of_def(y_def)).to_string();
   assert_eq!(rendered, "number");
 }
+
+#[test]
+fn import_equals_require_resolves_ambient_export_assignment_through_host_module_mapping() {
+  let options = CompilerOptions::default();
+  // Keep bundled libs enabled so primitives like literal types are available without
+  // requiring additional host-provided lib files.
+
+  let entry = FileKey::new("main.ts");
+  let ambient = FileKey::new("ambient_mod.d.ts");
+
+  let mut host = ModuleHost::new(options);
+  host.insert(
+    ambient.clone(),
+    r#"
+export {};
+declare module "pkg" {
+  declare const foo: 1;
+  export = foo;
+}
+"#,
+  );
+  host.insert(
+    entry.clone(),
+    r#"
+import foo = require("pkg");
+export const x: 1 = foo;
+"#,
+  );
+  // Allow `declare module "pkg"` to augment the resolved module.
+  host.link(entry.clone(), "pkg", ambient.clone());
+  host.link(ambient.clone(), "pkg", ambient.clone());
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics when importing an ambient export assignment: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&entry).expect("main.ts id");
+  let exports = program.exports_of(entry_id);
+  let x_entry = exports.get("x").expect("export x");
+  let x_ty = x_entry
+    .type_id
+    .or_else(|| x_entry.def.map(|def| program.type_of_def(def)))
+    .expect("type for exported x");
+  assert_eq!(program.display_type(x_ty).to_string(), "1");
+}
