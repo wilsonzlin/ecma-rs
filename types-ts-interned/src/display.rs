@@ -382,9 +382,13 @@ impl<'a> TypeDisplay<'a> {
       }
       TypeKind::TemplateLiteral(tpl) => self.fmt_template(&tpl, f),
       TypeKind::Intrinsic { kind, ty } => {
-        write!(f, "{}<", kind.as_str())?;
-        self.fmt_type(ty, f)?;
-        write!(f, ">")
+        if matches!(kind, crate::kind::IntrinsicKind::BuiltinIteratorReturn) {
+          write!(f, "{}", kind.as_str())
+        } else {
+          write!(f, "{}<", kind.as_str())?;
+          self.fmt_type(ty, f)?;
+          write!(f, ">")
+        }
       }
       TypeKind::IndexedAccess { obj, index } => {
         self.fmt_with_prec(obj, Precedence::Primary, f)?;

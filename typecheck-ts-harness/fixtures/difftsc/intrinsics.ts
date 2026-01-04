@@ -18,3 +18,6 @@ export const template: Uppercase<`foo${string}bar`> = "FOOXBAR";
 
 export const noInfer: NoInfer<"x"> = "x";
              // ^?
+
+export const builtinReturn: BuiltinIteratorReturn = undefined as any;
+             // ^?

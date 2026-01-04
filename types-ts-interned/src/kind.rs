@@ -62,6 +62,7 @@ pub enum IntrinsicKind {
   Capitalize,
   Uncapitalize,
   NoInfer,
+  BuiltinIteratorReturn,
 }
 
 impl IntrinsicKind {
@@ -72,6 +73,7 @@ impl IntrinsicKind {
       "Capitalize" => Some(Self::Capitalize),
       "Uncapitalize" => Some(Self::Uncapitalize),
       "NoInfer" => Some(Self::NoInfer),
+      "BuiltinIteratorReturn" => Some(Self::BuiltinIteratorReturn),
       _ => None,
     }
   }
@@ -83,6 +85,7 @@ impl IntrinsicKind {
       Self::Capitalize => "Capitalize",
       Self::Uncapitalize => "Uncapitalize",
       Self::NoInfer => "NoInfer",
+      Self::BuiltinIteratorReturn => "BuiltinIteratorReturn",
     }
   }
 }

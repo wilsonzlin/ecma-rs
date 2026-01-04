@@ -20,6 +20,11 @@
     "exports": [
       {
         "file": "intrinsics.ts",
+        "name": "builtinReturn",
+        "type": "any"
+      },
+      {
+        "file": "intrinsics.ts",
         "name": "capitalize",
         "type": "\"Hello\""
       },
@@ -103,6 +108,13 @@
         "line": 18,
         "column": 16,
         "type": "\"x\""
+      },
+      {
+        "file": "intrinsics.ts",
+        "offset": 555,
+        "line": 21,
+        "column": 16,
+        "type": "any"
       }
     ]
   }

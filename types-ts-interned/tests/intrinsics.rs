@@ -59,3 +59,17 @@ fn uppercase_transforms_template_literal_parts() {
     "`FOO${Uppercase<string>}BAR`"
   );
 }
+
+#[test]
+fn builtin_iterator_return_evaluates_to_any() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let ty = store.intern_type(TypeKind::Intrinsic {
+    kind: IntrinsicKind::BuiltinIteratorReturn,
+    ty: primitives.unknown,
+  });
+  let evaluated = store.evaluate(ty);
+
+  assert_eq!(evaluated, primitives.any);
+}

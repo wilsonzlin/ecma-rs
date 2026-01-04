@@ -1205,6 +1205,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
     match kind {
       IntrinsicKind::NoInfer => return evaluated,
+      IntrinsicKind::BuiltinIteratorReturn => return primitives.any,
       _ => {}
     }
 
@@ -1284,6 +1285,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             self.store.intern_type(TypeKind::TemplateLiteral(tpl))
           }
           IntrinsicKind::NoInfer => unreachable!("handled above"),
+          IntrinsicKind::BuiltinIteratorReturn => unreachable!("handled above"),
         }
       }
       _ => self.store.intern_type(TypeKind::Intrinsic {
@@ -1893,6 +1895,7 @@ fn apply_string_mapping(kind: IntrinsicKind, value: &str) -> String {
     IntrinsicKind::Capitalize => capitalize_string(value),
     IntrinsicKind::Uncapitalize => uncapitalize_string(value),
     IntrinsicKind::NoInfer => value.to_string(),
+    IntrinsicKind::BuiltinIteratorReturn => value.to_string(),
   }
 }
 

@@ -1683,12 +1683,16 @@ fn collect_marker_type_facts(
       continue;
     };
     // `Program::type_at` uses a trivia lookaround to be resilient to offsets in
-    // whitespace. TypeScript's marker queries use `getTokenAtPosition` on the
-    // exact offset, so keep our lookup strict: use `type_at` only when the
-    // marker lands inside an expression span; otherwise fall back to the
-    // declared symbol type (when the offset lands on an identifier). If neither
-    // is available, treat the marker as `any` so we still emit a fact with a
-    // stable, tsc-like default.
+    // whitespace, whereas TypeScript's marker queries use `getTokenAtPosition`
+    // and implicitly skip trivia to find the nearest token.
+    //
+    // To stay close to tsc while keeping results deterministic:
+    // - Prefer an exact expression hit when the marker offset is inside an
+    //   expression span.
+    // - Otherwise, try the declared symbol type when the offset lands on an
+    //   identifier.
+    // - Finally, fall back to `type_at`, allowing its bounded trivia lookaround
+    //   to recover common "caret points at whitespace" markers.
     let ty = if program.expr_at(file_id, marker.offset).is_some() {
       program.type_at(file_id, marker.offset)
     } else {

@@ -20,5 +20,6 @@ type Lowercase<S extends string> = intrinsic;
 type Capitalize<S extends string> = intrinsic;
 type Uncapitalize<S extends string> = intrinsic;
 type NoInfer<T> = intrinsic;
+type BuiltinIteratorReturn = intrinsic;
 
 declare const esVersion: "es2015";
