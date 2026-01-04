@@ -8237,7 +8237,38 @@ impl ProgramState {
         let symbol = self.alloc_symbol();
         let kind = match match_kind {
           DefMatchKind::Function => DefKind::Function(FuncData {
-            params: Vec::new(),
+            params: def
+              .body
+              .and_then(|body_id| lowered.body(body_id))
+              .and_then(|body| body.function.as_ref().map(|func| (body, func)))
+              .map(|(body, func)| {
+                func
+                  .params
+                  .iter()
+                  .enumerate()
+                  .map(|(index, param)| {
+                    let name = match body
+                      .pats
+                      .get(param.pat.0 as usize)
+                      .map(|pat| &pat.kind)
+                    {
+                      Some(HirPatKind::Ident(name_id)) => lowered
+                        .names
+                        .resolve(*name_id)
+                        .unwrap_or_default()
+                        .to_string(),
+                      _ => format!("<pattern{index}>"),
+                    };
+                    ParamData {
+                      name,
+                      typ: None,
+                      symbol: self.alloc_symbol(),
+                      pat: None,
+                    }
+                  })
+                  .collect()
+              })
+              .unwrap_or_default(),
             return_ann: None,
             body: def.body,
           }),

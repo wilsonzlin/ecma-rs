@@ -169,3 +169,65 @@ export const name = Lib.version;
     "property access through merged namespace should preserve literal type"
   );
 }
+
+#[test]
+fn value_and_namespace_merge_preserves_member_function_signature() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("merged_function_namespace.ts");
+  host.insert(
+    file.clone(),
+    Arc::from(
+      r#"
+function Lib(value: number): number {
+  return value * 2;
+}
+
+namespace Lib {
+  export const version = "merged";
+  export function helper(label: string): string {
+    return label + version;
+  }
+}
+
+export const doubled = Lib(2);
+export const label = Lib.helper("ok");
+export { Lib };
+"#,
+    ),
+  );
+
+  let program = Program::new(host, vec![file.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&file).unwrap();
+  let exports = program.exports_of(file_id);
+
+  let lib_ty = exports
+    .get("Lib")
+    .and_then(|e| e.type_id)
+    .expect("exported Lib type");
+  let helper_ty = program
+    .property_type(lib_ty, PropertyKey::String("helper".into()))
+    .expect("namespace member helper should be present on merged Lib");
+  let signatures = program.call_signatures(helper_ty);
+  assert_eq!(
+    signatures.len(),
+    1,
+    "expected a single signature for Lib.helper, got {signatures:?}"
+  );
+  assert_eq!(
+    signatures[0].signature.params.len(),
+    1,
+    "expected Lib.helper to take one argument"
+  );
+
+  let label_ty = exports
+    .get("label")
+    .and_then(|e| e.type_id)
+    .expect("label export type");
+  assert_eq!(program.display_type(label_ty).to_string(), "string");
+}
