@@ -3046,8 +3046,44 @@ impl<'a> Checker<'a> {
       }
     }
 
-    for diag in &resolution.diagnostics {
-      self.diagnostics.push(diag.clone());
+    let allow_assignable_fallback = resolution.diagnostics.len() == 1
+      && resolution.diagnostics[0].code.as_str() == codes::NO_OVERLOAD.as_str()
+      && candidate_sigs.len() == 1;
+    let mut reported_assignability = false;
+    if allow_assignable_fallback {
+      if let Some(sig_id) = resolution
+        .contextual_signature
+        .or_else(|| candidate_sigs.first().copied())
+      {
+        let sig = self.store.signature(sig_id);
+        let before = self.diagnostics.len();
+        for (idx, arg) in arg_exprs.iter().enumerate() {
+          let Some(param_index) = param_index_map.get(idx).and_then(|idx| *idx) else {
+            continue;
+          };
+          let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, param_index) else {
+            continue;
+          };
+          let arg_ty = arg_types.get(idx).map(|arg| arg.ty).unwrap_or(prim.unknown);
+          let expected = match self.store.type_kind(param_ty) {
+            TypeKind::TypeParam(id) => sig
+              .type_params
+              .iter()
+              .find(|tp| tp.id == id)
+              .and_then(|tp| tp.constraint)
+              .unwrap_or(param_ty),
+            _ => param_ty,
+          };
+          self.check_assignable(&arg.stx.value, arg_ty, expected, None);
+        }
+        reported_assignability = self.diagnostics.len() > before;
+      }
+    }
+
+    if !reported_assignability {
+      for diag in &resolution.diagnostics {
+        self.diagnostics.push(diag.clone());
+      }
     }
     if resolution.diagnostics.is_empty() {
       if let Some(sig_id) = resolution.signature {
