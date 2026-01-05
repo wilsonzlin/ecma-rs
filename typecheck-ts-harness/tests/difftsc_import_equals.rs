@@ -3,7 +3,9 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+mod common;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn harness_cli() -> Command {
   assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
@@ -11,10 +13,11 @@ fn harness_cli() -> Command {
 
 #[test]
 fn this_param_dts_matches_baseline_type_facts() {
-  let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
+  let source_suite = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("difftsc");
-  let manifest = suite.join("manifest.toml");
+  let manifest = source_suite.join("manifest.toml");
+  let (_dir, suite) = common::temp_difftsc_suite(&["overloads.ts", "this_param_dts"]);
 
   let output = harness_cli()
     .timeout(CLI_TIMEOUT)

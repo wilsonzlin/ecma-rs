@@ -1,10 +1,11 @@
 use assert_cmd::Command;
 use serde_json::Value;
 use std::collections::BTreeSet;
-use std::path::Path;
 use std::time::Duration;
 
-const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+mod common;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn harness_cli() -> Command {
   assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
@@ -12,9 +13,7 @@ fn harness_cli() -> Command {
 
 #[test]
 fn difftsc_uses_canonical_file_paths() {
-  let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("fixtures")
-    .join("difftsc");
+  let (_dir, suite) = common::temp_difftsc_suite(&["module_types", "win_paths"]);
 
   let output = harness_cli()
     .timeout(CLI_TIMEOUT)

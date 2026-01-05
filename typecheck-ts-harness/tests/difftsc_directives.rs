@@ -3,6 +3,8 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
+mod common;
+
 const CLI_TIMEOUT: Duration = Duration::from_secs(30);
 
 fn harness_cli() -> Command {
@@ -11,9 +13,7 @@ fn harness_cli() -> Command {
 
 #[test]
 fn difftsc_honors_fixture_directives_for_rust_runs() {
-  let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("fixtures")
-    .join("difftsc");
+  let (_dir, suite) = common::temp_difftsc_suite(&["win_paths"]);
   let baseline = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("baselines")
     .join("difftsc")

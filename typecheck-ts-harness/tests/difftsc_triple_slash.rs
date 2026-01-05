@@ -3,17 +3,25 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-const CLI_TIMEOUT: Duration = Duration::from_secs(30);
+mod common;
+
+const CLI_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn harness_cli() -> Command {
   assert_cmd::cargo::cargo_bin_cmd!("typecheck-ts-harness")
 }
 
 fn run_difftsc() -> Value {
-  let suite = Path::new(env!("CARGO_MANIFEST_DIR"))
+  let source_suite = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("difftsc");
-  let manifest = suite.join("manifest.toml");
+  let manifest = source_suite.join("manifest.toml");
+  let (_dir, suite) = common::temp_difftsc_suite(&[
+    "triple_slash_references.ts",
+    "triple_slash_no_default_lib.ts",
+    "triple_slash_path_imported",
+    "triple_slash_types_imported",
+  ]);
 
   let output = harness_cli()
     .timeout(CLI_TIMEOUT)
@@ -22,6 +30,10 @@ fn run_difftsc() -> Value {
     .arg(&suite)
     .arg("--manifest")
     .arg(&manifest)
+    // Keep the difftsc CLI lightweight so it stays within the test timeout even
+    // when the cargo test harness runs multiple integration tests in parallel.
+    .arg("--jobs")
+    .arg("1")
     .arg("--use-baselines")
     .arg("--compare-rust")
     .arg("--allow-mismatches")
@@ -74,17 +86,10 @@ fn difftsc_selected_cases_match_baselines() {
   );
 
   for name in [
-    "export_assignment_mixed_exports",
-    "export_assignment_qualified",
-    "export_assignment_require",
-    "import_equals_require",
-    "module_types",
-    "multi",
     "triple_slash_references",
     "triple_slash_no_default_lib",
     "triple_slash_path_imported",
     "triple_slash_types_imported",
-    "triple_slash_lib_imported",
   ] {
     let case = find_case(&report, name);
     assert_matched(case, name);

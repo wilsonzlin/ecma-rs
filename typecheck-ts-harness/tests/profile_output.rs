@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::path::PathBuf;
+use std::fs;
 use std::time::Duration;
 use tempfile::tempdir;
 use typecheck_ts_harness::run_conformance;
@@ -8,8 +8,19 @@ use typecheck_ts_harness::ConformanceOptions;
 
 #[test]
 fn conformance_profile_emits_actionable_json() {
-  let suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/conformance-mini");
   let dir = tempdir().expect("tempdir");
+  let suite = dir.path().join("suite");
+  fs::create_dir_all(&suite).expect("create suite directory");
+  fs::write(
+    suite.join("b.ts"),
+    "// @noLib: true\nexport const b = 1;\n",
+  )
+  .expect("write fixture");
+  fs::write(
+    suite.join("a.ts"),
+    "// @noLib: true\nexport const a = 1;\n",
+  )
+  .expect("write fixture");
   let profile_out = dir.path().join("profile.json");
 
   let mut options = ConformanceOptions::new(suite);
