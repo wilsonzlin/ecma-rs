@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use typecheck_ts::lib_support::{CompilerOptions, LibName};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 #[derive(Default)]
@@ -30,6 +31,15 @@ impl Host for MemoryHost {
 
   fn resolve(&self, from: &FileKey, spec: &str) -> Option<FileKey> {
     self.edges.get(&(from.clone(), spec.to_string())).cloned()
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    // Namespace import resolution does not require the bundled libs; disabling
+    // them keeps this integration test fast in debug builds.
+    CompilerOptions {
+      libs: vec![LibName::parse("es5").expect("es5 lib")],
+      ..CompilerOptions::default()
+    }
   }
 }
 

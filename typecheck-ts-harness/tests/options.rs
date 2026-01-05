@@ -1,9 +1,10 @@
+use globset::{Glob, GlobSetBuilder};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use typecheck_ts::lib_support::{LibName, ModuleKind, ScriptTarget};
 use typecheck_ts_harness::runner::EngineStatus;
-use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions};
+use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions, Filter};
 
 fn conformance_options(compare: CompareMode) -> ConformanceOptions {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -20,10 +21,23 @@ fn conformance_options(compare: CompareMode) -> ConformanceOptions {
   options
 }
 
+fn glob_filter(patterns: &[&str]) -> Filter {
+  let mut builder = GlobSetBuilder::new();
+  for pattern in patterns {
+    builder.add(Glob::new(pattern).unwrap());
+  }
+  Filter::Glob(builder.build().unwrap())
+}
+
 #[test]
 #[cfg(feature = "with-node")]
 fn strict_null_checks_directive_reaches_tsc() {
   let options = conformance_options(CompareMode::Tsc);
+  let mut options = options;
+  options.filter = glob_filter(&[
+    "match/strict_null_checks_disabled.ts",
+    "mismatch/strict_null_checks_enabled.ts",
+  ]);
   let report = run_conformance(options).expect("run conformance");
   let enabled = report
     .results
@@ -59,7 +73,11 @@ fn strict_null_checks_directive_reaches_tsc() {
 
 #[test]
 fn strict_null_checks_directive_reaches_rust_checker() {
-  let options = conformance_options(CompareMode::None);
+  let mut options = conformance_options(CompareMode::None);
+  options.filter = glob_filter(&[
+    "match/strict_null_checks_disabled.ts",
+    "mismatch/strict_null_checks_enabled.ts",
+  ]);
   let report = run_conformance(options).expect("run conformance");
 
   let enabled = report
@@ -87,7 +105,8 @@ fn strict_null_checks_directive_reaches_rust_checker() {
 
 #[test]
 fn exposes_applied_options_for_multi_file_fixture() {
-  let options = conformance_options(CompareMode::None);
+  let mut options = conformance_options(CompareMode::None);
+  options.filter = glob_filter(&["match/options_passthrough.ts"]);
   let report = run_conformance(options).expect("run conformance");
 
   let result = report
@@ -147,7 +166,8 @@ fn exposes_applied_options_for_multi_file_fixture() {
 
 #[test]
 fn exposes_applied_lib_list_with_dotted_names() {
-  let options = conformance_options(CompareMode::None);
+  let mut options = conformance_options(CompareMode::None);
+  options.filter = glob_filter(&["match/lib_names_dotted.ts"]);
   let report = run_conformance(options).expect("run conformance");
 
   let result = report

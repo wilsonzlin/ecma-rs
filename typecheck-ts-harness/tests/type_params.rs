@@ -3,12 +3,16 @@ use std::sync::Arc;
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::{codes, FileId, FileKey, MemoryHost, Program};
 use typecheck_ts::check::overload::CallArgType;
+use typecheck_ts::lib_support::{CompilerOptions, LibName};
 use types_ts_interned::{
   Param, RelateCtx, Signature, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 fn run_single_file(source: &str) -> (Program, FileId, Vec<diagnostics::Diagnostic>) {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    libs: vec![LibName::parse("es5").expect("es5 lib")],
+    ..CompilerOptions::default()
+  });
   let file = FileKey::new("input.ts");
   host.insert(file.clone(), source);
   let program = Program::new(host, vec![file]);
