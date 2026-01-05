@@ -2987,8 +2987,15 @@ echo '{"diagnostics":[]}'
     clear_executor_thread_ids();
 
     let dir = tempdir().expect("tempdir");
-    for idx in 0..100 {
-      fs::write(dir.path().join(format!("case{idx}.ts")), "const x = 1;\n").unwrap();
+    // Keep the suite tiny and `@noLib` so the test focuses on thread usage
+    // rather than paying lib parsing/binding costs for every case (which can
+    // be several seconds per file in debug builds).
+    for idx in 0..25 {
+      fs::write(
+        dir.path().join(format!("case{idx}.ts")),
+        "// @noLib: true\nconst x = 1;\n",
+      )
+      .unwrap();
     }
 
     let jobs = 4;
@@ -3015,7 +3022,7 @@ echo '{"diagnostics":[]}'
     };
 
     let report = run_conformance(opts).expect("run_conformance");
-    assert_eq!(report.summary.total, 100);
+    assert_eq!(report.summary.total, 25);
     assert_eq!(ACTIVE_CASE_COUNT.load(Ordering::SeqCst), 0);
 
     // `rayon::ThreadPool::install` can execute tasks on the calling thread in
