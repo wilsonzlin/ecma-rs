@@ -33,10 +33,17 @@ fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   fs::create_dir_all(root.join("err")).unwrap();
   fs::create_dir_all(root.join("multi")).unwrap();
 
-  fs::write(root.join("ok/basic.ts"), "const x = 1;\n").unwrap();
-  fs::write(root.join("err/parse_error.ts"), "const = ;\n").unwrap();
+  let header = "// @noLib: true\n";
+  fs::write(root.join("ok/basic.ts"), format!("{header}const x = 1;\n")).unwrap();
+  fs::write(
+    root.join("err/parse_error.ts"),
+    format!("{header}const = ;\n"),
+  )
+  .unwrap();
 
-  let multi = "// @filename: a.ts\nexport const a = 1;\n// @filename: b.ts\nexport const b = a;\n";
+  let multi = format!(
+    "{header}// @filename: a.ts\nexport const a = 1;\n// @filename: b.ts\nexport const b = a;\n"
+  );
   fs::write(root.join("multi/multi.ts"), multi).unwrap();
 
   (dir, root)
@@ -251,7 +258,11 @@ fn cli_json_report_is_machine_readable_with_trace_enabled() {
 #[test]
 fn fail_on_new_ignores_manifested_expectations() {
   let (_dir, root) = write_fixtures();
-  fs::write(root.join("err/type_error.ts"), "const = ;").unwrap();
+  fs::write(
+    root.join("err/type_error.ts"),
+    "// @noLib: true\nconst = ;",
+  )
+  .unwrap();
 
   let manifest =
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/conformance_manifest.toml");
@@ -273,8 +284,9 @@ fn conformance_enforces_timeouts_per_test() {
   let dir = tempdir().expect("tempdir");
   let root = dir.path().to_path_buf();
 
-  fs::write(root.join("fast.ts"), "const fast = 1;\n").unwrap();
-  fs::write(root.join("slow.ts"), "const slow = 1;\n").unwrap();
+  let header = "// @noLib: true\n";
+  fs::write(root.join("fast.ts"), format!("{header}const fast = 1;\n")).unwrap();
+  fs::write(root.join("slow.ts"), format!("{header}const slow = 1;\n")).unwrap();
 
   let mut cmd = harness_cli();
   cmd.timeout(CLI_TIMEOUT);
@@ -350,7 +362,13 @@ fn json_results_are_stably_ordered_with_parallel_execution() {
 
 #[test]
 fn difftsc_results_are_sorted_with_parallel_execution() {
-  let suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/difftsc");
+  let source_suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/difftsc");
+  let dir = tempdir().expect("tempdir");
+  let suite = dir.path().join("difftsc");
+  fs::create_dir_all(&suite).expect("create suite directory");
+  for fixture in ["assignability.ts", "await_using_invalid.ts", "no_error.ts"] {
+    fs::copy(source_suite.join(fixture), suite.join(fixture)).expect("copy fixture");
+  }
 
   let run = || -> Value {
     let mut cmd = harness_cli();
