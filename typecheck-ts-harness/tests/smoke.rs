@@ -362,13 +362,15 @@ fn json_results_are_stably_ordered_with_parallel_execution() {
 
 #[test]
 fn difftsc_results_are_sorted_with_parallel_execution() {
-  let source_suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/difftsc");
   let dir = tempdir().expect("tempdir");
   let suite = dir.path().join("difftsc");
   fs::create_dir_all(&suite).expect("create suite directory");
-  for fixture in ["assignability.ts", "await_using_invalid.ts", "no_error.ts"] {
-    fs::copy(source_suite.join(fixture), suite.join(fixture)).expect("copy fixture");
-  }
+  // Use a tiny suite so this ordering test runs quickly in debug builds. We
+  // intentionally *do not* provide baselines for these cases; difftsc should
+  // still return JSON output in a deterministic order when `--allow-mismatches`
+  // is set.
+  fs::write(suite.join("a.ts"), "// @noLib: true\nconst a = 1;\n").unwrap();
+  fs::write(suite.join("b.ts"), "// @noLib: true\nconst b = 1;\n").unwrap();
 
   let run = || -> Value {
     let mut cmd = harness_cli();
