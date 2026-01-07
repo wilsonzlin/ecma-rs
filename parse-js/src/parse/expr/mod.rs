@@ -1147,9 +1147,7 @@ impl<'a> Parser<'a> {
                 }
                 _ => {
                   if !self.should_recover() {
-                    return Err(right_tok.error(SyntaxErrorType::ExpectedSyntax(
-                      "property name",
-                    )));
+                    return Err(right_tok.error(SyntaxErrorType::ExpectedSyntax("property name")));
                   }
                   if matches!(
                     right_tok.typ,

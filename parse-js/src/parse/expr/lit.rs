@@ -1,6 +1,6 @@
+use super::pat::is_valid_pattern_identifier;
 use super::Asi;
 use super::ParseCtx;
-use super::pat::is_valid_pattern_identifier;
 use super::Parser;
 use crate::ast::class_or_object::ClassOrObjKey;
 use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
@@ -725,7 +725,9 @@ impl<'a> Parser<'a> {
               match key {
                 ClassOrObjKey::Computed(expr) => {
                   if !p.should_recover() {
-                    return Err(expr.error(SyntaxErrorType::ExpectedSyntax("object literal value")));
+                    return Err(
+                      expr.error(SyntaxErrorType::ExpectedSyntax("object literal value")),
+                    );
                   }
                   // TypeScript-style recovery - computed properties without value like `{ [e] }`.
                   let loc = expr.loc;

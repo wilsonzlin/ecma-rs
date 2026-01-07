@@ -55,6 +55,15 @@ Use the `--help` argument for more details.
 minify-js --mode global --input /path/to/src.js --output /path/to/output.min.js
 ```
 
+### Runnable workspace example
+
+When working inside this repository, there is also a small in-memory example
+that avoids filesystem I/O:
+
+```bash
+cargo run -p minify-js --example basic
+```
+
 ### Rust
 
 Add the dependency:

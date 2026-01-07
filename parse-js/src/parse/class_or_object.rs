@@ -966,13 +966,14 @@ impl<'a> Parser<'a> {
     // TypeScript-style recovery: index signatures in object literals (or with
     // misplaced accessibility modifiers).
     if self.should_recover() {
-      let is_index_sig = (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
-        || (matches!(
-          a.typ,
-          TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
-        ) && b.typ == TT::BracketOpen
-          && c.typ == TT::Identifier
-          && d.typ == TT::Colon);
+      let is_index_sig =
+        (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
+          || (matches!(
+            a.typ,
+            TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
+          ) && b.typ == TT::BracketOpen
+            && c.typ == TT::Identifier
+            && d.typ == TT::Colon);
       if is_index_sig {
         // Consume optional accessibility modifier for error recovery
         if matches!(

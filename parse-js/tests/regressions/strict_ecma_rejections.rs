@@ -15,8 +15,9 @@ fn assert_reject(src: &str) {
 }
 
 fn assert_accept(src: &str) {
-  parse_with_options(src, strict_script_opts())
-    .unwrap_or_else(|err| panic!("expected strict ECMAScript parsing to accept {src:?}, got {err:?}"));
+  parse_with_options(src, strict_script_opts()).unwrap_or_else(|err| {
+    panic!("expected strict ECMAScript parsing to accept {src:?}, got {err:?}")
+  });
 }
 
 #[test]
@@ -38,4 +39,3 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("a != b; a !== b;");
   assert_accept("function f(x) { return x; }");
 }
-

@@ -280,12 +280,14 @@ impl<'a> Parser<'a> {
       // TypeScript: Error recovery - template literals as patterns
       // Example: `function f(`hello`) {}` - template literal used as parameter name
       // The type checker will catch this as a semantic error
-      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd if self.should_recover() => self
-        .with_loc(|p| {
-          let name = p.consume_as_string();
-          Ok(IdPat { name })
-        })?
-        .into_wrapped(),
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd if self.should_recover() => {
+        self
+          .with_loc(|p| {
+            let name = p.consume_as_string();
+            Ok(IdPat { name })
+          })?
+          .into_wrapped()
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)
