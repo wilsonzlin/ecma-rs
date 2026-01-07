@@ -48,6 +48,8 @@ mod object_literal_modifier_line_terminator;
 mod private_index_signature;
 #[path = "regressions/strict_ecma_rejections.rs"]
 mod strict_ecma_rejections;
+#[path = "regressions/ts_declare_modifiers.rs"]
+mod ts_declare_modifiers;
 #[path = "regressions/ts_instantiation_expr.rs"]
 mod ts_instantiation_expr;
 #[path = "regressions/ts_module_blocks.rs"]

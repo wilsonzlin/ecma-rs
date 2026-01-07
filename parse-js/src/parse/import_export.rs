@@ -659,21 +659,42 @@ impl<'a> Parser<'a> {
               self.namespace_decl(ctx, true, true)?.into_wrapped()
             }
           },
-          TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
-          TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
-          TT::KeywordAsync if self.peek_n::<2>()[1].typ == TT::KeywordFunction => {
-            self.consume(); // consume 'async'
-            self.func_decl(ctx)?.into_wrapped()
+          TT::KeywordClass => {
+            let mut decl = self.class_decl_impl(ctx, true)?;
+            decl.stx.export = true;
+            decl.into_wrapped()
+          }
+          TT::KeywordFunction => {
+            let mut decl = self.func_decl(ctx)?;
+            decl.stx.export = true;
+            decl.into_wrapped()
+          }
+          TT::KeywordAsync
+            if self.peek_n::<2>()[1].typ == TT::KeywordFunction
+              && !self.peek_n::<2>()[1].preceded_by_line_terminator =>
+          {
+            let mut decl = self.func_decl(ctx)?;
+            decl.stx.export = true;
+            decl.into_wrapped()
           }
           TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
             self.consume(); // consume 'const'
             self.enum_decl(ctx, true, true, true)?.into_wrapped()
           }
           TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
-            self.consume(); // consume 'abstract'
-            self.class_decl(ctx)?.into_wrapped()
+            let mut decl = self.class_decl_impl(ctx, true)?;
+            decl.stx.export = true;
+            decl.into_wrapped()
           }
-          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing | TT::KeywordAwait => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+          TT::KeywordVar
+          | TT::KeywordLet
+          | TT::KeywordConst
+          | TT::KeywordUsing
+          | TT::KeywordAwait => {
+            let mut decl = self.var_decl(ctx, VarDeclParseMode::Asi)?;
+            decl.stx.export = true;
+            decl.into_wrapped()
+          }
           _ => return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after export declare"))),
         }
       },

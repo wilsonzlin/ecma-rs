@@ -223,8 +223,10 @@ impl<'a> Parser<'a> {
           .wrap(Stmt::FunctionDecl),
       ),
       // Support declare async function
-      TT::KeywordAsync if self.peek_n::<2>()[1].typ == TT::KeywordFunction => {
-        self.consume(); // consume 'async'
+      TT::KeywordAsync
+        if self.peek_n::<2>()[1].typ == TT::KeywordFunction
+          && !self.peek_n::<2>()[1].preceded_by_line_terminator =>
+      {
         Ok(
           self
             .func_decl_with_modifiers(ctx, false, true)?
@@ -237,14 +239,11 @@ impl<'a> Parser<'a> {
         Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
       }
       // Support declare abstract class
-      TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
-        self.consume(); // consume 'abstract'
-        Ok(
-          self
-            .class_decl_with_modifiers(ctx, false, true, true)?
-            .wrap(Stmt::ClassDecl),
-        )
-      }
+      TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => Ok(
+        self
+          .class_decl_with_modifiers(ctx, false, true, true)?
+          .wrap(Stmt::ClassDecl),
+      ),
       // TypeScript: declare var, declare const, declare let, declare using
       TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(
         self
