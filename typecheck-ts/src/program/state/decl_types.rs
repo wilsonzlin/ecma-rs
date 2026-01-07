@@ -909,5 +909,4 @@ impl ProgramState {
     self.def_types.insert(def, ty);
     Ok(ty)
   }
-
 }

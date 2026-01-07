@@ -123,14 +123,20 @@ impl ProgramState {
     Ok(map)
   }
 
-  pub(super) fn exports_of_ambient_module(&mut self, specifier: &str) -> Result<ExportMap, FatalError> {
+  pub(super) fn exports_of_ambient_module(
+    &mut self,
+    specifier: &str,
+  ) -> Result<ExportMap, FatalError> {
     let Some(semantics) = self.semantics.clone() else {
       return Ok(ExportMap::new());
     };
     check::modules::exports_of_ambient_module(self, &semantics, specifier)
   }
 
-  pub(super) fn exports_for_import(&mut self, import: &ImportData) -> Result<ExportMap, FatalError> {
+  pub(super) fn exports_for_import(
+    &mut self,
+    import: &ImportData,
+  ) -> Result<ExportMap, FatalError> {
     match &import.target {
       ImportTarget::File(file) => self.exports_of_file(*file),
       ImportTarget::Unresolved { specifier } => self.exports_of_ambient_module(specifier),
@@ -142,5 +148,4 @@ impl ProgramState {
     let path = export_assignment_path_for_file(semantics.as_ref(), sem_ts::FileId(file.0))?;
     self.resolve_import_alias_target(file, &path)
   }
-
 }
