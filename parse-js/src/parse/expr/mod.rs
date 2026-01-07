@@ -738,6 +738,60 @@ impl<'a> Parser<'a> {
               operator.precedence + (operator.associativity == Associativity::Left) as u8;
 
             let next_token = p.peek();
+            let starts_assignment_expr = || {
+              // Yield's operand is an AssignmentExpression (and is optional for
+              // plain `yield`). Only treat the following token as the start of
+              // an operand if it can actually begin an expression; otherwise
+              // we should parse `yield` with no operand and let higher-level
+              // expression parsing handle (and potentially reject) any
+              // continuation operators like `?`, `||`, `.`, `(`, etc.
+              let typ = next_token.typ;
+              // Identifiers (including contextual keywords when allowed).
+              is_valid_pattern_identifier(typ, ctx.rules)
+                // Await/Yield expressions can start with their respective keywords even when
+                // they aren't allowed as identifiers.
+                || (typ == TT::KeywordAwait && ctx.rules.await_expr_allowed)
+                || (typ == TT::KeywordYield && ctx.rules.yield_expr_allowed)
+                // Primary expressions.
+                || matches!(
+                  typ,
+                  TT::ParenthesisOpen
+                    | TT::BracketOpen
+                    | TT::BraceOpen
+                    | TT::KeywordThis
+                    | TT::KeywordSuper
+                    | TT::KeywordFunction
+                    | TT::KeywordClass
+                    | TT::KeywordNew
+                    | TT::KeywordImport
+                    | TT::PrivateMember
+                    | TT::ChevronLeft
+                    | TT::LiteralBigInt
+                    | TT::LiteralTrue
+                    | TT::LiteralFalse
+                    | TT::LiteralNull
+                    | TT::LiteralNumber
+                    | TT::LiteralRegex
+                    | TT::LiteralString
+                    | TT::LiteralTemplatePartString
+                    | TT::LiteralTemplatePartStringEnd
+                    | TT::Invalid
+                )
+                // Unary operators.
+                || matches!(
+                  typ,
+                  TT::Plus
+                    | TT::Hyphen
+                    | TT::PlusPlus
+                    | TT::HyphenHyphen
+                    | TT::Exclamation
+                    | TT::Tilde
+                    | TT::KeywordDelete
+                    | TT::KeywordTypeof
+                    | TT::KeywordVoid
+                )
+                || (p.should_recover() && typ == TT::At)
+            };
             let has_operand = match operator.name {
               // `yield` without an operand is valid. `yield` with an operand
               // requires no line terminator.
@@ -750,6 +804,7 @@ impl<'a> Parser<'a> {
                   && next_token.typ != TT::BracketClose
                   && next_token.typ != TT::BraceClose
                   && !terminators.contains(&next_token.typ)
+                  && starts_assignment_expr()
               }
               // `await` and `yield*` always require an operand. Line terminators are
               // allowed between the operator and its operand (except between `yield`
@@ -762,6 +817,7 @@ impl<'a> Parser<'a> {
                   && next_token.typ != TT::BracketClose
                   && next_token.typ != TT::BraceClose
                   && !terminators.contains(&next_token.typ)
+                  && starts_assignment_expr()
               }
               _ => {
                 if p.should_recover() {

@@ -89,3 +89,46 @@ fn yield_requires_parentheses_in_higher_precedence_expressions() {
 
   parse_with_options("function* g(){ return 1 + (yield 2); }", ecma_script_opts()).unwrap();
 }
+
+#[test]
+fn yield_requires_parentheses_in_conditional_test() {
+  let err =
+    parse_with_options("function* g(){ return yield ? 1 : 2; }", ecma_script_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+
+  parse_with_options("function* g(){ return (yield) ? 1 : 2; }", ecma_script_opts()).unwrap();
+}
+
+#[test]
+fn yield_requires_parentheses_before_exponentiation_operand() {
+  let err =
+    parse_with_options("function* g(){ return 2 ** yield 1; }", ecma_script_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+
+  parse_with_options("function* g(){ return 2 ** (yield 1); }", ecma_script_opts()).unwrap();
+}
+
+#[test]
+fn await_requires_parentheses_before_exponentiation_operand() {
+  let err = parse_with_options(
+    "async function f(){ return await 2 ** 2; }",
+    ecma_script_opts(),
+  )
+  .unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+
+  parse_with_options(
+    "async function f(){ return await (2 ** 2); }",
+    ecma_script_opts(),
+  )
+  .unwrap();
+}
