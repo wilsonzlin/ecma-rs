@@ -110,6 +110,12 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("class C { a b }");
   assert_reject("class C { a b(){} }");
   assert_reject("class C { a [foo](){} }");
+  // `get`/`set` remain accessor modifiers across LineTerminators; missing `()` must be a
+  // syntax error (it must not be parsed as two adjacent class fields).
+  assert_reject("class C { get\nfoo }");
+  assert_reject("class C { set\nfoo }");
+  assert_reject("class C { get\n[foo] }");
+  assert_reject("class C { set\n[foo] }");
 
   // Invalid assignment targets.
   assert_reject("foo() = 1;");

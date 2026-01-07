@@ -50,7 +50,7 @@ fn async_arrow_comment_with_newline_does_not_form_async_arrow() {
 }
 
 #[test]
-fn class_get_comment_with_newline_is_not_a_modifier() {
+fn class_get_comment_with_newline_still_forms_getter() {
   let ast = parse_with_options("class C { get/*\n*/foo(){} }", js_script_opts()).unwrap();
   assert_eq!(ast.stx.body.len(), 1);
 
@@ -58,31 +58,21 @@ fn class_get_comment_with_newline_is_not_a_modifier() {
     Stmt::ClassDecl(decl) => &decl.stx.members,
     other => panic!("expected class declaration, got {other:?}"),
   };
-  assert_eq!(members.len(), 2);
+  assert_eq!(members.len(), 1);
 
-  let first = &members[0].stx;
-  match &first.key {
-    ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "get"),
-    other => panic!("expected direct key, got {other:?}"),
-  }
-  match &first.val {
-    ClassOrObjVal::Prop(init) => assert!(init.is_none()),
-    other => panic!("expected field property, got {other:?}"),
-  }
-
-  let second = &members[1].stx;
-  match &second.key {
+  let member = &members[0].stx;
+  match &member.key {
     ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "foo"),
     other => panic!("expected direct key, got {other:?}"),
   }
-  match &second.val {
-    ClassOrObjVal::Method(_) => {}
-    other => panic!("expected method, got {other:?}"),
+  match &member.val {
+    ClassOrObjVal::Getter(_) => {}
+    other => panic!("expected getter, got {other:?}"),
   }
 }
 
 #[test]
-fn class_set_comment_with_newline_is_not_a_modifier() {
+fn class_set_comment_with_newline_still_forms_setter() {
   let ast = parse_with_options("class C { set/*\n*/foo(v){} }", js_script_opts()).unwrap();
   assert_eq!(ast.stx.body.len(), 1);
 
@@ -90,26 +80,16 @@ fn class_set_comment_with_newline_is_not_a_modifier() {
     Stmt::ClassDecl(decl) => &decl.stx.members,
     other => panic!("expected class declaration, got {other:?}"),
   };
-  assert_eq!(members.len(), 2);
+  assert_eq!(members.len(), 1);
 
-  let first = &members[0].stx;
-  match &first.key {
-    ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "set"),
-    other => panic!("expected direct key, got {other:?}"),
-  }
-  match &first.val {
-    ClassOrObjVal::Prop(init) => assert!(init.is_none()),
-    other => panic!("expected field property, got {other:?}"),
-  }
-
-  let second = &members[1].stx;
-  match &second.key {
+  let member = &members[0].stx;
+  match &member.key {
     ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "foo"),
     other => panic!("expected direct key, got {other:?}"),
   }
-  match &second.val {
-    ClassOrObjVal::Method(_) => {}
-    other => panic!("expected method, got {other:?}"),
+  match &member.val {
+    ClassOrObjVal::Setter(_) => {}
+    other => panic!("expected setter, got {other:?}"),
   }
 }
 
@@ -148,11 +128,57 @@ fn class_async_comment_with_newline_is_not_a_modifier() {
 }
 
 #[test]
-fn object_literal_get_comment_with_newline_is_syntax_error() {
-  assert!(parse_with_options("({ get/*\n*/foo(){} })", ecma_script_opts()).is_err());
+fn object_literal_get_comment_with_newline_still_forms_getter() {
+  let ast = parse_with_options("({ get/*\n*/foo(){} })", ecma_script_opts()).unwrap();
+  assert_eq!(ast.stx.body.len(), 1);
+
+  let members = match ast.stx.body[0].stx.as_ref() {
+    Stmt::Expr(stmt) => match stmt.stx.expr.stx.as_ref() {
+      Expr::LitObj(obj) => &obj.stx.members,
+      other => panic!("expected object literal, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  assert_eq!(members.len(), 1);
+
+  let parse_js::ast::class_or_object::ObjMemberType::Valued { key, val } = &members[0].stx.typ
+  else {
+    panic!("expected valued object member");
+  };
+  match key {
+    parse_js::ast::class_or_object::ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "foo"),
+    other => panic!("expected direct key, got {other:?}"),
+  }
+  assert!(matches!(
+    val,
+    parse_js::ast::class_or_object::ClassOrObjVal::Getter(_)
+  ));
 }
 
 #[test]
-fn object_literal_set_comment_with_newline_is_syntax_error() {
-  assert!(parse_with_options("({ set/*\n*/foo(v){} })", ecma_script_opts()).is_err());
+fn object_literal_set_comment_with_newline_still_forms_setter() {
+  let ast = parse_with_options("({ set/*\n*/foo(v){} })", ecma_script_opts()).unwrap();
+  assert_eq!(ast.stx.body.len(), 1);
+
+  let members = match ast.stx.body[0].stx.as_ref() {
+    Stmt::Expr(stmt) => match stmt.stx.expr.stx.as_ref() {
+      Expr::LitObj(obj) => &obj.stx.members,
+      other => panic!("expected object literal, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  assert_eq!(members.len(), 1);
+
+  let parse_js::ast::class_or_object::ObjMemberType::Valued { key, val } = &members[0].stx.typ
+  else {
+    panic!("expected valued object member");
+  };
+  match key {
+    parse_js::ast::class_or_object::ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "foo"),
+    other => panic!("expected direct key, got {other:?}"),
+  }
+  assert!(matches!(
+    val,
+    parse_js::ast::class_or_object::ClassOrObjVal::Setter(_)
+  ));
 }
