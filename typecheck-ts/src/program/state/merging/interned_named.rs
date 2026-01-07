@@ -419,5 +419,4 @@ impl ProgramState {
     diagnostics.extend(lowerer.take_diagnostics());
     (sig_id, type_param_ids, diagnostics)
   }
-
 }

@@ -1,9 +1,8 @@
 use super::*;
 
-mod libs;
 mod hir_align;
+mod libs;
 mod sem_diagnostics;
-
 
 impl ProgramState {
   pub(super) fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey]) {
@@ -343,5 +342,4 @@ impl ProgramState {
     self.analyzed = true;
     Ok(())
   }
-
 }

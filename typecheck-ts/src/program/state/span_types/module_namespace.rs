@@ -88,7 +88,10 @@ impl ProgramState {
     }
   }
 
-  pub(in super::super) fn module_namespace_type(&mut self, file: FileId) -> Result<TypeId, FatalError> {
+  pub(in super::super) fn module_namespace_type(
+    &mut self,
+    file: FileId,
+  ) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let store = match self.interned_store.as_ref() {
       Some(store) => Arc::clone(store),

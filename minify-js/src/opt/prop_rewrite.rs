@@ -149,10 +149,7 @@ fn simplify_object_literal_key(key: ClassOrObjKey) -> (ClassOrObjKey, bool) {
           };
 
           (
-            ClassOrObjKey::Direct(Node::new(
-              expr.loc,
-              ClassOrObjMemberDirectKey { key, tt },
-            )),
+            ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
             true,
           )
         }

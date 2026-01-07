@@ -1,7 +1,10 @@
 use super::*;
 
 impl ProgramState {
-  pub(in super::super) fn object_type_from_members(&mut self, members: &[Node<TypeMember>]) -> ObjectType {
+  pub(in super::super) fn object_type_from_members(
+    &mut self,
+    members: &[Node<TypeMember>],
+  ) -> ObjectType {
     let mut object = ObjectType::empty();
     for member in members.iter() {
       match member.stx.as_ref() {
@@ -94,5 +97,4 @@ impl ProgramState {
 
     base
   }
-
 }

@@ -1,7 +1,11 @@
 use super::*;
 
 impl ProgramState {
-  pub(super) fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
+  pub(super) fn load_text(
+    &self,
+    file: FileId,
+    host: &Arc<dyn Host>,
+  ) -> Result<Arc<str>, HostError> {
     let Some(key) = self.file_key_for_id(file) else {
       return Err(HostError::new(format!("missing file key for {file:?}")));
     };
@@ -109,5 +113,4 @@ impl ProgramState {
       })),
     }
   }
-
 }

@@ -5,8 +5,8 @@ use parse_js::ast::class_or_object::{
 };
 use parse_js::ast::expr::lit::{LitNullExpr, LitStrExpr};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat, ObjPatProp, Pat};
+use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::IdExpr;
-use parse_js::ast::expr::{Expr};
 use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
@@ -632,7 +632,10 @@ impl<'a> ApplyVisitor<'a> {
     }
 
     let dummy = ObjMemberType::Rest {
-      val: Node::new(Loc(0, 0), Expr::LitNull(Node::new(Loc(0, 0), LitNullExpr {}))),
+      val: Node::new(
+        Loc(0, 0),
+        Expr::LitNull(Node::new(Loc(0, 0), LitNullExpr {})),
+      ),
     };
     let typ = std::mem::replace(&mut node.stx.typ, dummy);
     let ObjMemberType::Shorthand { mut id } = typ else {

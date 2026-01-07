@@ -95,5 +95,4 @@ impl ProgramState {
     let mut dummy_builder = SemHirBuilder::new(file, file_kind);
     bind_body(self, file, body, defs, &mut dummy_builder);
   }
-
 }

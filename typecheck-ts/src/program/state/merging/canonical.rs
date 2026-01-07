@@ -200,5 +200,4 @@ impl ProgramState {
     self.namespace_member_index = Some(Arc::new(index));
     Ok(())
   }
-
 }

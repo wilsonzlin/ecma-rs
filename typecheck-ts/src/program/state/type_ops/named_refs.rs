@@ -197,5 +197,4 @@ impl ProgramState {
     }
     canonical
   }
-
 }

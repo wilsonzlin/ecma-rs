@@ -114,8 +114,8 @@ pub use api::{BodyCheckResult, Host, Program};
 
 mod analysis;
 mod bind;
-mod body_context;
 mod bodies;
+mod body_context;
 mod decl_types;
 mod diagnostics;
 mod inputs;

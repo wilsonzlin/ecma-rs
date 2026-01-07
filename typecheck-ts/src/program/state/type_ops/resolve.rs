@@ -1,7 +1,10 @@
 use super::*;
 
 impl ProgramState {
-  pub(in super::super) fn resolve_value_ref_type(&mut self, ty: TypeId) -> Result<TypeId, FatalError> {
+  pub(in super::super) fn resolve_value_ref_type(
+    &mut self,
+    ty: TypeId,
+  ) -> Result<TypeId, FatalError> {
     let Some(store) = self.interned_store.clone() else {
       return Ok(ty);
     };
@@ -66,5 +69,4 @@ impl ProgramState {
     }
     Ok(canonical)
   }
-
 }

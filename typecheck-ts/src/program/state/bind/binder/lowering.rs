@@ -17,7 +17,12 @@ impl ProgramState {
     }
   }
 
-  pub(super) fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>, index: usize) -> ParamData {
+  pub(super) fn lower_param(
+    &mut self,
+    file: FileId,
+    param: &Node<ParamDecl>,
+    index: usize,
+  ) -> ParamData {
     let (name, symbol, record_symbol) = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => (id.stx.name.clone(), self.alloc_symbol(), true),
       _ => (format!("<pattern{index}>"), self.alloc_symbol(), false),

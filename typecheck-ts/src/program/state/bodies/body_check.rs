@@ -1,7 +1,10 @@
 use super::*;
 
 impl ProgramState {
-  pub(in super::super) fn check_body(&mut self, body_id: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
+  pub(in super::super) fn check_body(
+    &mut self,
+    body_id: BodyId,
+  ) -> Result<Arc<BodyCheckResult>, FatalError> {
     self.check_cancelled()?;
     let _parallel_guard = db::queries::body_check::parallel_guard();
     let cache_hit = self.body_results.contains_key(&body_id);

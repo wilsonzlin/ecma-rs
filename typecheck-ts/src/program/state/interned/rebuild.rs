@@ -15,5 +15,4 @@ impl ProgramState {
       self.module_namespace_defs.insert(file, def);
     }
   }
-
 }

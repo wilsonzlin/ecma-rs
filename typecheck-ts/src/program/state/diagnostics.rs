@@ -124,5 +124,4 @@ impl ProgramState {
     self.filter_skip_lib_check_diagnostics(&mut diagnostics);
     Ok(Arc::from(diagnostics))
   }
-
 }

@@ -784,5 +784,4 @@ impl ProgramState {
     );
     sem_builder.finish()
   }
-
 }

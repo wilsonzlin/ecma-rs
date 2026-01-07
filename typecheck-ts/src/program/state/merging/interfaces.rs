@@ -1,7 +1,10 @@
 use super::*;
 
 impl ProgramState {
-  pub(in super::super) fn merge_interface_symbol_types(&mut self, def: DefId) -> Result<(), FatalError> {
+  pub(in super::super) fn merge_interface_symbol_types(
+    &mut self,
+    def: DefId,
+  ) -> Result<(), FatalError> {
     let Some(store) = self.interned_store.as_ref() else {
       return Ok(());
     };

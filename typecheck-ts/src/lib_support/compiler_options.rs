@@ -310,15 +310,29 @@ impl LibSet {
 
   /// Compute the default lib set for a given compiler configuration.
   pub fn for_options(options: &CompilerOptions) -> Self {
+    // TypeScript always loads a baseline ES lib (derived from `target`) so that
+    // core global types like `Array`/`String` exist, even when users provide an
+    // explicit `compilerOptions.lib` list (e.g. `["dom"]` / `["webworker"]`).
+    //
+    // The explicit list should be treated as replacing the *additional* default
+    // libs (like `dom`), not the baseline ES lib itself.
     if !options.libs.is_empty() {
-      return LibSet::from(options.libs.clone());
+      if options.no_default_lib {
+        return LibSet::from(options.libs.clone());
+      }
+
+      let mut libs = vec![es_lib_for_target(options.target)];
+      libs.extend(options.libs.clone());
+      return LibSet::from(libs);
     }
 
     if options.no_default_lib {
       return LibSet::empty();
     }
 
-    let mut libs = vec![es_lib_for_target(options.target), lib_name("dom")];
+    let mut libs = vec![es_lib_for_target(options.target)];
+
+    libs.push(lib_name("dom"));
     if matches!(options.target, ScriptTarget::EsNext) {
       libs.push(lib_name("esnext.disposable"));
     }

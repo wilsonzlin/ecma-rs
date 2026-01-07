@@ -768,18 +768,16 @@ impl ProgramState {
       def_types.insert(namespace_def, ty);
     }
 
-    // `canonical_defs` may map merged global interface declarations (e.g.
-    // `SymbolConstructor`, `Promise`) across multiple `.d.ts` files onto a
-    // single canonical `DefId`. During the initial lowering pass above we store
-    // the merged type only under that canonical key.
+    // `lower_decl_types` canonicalizes declarations with the same name within a
+    // file (e.g. multiple `interface Foo { ... }` blocks) by mapping them onto a
+    // single `DefId`. In that case the non-canonical defs have no entry in
+    // `decls.types`, and later declaration-merging passes would fall back to
+    // converting legacy types for display (which is lossy for features like
+    // `unique symbol`).
     //
-    // Later, interface-merging passes iterate the original interface definition
-    // IDs from semantic symbol groups. If those defs are missing entries in
-    // `interned_def_types`, they fall back to converting legacy types for
-    // display, which is lossy (notably dropping `unique symbol`).
-    //
-    // Copy the canonical types (and their parameter lists) back onto the
-    // original interface defs so the merge steps stay lossless.
+    // Copy the canonical types (and their parameter lists) onto only the
+    // *missing* interface defs so the merge steps stay lossless without
+    // clobbering distinct augmentations in other files.
     for def_map in hir_def_maps.values() {
       for (hir_def, mapped) in def_map.iter() {
         if hir_def == mapped {
@@ -792,11 +790,15 @@ impl ProgramState {
         {
           continue;
         }
-        if let Some(ty) = def_types.get(mapped).copied() {
-          def_types.insert(*hir_def, ty);
+        if !def_types.contains_key(hir_def) {
+          if let Some(ty) = def_types.get(mapped).copied() {
+            def_types.insert(*hir_def, ty);
+          }
         }
-        if let Some(params) = type_params.get(mapped).cloned() {
-          type_params.insert(*hir_def, params);
+        if !type_params.contains_key(hir_def) {
+          if let Some(params) = type_params.get(mapped).cloned() {
+            type_params.insert(*hir_def, params);
+          }
         }
       }
     }
@@ -811,6 +813,7 @@ impl ProgramState {
     // module augmentation and `declare global`). Other merge kinds (functions,
     // namespaces, value+namespace) are handled by dedicated passes.
     if let Some(semantics) = self.semantics.as_ref() {
+      let symbols = semantics.symbols();
       let mut interface_groups: BTreeMap<sem_ts::SymbolId, Vec<DefId>> = BTreeMap::new();
       for (def, data) in self.def_data.iter() {
         if !matches!(data.kind, DefKind::Interface(_)) {
@@ -821,6 +824,29 @@ impl ProgramState {
           continue;
         };
         interface_groups.entry(symbol).or_default().push(*def);
+      }
+
+      // `semantic-js` exposes merged global declarations (especially the TS
+      // `lib.*.d.ts` ecosystem) via `global_symbols`. The per-def `symbol_for_def`
+      // mapping does not always point at the merged global symbol, so merge
+      // interface declarations grouped by the global symbol as well.
+      for group in semantics.global_symbols().values() {
+        let Some(symbol) = group.symbol_for(sem_ts::Namespace::TYPE, symbols) else {
+          continue;
+        };
+        let decls = semantics.symbol_decls(symbol, sem_ts::Namespace::TYPE);
+        if decls.len() <= 1 {
+          continue;
+        }
+        for decl_id in decls.iter().copied() {
+          let decl = symbols.decl(decl_id);
+          if !matches!(decl.kind, sem_ts::DeclKind::Interface) {
+            continue;
+          }
+          if let Some(def) = self.map_decl_to_program_def(decl, sem_ts::Namespace::TYPE) {
+            interface_groups.entry(symbol).or_default().push(def);
+          }
+        }
       }
 
       for defs in interface_groups.values_mut() {

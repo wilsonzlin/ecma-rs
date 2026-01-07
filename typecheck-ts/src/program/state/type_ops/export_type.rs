@@ -1,7 +1,10 @@
 use super::*;
 
 impl ProgramState {
-  pub(in super::super) fn export_type_for_def(&mut self, def: DefId) -> Result<Option<TypeId>, FatalError> {
+  pub(in super::super) fn export_type_for_def(
+    &mut self,
+    def: DefId,
+  ) -> Result<Option<TypeId>, FatalError> {
     self.rebuild_callable_overloads();
     if let Some(store) = self.interned_store.clone() {
       let mut cache = HashMap::new();
@@ -51,5 +54,4 @@ impl ProgramState {
       Ok(self.def_types.get(&def).copied())
     }
   }
-
 }

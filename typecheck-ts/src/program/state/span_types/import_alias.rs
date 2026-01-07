@@ -230,7 +230,11 @@ impl ProgramState {
     Some(current)
   }
 
-  pub(in super::super) fn resolve_import_alias_target(&self, file: FileId, path: &[String]) -> Option<DefId> {
+  pub(in super::super) fn resolve_import_alias_target(
+    &self,
+    file: FileId,
+    path: &[String],
+  ) -> Option<DefId> {
     self
       .resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::VALUE)
       .or_else(|| {
@@ -386,5 +390,4 @@ impl ProgramState {
         )
       })
   }
-
 }

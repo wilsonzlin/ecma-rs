@@ -202,7 +202,6 @@ impl ProgramState {
     Ok(())
   }
 
-
   pub(in super::super) fn merge_namespace_store_types(
     &mut self,
     existing: TypeId,
@@ -229,5 +228,4 @@ impl ProgramState {
         .union(vec![existing, incoming], &self.builtin),
     }
   }
-
 }

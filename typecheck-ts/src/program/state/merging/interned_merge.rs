@@ -128,5 +128,4 @@ impl ProgramState {
       _ => store.intersection(vec![existing, incoming]),
     }
   }
-
 }

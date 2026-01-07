@@ -77,5 +77,4 @@ impl ProgramState {
       _ => ty,
     }
   }
-
 }

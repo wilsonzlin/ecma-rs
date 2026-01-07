@@ -290,5 +290,4 @@ impl ProgramState {
   pub(super) fn owner_of_body(&self, body: BodyId) -> Option<DefId> {
     self.body_owners.get(&body).copied()
   }
-
 }
