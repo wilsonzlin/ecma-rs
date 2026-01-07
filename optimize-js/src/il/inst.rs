@@ -1,13 +1,13 @@
 use crate::symbol::semantics::SymbolId;
 use num_bigint::BigInt;
 use parse_js::num::JsNumber;
-use serde::Serialize;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::{self};
 
 // PartialOrd and Ord are for some arbitrary canonical order, even if semantics of ordering is opaque.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum Const {
   BigInt(BigInt),
   Bool(bool),
@@ -31,7 +31,8 @@ impl Debug for Const {
 }
 
 // PartialOrd and Ord are for some arbitrary canonical order, even if semantics of ordering are opaque.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum Arg {
   Builtin(String), // The value is a path (e.g. `Array.prototype.forEach`). Using a single string makes it easier to match.
   Const(Const),
@@ -71,7 +72,8 @@ impl Debug for Arg {
 }
 
 /// These must all be pure; impure operations (e.g. prop assign) are separate insts.
-#[derive(PartialEq, Eq, Hash, Clone, Copy, Serialize)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum BinOp {
   Add,
   BitAnd,
@@ -127,7 +129,8 @@ impl Debug for BinOp {
 }
 
 /// These must all be pure; impure operations (e.g. prop assign) are separate insts.
-#[derive(PartialEq, Eq, Hash, Clone, Copy, Serialize)]
+#[derive(PartialEq, Eq, Hash, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum UnOp {
   BitNot,
   Neg,
@@ -152,7 +155,8 @@ impl Debug for UnOp {
   }
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum InstTyp {
   Bin,        // tgts[0] = args[0] bin_op args[1]
   Un,         // tgts[0] = un_op args[0]
@@ -176,14 +180,17 @@ pub enum InstTyp {
   _Dummy,
 }
 
+#[cfg(feature = "serde")]
 fn is_dummy_binop(op: &BinOp) -> bool {
   matches!(op, BinOp::_Dummy)
 }
 
+#[cfg(feature = "serde")]
 fn is_dummy_unop(op: &UnOp) -> bool {
   matches!(op, UnOp::_Dummy)
 }
 
+#[cfg(feature = "serde")]
 fn is_dummy_symbol(sym: &SymbolId) -> bool {
   sym.raw_id() == u32::MAX as u64
 }
@@ -192,7 +199,8 @@ fn dummy_symbol() -> SymbolId {
   SymbolId(u32::MAX as u64)
 }
 
-#[derive(PartialEq, Eq, Clone, Debug, Serialize)]
+#[derive(PartialEq, Eq, Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Inst {
   pub t: InstTyp,
   pub tgts: Vec<u32>,
@@ -200,16 +208,22 @@ pub struct Inst {
   pub spreads: Vec<usize>, // Indices into `args` that are spread, for Call. Cannot have values less than 2 as the first two args are `callee` and `this`.
   pub labels: Vec<u32>,
   // Garbage values if not applicable.
-  #[serde(
-    default = "BinOp::_Unreachable",
-    skip_serializing_if = "is_dummy_binop"
+  #[cfg_attr(
+    feature = "serde",
+    serde(default = "BinOp::_Unreachable", skip_serializing_if = "is_dummy_binop")
   )]
   pub bin_op: BinOp,
-  #[serde(default = "UnOp::_Unreachable", skip_serializing_if = "is_dummy_unop")]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default = "UnOp::_Unreachable", skip_serializing_if = "is_dummy_unop")
+  )]
   pub un_op: UnOp,
-  #[serde(default = "dummy_symbol", skip_serializing_if = "is_dummy_symbol")]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default = "dummy_symbol", skip_serializing_if = "is_dummy_symbol")
+  )]
   pub foreign: SymbolId,
-  #[serde(default, skip_serializing_if = "String::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "String::is_empty"))]
   pub unknown: String,
 }
 

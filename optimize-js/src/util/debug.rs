@@ -1,10 +1,10 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Inst;
-use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Serialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct OptimizerDebugStep {
   pub name: String,
   pub bblock_order: Vec<u32>,
@@ -12,7 +12,8 @@ pub struct OptimizerDebugStep {
   pub cfg_children: BTreeMap<u32, Vec<u32>>,
 }
 
-#[derive(Serialize, Debug, Clone)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct OptimizerDebug {
   steps: Vec<OptimizerDebugStep>,
 }

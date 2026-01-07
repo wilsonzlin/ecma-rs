@@ -2,7 +2,6 @@ use ahash::HashMap;
 use ahash::HashMapExt;
 use ahash::HashSet;
 use ahash::HashSetExt;
-use serde::Serialize;
 use std::collections::hash_set;
 use std::hash::Hash;
 use std::iter;
@@ -37,7 +36,8 @@ impl<'a, K: Clone + Default + Eq + Hash + Ord> PostOrderVisitor<'a, K> {
   }
 }
 
-#[derive(Clone, Default, Debug, Serialize)]
+#[derive(Clone, Default, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 struct GraphNode<K: Clone + Default + Hash + Eq> {
   children: HashSet<K>,
   parents: HashSet<K>,
@@ -50,7 +50,8 @@ struct GraphNode<K: Clone + Default + Hash + Eq> {
 /// - Cycles
 /// - Empty graphs
 /// - Disconnected components
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Graph<K: Clone + Default + Hash + Eq> {
   nodes: HashMap<K, GraphNode<K>>,
 }

@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use num_bigint::BigInt;
 use optimize_js::decompile::il::{
   lower_arg, lower_call_inst, lower_prop_assign_inst, node, FnEmitter, VarInit, VarNamer,

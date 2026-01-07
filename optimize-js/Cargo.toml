@@ -6,21 +6,28 @@ edition = "2021"
 [features]
 default = []
 typed = ["dep:typecheck-ts", "dep:types-ts-interned"]
+serde = [
+  "dep:serde",
+  "ahash/serde",
+  "dashmap/serde",
+  "num-bigint/serde",
+  "parse-js/serde",
+]
 
 [dependencies]
-ahash = { version = "0.8.6", features = ["serde"] }
+ahash = { version = "0.8.6" }
 crossbeam-utils = "0.8.21"
-dashmap = { version = "6.1.0", features = ["rayon", "serde"] }
+dashmap = { version = "6.1.0", features = ["rayon"] }
 derive-visitor = "0.4.0"
 itertools = "0.12.0"
-num-bigint = { version = "0.4.6", features = ["serde"] }
+num-bigint = { version = "0.4.6" }
 num-traits = "0.2.19"
 once_cell = "1.20.2"
-diagnostics = { path = "../diagnostics", features = ["serde"] }
-parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics", "serde"] }
+diagnostics = { path = "../diagnostics" }
+parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 semantic-js = { path = "../semantic-js" }
 rayon = "1.10.0"
-serde = { version = "1.0.216", features = ["derive"] }
+serde = { version = "1.0.216", features = ["derive"], optional = true }
 emit-js = { version = "0.1.0", path = "../emit-js" }
 hir-js = { path = "../hir-js" }
 typecheck-ts = { path = "../typecheck-ts", optional = true }

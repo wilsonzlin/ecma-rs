@@ -7,11 +7,11 @@ use crate::il::s2i::DUMMY_LABEL;
 use ahash::HashMap;
 use ahash::HashSet;
 use itertools::Itertools;
-use serde::Serialize;
 use std::collections::VecDeque;
 use std::iter;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum Terminator {
   /// No outgoing edges from this block.
   Stop,
@@ -25,7 +25,8 @@ pub enum Terminator {
 
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CfgGraph(Graph<u32>);
 
 impl CfgGraph {
@@ -154,7 +155,8 @@ impl CfgGraph {
 
 /// Wrapper over a HashMap that provides owned types and better method names,
 /// as well as domain-specific methods.
-#[derive(Default, Debug, Serialize)]
+#[derive(Default, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct CfgBBlocks(HashMap<u32, Vec<Inst>>);
 
 impl CfgBBlocks {
@@ -192,7 +194,8 @@ impl CfgBBlocks {
 }
 
 /// Control flow graph. Contains the bblock graph and the bblocks themselves.
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Cfg {
   // We store these as different fields because we often want to mutate one while holding a reference to the other. If we only provide &mut self methods, we'd have to borrow both mutably at the same time.
   pub graph: CfgGraph,

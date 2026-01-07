@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use ahash::HashMap;
 use ahash::HashSet;
 use optimize_js::analysis::find_loops::find_loops;

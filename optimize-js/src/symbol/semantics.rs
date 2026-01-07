@@ -4,7 +4,6 @@ use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stx::TopLevel;
 use semantic_js::assoc::js as assoc;
 use semantic_js::js::{bind_js, JsSemantics, ScopeData, TopLevelMode};
-use serde::Serialize;
 use std::cmp::Ordering;
 
 pub use semantic_js::js::ScopeKind;
@@ -15,7 +14,8 @@ pub struct ResolvedSymbol {
   pub in_tdz: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ScopeId(pub u64);
 
 impl From<semantic_js::js::ScopeId> for ScopeId {
@@ -30,7 +30,8 @@ impl ScopeId {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct SymbolId(pub u64);
 
 impl From<semantic_js::js::SymbolId> for SymbolId {

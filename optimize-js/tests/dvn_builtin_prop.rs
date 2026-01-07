@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 #[path = "common/mod.rs"]
 mod common;
 use common::compile_source;

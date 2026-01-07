@@ -73,7 +73,6 @@ use parse_js::loc::Loc;
 use parse_js::parse;
 use semantic_js::js::ScopeKind;
 pub use semantic_js::js::TopLevelMode;
-use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
 use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
 use ssa::ssa_rename::rename_targets_for_ssa_construction;
@@ -158,15 +157,17 @@ impl OptimizationStats {
   }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProgramFunction {
   pub debug: Option<OptimizerDebug>,
   pub body: Cfg,
-  #[serde(skip_serializing)]
+  #[cfg_attr(feature = "serde", serde(skip_serializing))]
   pub stats: OptimizationStats,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProgramSymbol {
   pub id: SymbolId,
   pub name: String,
@@ -174,14 +175,16 @@ pub struct ProgramSymbol {
   pub captured: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProgramFreeSymbols {
   pub top_level: Vec<SymbolId>,
   pub functions: Vec<Vec<SymbolId>>, // Index aligned with Program::functions.
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum ProgramScopeKind {
   Global,
   Module,
@@ -208,30 +211,32 @@ impl From<ScopeKind> for ProgramScopeKind {
   }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProgramScope {
   pub id: ScopeId,
-  #[serde(skip_serializing_if = "Option::is_none")]
+  #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
   pub parent: Option<ScopeId>,
   pub kind: ProgramScopeKind,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
   pub symbols: Vec<SymbolId>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
   pub children: Vec<ScopeId>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
   pub tdz_bindings: Vec<SymbolId>,
   pub is_dynamic: bool,
   pub has_direct_eval: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ProgramSymbols {
   pub symbols: Vec<ProgramSymbol>,
-  #[serde(skip_serializing_if = "Option::is_none")]
+  #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
   pub free_symbols: Option<ProgramFreeSymbols>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
   pub names: Vec<String>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
   pub scopes: Vec<ProgramScope>,
 }
 
@@ -816,9 +821,11 @@ mod tests {
   use crate::Program;
   use crate::TopLevelMode;
   use parse_js::parse;
+  #[cfg(feature = "serde")]
   use serde_json::to_string;
   use std::collections::HashSet;
 
+  #[cfg(feature = "serde")]
   fn compile_with_debug_json(source: &str) -> String {
     let top_level_node = parse(source).expect("parse input");
     let Program { top_level, .. } =
@@ -895,6 +902,7 @@ mod tests {
     assert_eq!(&source[range.start as usize..range.end as usize], "a");
   }
 
+  #[cfg(feature = "serde")]
   #[test]
   fn optimizer_debug_output_is_deterministic() {
     let source = r#"
