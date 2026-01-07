@@ -278,10 +278,11 @@ impl Program {
           }
         }
       }
-      let is_number_literal = state
-        .store
-        .contains_type_id(ty)
-        && matches!(store.type_kind(store.canon(ty)), tti::TypeKind::NumberLiteral(_));
+      let is_number_literal = state.store.contains_type_id(ty)
+        && matches!(
+          store.type_kind(store.canon(ty)),
+          tti::TypeKind::NumberLiteral(_)
+        );
       if is_number_literal {
         let is_literal = state
           .body_map

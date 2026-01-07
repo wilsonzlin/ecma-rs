@@ -134,13 +134,21 @@ impl ProgramState {
           if args.is_empty() && ref_def.0 == def.0
       );
 
-      if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache || (is_param_def && is_self_ref) {
+      if matches!(store.type_kind(ty), tti::TypeKind::Unknown)
+        || skip_cache
+        || (is_param_def && is_self_ref)
+      {
         self.interned_def_types.remove(&def);
       } else {
         if let DefKind::Function(func) = &def_data.kind {
-          if func.return_ann.is_none() && func.body.is_some() && callable_return_is_unknown(&store, ty) {
+          if func.return_ann.is_none()
+            && func.body.is_some()
+            && callable_return_is_unknown(&store, ty)
+          {
             let has_overloads = self.def_data.iter().any(|(other, data)| {
-              *other != def && data.symbol == def_data.symbol && matches!(data.kind, DefKind::Function(_))
+              *other != def
+                && data.symbol == def_data.symbol
+                && matches!(data.kind, DefKind::Function(_))
             });
             if !has_overloads {
               let old_ty = ty;
@@ -148,12 +156,14 @@ impl ProgramState {
                 tti::TypeKind::Callable { .. } => (ty, None, None),
                 tti::TypeKind::Intersection(members) => {
                   let prim = store.primitive_ids();
-                  let idx = members.iter().position(|member| match store.type_kind(*member) {
-                    tti::TypeKind::Callable { overloads } => overloads
-                      .iter()
-                      .any(|sig_id| store.signature(*sig_id).ret == prim.unknown),
-                    _ => false,
-                  });
+                  let idx = members
+                    .iter()
+                    .position(|member| match store.type_kind(*member) {
+                      tti::TypeKind::Callable { overloads } => overloads
+                        .iter()
+                        .any(|sig_id| store.signature(*sig_id).ret == prim.unknown),
+                      _ => false,
+                    });
                   if let Some(idx) = idx {
                     (members[idx], Some(members.clone()), Some(idx))
                   } else {
@@ -163,7 +173,9 @@ impl ProgramState {
                 _ => (ty, None, None),
               };
 
-              if intersection_members.is_some() || matches!(store.type_kind(callable_ty), tti::TypeKind::Callable { .. }) {
+              if intersection_members.is_some()
+                || matches!(store.type_kind(callable_ty), tti::TypeKind::Callable { .. })
+              {
                 if let Some(updated_callable) =
                   self.infer_cached_callable_return_type(func, &store, callable_ty)?
                 {
@@ -410,7 +422,10 @@ impl ProgramState {
           if self.compiler_options.no_implicit_any
             && !skip_implicit_any
             && annotated.is_none()
-            && matches!(store.type_kind(store.canon(inferred)), tti::TypeKind::Unknown)
+            && matches!(
+              store.type_kind(store.canon(inferred)),
+              tti::TypeKind::Unknown
+            )
           {
             // Like TypeScript with `--noImplicitAny`, flag unannotated bindings
             // that could not be inferred. Use `any` for recovery so later checks
@@ -492,7 +507,11 @@ impl ProgramState {
                   } else if let Some(ty) = entry.type_id {
                     let unknown = !store.contains_type_id(ty)
                       || matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown);
-                    if unknown { prim.unknown } else { store.canon(ty) }
+                    if unknown {
+                      prim.unknown
+                    } else {
+                      store.canon(ty)
+                    }
                   } else {
                     prim.unknown
                   }
@@ -513,7 +532,11 @@ impl ProgramState {
               } else if let Some(ty) = entry.type_id {
                 let unknown = !store.contains_type_id(ty)
                   || matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown);
-                if unknown { prim.unknown } else { store.canon(ty) }
+                if unknown {
+                  prim.unknown
+                } else {
+                  store.canon(ty)
+                }
               } else {
                 prim.unknown
               }
@@ -522,10 +545,12 @@ impl ProgramState {
             }
           }
         }
-        DefKind::ImportAlias(alias) => match self.resolve_import_alias_target(def_data.file, &alias.path) {
-          Some(target) if target != def => self.type_of_def(target)?,
-          _ => prim.unknown,
-        },
+        DefKind::ImportAlias(alias) => {
+          match self.resolve_import_alias_target(def_data.file, &alias.path) {
+            Some(target) if target != def => self.type_of_def(target)?,
+            _ => prim.unknown,
+          }
+        }
         DefKind::Interface(interface) => self
           .interned_def_types
           .get(&def)
@@ -533,7 +558,9 @@ impl ProgramState {
           .unwrap_or(interface.typ),
         DefKind::TypeAlias(alias) => {
           let mut typ = alias.typ;
-          if store.contains_type_id(typ) && matches!(store.type_kind(store.canon(typ)), tti::TypeKind::Unknown) {
+          if store.contains_type_id(typ)
+            && matches!(store.type_kind(store.canon(typ)), tti::TypeKind::Unknown)
+          {
             if let Some(recomputed) =
               self.type_alias_type_for_span(def_data.file, def_data.span, &def_data.name)
             {
@@ -600,11 +627,7 @@ impl ProgramState {
           }
         }
 
-        let ret_ty = self
-          .interned_def_types
-          .get(&def)
-          .copied()
-          .unwrap_or(ty);
+        let ret_ty = self.interned_def_types.get(&def).copied().unwrap_or(ty);
 
         if let Some(file_state) = self.files.get_mut(&def_data.file) {
           if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {

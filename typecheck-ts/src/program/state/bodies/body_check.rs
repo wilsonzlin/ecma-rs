@@ -199,7 +199,11 @@ impl ProgramState {
     let mut binding_defs: HashMap<String, DefId> = HashMap::new();
     let map_def_ty = |state: &mut ProgramState, store: &Arc<tti::TypeStore>, def: DefId| {
       if owner == Some(def) {
-        return state.interned_def_types.get(&def).copied().map(|ty| store.canon(ty));
+        return state
+          .interned_def_types
+          .get(&def)
+          .copied()
+          .map(|ty| store.canon(ty));
       }
 
       let var_info = state.def_data.get(&def).and_then(|def_data| {
@@ -257,10 +261,7 @@ impl ProgramState {
         // can see real call signatures. Other defs are skipped to avoid deep
         // recursion and duplicate diagnostics.
         match state.def_data.get(&def).map(|data| &data.kind) {
-          Some(DefKind::Function(_)) => state
-            .type_of_def(def)
-            .ok()
-            .map(|ty| store.canon(ty)),
+          Some(DefKind::Function(_)) => state.type_of_def(def).ok().map(|ty| store.canon(ty)),
           _ => None,
         }
       } else {
@@ -452,11 +453,9 @@ impl ProgramState {
         let mut ty = if binding.def.is_some() {
           None
         } else {
-          binding.type_id.and_then(|ty| {
-            store
-              .contains_type_id(ty)
-              .then_some(store.canon(ty))
-          })
+          binding
+            .type_id
+            .and_then(|ty| store.contains_type_id(ty).then_some(store.canon(ty)))
         };
         if let Some(converted) = ty {
           if matches!(store.type_kind(converted), tti::TypeKind::Unknown) {
@@ -484,9 +483,7 @@ impl ProgramState {
                   if let Some(target) = entry.def {
                     if let Some(defs) = self.callable_overload_defs(target) {
                       if defs.len() > 1 {
-                        if let Some(merged) =
-                          self.callable_overload_type_for_def(target, &store)
-                        {
+                        if let Some(merged) = self.callable_overload_type_for_def(target, &store) {
                           ty = Some(merged);
                           self.interned_def_types.insert(def, merged);
                         }
@@ -494,14 +491,11 @@ impl ProgramState {
                     }
                   }
                   if ty.is_none() {
-                    let mapped = entry
-                      .type_id
-                      .or_else(|| {
-                        entry
-                          .def
-                          .and_then(|target| self.export_type_for_def(target).ok().flatten())
-                      })
-                      ;
+                    let mapped = entry.type_id.or_else(|| {
+                      entry
+                        .def
+                        .and_then(|target| self.export_type_for_def(target).ok().flatten())
+                    });
                     if let Some(exported) = mapped {
                       let mapped = store
                         .contains_type_id(exported)
@@ -519,10 +513,7 @@ impl ProgramState {
             if debug_overload {
               eprintln!("DEBUG overload defs for {name}: {:?}", defs);
               for d in defs.iter() {
-                let maybe_ty = self
-                  .interned_def_types
-                  .get(d)
-                  .copied();
+                let maybe_ty = self.interned_def_types.get(d).copied();
                 if let Some(maybe_ty) = maybe_ty {
                   let disp = tti::TypeDisplay::new(&store, store.canon(maybe_ty));
                   eprintln!("DEBUG overload def {d:?} type {disp}");
@@ -555,15 +546,15 @@ impl ProgramState {
                 def_data.kind,
                 DefKind::Namespace(_) | DefKind::Module(_) | DefKind::Import(_)
               ) || (!same_body && def_has_body);
-                if !nested_check && needs_type && (!def_has_body || allow_body) {
-                  match self.type_of_def(def) {
-                    Ok(fresh) => {
-                      let mapped = store.canon(fresh);
-                      ty = Some(mapped);
-                      self.interned_def_types.insert(def, mapped);
-                    }
-                    Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
-                    Err(_) => {}
+              if !nested_check && needs_type && (!def_has_body || allow_body) {
+                match self.type_of_def(def) {
+                  Ok(fresh) => {
+                    let mapped = store.canon(fresh);
+                    ty = Some(mapped);
+                    self.interned_def_types.insert(def, mapped);
+                  }
+                  Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
+                  Err(_) => {}
                 }
               }
             }
@@ -986,8 +977,8 @@ impl ProgramState {
           continue;
         };
         let current = result.expr_types.get(idx).copied().unwrap_or(prim.unknown);
-        let current_unknown =
-          !store.contains_type_id(current) || matches!(store.type_kind(current), tti::TypeKind::Unknown);
+        let current_unknown = !store.contains_type_id(current)
+          || matches!(store.type_kind(current), tti::TypeKind::Unknown);
         if !current_unknown {
           continue;
         }
@@ -1027,25 +1018,25 @@ impl ProgramState {
           let current_is_unknown = current == prim.unknown
             || (store.contains_type_id(current)
               && matches!(store.type_kind(current), tti::TypeKind::Unknown));
-            let mut ty = bindings.get(name).copied();
-            if ty.is_none() {
-              if let Some(def) = binding_defs.get(name) {
-                ty = map_def_ty(self, &store, *def);
-              }
-            } else if ty == Some(prim.unknown) {
-              if let Some(def) = binding_defs.get(name) {
-                if let Some(mapped) = map_def_ty(self, &store, *def) {
-                  ty = Some(mapped);
-                }
-              } else {
-                ty = None;
-              }
+          let mut ty = bindings.get(name).copied();
+          if ty.is_none() {
+            if let Some(def) = binding_defs.get(name) {
+              ty = map_def_ty(self, &store, *def);
             }
-            if current_is_unknown {
-              if let Some(ty) = ty {
-                if ty == prim.unknown {
-                  continue;
-                }
+          } else if ty == Some(prim.unknown) {
+            if let Some(def) = binding_defs.get(name) {
+              if let Some(mapped) = map_def_ty(self, &store, *def) {
+                ty = Some(mapped);
+              }
+            } else {
+              ty = None;
+            }
+          }
+          if current_is_unknown {
+            if let Some(ty) = ty {
+              if ty == prim.unknown {
+                continue;
+              }
               result.expr_types[idx] = ty;
               updated_callees.push((hir_js::ExprId(idx as u32), ty));
             }
@@ -1160,13 +1151,13 @@ impl ProgramState {
         match &expr.kind {
           hir_js::ExprKind::Ident(name_id) => {
             if let Some(name) = lowered.names.resolve(*name_id) {
-                if let Some(def) = binding_defs.get(name) {
-                  if let Ok(def_ty) = self.type_of_def(*def) {
+              if let Some(def) = binding_defs.get(name) {
+                if let Ok(def_ty) = self.type_of_def(*def) {
                   result.expr_types[idx] = store.canon(def_ty);
-                  }
                 }
               }
             }
+          }
           hir_js::ExprKind::Member(mem) => {
             let obj_ty = result.expr_types[mem.object.0 as usize];
             if obj_ty != prim.unknown {

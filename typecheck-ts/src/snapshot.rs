@@ -6,8 +6,7 @@ use crate::program::{BodyCheckResult, DefData};
 use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
 use crate::{BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
-  IntrinsicKind, TypeId, TypeParamDecl, TypeParamId,
-  TypeStoreSnapshot as InternedTypeStoreSnapshot,
+  IntrinsicKind, TypeId, TypeParamDecl, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
@@ -143,4 +142,3 @@ pub struct ProgramSnapshot {
   pub next_def: u64,
   pub next_body: u64,
 }
-

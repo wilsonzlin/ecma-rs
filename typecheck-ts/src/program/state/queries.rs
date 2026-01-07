@@ -7,12 +7,7 @@ impl ProgramState {
       .iter()
       .find(|(_, binding)| binding.symbol == symbol);
 
-    let resolve_def_type = |def_id: DefId| {
-      self
-        .interned_def_types
-        .get(&def_id)
-        .copied()
-    };
+    let resolve_def_type = |def_id: DefId| self.interned_def_types.get(&def_id).copied();
 
     let mut def = self
       .symbol_to_def

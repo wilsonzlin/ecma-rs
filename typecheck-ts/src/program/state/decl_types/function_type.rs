@@ -138,9 +138,15 @@ impl ProgramState {
       prim.unknown
     };
 
-    if inferred_from_body && func.body.is_some_and(|body| self.body_is_async_function(body)) {
+    if inferred_from_body
+      && func
+        .body
+        .is_some_and(|body| self.body_is_async_function(body))
+    {
       if ret != prim.unknown {
-        ret = self.promise_ref(store.as_ref(), ret).unwrap_or(prim.unknown);
+        ret = self
+          .promise_ref(store.as_ref(), ret)
+          .unwrap_or(prim.unknown);
       }
     }
 

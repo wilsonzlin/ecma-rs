@@ -116,7 +116,11 @@ impl ProgramState {
               .and_then(|entry| entry.def)
               .and_then(|def| self.export_type_for_def(def).ok().flatten())
           })
-          .or_else(|| entry.and_then(|entry| entry.def).and_then(|def| self.interned_def_types.get(&def).copied()))
+          .or_else(|| {
+            entry
+              .and_then(|entry| entry.def)
+              .and_then(|def| self.interned_def_types.get(&def).copied())
+          })
           .unwrap_or(prim.unknown);
         let ty = if store.contains_type_id(ty) {
           store.canon(ty)

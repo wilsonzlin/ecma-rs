@@ -204,7 +204,9 @@ impl Program {
       .namespace_object_types
       .iter()
       .filter_map(|((file, name), store_ty)| {
-        state.find_namespace_def(*file, name).map(|def| (def, *store_ty))
+        state
+          .find_namespace_def(*file, name)
+          .map(|def| (def, *store_ty))
       })
       .collect();
     namespace_types.sort_by_key(|(def, _)| def.0);
