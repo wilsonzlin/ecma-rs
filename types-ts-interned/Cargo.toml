@@ -8,10 +8,11 @@ description = "Interned TypeScript type representation (imported from worker-10)
 
 [features]
 default = []
-fuzzing = []
 serde = ["dep:serde", "hir-js/serde", "ordered-float/serde", "num-bigint/serde"]
 # Enable JSON helpers such as `TypeStore::debug_json`. Implies `serde`.
 serde-json = ["serde", "dep:serde_json"]
+# Fuzzing helpers deserialize JSON payloads, so `fuzzing` must imply `serde-json`.
+fuzzing = ["serde-json"]
 tracing = ["dep:tracing"]
 strict-determinism = []
 
