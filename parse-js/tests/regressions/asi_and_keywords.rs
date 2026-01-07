@@ -27,6 +27,25 @@ fn asi_does_not_split_before_brace_without_line_terminator() {
 }
 
 #[test]
+fn asi_splits_before_regex_literal_when_required() {
+  // `a\n/b/.test("x")` must parse as two statements:
+  //   a;
+  //   /b/.test("x");
+  // because parsing it as a division expression would be a syntax error.
+  let parsed =
+    parse_with_options("a\n/b/.test('x')", ecma_script_opts()).expect("expected ASI before regex");
+  assert_eq!(parsed.stx.body.len(), 2);
+}
+
+#[test]
+fn asi_does_not_split_division_expression_after_line_terminator() {
+  // `a\n/b/2` is a valid division expression and must not trigger ASI.
+  let parsed =
+    parse_with_options("a\n/b/2", ecma_script_opts()).expect("expected division expression");
+  assert_eq!(parsed.stx.body.len(), 1);
+}
+
+#[test]
 fn await_allows_line_terminator_before_operand() {
   assert!(parse_with_options("async function f(){ await\nfoo(); }", ecma_script_opts()).is_ok());
 }
@@ -99,7 +118,11 @@ fn yield_requires_parentheses_in_conditional_test() {
     SyntaxErrorType::ExpectedSyntax("parenthesized expression")
   );
 
-  parse_with_options("function* g(){ return (yield) ? 1 : 2; }", ecma_script_opts()).unwrap();
+  parse_with_options(
+    "function* g(){ return (yield) ? 1 : 2; }",
+    ecma_script_opts(),
+  )
+  .unwrap();
 }
 
 #[test]
@@ -111,7 +134,11 @@ fn yield_requires_parentheses_before_exponentiation_operand() {
     SyntaxErrorType::ExpectedSyntax("parenthesized expression")
   );
 
-  parse_with_options("function* g(){ return 2 ** (yield 1); }", ecma_script_opts()).unwrap();
+  parse_with_options(
+    "function* g(){ return 2 ** (yield 1); }",
+    ecma_script_opts(),
+  )
+  .unwrap();
 }
 
 #[test]
