@@ -964,7 +964,18 @@ impl<'a> Parser<'a> {
       && !t1.preceded_by_line_terminator
     {
       return Ok(match t1.typ {
-        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
+        TT::ParenthesisOpen => {
+          match self.rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
+            Ok(expr) => Ok(Some(expr.into_wrapped())),
+            Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => {
+              Err(err)
+            }
+            Err(_) => Ok(None),
+          })? {
+            Some(expr) => expr,
+            None => self.id_expr(ctx)?.into_wrapped(),
+          }
+        }
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
         // Check if this could be a single-parameter arrow function: `async x => {}`
         // t1 is the identifier, t2 should be =>

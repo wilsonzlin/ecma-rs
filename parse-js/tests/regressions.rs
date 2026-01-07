@@ -4,6 +4,8 @@ mod asi_and_keywords;
 mod async_arrow_line_terminator;
 #[path = "regressions/async_function_decl_line_terminator.rs"]
 mod async_function_decl_line_terminator;
+#[path = "regressions/async_identifier_disambiguation.rs"]
+mod async_identifier_disambiguation;
 #[path = "regressions/class_async_method_line_terminator.rs"]
 mod class_async_method_line_terminator;
 #[path = "regressions/class_get_set_line_terminator.rs"]

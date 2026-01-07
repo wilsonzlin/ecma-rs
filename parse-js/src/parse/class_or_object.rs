@@ -605,10 +605,23 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
     abstract_: bool,
   ) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjMethod>)> {
-    let is_async = self.consume_if(TT::KeywordAsync).is_match();
+    // `async` is contextual: it only acts as a modifier when it is followed by a
+    // property name on the same line. `async()` (no name after `async`) is a
+    // normal method named `async`, not an async method.
+    let is_async = if self.peek().typ == TT::KeywordAsync {
+      let [_, next] = self.peek_n::<2>();
+      if next.typ != TT::ParenthesisOpen && !next.preceded_by_line_terminator {
+        self.consume();
+        true
+      } else {
+        false
+      }
+    } else {
+      false
+    };
     let is_generator = self.consume_if(TT::Asterisk).is_match();
 
-    // For anonymous methods like *(), async(), check if paren comes immediately
+    // For anonymous methods like *(), check if paren comes immediately
     let key = if self.peek().typ == TT::ParenthesisOpen {
       // Anonymous method - use empty string as key
       self.create_synthetic_class_key()
