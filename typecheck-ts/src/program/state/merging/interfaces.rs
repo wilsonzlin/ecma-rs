@@ -52,15 +52,22 @@ impl ProgramState {
     let prim = store.primitive_ids();
     let mut merged: Option<tti::TypeId> = None;
     for iface_def in interface_defs.iter().copied() {
-      if !self.interned_def_types.contains_key(&iface_def) {
-        let _ = self.type_of_def(iface_def);
-      }
-      let Some(ty) = self
+      // `type_of_def` for interfaces consults `merge_interface_symbol_types`, so
+      // calling it from within the merge routine can recurse infinitely when
+      // some interface defs have not yet been interned (notably for module
+      // augmentations). Use the best available cached type instead.
+      let ty = self
         .interned_def_types
         .get(&iface_def)
         .copied()
-        .and_then(|ty| store.contains_type_id(ty).then_some(store.canon(ty)))
-      else {
+        .or_else(|| {
+          self.def_data.get(&iface_def).and_then(|data| match &data.kind {
+            DefKind::Interface(interface) => Some(interface.typ),
+            _ => None,
+          })
+        })
+        .unwrap_or(prim.unknown);
+      let Some(ty) = store.contains_type_id(ty).then_some(store.canon(ty)) else {
         continue;
       };
       if matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
