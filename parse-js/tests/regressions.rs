@@ -30,6 +30,8 @@ mod destructuring_type_params;
 mod exponentiation;
 #[path = "regressions/export_assignment_asi.rs"]
 mod export_assignment_asi;
+#[path = "regressions/export_default_async_line_terminator.rs"]
+mod export_default_async_line_terminator;
 #[path = "regressions/for_header_asi.rs"]
 mod for_header_asi;
 #[path = "regressions/function_name_reserved_words.rs"]
