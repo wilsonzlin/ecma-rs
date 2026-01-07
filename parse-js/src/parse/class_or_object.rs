@@ -621,10 +621,14 @@ impl<'a> Parser<'a> {
     };
     let is_generator = self.consume_if(TT::Asterisk).is_match();
 
-    // For anonymous methods like *(), check if paren comes immediately
+    // Error recovery: accept anonymous methods like `*() {}` / `async *() {}` by
+    // fabricating an empty key. Strict ECMAScript parsing must reject these.
     let key = if self.peek().typ == TT::ParenthesisOpen {
-      // Anonymous method - use empty string as key
-      self.create_synthetic_class_key()
+      if self.should_recover() {
+        self.create_synthetic_class_key()
+      } else {
+        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("method name")));
+      }
     } else {
       self.class_or_obj_key(ctx)?
     };
