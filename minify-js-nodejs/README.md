@@ -19,13 +19,29 @@ const out = minify('global', src);
 // out is a Buffer containing the minified source
 ```
 
-`minify(topLevelType, src)` accepts:
+`minify(topLevelType, src, options?)` accepts:
 
 - `'global'` or `'module'` for `topLevelType`
 - a `string` or `Buffer` of UTF-8 JavaScript/TypeScript for `src`
+- an optional `options` object (see `index.d.ts`) controlling parsing and TypeScript lowering
 
 It returns a `Buffer` containing the minified JavaScript output. Buffer inputs
 must be valid UTF-8.
+
+### Options
+
+The optional third parameter can be used to control the parser dialect and TS
+erasure semantics:
+
+```js
+const {minify} = require("@minify-js/node");
+
+// Keep TypeScript const enums as runtime enums (instead of inlining/erasing).
+const out = minify("module", "const enum E { A = 1 } export const x = E.A;", {
+  dialect: "ts",
+  tsPreserveConstEnums: true,
+});
+```
 
 If the input cannot be minified (e.g. due to syntax errors), an `Error` is
 thrown containing rendered diagnostics for the input file. The error also has

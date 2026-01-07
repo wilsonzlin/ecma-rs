@@ -18,6 +18,27 @@ assert.strictEqual(typeof minify, "function", "minify export should be a functio
 
 expectMinify("global", "let x = 1;", "let x=1;");
 expectMinify("module", "export default 1;", "export default 1;");
+expectMinify(
+  "module",
+  "const enum E { A = 1 } export const x = E.A;",
+  "export const x=1;",
+);
+
+// Preserve const enums at runtime when requested.
+const preservedConstEnum = utf8(
+  minify("module", 'eval("x");const enum E{A=1}export const x=E.A;', {
+    dialect: "ts",
+    tsPreserveConstEnums: true,
+  }),
+);
+assert(
+  preservedConstEnum.includes("var E") || preservedConstEnum.includes("let E"),
+  `expected preserve mode to emit runtime enum scaffolding, got: ${preservedConstEnum}`,
+);
+assert(
+  preservedConstEnum.includes("export const x=E.A"),
+  `expected preserve mode to keep enum member access, got: ${preservedConstEnum}`,
+);
 
 // Invalid JavaScript should surface deterministic diagnostics.
 try {
