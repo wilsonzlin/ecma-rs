@@ -91,6 +91,33 @@ fn await_allows_operand_after_line_terminator_in_single_line_comment() {
 }
 
 #[test]
+fn await_allows_unary_operand_after_line_terminator() {
+  let source = "async function f(){ await\n+1; }";
+  let parsed = parse_with_options(source, js_module_opts()).unwrap();
+  assert_eq!(parsed.stx.body.len(), 1);
+
+  let Stmt::FunctionDecl(func_decl) = parsed.stx.body[0].stx.as_ref() else {
+    panic!("expected function declaration");
+  };
+  let Some(FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
+    panic!("expected function body");
+  };
+  assert_eq!(body.len(), 1, "await must include unary operands across newlines");
+
+  let Stmt::Expr(stmt) = body[0].stx.as_ref() else {
+    panic!("expected expression statement");
+  };
+  let Expr::Unary(await_expr) = stmt.stx.expr.stx.as_ref() else {
+    panic!("expected await unary expression");
+  };
+  assert_eq!(await_expr.stx.operator, OperatorName::Await);
+  let Expr::Unary(unary_plus) = await_expr.stx.argument.stx.as_ref() else {
+    panic!("expected unary plus operand");
+  };
+  assert_eq!(unary_plus.stx.operator, OperatorName::UnaryPlus);
+}
+
+#[test]
 fn top_level_await_allows_operand_after_line_terminator() {
   let source = "await\nfoo()";
   let parsed = parse_with_options(source, js_module_opts()).unwrap();
