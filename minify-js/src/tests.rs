@@ -83,7 +83,7 @@ fn test_shadow_safety() {
     TopLevelMode::Global,
     "let x=1;(()=>{let x=2;let y=x;return y})();",
   );
-  assert_eq!(result, "let x=1;(()=>{let b=2;let a=b;return a;})();");
+  assert_eq!(result, "let x=1;(()=>{let b=2,a=b;return a;})();");
 }
 
 #[test]
@@ -489,6 +489,61 @@ fn test_minify_determinism() {
 }
 
 #[test]
+fn combines_adjacent_let_declarations() {
+  let (result, _parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "let a=1;let b=2;",
+  );
+  assert_eq!(result, "let a=1,b=2;");
+}
+
+#[test]
+fn combines_adjacent_const_declarations_preserving_order() {
+  let (result, _parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "const a=f();const b=g();",
+  );
+  assert_eq!(result, "const a=f(),b=g();");
+}
+
+#[test]
+fn combines_adjacent_export_declarations() {
+  let (result, _parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "export const x=1;export const y=2;",
+  );
+  assert_eq!(result, "export const x=1,y=2;");
+}
+
+#[test]
+fn does_not_combine_using_declarations() {
+  let (result, _parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "using a=f();using b=g();",
+  );
+  assert_eq!(result, "using a=f();using b=g();");
+}
+
+#[test]
+fn does_not_combine_mismatched_declaration_kinds() {
+  let (result, _parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "var a=1;let b=2;",
+  );
+  assert_eq!(result, "var a=1;let b=2;");
+}
+
+#[test]
 fn folds_numeric_expressions() {
   let result = minified(TopLevelMode::Global, "console.log(1+2*3);");
   assert_eq!(result, "console.log(7);");
@@ -653,7 +708,7 @@ fn rewrites_object_pattern_numeric_string_keys_to_number_keys() {
     TopLevelMode::Module,
     r#"const obj={0:1};const {"0":x}=obj;console.log(x);"#,
   );
-  assert_eq!(result, r#"const a={0:1};const{0:b}=a;console.log(b);"#);
+  assert_eq!(result, r#"const a={0:1},{0:b}=a;console.log(b);"#);
 }
 
 #[test]
@@ -664,7 +719,7 @@ fn rewrites_object_pattern_computed_string_keys_to_direct_keys() {
   );
   assert_eq!(
     result,
-    r#"const a={"a-b":1};const{"a-b":b}=a;console.log(b);"#
+    r#"const a={"a-b":1},{"a-b":b}=a;console.log(b);"#
   );
 }
 
@@ -676,7 +731,7 @@ fn rewrites_object_pattern_computed_boolean_and_null_keys_to_direct_keys() {
   );
   assert_eq!(
     result,
-    "const a={true:1,false:2,null:3};const{true:c,false:b,null:d}=a;console.log(c+b+d);"
+    "const a={true:1,false:2,null:3},{true:c,false:b,null:d}=a;console.log(c+b+d);"
   );
 }
 
@@ -689,14 +744,14 @@ fn rewrites_object_pattern_computed_proto_keys_to_direct_keys() {
   );
   assert_eq!(
     result,
-    r#"const a={["__proto__"]:1};const{__proto__:b}=a;console.log(b);"#
+    r#"const a={["__proto__"]:1},{__proto__:b}=a;console.log(b);"#
   );
 }
 
 #[test]
 fn rewrites_object_literal_value_properties_to_shorthand() {
   let result = minified(TopLevelMode::Global, "let a=1;let obj={a:a};");
-  assert_eq!(result, "let a=1;let obj={a};");
+  assert_eq!(result, "let a=1,obj={a};");
 }
 
 #[test]
@@ -705,7 +760,7 @@ fn does_not_rewrite_proto_object_literal_value_properties_to_shorthand() {
     TopLevelMode::Global,
     "let __proto__=1;let obj={__proto__:__proto__};",
   );
-  assert_eq!(result, "let __proto__=1;let obj={__proto__:__proto__};");
+  assert_eq!(result, "let __proto__=1,obj={__proto__:__proto__};");
 }
 
 #[test]
@@ -716,7 +771,7 @@ fn renaming_expands_object_literal_shorthand_properties() {
     TopLevelMode::Module,
     "const x=1;const obj={x};console.log(obj.x);",
   );
-  assert_eq!(result, "const b=1;const a={x:b};console.log(a.x);");
+  assert_eq!(result, "const b=1,a={x:b};console.log(a.x);");
 }
 
 #[test]
@@ -725,7 +780,7 @@ fn renaming_expands_object_pattern_shorthand_properties() {
     TopLevelMode::Module,
     "const obj={x:1};const {x}=obj;console.log(x);",
   );
-  assert_eq!(result, "const a={x:1};const{x:b}=a;console.log(b);");
+  assert_eq!(result, "const a={x:1},{x:b}=a;console.log(b);");
 }
 
 #[test]
@@ -736,7 +791,7 @@ fn object_literal_shorthand_rewrite_runs_after_renaming() {
     TopLevelMode::Module,
     "const x=1;const obj={x:x};console.log(obj.x);",
   );
-  assert_eq!(result, "const b=1;const a={x:b};console.log(a.x);");
+  assert_eq!(result, "const b=1,a={x:b};console.log(a.x);");
 }
 
 #[test]
@@ -1970,6 +2025,14 @@ fn erases_type_parameters_from_functions() {
   let src = "const wrap = <T>(value: T): T => value; const result: string = wrap<string>(\"x\");";
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert_eq!(parsed.stx.body.len(), 2);
+  match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(_) => {}
+    other => panic!("expected var decl, got {other:?}"),
+  }
+  match parsed.stx.body[1].stx.as_ref() {
+    Stmt::Expr(_) => {}
+    other => panic!("expected expr stmt, got {other:?}"),
+  }
 }
 
 #[test]

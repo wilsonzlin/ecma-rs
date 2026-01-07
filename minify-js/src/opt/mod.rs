@@ -13,6 +13,7 @@ mod cleanup;
 mod const_fold;
 mod dce;
 mod prop_rewrite;
+mod decl_combine;
 mod sem_rewrite;
 mod side_effects;
 mod stmt_rewrite;
@@ -30,6 +31,7 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
     Box::new(prop_rewrite::PropRewritePass),
     Box::new(stmt_rewrite::StmtRewritePass),
     Box::new(cleanup::CleanupPass),
+    Box::new(decl_combine::DeclCombinePass),
   ]);
   pre.run(&mut cx, top, 4);
 
@@ -42,6 +44,7 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
     Box::new(sem_rewrite::SemanticRewritePass),
     Box::new(const_fold::ConstFoldPass),
     Box::new(cleanup::CleanupPass),
+    Box::new(decl_combine::DeclCombinePass),
   ]);
   for _ in 0..2 {
     cx.bind(top);
