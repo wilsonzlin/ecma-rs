@@ -4,13 +4,14 @@ use parse_js::ast::class_or_object::{
   ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr};
-use parse_js::ast::expr::pat::ObjPatProp;
+use parse_js::ast::expr::pat::{ObjPatProp, Pat};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
+use parse_js::parse::expr::pat::{is_valid_pattern_identifier, ParsePatternRules};
 use parse_js::token::TT;
 use parse_js::Dialect;
 
@@ -172,10 +173,7 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
         };
 
         (
-          ClassOrObjKey::Direct(Node::new(
-            expr.loc,
-            ClassOrObjMemberDirectKey { key, tt },
-          )),
+          ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
           true,
         )
       }
@@ -245,6 +243,48 @@ fn try_shorthand_prop(typ: ObjMemberType) -> (ObjMemberType, bool) {
   (ObjMemberType::Shorthand { id }, true)
 }
 
+fn try_shorthand_pat_prop(prop: &mut ObjPatProp) -> bool {
+  if prop.shorthand {
+    return false;
+  }
+
+  let ClassOrObjKey::Direct(key) = &mut prop.key else {
+    return false;
+  };
+
+  let Pat::Id(id) = prop.target.stx.as_ref() else {
+    return false;
+  };
+
+  if id.stx.name != key.stx.key {
+    return false;
+  }
+
+  // Shorthand properties must use a token that can appear as a binding identifier
+  // (identifier or an unreserved TypeScript/JS keyword like `as`).
+  let shorthand_rules = ParsePatternRules {
+    await_allowed: true,
+    yield_allowed: true,
+    await_expr_allowed: true,
+    yield_expr_allowed: true,
+  };
+  let tt = if key.stx.tt == TT::LiteralString {
+    let Some(tt) = identifier_name_token_tt(&key.stx.key) else {
+      return false;
+    };
+    tt
+  } else {
+    key.stx.tt
+  };
+  if !is_valid_pattern_identifier(tt, shorthand_rules) {
+    return false;
+  }
+  key.stx.tt = tt;
+
+  prop.shorthand = true;
+  true
+}
+
 fn is_identifier_name_token(name: &str) -> bool {
   identifier_name_token_tt(name).is_some()
 }
@@ -310,9 +350,10 @@ fn dummy_obj_member_type() -> ObjMemberType {
 
 pub(crate) fn rewrite_object_shorthand_props(top: &mut Node<TopLevel>) -> bool {
   type ObjMemberNode = Node<ObjMember>;
+  type ObjPatPropNode = Node<ObjPatProp>;
 
   #[derive(VisitorMut)]
-  #[visitor(ObjMemberNode(exit))]
+  #[visitor(ObjMemberNode(exit), ObjPatPropNode(exit))]
   struct ShorthandVisitor {
     changed: bool,
   }
@@ -324,6 +365,10 @@ pub(crate) fn rewrite_object_shorthand_props(top: &mut Node<TopLevel>) -> bool {
       let (typ, changed) = try_shorthand_prop(typ);
       node.stx.typ = typ;
       self.changed |= changed;
+    }
+
+    fn exit_obj_pat_prop_node(&mut self, node: &mut ObjPatPropNode) {
+      self.changed |= try_shorthand_pat_prop(&mut node.stx);
     }
   }
 

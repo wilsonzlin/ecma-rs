@@ -561,7 +561,10 @@ fn rewrites_object_pattern_computed_string_keys_to_direct_keys() {
     TopLevelMode::Module,
     r#"const obj={"a-b":1};const {["a-b"]:x}=obj;console.log(x);"#,
   );
-  assert_eq!(result, r#"const a={"a-b":1};const{"a-b":b}=a;console.log(b);"#);
+  assert_eq!(
+    result,
+    r#"const a={"a-b":1};const{"a-b":b}=a;console.log(b);"#
+  );
 }
 
 #[test]
@@ -571,7 +574,10 @@ fn rewrites_object_pattern_computed_proto_keys_to_direct_keys() {
     TopLevelMode::Module,
     r#"const obj={["__proto__"]:1};const {["__proto__"]:x}=obj;console.log(x);"#,
   );
-  assert_eq!(result, r#"const a={["__proto__"]:1};const{__proto__:b}=a;console.log(b);"#);
+  assert_eq!(
+    result,
+    r#"const a={["__proto__"]:1};const{__proto__:b}=a;console.log(b);"#
+  );
 }
 
 #[test]
@@ -618,6 +624,38 @@ fn object_literal_shorthand_rewrite_runs_after_renaming() {
     "const x=1;const obj={x:x};console.log(obj.x);",
   );
   assert_eq!(result, "const b=1;const a={x:b};console.log(a.x);");
+}
+
+#[test]
+fn rewrites_object_pattern_value_properties_to_shorthand() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const obj={x:1};export const {x:x}=obj;console.log(x);",
+  );
+  assert_eq!(result, "const a={x:1};export const{x}=a;console.log(x);");
+}
+
+#[test]
+fn rewrites_object_pattern_value_properties_to_shorthand_with_default_value() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const obj={};export const {x:x=1}=obj;console.log(x);",
+  );
+  assert_eq!(result, "const a={};export const{x=1}=a;console.log(x);");
+}
+
+#[test]
+fn object_pattern_shorthand_rewrite_runs_after_renaming() {
+  // The binding may be renamed to match the property key; ensure we still
+  // shorten the destructuring pattern afterwards.
+  let result = minified(
+    TopLevelMode::Module,
+    "export const obj={a:1};const {a:long_name}=obj;console.log(long_name);",
+  );
+  assert_eq!(
+    result,
+    "export const obj={a:1};const{a}=obj;console.log(a);"
+  );
 }
 
 #[test]
