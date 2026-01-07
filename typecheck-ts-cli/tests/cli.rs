@@ -87,6 +87,47 @@ fn type_at_reports_number() {
 }
 
 #[test]
+fn symbol_at_json_paths_are_normalized() {
+  let path = fixture("basic.ts");
+  let normalized_path = normalized(&path);
+  let content = fs::read_to_string(&path).expect("read fixture");
+  let offset = content
+    .find("add(1, 2)")
+    .map(|idx| idx as u32)
+    .expect("offset for add(1, 2) call");
+  let query = format!("{}:{}", path.display(), offset);
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg(path.as_os_str())
+    .arg("--json")
+    .args(["--symbol-at", &query])
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let symbol_at = json
+    .get("queries")
+    .and_then(|q| q.get("symbol_at"))
+    .and_then(|v| v.as_object())
+    .expect("symbol_at object");
+
+  assert_eq!(
+    symbol_at.get("file").and_then(|v| v.as_str()),
+    Some(normalized_path.as_str())
+  );
+  assert_eq!(
+    symbol_at.get("def_file").and_then(|v| v.as_str()),
+    Some(normalized_path.as_str()),
+    "expected symbol definition file to be normalized: {symbol_at:?}"
+  );
+}
+
+#[test]
 fn resolves_relative_modules_and_index_files() {
   let path = fixture("resolution/entry.ts");
   typecheck_cli()
