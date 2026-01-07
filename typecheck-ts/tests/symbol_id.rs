@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use std::sync::Arc;
 
 use semantic_js as semjs;

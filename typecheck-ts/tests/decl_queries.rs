@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use typecheck_ts::{DefId, FileKey, MemoryHost, Program, TypeKindSummary};
 
 fn def_by_name(program: &Program, file: FileKey, name: &str) -> DefId {

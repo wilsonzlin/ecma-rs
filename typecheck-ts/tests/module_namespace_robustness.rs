@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
