@@ -205,6 +205,20 @@ fn maybe_pick_name(cursor: &mut ByteCursor<'_>, pool: &[String], prefix: &str) -
   }
 }
 
+fn maybe_reuse_name(
+  cursor: &mut ByteCursor<'_>,
+  previous: Option<&str>,
+  pool: &[String],
+  prefix: &str,
+) -> String {
+  if let Some(prev) = previous {
+    if (cursor.next_u8() % 3) == 0 {
+      return prev.to_string();
+    }
+  }
+  maybe_pick_name(cursor, pool, prefix)
+}
+
 fn gen_decl_kind(cursor: &mut ByteCursor<'_>) -> ts::DeclKind {
   match cursor.next_usize(7) {
     0 => ts::DeclKind::Function,
@@ -229,6 +243,7 @@ fn gen_decl(
   cursor: &mut ByteCursor<'_>,
   spans: &mut SpanCursor,
   names: &[String],
+  name_override: Option<String>,
   allow_import_binding: bool,
   file_id: FileId,
 ) -> ts::Decl {
@@ -239,7 +254,7 @@ fn gen_decl(
   };
   ts::Decl {
     def_id: ts::DefId::new(file_id, cursor.next_u32()),
-    name: maybe_pick_name(cursor, names, "d"),
+    name: name_override.unwrap_or_else(|| maybe_pick_name(cursor, names, "d")),
     kind,
     is_ambient: cursor.next_bool(),
     is_global: cursor.next_bool(),
@@ -456,8 +471,11 @@ fn gen_ambient_module(
 
   let decl_count = cursor.next_usize(MAX_TS_DECLS.min(8) + 1);
   let mut decls = Vec::new();
+  let mut prev_name: Option<String> = None;
   for _ in 0..decl_count {
-    let mut decl = gen_decl(cursor, spans, names, true, file_id);
+    let name = maybe_reuse_name(cursor, prev_name.as_deref(), names, "d");
+    prev_name = Some(name.clone());
+    let mut decl = gen_decl(cursor, spans, names, Some(name), true, file_id);
     // Ambient module declarations default to `declare`, but still allow callers to
     // toggle flags via the generator.
     decl.is_ambient = true;
@@ -554,8 +572,18 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
 
   let decl_count = cursor.next_usize(MAX_TS_DECLS + 1);
   let mut decls = Vec::new();
+  let mut prev_name: Option<String> = None;
   for _ in 0..decl_count {
-    decls.push(gen_decl(cursor, &mut spans, &names, true, file_id));
+    let name = maybe_reuse_name(cursor, prev_name.as_deref(), &names, "d");
+    prev_name = Some(name.clone());
+    decls.push(gen_decl(
+      cursor,
+      &mut spans,
+      &names,
+      Some(name),
+      true,
+      file_id,
+    ));
   }
 
   let type_import_count = cursor.next_usize(3);
