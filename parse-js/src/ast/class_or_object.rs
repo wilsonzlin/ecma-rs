@@ -9,10 +9,10 @@ use crate::token::TT;
 use derive_more::derive::From;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
 
 /// Index signature in class: [key: string]: Type
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassIndexSignature {
   #[drive(skip)]
   pub parameter_name: String,
@@ -21,7 +21,8 @@ pub struct ClassIndexSignature {
 }
 
 /// This is a node as the key may not the same as source[node.loc], due to decoding/normalization.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassOrObjMemberDirectKey {
   #[drive(skip)]
   pub key: String,
@@ -31,7 +32,8 @@ pub struct ClassOrObjMemberDirectKey {
 }
 
 // WARNING: This enum must exist, and the two variants cannot be merged by representing Direct with an IdentifierExpr, as it's not a usage of a variable.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum ClassOrObjKey {
   // Identifier, keyword, string, or number.
   // NOTE: This isn't used by ObjectMemberType::Shorthand.
@@ -39,27 +41,32 @@ pub enum ClassOrObjKey {
   Computed(Node<Expr>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassOrObjGetter {
   pub func: Node<Func>, // `params` is empty.
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassOrObjMethod {
   pub func: Node<Func>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassOrObjSetter {
   pub func: Node<Func>, // `params` contains exactly one ParamDecl with no `default_value` or `rest`.
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassStaticBlock {
   pub body: Vec<Node<super::stmt::Stmt>>,
 }
 
-#[derive(Debug, Drive, DriveMut, From, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut, From)]
 pub enum ClassOrObjVal {
   Getter(Node<ClassOrObjGetter>),
   Setter(Node<ClassOrObjSetter>),
@@ -73,7 +80,8 @@ pub enum ClassOrObjVal {
   StaticBlock(Node<ClassStaticBlock>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum ObjMemberType {
   Valued {
     key: ClassOrObjKey,
@@ -87,7 +95,8 @@ pub enum ObjMemberType {
   },
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassMember {
   pub decorators: Vec<Node<Decorator>>,
   pub key: ClassOrObjKey,
@@ -111,7 +120,8 @@ pub struct ClassMember {
 }
 
 // This is a node instead of an enum so that we can replace it when minifying e.g. expanding shorthand to `key: value`.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ObjMember {
   pub typ: ObjMemberType,
 }

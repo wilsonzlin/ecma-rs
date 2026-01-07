@@ -10,6 +10,7 @@ use parse_js::error::SyntaxErrorType;
 use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
+#[cfg(feature = "serde")]
 use serde::Serialize;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};

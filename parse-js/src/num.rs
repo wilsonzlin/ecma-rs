@@ -1,8 +1,6 @@
 use core::hash::Hash;
 use core::hash::Hasher;
 use num_bigint::BigUint;
-use serde::Serialize;
-use serde::Serializer;
 use std::cmp::Ordering;
 use std::fmt;
 use std::fmt::Display;
@@ -91,8 +89,9 @@ impl Hash for JsNumber {
   }
 }
 
-impl Serialize for JsNumber {
-  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+#[cfg(feature = "serde")]
+impl serde::Serialize for JsNumber {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_f64(self.0)
   }
 }

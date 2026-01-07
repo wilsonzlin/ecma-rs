@@ -3,11 +3,11 @@ use super::expr::ImportExpr;
 use super::node::Node;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::{Deserialize, Serialize};
 
 /// Main type expression enum covering all TypeScript type constructs
-#[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", serde(tag = "$t"))]
 pub enum TypeExpr {
   // Primitive types
   Any(Node<TypeAny>),
@@ -55,71 +55,87 @@ pub enum TypeExpr {
 }
 
 /// Primitive type: any
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeAny {}
 
 /// Primitive type: unknown
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeUnknown {}
 
 /// Primitive type: never
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeNever {}
 
 /// Primitive type: void
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeVoid {}
 
 /// Primitive type: string
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeString {}
 
 /// Primitive type: number
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeNumber {}
 
 /// Primitive type: boolean
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeBoolean {}
 
 /// Primitive type: bigint
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeBigInt {}
 
 /// Primitive type: symbol
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeSymbol {}
 
 /// Primitive type: unique symbol
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeUniqueSymbol {}
 
 /// Primitive type: object
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeObject {}
 
 /// Primitive type: null
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeNull {}
 
 /// Primitive type: undefined
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeUndefined {}
 
 /// Special type: intrinsic
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeIntrinsic {}
 
 /// Type reference: Foo, Foo<T>, A.B.C<T, U>
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeReference {
   pub name: TypeEntityName,
   pub type_arguments: Option<Vec<Node<TypeExpr>>>,
 }
 
 /// Entity name in type reference (can be qualified)
-#[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t", content = "v")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", serde(tag = "$t", content = "v"))]
 pub enum TypeEntityName {
   Identifier(#[drive(skip)] String),
   Qualified(Box<TypeQualifiedName>),
@@ -127,7 +143,8 @@ pub enum TypeEntityName {
 }
 
 /// Qualified name: A.B.C
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeQualifiedName {
   pub left: TypeEntityName,
   #[drive(skip)]
@@ -135,8 +152,9 @@ pub struct TypeQualifiedName {
 }
 
 /// Literal type: "foo", 42, true, false, etc.
-#[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t", content = "v")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", serde(tag = "$t", content = "v"))]
 pub enum TypeLiteral {
   String(#[drive(skip)] String),
   Number(#[drive(skip)] String),
@@ -146,7 +164,8 @@ pub enum TypeLiteral {
 }
 
 /// Array type: T[] or readonly T[]
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeArray {
   #[drive(skip)]
   pub readonly: bool,
@@ -154,7 +173,8 @@ pub struct TypeArray {
 }
 
 /// Tuple type: [T, U], [string, ...number[]] or readonly [T, U]
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeTuple {
   #[drive(skip)]
   pub readonly: bool,
@@ -162,7 +182,8 @@ pub struct TypeTuple {
 }
 
 /// Tuple element with optional name and modifiers
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeTupleElement {
   #[drive(skip)]
   pub label: Option<String>,
@@ -174,19 +195,22 @@ pub struct TypeTupleElement {
 }
 
 /// Union type: T | U | V
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeUnion {
   pub types: Vec<Node<TypeExpr>>,
 }
 
 /// Intersection type: T & U & V
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeIntersection {
   pub types: Vec<Node<TypeExpr>>,
 }
 
 /// Function type: (x: T, y: U) => R
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeFunction {
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub parameters: Vec<Node<TypeFunctionParameter>>,
@@ -194,7 +218,8 @@ pub struct TypeFunction {
 }
 
 /// Constructor type: new (x: T) => R
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeConstructor {
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub parameters: Vec<Node<TypeFunctionParameter>>,
@@ -202,7 +227,8 @@ pub struct TypeConstructor {
 }
 
 /// Function type parameter
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeFunctionParameter {
   #[drive(skip)]
   pub name: Option<String>,
@@ -214,7 +240,8 @@ pub struct TypeFunctionParameter {
 }
 
 /// Variance annotation for type parameters
-#[derive(Debug, Copy, Clone, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Copy, Clone)]
 pub enum Variance {
   In,    // contravariant
   Out,   // covariant
@@ -222,7 +249,8 @@ pub enum Variance {
 }
 
 /// Type parameter: T, T extends U, T = DefaultType, in T, out T, in out T, const T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeParameter {
   #[drive(skip)]
   pub const_: bool, // TypeScript: const type parameter
@@ -235,14 +263,16 @@ pub struct TypeParameter {
 }
 
 /// Object type literal: { x: T; y: U; }
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeObjectLiteral {
   pub members: Vec<Node<TypeMember>>,
 }
 
 /// Type member in object type or interface
-#[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", serde(tag = "$t"))]
 pub enum TypeMember {
   Property(Node<TypePropertySignature>),
   Method(Node<TypeMethodSignature>),
@@ -255,7 +285,8 @@ pub enum TypeMember {
 }
 
 /// Property signature: x: T, readonly x?: T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypePropertySignature {
   #[drive(skip)]
   pub readonly: bool,
@@ -266,7 +297,8 @@ pub struct TypePropertySignature {
 }
 
 /// Method signature: foo(x: T): U
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeMethodSignature {
   #[drive(skip)]
   pub optional: bool,
@@ -277,7 +309,8 @@ pub struct TypeMethodSignature {
 }
 
 /// Constructor signature: new (x: T): U
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeConstructSignature {
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub parameters: Vec<Node<TypeFunctionParameter>>,
@@ -285,7 +318,8 @@ pub struct TypeConstructSignature {
 }
 
 /// Call signature: (x: T): U
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeCallSignature {
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub parameters: Vec<Node<TypeFunctionParameter>>,
@@ -293,7 +327,8 @@ pub struct TypeCallSignature {
 }
 
 /// Index signature: [key: string]: T, [key: number]: T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeIndexSignature {
   #[drive(skip)]
   pub readonly: bool,
@@ -304,22 +339,25 @@ pub struct TypeIndexSignature {
 }
 
 /// Get accessor signature: get x(): T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeGetAccessor {
   pub key: TypePropertyKey,
   pub return_type: Option<Node<TypeExpr>>,
 }
 
 /// Set accessor signature: set x(value: T)
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeSetAccessor {
   pub key: TypePropertyKey,
   pub parameter: Node<TypeFunctionParameter>,
 }
 
 /// Property key in type members
-#[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t", content = "v")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", serde(tag = "$t", content = "v"))]
 pub enum TypePropertyKey {
   Identifier(#[drive(skip)] String),
   String(#[drive(skip)] String),
@@ -328,32 +366,37 @@ pub enum TypePropertyKey {
 }
 
 /// Parenthesized type: (T)
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeParenthesized {
   pub type_expr: Box<Node<TypeExpr>>,
 }
 
 /// Type query: typeof x, typeof foo.bar
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeQuery {
   pub expr_name: TypeEntityName,
 }
 
 /// KeyOf type: keyof T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeKeyOf {
   pub type_expr: Box<Node<TypeExpr>>,
 }
 
 /// Indexed access type: T[K], T["prop"]
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeIndexedAccess {
   pub object_type: Box<Node<TypeExpr>>,
   pub index_type: Box<Node<TypeExpr>>,
 }
 
 /// Conditional type: T extends U ? X : Y
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeConditional {
   pub check_type: Box<Node<TypeExpr>>,
   pub extends_type: Box<Node<TypeExpr>>,
@@ -362,7 +405,8 @@ pub struct TypeConditional {
 }
 
 /// Infer type: infer R, infer R extends U
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeInfer {
   #[drive(skip)]
   pub type_parameter: String,
@@ -370,7 +414,8 @@ pub struct TypeInfer {
 }
 
 /// Mapped type: { [K in keyof T]: T[K] }, { readonly [K in T]?: U }, { [K in T as NewK]: U }
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeMapped {
   #[drive(skip)]
   pub readonly_modifier: Option<MappedTypeModifier>,
@@ -384,7 +429,8 @@ pub struct TypeMapped {
 }
 
 /// Mapped type modifier: +, -, or none
-#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum MappedTypeModifier {
   Plus,
   Minus,
@@ -392,7 +438,8 @@ pub enum MappedTypeModifier {
 }
 
 /// Template literal type: `foo${T}bar`
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeTemplateLiteral {
   #[drive(skip)]
   pub head: String,
@@ -400,7 +447,8 @@ pub struct TypeTemplateLiteral {
 }
 
 /// Template literal span
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeTemplateLiteralSpan {
   pub type_expr: Node<TypeExpr>,
   #[drive(skip)]
@@ -408,7 +456,8 @@ pub struct TypeTemplateLiteralSpan {
 }
 
 /// Type predicate: x is T, asserts x, asserts x is T
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypePredicate {
   #[drive(skip)]
   pub asserts: bool,
@@ -418,11 +467,13 @@ pub struct TypePredicate {
 }
 
 /// This type: this
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeThis {}
 
 /// Import type: import("module").Type
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeImport {
   #[drive(skip)]
   pub module_specifier: String,

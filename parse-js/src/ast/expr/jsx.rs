@@ -3,16 +3,17 @@ use super::IdExpr;
 use crate::ast::node::Node;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum JsxAttrVal {
   Expression(Node<JsxExprContainer>),
   Text(Node<JsxText>),
   Element(Node<JsxElem>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum JsxAttr {
   Named {
     name: Node<JsxName>,
@@ -23,7 +24,8 @@ pub enum JsxAttr {
   },
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum JsxElemName {
   Id(Node<IdExpr>),
   Member(Node<JsxMemberExpr>),
@@ -47,14 +49,16 @@ impl PartialEq for JsxElemName {
 
 impl Eq for JsxElemName {}
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum JsxElemChild {
   Element(Node<JsxElem>),
   Expr(Node<JsxExprContainer>),
   Text(Node<JsxText>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxElem {
   // JSX distinguishes intrinsic elements (e.g. `<div>`, `<my-tag>`, `<Svg:Path>`) from
   // value-based component references (e.g. `<Foo>`, `<Foo.Bar>`) primarily by capitalization.
@@ -68,14 +72,16 @@ pub struct JsxElem {
   pub children: Vec<JsxElemChild>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxExprContainer {
   #[drive(skip)]
   pub spread: bool,
   pub value: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxMemberExpr {
   // This is a separate property to indicate it's required and for easier pattern matching.
   pub base: Node<IdExpr>,
@@ -83,7 +89,8 @@ pub struct JsxMemberExpr {
   pub path: Vec<String>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxName {
   #[drive(skip)]
   pub namespace: Option<String>,
@@ -91,12 +98,14 @@ pub struct JsxName {
   pub name: String,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxSpreadAttr {
   pub value: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct JsxText {
   #[drive(skip)]
   pub value: String,

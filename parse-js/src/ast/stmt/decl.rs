@@ -9,9 +9,9 @@ use crate::ast::type_expr::TypeExpr;
 use crate::ast::type_expr::TypeParameter;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassDecl {
   pub decorators: Vec<Node<Decorator>>,
   #[drive(skip)]
@@ -29,7 +29,8 @@ pub struct ClassDecl {
   pub members: Vec<Node<ClassMember>>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct FuncDecl {
   #[drive(skip)]
   pub export: bool,
@@ -39,7 +40,8 @@ pub struct FuncDecl {
   pub function: Node<Func>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ParamDecl {
   pub decorators: Vec<Node<Decorator>>,
   #[drive(skip)]
@@ -54,7 +56,8 @@ pub struct ParamDecl {
   pub default_value: Option<Node<Expr>>,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Copy, Clone, Drive, DriveMut)]
 pub enum Accessibility {
   Public,
   Private,
@@ -62,12 +65,14 @@ pub enum Accessibility {
 }
 
 // Since a pattern can also be in an expression (e.g. assignment), have a specific unified type for declarations (e.g. imports, function params, var/let/const, catch binding) only, useful for downstream tasks. This contains only the pattern; it shouldn't contain any expressions (e.g. initializer) as that itself could contain patterns (e.g. assignment), defeating the purpose.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct PatDecl {
   pub pat: Node<Pat>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct VarDecl {
   #[drive(skip)]
   pub export: bool,
@@ -75,7 +80,8 @@ pub struct VarDecl {
   pub declarators: Vec<VarDeclarator>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct VarDeclarator {
   pub pattern: Node<PatDecl>,
   #[drive(skip)]
@@ -84,7 +90,8 @@ pub struct VarDeclarator {
   pub initializer: Option<Node<Expr>>,
 }
 
-#[derive(Eq, PartialEq, Clone, Copy, Debug, Serialize, Drive, DriveMut)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Eq, PartialEq, Clone, Copy, Debug, Drive, DriveMut)]
 pub enum VarDeclMode {
   Const,
   Let,

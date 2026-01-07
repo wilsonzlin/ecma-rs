@@ -4,11 +4,11 @@ use crate::ast::node::Node;
 use derive_more::derive::From;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
-#[derive(Debug, Drive, DriveMut, From, Serialize)]
-#[serde(tag = "$t")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "$t"))]
+#[derive(Debug, Drive, DriveMut, From)]
 pub enum Pat {
   Arr(Node<ArrPat>),
   Id(Node<IdPat>),
@@ -28,14 +28,16 @@ impl From<Pat> for Expr {
   }
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ArrPatElem {
   pub target: Node<Pat>,
   pub default_value: Option<Node<Expr>>,
 }
 
 // `const fn = (a: any, b: any, ...{ length, ...c }: any[]) => void 0` is allowed.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ArrPat {
   // Unnamed elements can exist.
   pub elements: Vec<Option<ArrPatElem>>,
@@ -44,13 +46,15 @@ pub struct ArrPat {
 
 // Not really a pattern but functions similarly so kept here in pat.rs.
 // This exists as a separate AST node type for easy replacement when minifying.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassOrFuncName {
   #[drive(skip)]
   pub name: String,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct IdPat {
   #[drive(skip)]
   pub name: String,
@@ -58,14 +62,16 @@ pub struct IdPat {
 
 // For an object pattern, `...` must be followed by an identifier.
 // `const fn = ({ a: { b = c } = d, ...e }: any) => void 0` is possible.
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ObjPat {
   pub properties: Vec<Node<ObjPatProp>>,
   // TypeScript: Can be any pattern for error recovery (e.g., {...{}} or {...[]})
   pub rest: Option<Node<Pat>>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ObjPatProp {
   pub key: ClassOrObjKey,
   // If `shorthand`, `key` is Direct and `target` is IdentifierPattern of same name. This way, there is always an IdentifierPattern that exists and can be visited, instead of also having to consider ClassOrObjectMemberKey::Direct as identifier if shorthand.

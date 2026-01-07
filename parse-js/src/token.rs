@@ -6,9 +6,9 @@ use ahash::HashMap;
 use ahash::HashSet;
 use ahash::HashSetExt;
 use once_cell::sync::Lazy;
-use serde::Serialize;
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
 pub enum TT {
   // Used to represent a type that should never be seen in actual code. Similar to 0xFF from UTF-8
   // bytes perspective. Often used to represent an omitted value without having to use `Option`.

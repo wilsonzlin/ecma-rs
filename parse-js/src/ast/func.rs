@@ -7,10 +7,10 @@ use super::type_expr::TypeParameter;
 use derive_more::derive::From;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
 
 // This common type exists for better downstream usage, as one type is easier to match on and wrangle than many different types (ArrowFunctionExpr, ClassMember::Method, FunctionDecl, etc.).
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct Func {
   #[drive(skip)]
   pub arrow: bool,
@@ -25,7 +25,8 @@ pub struct Func {
 }
 
 // A function body is different from a block statement, as the scopes are different. This doesn't mean much at the parser level, but helps with downstream usages.
-#[derive(Debug, Drive, DriveMut, From, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut, From)]
 pub enum FuncBody {
   Block(Vec<Node<Stmt>>),
   // If arrow function.

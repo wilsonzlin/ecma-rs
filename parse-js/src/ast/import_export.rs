@@ -3,9 +3,9 @@ use super::node::Node;
 use super::stmt::decl::PatDecl;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ModuleExportImportName {
   Ident(String),
   Str(String),
@@ -19,7 +19,8 @@ impl ModuleExportImportName {
   }
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ExportName {
   #[drive(skip)]
   pub type_only: bool, // TypeScript: export { type Foo }
@@ -29,7 +30,8 @@ pub struct ExportName {
   pub alias: Node<IdPat>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum ExportNames {
   // `export * from "module"`
   // `export * as name from "module"`
@@ -40,7 +42,8 @@ pub enum ExportNames {
   Specific(Vec<Node<ExportName>>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ImportName {
   #[drive(skip)]
   pub type_only: bool, // TypeScript: import { type Foo }
@@ -51,7 +54,8 @@ pub struct ImportName {
   pub alias: Node<PatDecl>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub enum ImportNames {
   // `import * as name`
   // PatDecl always contains IdPat.
@@ -61,7 +65,7 @@ pub enum ImportNames {
   Specific(Vec<Node<ImportName>>),
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "serde"))]
 mod tests {
   use super::ModuleExportImportName;
   use serde_json::json;

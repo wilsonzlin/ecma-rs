@@ -7,10 +7,12 @@ use crate::parse::expr::pat::ParsePatternRules;
 use crate::parse::Parser;
 use crate::parse::{AsiContext, ParseCtx};
 use crate::token::TT;
+#[cfg(feature = "serde")]
 use crate::util::test::evaluate_test_input_files;
 use crate::Dialect;
 use crate::ParseOptions;
 use crate::SourceType;
+#[cfg(feature = "serde")]
 use serde_json::Value;
 
 fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
@@ -27,6 +29,7 @@ fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
   parser.expr(ctx, [TT::Semicolon]).unwrap()
 }
 
+#[cfg(feature = "serde")]
 fn parse_expr(input: &str) -> Node<Expr> {
   parse_expr_with_options(
     input,
@@ -37,11 +40,13 @@ fn parse_expr(input: &str) -> Node<Expr> {
   )
 }
 
+#[cfg(feature = "serde")]
 fn parse_expr_and_serialize(input: String) -> Value {
   let node = parse_expr(&input);
   serde_json::to_value(&node).unwrap()
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn test_parse_expression() {
   evaluate_test_input_files("parse/tests/expr", parse_expr_and_serialize);

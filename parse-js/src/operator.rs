@@ -4,9 +4,9 @@ use crate::operator::OperatorName::*;
 use ahash::HashMap;
 use ahash::HashMapExt;
 use once_cell::sync::Lazy;
-use serde::Serialize;
 
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub enum OperatorName {
   Addition,
   Assignment,

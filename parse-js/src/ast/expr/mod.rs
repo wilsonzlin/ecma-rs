@@ -31,11 +31,11 @@ use pat::ArrPat;
 use pat::ClassOrFuncName;
 use pat::IdPat;
 use pat::ObjPat;
-use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
-#[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
-#[serde(tag = "$t")]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(tag = "$t"))]
+#[derive(Debug, Drive, DriveMut, From, TryInto)]
 pub enum Expr {
   ArrowFunc(Node<ArrowFuncExpr>),
   Binary(Node<BinaryExpr>),
@@ -85,19 +85,22 @@ pub enum Expr {
   SatisfiesExpr(Node<SatisfiesExpr>),
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct CallArg {
   #[drive(skip)]
   pub spread: bool,
   pub value: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ArrowFuncExpr {
   pub func: Node<Func>, // Always Function.
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct BinaryExpr {
   #[drive(skip)]
   pub operator: OperatorName,
@@ -105,7 +108,8 @@ pub struct BinaryExpr {
   pub right: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct CallExpr {
   #[drive(skip)]
   pub optional_chaining: bool,
@@ -113,7 +117,8 @@ pub struct CallExpr {
   pub arguments: Vec<Node<CallArg>>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ClassExpr {
   pub decorators: Vec<Node<Decorator>>,
   pub name: Option<Node<ClassOrFuncName>>,
@@ -123,14 +128,16 @@ pub struct ClassExpr {
   pub members: Vec<Node<ClassMember>>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct CondExpr {
   pub test: Node<Expr>,
   pub consequent: Node<Expr>,
   pub alternate: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ComputedMemberExpr {
   #[drive(skip)]
   pub optional_chaining: bool,
@@ -138,33 +145,39 @@ pub struct ComputedMemberExpr {
   pub member: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct FuncExpr {
   pub name: Option<Node<ClassOrFuncName>>,
   pub func: Node<Func>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct IdExpr {
   #[drive(skip)]
   pub name: String,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ImportExpr {
   pub module: Node<Expr>,
   pub attributes: Option<Node<Expr>>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ImportMeta {}
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct NewTarget {}
 
 // Dedicated special type to easily distinguish when analysing and minifying. Also done to avoid using IdentifierExpr as right, which is incorrect (not a variable usage).
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct MemberExpr {
   #[drive(skip)]
   pub optional_chaining: bool,
@@ -173,26 +186,31 @@ pub struct MemberExpr {
   pub right: String,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct SuperExpr {}
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct ThisExpr {}
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TaggedTemplateExpr {
   pub function: Node<Expr>,
   pub parts: Vec<LitTemplatePart>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct UnaryExpr {
   #[drive(skip)]
   pub operator: OperatorName,
   pub argument: Node<Expr>,
 }
 
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct UnaryPostfixExpr {
   #[drive(skip)]
   pub operator: OperatorName,
@@ -202,7 +220,8 @@ pub struct UnaryPostfixExpr {
 // TypeScript expressions
 
 /// Type assertion: value as Type or value as const
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct TypeAssertionExpr {
   pub expression: Box<Node<Expr>>,
   pub type_annotation: Option<Node<TypeExpr>>, // None for "as const"
@@ -211,20 +230,23 @@ pub struct TypeAssertionExpr {
 }
 
 /// Non-null assertion: value!
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct NonNullAssertionExpr {
   pub expression: Box<Node<Expr>>,
 }
 
 /// Satisfies expression: value satisfies Type
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct SatisfiesExpr {
   pub expression: Box<Node<Expr>>,
   pub type_annotation: Node<TypeExpr>,
 }
 
 /// Decorator: @decorator or @decorator(args)
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct Decorator {
   pub expression: Node<Expr>,
 }

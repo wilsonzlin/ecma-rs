@@ -3,9 +3,10 @@ use crate::error::SyntaxErrorType;
 use crate::loc::Loc;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
+#[cfg(feature = "serde")]
 use serde::ser::SerializeStruct;
-use serde::Serialize;
-use serde::Serializer;
+#[cfg(feature = "serde")]
+use serde::{Serialize, Serializer};
 use smallvec::SmallVec;
 use std::any::Any;
 use std::any::TypeId;
@@ -208,6 +209,7 @@ impl Debug for LocSpan {
   }
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for LocSpan {
   fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
     let Loc(start, end) = self.0;
@@ -218,6 +220,7 @@ impl Serialize for LocSpan {
   }
 }
 
+#[cfg(feature = "serde")]
 fn serialize_located_node<S: Serialize + Drive + DriveMut, Se: Serializer>(
   node: &Node<S>,
   serializer: Se,
@@ -249,20 +252,21 @@ impl<'a, S: Debug + Drive + DriveMut> Display for LocatedNode<'a, S> {
   }
 }
 
-#[cfg(feature = "serde-loc")]
+#[cfg(all(feature = "serde", feature = "serde-loc"))]
 impl<S: Serialize + Drive + DriveMut> Serialize for Node<S> {
   fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
     serialize_located_node(self, serializer)
   }
 }
 
-#[cfg(not(feature = "serde-loc"))]
+#[cfg(all(feature = "serde", not(feature = "serde-loc")))]
 impl<S: Serialize + Drive + DriveMut> Serialize for Node<S> {
   fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
     self.stx.serialize(serializer)
   }
 }
 
+#[cfg(feature = "serde")]
 impl<'a, S: Serialize + Drive + DriveMut> Serialize for LocatedNode<'a, S> {
   fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
     serialize_located_node(self.0, serializer)
@@ -274,8 +278,8 @@ mod tests {
   use super::*;
   use crate::ast::expr::Expr;
   use crate::ast::expr::IdExpr;
-  use serde_json::json;
-  use serde_json::to_value;
+  #[cfg(feature = "serde")]
+  use serde_json::{json, to_value};
 
   fn id_expr(loc: Loc, name: &'static str) -> Node<Expr> {
     let ident = Node::new(loc, IdExpr { name: name.into() });
@@ -314,6 +318,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(feature = "serde")]
   fn serializes_located_node_with_location() {
     let loc = Loc(2, 5);
     let node = id_expr(loc, "abc");

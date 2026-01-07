@@ -1,3 +1,5 @@
+#![cfg(feature = "serde")]
+
 use crate::lex::Lexer;
 use crate::parse::expr::pat::ParsePatternRules;
 use crate::parse::Parser;

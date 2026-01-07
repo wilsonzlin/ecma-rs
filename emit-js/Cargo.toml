@@ -12,5 +12,6 @@ hir-js = { path = "../hir-js" }
 parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 
 [dev-dependencies]
+parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics", "serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
