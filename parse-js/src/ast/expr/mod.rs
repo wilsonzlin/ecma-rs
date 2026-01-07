@@ -222,7 +222,8 @@ pub struct UnaryPostfixExpr {
 
 /// Instantiation expression: expr<TypeArgs>
 /// TypeScript 4.7+ allows this without an immediate call suffix (e.g. `foo<string>`).
-#[derive(Debug, Drive, DriveMut, Serialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[derive(Debug, Drive, DriveMut)]
 pub struct InstantiationExpr {
   pub expression: Box<Node<Expr>>,
   pub type_arguments: Vec<Node<TypeExpr>>,
