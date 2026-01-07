@@ -540,8 +540,7 @@ impl<'a> Parser<'a> {
             } else {
               let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
               Some(
-                p
-                  .parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
+                p.parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
                   .into(),
               )
             };
@@ -568,8 +567,7 @@ impl<'a> Parser<'a> {
         self.new_target_allowed += 1;
         self.super_prop_allowed += 1;
         self.super_call_allowed = 0;
-        let initializer =
-          self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
+        let initializer = self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
         self.new_target_allowed = prev_new_target_allowed;
         self.super_prop_allowed = prev_super_prop_allowed;
         self.super_call_allowed = prev_super_call_allowed;
@@ -754,10 +752,10 @@ impl<'a> Parser<'a> {
         Some(
           p.parse_method_block_body(
             ctx.with_rules(ParsePatternRules {
-            await_allowed: !is_module,
-            yield_allowed: !is_module,
-            await_expr_allowed: false,
-            yield_expr_allowed: false,
+              await_allowed: !is_module,
+              yield_allowed: !is_module,
+              await_expr_allowed: false,
+              yield_expr_allowed: false,
             }),
             false,
           )?

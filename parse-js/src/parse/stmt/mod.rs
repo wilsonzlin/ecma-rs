@@ -748,15 +748,10 @@ impl<'a> Parser<'a> {
       let await_ = await_token.is_match();
       if await_ && p.is_strict_ecmascript() && !ctx.rules.await_expr_allowed {
         // `for await (...)` is only permitted in async functions and modules.
-        return Err(
-          await_token
-            .match_loc()
-            .unwrap()
-            .error(
-              SyntaxErrorType::ExpectedSyntax("for-await-of not allowed outside async contexts"),
-              Some(TT::KeywordAwait),
-            ),
-        );
+        return Err(await_token.match_loc().unwrap().error(
+          SyntaxErrorType::ExpectedSyntax("for-await-of not allowed outside async contexts"),
+          Some(TT::KeywordAwait),
+        ));
       }
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(header_ctx)?;
