@@ -63,4 +63,3 @@ fn json_error_contains_diagnostics_array() {
     "expected diagnostics to be non-empty, got: {diagnostics:?}"
   );
 }
-

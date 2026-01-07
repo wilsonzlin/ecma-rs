@@ -48,4 +48,3 @@ fn human_mode_writes_diagnostics_to_stderr() {
     "expected stderr to contain diagnostics"
   );
 }
-

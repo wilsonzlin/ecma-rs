@@ -343,13 +343,7 @@ fn main() {
         name: input_name,
         text: source,
       };
-      exit_with_diagnostics(
-        args.mode,
-        args.json,
-        &provider,
-        diagnostics,
-        render_options,
-      );
+      exit_with_diagnostics(args.mode, args.json, &provider, diagnostics, render_options);
     }
   }
 }

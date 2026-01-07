@@ -151,4 +151,3 @@ fn preserve_const_enums_changes_output() {
     preserved_out
   );
 }
-
