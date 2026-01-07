@@ -11,6 +11,13 @@ fn ecma_script_opts() -> ParseOptions {
   }
 }
 
+fn ecma_module_opts() -> ParseOptions {
+  ParseOptions {
+    dialect: Dialect::Ecma,
+    source_type: SourceType::Module,
+  }
+}
+
 #[test]
 fn asi_splits_identifiers_only_across_line_terminators() {
   let parsed = parse_with_options("a\nb", ecma_script_opts()).expect("expected ASI split");
@@ -89,9 +96,22 @@ fn await_allows_line_terminator_before_operand() {
 }
 
 #[test]
+fn await_allows_line_terminator_before_operand_in_module() {
+  assert!(parse_with_options("await\nfoo()", ecma_module_opts()).is_ok());
+}
+
+#[test]
 fn await_requires_operand() {
   assert!(
     parse_with_options("async function f(){ await; }", ecma_script_opts()).is_err(),
+    "await must not accept a missing operand"
+  );
+}
+
+#[test]
+fn await_requires_operand_in_module() {
+  assert!(
+    parse_with_options("await;", ecma_module_opts()).is_err(),
     "await must not accept a missing operand"
   );
 }
