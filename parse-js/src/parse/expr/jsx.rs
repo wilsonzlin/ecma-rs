@@ -217,7 +217,7 @@ impl<'a> Parser<'a> {
   pub fn jsx_elem_children(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<JsxElemChild>> {
     let mut children = Vec::<JsxElemChild>::new();
     loop {
-      let ahead = self.peek();
+      let ahead = self.peek_with_mode(LexMode::JsxTag);
       if matches!(ahead.typ, TT::ChevronLeftSlash | TT::EOF) {
         break;
       }
@@ -230,7 +230,7 @@ impl<'a> Parser<'a> {
           },
         )));
       }
-      let next = self.peek();
+      let next = self.peek_with_mode(LexMode::JsxTag);
       match next.typ {
         TT::ChevronLeftSlash | TT::EOF => break,
         TT::ChevronLeft => {

@@ -144,6 +144,9 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
 fn strict_ecma_still_accepts_valid_js() {
   assert_accept("({ [x]: y, while: 1, class: 2 });");
   assert_accept("a != b; a !== b;");
+  // `<` followed immediately by a regex literal begins with `</` and must not be lexed as a
+  // JSX closing-tag token outside JSX contexts.
+  assert_accept("1</b/.test('b');");
   assert_accept("for (a of b) {}");
   assert_accept("for (var x of y) {}");
   assert_accept("for (var x in y) {}");

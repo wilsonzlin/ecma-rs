@@ -1163,6 +1163,13 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
         TT::PrivateMember => lex_private_member(lexer),
         TT::Slash | TT::SlashEquals if mode == LexMode::SlashIsRegex => lex_regex(lexer),
         typ => {
+          if typ == TT::ChevronLeftSlash && mode != LexMode::JsxTag {
+            // Only treat `</` as a single token when lexing JSX tags. In normal
+            // ECMAScript lexing this sequence can occur as `<` followed by `/`
+            // (e.g. `a</b/.test('b')`), so split it into `<` and `/`.
+            lexer.consume(mat.prefix(1));
+            return Ok(TT::ChevronLeft);
+          }
           if typ == TT::Question && mat.len() != 1 {
             // We've matched `?.[0-9]`.
             mat = mat.prefix(1);
