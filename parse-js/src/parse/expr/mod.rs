@@ -1086,7 +1086,7 @@ impl<'a> Parser<'a> {
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     let left = self.expr_operand(ctx, terminators, asi)?;
-    self.expr_with_min_prec_after_left(ctx, left, min_prec, terminators, asi, true)
+    self.expr_with_min_prec_after_left(ctx, left, min_prec, terminators, asi)
   }
 
   fn expr_with_min_prec_after_left<const N: usize>(
@@ -1096,7 +1096,6 @@ impl<'a> Parser<'a> {
     min_prec: u8,
     terminators: [TT; N],
     asi: &mut Asi,
-    allow_division_asi_reparse: bool,
   ) -> SyntaxResult<Node<Expr>> {
     let asi_allowed = asi.can_end_with_asi && ctx.asi.allows_asi();
     let yield_precedence = OPERATORS[&OperatorName::Yield].precedence;
@@ -1127,44 +1126,6 @@ impl<'a> Parser<'a> {
         self.restore_checkpoint(cp);
         break;
       };
-
-      // `a\n/b/.test(...)` must parse as two statements (`a; /b/.test(...)`) even
-      // though `/` is normally a binary division operator.
-      //
-      // The spec's ASI algorithm inserts a semicolon at a LineTerminator boundary
-      // if parsing would otherwise fail. To match that, we speculatively check
-      // whether parsing can continue as a division expression; if it cannot, we
-      // end the current expression and allow the next statement to re-lex `/` as
-      // a regular expression literal.
-      if allow_division_asi_reparse
-        && asi_allowed
-        && t.typ == TT::Slash
-        && t.preceded_by_line_terminator
-      {
-        let after_slash = self.checkpoint();
-        self.restore_checkpoint(cp);
-        let dummy_left = self.create_synthetic_undefined(left.loc);
-        let mut dry_run_asi = Asi {
-          can_end_with_asi: asi.can_end_with_asi,
-          did_end_with_asi: false,
-        };
-        let can_continue = self
-          .expr_with_min_prec_after_left(
-            ctx,
-            dummy_left,
-            min_prec,
-            terminators,
-            &mut dry_run_asi,
-            false,
-          )
-          .is_ok();
-        if !can_continue {
-          self.restore_checkpoint(cp);
-          asi.did_end_with_asi = true;
-          break;
-        }
-        self.restore_checkpoint(after_slash);
-      }
 
       match t.typ {
         // Automatic Semicolon Insertion rules: no newline between operand and postfix operator.

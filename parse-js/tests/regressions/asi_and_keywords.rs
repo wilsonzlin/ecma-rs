@@ -27,14 +27,11 @@ fn asi_does_not_split_before_brace_without_line_terminator() {
 }
 
 #[test]
-fn asi_splits_before_regex_literal_when_required() {
-  // `a\n/b/.test("x")` must parse as two statements:
-  //   a;
-  //   /b/.test("x");
-  // because parsing it as a division expression would be a syntax error.
-  let parsed =
-    parse_with_options("a\n/b/.test('x')", ecma_script_opts()).expect("expected ASI before regex");
-  assert_eq!(parsed.stx.body.len(), 2);
+fn asi_does_not_backtrack_to_treat_slash_as_regex_literal() {
+  // In expression context, `/` is a division operator, not a regex literal. The
+  // parser must not insert ASI at an earlier LineTerminator just because later
+  // tokens would make the division parse fail.
+  assert!(parse_with_options("a\n/b/.test('x')", ecma_script_opts()).is_err());
 }
 
 #[test]
