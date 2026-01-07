@@ -1132,10 +1132,22 @@ impl<'a> Parser<'a> {
           self.restore_checkpoint(cp);
           continue; // Restart loop to re-process the ! token as part of != or !==
         }
-        // Automatic Semicolon Insertion rules: no newline between operand and template literal.
-        TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
-          if !t.preceded_by_line_terminator =>
-        {
+        // Tagged templates allow line terminators between the tag expression and
+        // the template literal (`tag\n\`x\``). ASI must not split in that case.
+        TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => {
+          // However, `yield` expressions are restricted productions: an unparenthesized
+          // `yield`/`yield*` cannot be used as a tag expression. If we encounter a template
+          // literal after `yield` across a LineTerminator, treat it as an ASI boundary.
+          if matches!(left.stx.as_ref(), Expr::Unary(unary) if matches!(unary.stx.operator, OperatorName::Yield | OperatorName::YieldDelegated))
+            && left.assoc.get::<ParenthesizedExpr>().is_none()
+          {
+            if asi_allowed && t.preceded_by_line_terminator {
+              self.restore_checkpoint(cp);
+              asi.did_end_with_asi = true;
+              break;
+            }
+            return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
+          }
           let loc = t.loc;
           self.restore_checkpoint(cp);
           // ES2018: Tagged templates allow invalid escape sequences

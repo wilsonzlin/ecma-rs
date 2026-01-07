@@ -46,6 +46,26 @@ fn asi_does_not_split_division_expression_after_line_terminator() {
 }
 
 #[test]
+fn asi_does_not_split_before_tagged_template() {
+  let parsed =
+    parse_with_options("tag\n`x`", ecma_script_opts()).expect("expected tagged template parse");
+  assert_eq!(parsed.stx.body.len(), 1);
+}
+
+#[test]
+fn yield_does_not_form_tagged_template_across_line_terminator() {
+  let parsed =
+    parse_with_options("function* g(){ yield\n`x`; }", ecma_script_opts()).expect("expected parse");
+  let Stmt::FunctionDecl(func_decl) = parsed.stx.body[0].stx.as_ref() else {
+    panic!("expected function declaration");
+  };
+  let Some(parse_js::ast::func::FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
+    panic!("expected function body");
+  };
+  assert_eq!(body.len(), 2);
+}
+
+#[test]
 fn await_allows_line_terminator_before_operand() {
   assert!(parse_with_options("async function f(){ await\nfoo(); }", ecma_script_opts()).is_ok());
 }
