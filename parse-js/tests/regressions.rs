@@ -26,6 +26,8 @@ mod class_method_overload;
 mod destructuring_type_params;
 #[path = "regressions/exponentiation.rs"]
 mod exponentiation;
+#[path = "regressions/function_name_reserved_words.rs"]
+mod function_name_reserved_words;
 #[path = "regressions/export_assignment_asi.rs"]
 mod export_assignment_asi;
 #[path = "regressions/for_header_asi.rs"]

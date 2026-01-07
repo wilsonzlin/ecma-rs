@@ -414,12 +414,12 @@ impl<'a> Parser<'a> {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       p.require(TT::KeywordFunction)?;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      // Function name is always parsed with yield/await allowed as identifiers,
-      // even for generator/async functions (the function can be named "yield" or "await")
       let is_module = p.is_module();
+      // The name of a named function expression is bound in the function-expression-name scope,
+      // so `await`/`yield` should be reserved based on the function's own async/generator status.
       let name_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: !is_module,
-        yield_allowed: !is_module,
+        await_allowed: if is_module { false } else { !is_async },
+        yield_allowed: if is_module { false } else { !generator },
         await_expr_allowed: false,
         yield_expr_allowed: false,
       });

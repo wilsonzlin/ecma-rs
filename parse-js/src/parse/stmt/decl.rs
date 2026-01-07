@@ -149,16 +149,8 @@ impl<'a> Parser<'a> {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       let start = p.require(TT::KeywordFunction)?.loc;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      // Function name is always parsed with yield/await allowed as identifiers,
-      // even for generator/async functions (the function can be named "yield" or "await")
       let is_module = p.is_module();
-      let name_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: !is_module,
-        yield_allowed: !is_module,
-        await_expr_allowed: false,
-        yield_expr_allowed: false,
-      });
-      let name = p.maybe_class_or_func_name(name_ctx);
+      let name = p.maybe_class_or_func_name(ctx);
       // The name can only be omitted in default exports.
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
