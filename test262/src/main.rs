@@ -192,7 +192,7 @@ impl SourceMode {
 
   fn to_parse_options(self) -> ParseOptions {
     ParseOptions {
-      dialect: Dialect::Js,
+      dialect: Dialect::Ecma,
       source_type: match self {
         SourceMode::Script => SourceType::Script,
         SourceMode::Module => SourceType::Module,

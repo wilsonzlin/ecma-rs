@@ -205,6 +205,14 @@ impl<'a> Parser<'a> {
     self.dialect().allows_angle_bracket_type_assertions()
   }
 
+  pub fn is_strict_ecmascript(&self) -> bool {
+    self.dialect().is_strict_ecmascript()
+  }
+
+  pub fn should_recover(&self) -> bool {
+    !self.is_strict_ecmascript()
+  }
+
   pub fn source_range(&self) -> Loc {
     self.lexer.source_range()
   }

@@ -24,6 +24,12 @@ pub enum Dialect {
   Ts,
   Tsx,
   Dts,
+  /// Strict ECMAScript parsing with recovery disabled.
+  ///
+  /// This mode is intended for conformance suites (e.g. test262) where the
+  /// parser must reject syntax errors instead of attempting TypeScript-style
+  /// recovery.
+  Ecma,
 }
 
 impl Dialect {
@@ -37,6 +43,10 @@ impl Dialect {
 
   pub fn allows_angle_bracket_type_assertions(self) -> bool {
     matches!(self, Dialect::Ts | Dialect::Dts)
+  }
+
+  pub fn is_strict_ecmascript(self) -> bool {
+    matches!(self, Dialect::Ecma)
   }
 }
 

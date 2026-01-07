@@ -277,6 +277,7 @@ pub fn minify_with_options(
       Dialect::Ts => FileKind::Ts,
       Dialect::Tsx => FileKind::Tsx,
       Dialect::Dts => FileKind::Dts,
+      Dialect::Ecma => FileKind::Js,
     };
     let emit_opts = EmitOptions::minified();
     let (emitted, _) = emit_minified(file, file_kind, &top_level_node, &emit_opts)?;

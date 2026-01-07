@@ -1177,7 +1177,8 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
       })
   });
 
-  if matches!(dialect, Dialect::Js | Dialect::Jsx) && is_ts_only_keyword(token.typ) {
+  if matches!(dialect, Dialect::Js | Dialect::Jsx | Dialect::Ecma) && is_ts_only_keyword(token.typ)
+  {
     token.typ = TT::Identifier;
   }
 

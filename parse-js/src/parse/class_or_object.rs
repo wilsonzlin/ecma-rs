@@ -103,8 +103,15 @@ impl<'a> Parser<'a> {
       if self.peek().typ == TT::BraceClose {
         break;
       }
-      // Error recovery: nested class declarations are not allowed
-      if self.peek().typ == TT::KeywordClass {
+      // TypeScript-style recovery: nested class declarations are not allowed,
+      // but try to skip them so the rest of the class body can be parsed.
+      let looks_like_nested_class = self.should_recover()
+        && self.peek().typ == TT::KeywordClass
+        && matches!(
+          self.peek_n::<3>()[1].typ,
+          TT::Identifier | TT::BraceOpen | TT::KeywordExtends
+        );
+      if looks_like_nested_class {
         // Skip the entire nested class declaration
         self.consume(); // consume 'class'
                         // Skip optional class name
@@ -418,9 +425,8 @@ impl<'a> Parser<'a> {
         TT::Identifier => self.consume_as_string(),
         // Any keyword is allowed as a key.
         t if KEYWORDS_MAPPING.contains_key(&t) => self.consume_as_string(),
-        // TypeScript: Error recovery - allow asterisk as property key (malformed generator)
-        // Example: `class C { *() {} }` or `class C { * }`
-        TT::Asterisk => self.consume_as_string(),
+        // TypeScript-style recovery: allow asterisk as property key (malformed generator).
+        TT::Asterisk if self.should_recover() => self.consume_as_string(),
         _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("keyword or identifier"))),
       };
 
@@ -601,18 +607,23 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
-      // Error recovery: allow getters without parentheses
+      // TypeScript-style recovery: allow getters without parentheses.
       if p.peek().typ != TT::ParenthesisOpen {
-        // Missing parentheses - create empty body for error recovery
-        return Ok(Func {
-          arrow: false,
-          async_: false,
-          generator: false,
-          type_parameters,
-          parameters: Vec::new(),
-          return_type: None,
-          body: None,
-        });
+        if p.should_recover() {
+          return Ok(Func {
+            arrow: false,
+            async_: false,
+            generator: false,
+            type_parameters,
+            parameters: Vec::new(),
+            return_type: None,
+            body: None,
+          });
+        }
+        return Err(
+          p.peek()
+            .error(SyntaxErrorType::RequiredTokenNotFound(TT::ParenthesisOpen)),
+        );
       }
       p.require(TT::ParenthesisOpen)?;
 
@@ -719,44 +730,50 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
-      // Error recovery: allow setters without parentheses
+      // TypeScript-style recovery: allow setters without parentheses.
       if p.peek().typ != TT::ParenthesisOpen {
-        // Missing parentheses - create synthetic parameter for error recovery
-        let loc = p.peek().loc;
-        let synthetic_pattern = Node::new(
-          loc,
-          PatDecl {
-            pat: Node::new(
-              loc,
-              IdPat {
-                name: String::from("_"),
-              },
-            )
-            .into_wrapped(),
-          },
-        );
-        let param_loc = synthetic_pattern.loc;
-        return Ok(Func {
-          arrow: false,
-          async_: false,
-          generator: false,
-          type_parameters,
-          parameters: vec![Node::new(
-            param_loc,
-            ParamDecl {
-              decorators: Vec::new(),
-              rest: false,
-              optional: false,
-              accessibility: None,
-              readonly: false,
-              pattern: synthetic_pattern,
-              type_annotation: None,
-              default_value: None,
+        if p.should_recover() {
+          // Missing parentheses - create synthetic parameter for error recovery
+          let loc = p.peek().loc;
+          let synthetic_pattern = Node::new(
+            loc,
+            PatDecl {
+              pat: Node::new(
+                loc,
+                IdPat {
+                  name: String::from("_"),
+                },
+              )
+              .into_wrapped(),
             },
-          )],
-          return_type: None,
-          body: None,
-        });
+          );
+          let param_loc = synthetic_pattern.loc;
+          return Ok(Func {
+            arrow: false,
+            async_: false,
+            generator: false,
+            type_parameters,
+            parameters: vec![Node::new(
+              param_loc,
+              ParamDecl {
+                decorators: Vec::new(),
+                rest: false,
+                optional: false,
+                accessibility: None,
+                readonly: false,
+                pattern: synthetic_pattern,
+                type_annotation: None,
+                default_value: None,
+              },
+            )],
+            return_type: None,
+            body: None,
+          });
+        }
+        return Err(
+          p.peek()
+            .error(SyntaxErrorType::RequiredTokenNotFound(TT::ParenthesisOpen)),
+        );
       }
       p.require(TT::ParenthesisOpen)?;
       // Setters are not generators or async, so yield/await can be used as identifiers
@@ -816,6 +833,12 @@ impl<'a> Parser<'a> {
 
       // TypeScript: Parse value parameter (or error recovery - allow setters with no parameter)
       let (pattern, type_annotation, default_value) = if p.peek().typ == TT::ParenthesisClose {
+        if !p.should_recover() {
+          return Err(
+            p.peek()
+              .error(SyntaxErrorType::ExpectedSyntax("setter parameter")),
+          );
+        }
         // Empty parameter list - create synthetic parameter for error recovery
         let loc = p.peek().loc;
         let synthetic_pattern = Node::new(
@@ -940,30 +963,32 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
 
-    // TypeScript: index signatures in object literals (or with misplaced accessibility modifiers)
-    // Accept patterns like `[key: Type]: Type` and `private [key: Type]: Type` for error recovery.
-    let is_index_sig = (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
-      || (matches!(
-        a.typ,
-        TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
-      ) && b.typ == TT::BracketOpen
-        && c.typ == TT::Identifier
-        && d.typ == TT::Colon);
-    if is_index_sig {
-      // Consume optional accessibility modifier for error recovery
-      if matches!(
-        a.typ,
-        TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
-      ) {
-        self.consume();
+    // TypeScript-style recovery: index signatures in object literals (or with
+    // misplaced accessibility modifiers).
+    if self.should_recover() {
+      let is_index_sig = (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
+        || (matches!(
+          a.typ,
+          TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
+        ) && b.typ == TT::BracketOpen
+          && c.typ == TT::Identifier
+          && d.typ == TT::Colon);
+      if is_index_sig {
+        // Consume optional accessibility modifier for error recovery
+        if matches!(
+          a.typ,
+          TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
+        ) {
+          self.consume();
+        }
+        let index_sig = self.parse_index_signature(ctx)?;
+        let dummy_key = self.create_synthetic_class_key();
+        return Ok((dummy_key, ClassOrObjVal::IndexSignature(index_sig)));
       }
-      let index_sig = self.parse_index_signature(ctx)?;
-      let dummy_key = self.create_synthetic_class_key();
-      return Ok((dummy_key, ClassOrObjVal::IndexSignature(index_sig)));
     }
 
-    // Error recovery: Handle generator method without a name: *{ }
-    if a.typ == TT::Asterisk && b.typ == TT::BraceOpen {
+    // TypeScript-style recovery: Handle generator method without a name: `*{ }`.
+    if self.should_recover() && a.typ == TT::Asterisk && b.typ == TT::BraceOpen {
       self.consume(); // consume *
                       // Create synthetic empty key
       let key = self.create_synthetic_class_key();

@@ -1,5 +1,6 @@
 use super::Asi;
 use super::ParseCtx;
+use super::pat::is_valid_pattern_identifier;
 use super::Parser;
 use crate::ast::class_or_object::ClassOrObjKey;
 use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
@@ -610,8 +611,16 @@ impl<'a> Parser<'a> {
       let mut members = Vec::new();
       while p.peek().typ != TT::BraceClose && p.peek().typ != TT::EOF {
         let member_start = p.peek().loc;
-        // Error recovery: class declarations in object literals are not allowed
-        if p.peek().typ == TT::KeywordClass {
+        // TypeScript-style recovery: class declarations in object literals are
+        // not allowed, but try to skip them so the rest of the literal can be
+        // parsed.
+        let looks_like_nested_class = p.should_recover()
+          && p.peek().typ == TT::KeywordClass
+          && matches!(
+            p.peek_n::<3>()[1].typ,
+            TT::Identifier | TT::BraceOpen | TT::KeywordExtends
+          );
+        if looks_like_nested_class {
           // Skip the entire class declaration
           p.consume(); // consume 'class'
                        // Skip optional class name
@@ -687,50 +696,55 @@ impl<'a> Parser<'a> {
               },
             },
           ));
+          continue;
+        }
+
+        let rest = p.consume_if(TT::DotDotDot).is_match();
+        let mut allow_semicolon_separator = false;
+        if rest {
+          let value = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
+          members.push(Node::new(
+            member_start,
+            ObjMember {
+              typ: ObjMemberType::Rest { val: value },
+            },
+          ));
         } else {
-          let rest = p.consume_if(TT::DotDotDot).is_match();
-          let mut allow_semicolon_separator = false;
-          if rest {
-            let value = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
-            members.push(Node::new(
-              member_start,
-              ObjMember {
-                typ: ObjMemberType::Rest { val: value },
-              },
-            ));
-          } else {
-            let (key, value) = p.class_or_obj_member(
-              ctx,
-              TT::Colon,
-              TT::Comma,
-              &mut Asi::no(),
-              false, // Object literals don't have abstract methods
-            )?;
-            allow_semicolon_separator = matches!(value, ClassOrObjVal::IndexSignature(_));
-            let typ = match value {
-              ClassOrObjVal::Prop(None) => {
-                // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
-                match key {
-                  ClassOrObjKey::Computed(expr) => {
-                    // TypeScript: Error recovery - computed properties without value like { [e] }
-                    // Create synthetic undefined value for error recovery
-                    let loc = expr.loc;
-                    let synthetic_value = Node::new(
-                      loc,
-                      IdExpr {
-                        name: "undefined".to_string(),
-                      },
-                    )
-                    .into_wrapped();
-                    ObjMemberType::Valued {
-                      key: ClassOrObjKey::Computed(expr),
-                      val: ClassOrObjVal::Prop(Some(synthetic_value)),
-                    }
+          let (key, value) = p.class_or_obj_member(
+            ctx,
+            TT::Colon,
+            TT::Comma,
+            &mut Asi::no(),
+            false, // Object literals don't have abstract methods
+          )?;
+          allow_semicolon_separator = matches!(value, ClassOrObjVal::IndexSignature(_));
+          let typ = match value {
+            ClassOrObjVal::Prop(None) => {
+              // This property had no value, so it's a shorthand property. Therefore, check
+              // that it's a valid identifier name.
+              match key {
+                ClassOrObjKey::Computed(expr) => {
+                  if !p.should_recover() {
+                    return Err(expr.error(SyntaxErrorType::ExpectedSyntax("object literal value")));
                   }
-                  ClassOrObjKey::Direct(direct_key) => {
-                    // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                    // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
-                    // The type checker will validate this semantically.
+                  // TypeScript-style recovery - computed properties without value like `{ [e] }`.
+                  let loc = expr.loc;
+                  let synthetic_value = Node::new(
+                    loc,
+                    IdExpr {
+                      name: "undefined".to_string(),
+                    },
+                  )
+                  .into_wrapped();
+                  ObjMemberType::Valued {
+                    key: ClassOrObjKey::Computed(expr),
+                    val: ClassOrObjVal::Prop(Some(synthetic_value)),
+                  }
+                }
+                ClassOrObjKey::Direct(direct_key) => {
+                  if p.should_recover() {
+                    // TypeScript-style recovery: accept malformed shorthand properties
+                    // like `{ while }` / `{ "while" }` / `{ 1 }`.
                     if direct_key.stx.tt != TT::Identifier
                       && !KEYWORDS_MAPPING.contains_key(&direct_key.stx.tt)
                       && direct_key.stx.tt != TT::LiteralString
@@ -739,11 +753,10 @@ impl<'a> Parser<'a> {
                     {
                       return Err(direct_key.error(SyntaxErrorType::ExpectedNotFound));
                     };
-                    // TypeScript: Check for definite assignment assertion (e.g., { a! })
+                    // TypeScript-style recovery: definite assignment assertion (e.g., `{ a! }`).
                     let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
-                    // Check for default value (e.g., {c = 1})
+                    // TypeScript-style recovery: default value (e.g., `{ c = 1 }`).
                     if p.consume_if(TT::Equals).is_match() {
-                      // Parse the default value and create an assignment expression
                       let key_name = direct_key.stx.key.clone();
                       let key_loc = direct_key.loc;
                       let default_val = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
@@ -774,31 +787,37 @@ impl<'a> Parser<'a> {
                         val: ClassOrObjVal::Prop(Some(bin_expr)),
                       }
                     } else {
-                      // No default value - this is a normal shorthand property
                       ObjMemberType::Shorthand {
                         id: direct_key.map_stx(|n| IdExpr { name: n.key }),
                       }
                     }
+                  } else {
+                    if !is_valid_pattern_identifier(direct_key.stx.tt, ctx.rules) {
+                      return Err(direct_key.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+                    }
+                    ObjMemberType::Shorthand {
+                      id: direct_key.map_stx(|n| IdExpr { name: n.key }),
+                    }
                   }
                 }
               }
-              _ => ObjMemberType::Valued { key, val: value },
-            };
-            members.push(Node::new(member_start, ObjMember { typ }));
-          }
-          if p.consume_if(TT::Comma).is_match() {
+            }
+            _ => ObjMemberType::Valued { key, val: value },
+          };
+          members.push(Node::new(member_start, ObjMember { typ }));
+        }
+        if p.consume_if(TT::Comma).is_match() {
+          continue;
+        }
+        if p.peek().typ == TT::Semicolon {
+          let semi = p.consume();
+          if allow_semicolon_separator {
             continue;
           }
-          if p.peek().typ == TT::Semicolon {
-            let semi = p.consume();
-            if allow_semicolon_separator {
-              continue;
-            }
-            return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
-          }
-          if p.peek().typ == TT::BraceClose {
-            break;
-          }
+          return Err(semi.error(SyntaxErrorType::ExpectedSyntax("`,`")));
+        }
+        if p.peek().typ == TT::BraceClose {
+          break;
         }
       }
       p.require(TT::BraceClose)?;

@@ -116,7 +116,9 @@ impl<'a> Parser<'a> {
           // TypeScript: For error recovery, allow trailing comma after rest element
           // even though it's semantically invalid (e.g., {...x,})
           // The type checker will catch this error
-          let _ = p.consume_if(TT::Comma);
+          if p.should_recover() {
+            let _ = p.consume_if(TT::Comma);
+          }
           break;
         };
 
@@ -134,14 +136,18 @@ impl<'a> Parser<'a> {
                 )));
               }
               ClassOrObjKey::Direct(n) => {
-                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                // TypeScript: Also accept string literals that normalize to identifiers (e.g., { "while" })
-                // The type checker will validate these semantically.
-                if n.stx.tt != TT::Identifier
-                  && n.stx.tt != TT::LiteralString
-                  && !KEYWORDS_MAPPING.contains_key(&n.stx.tt)
-                {
-                  return Err(n.error(SyntaxErrorType::ExpectedNotFound));
+                if p.should_recover() {
+                  // TypeScript-style recovery: Accept any keyword in shorthand
+                  // properties (e.g., `{ while }`) and string literals that
+                  // normalize to identifiers (e.g., `{ "while" }`).
+                  if n.stx.tt != TT::Identifier
+                    && n.stx.tt != TT::LiteralString
+                    && !KEYWORDS_MAPPING.contains_key(&n.stx.tt)
+                  {
+                    return Err(n.error(SyntaxErrorType::ExpectedNotFound));
+                  }
+                } else if !is_valid_pattern_identifier(n.stx.tt, ctx.rules) {
+                  return Err(n.error(SyntaxErrorType::ExpectedSyntax("identifier")));
                 }
                 // We've already ensured that this is a valid identifier, keyword, or string literal.
                 let id_pat = n
@@ -153,10 +159,11 @@ impl<'a> Parser<'a> {
               }
             }
           };
-          // TypeScript: Error recovery - skip optional marker (?) in destructuring patterns
-          // This is invalid syntax but helps with error recovery
-          // e.g., `var {h?} = obj;` - the ? is not allowed but we skip it to continue parsing
-          let _ = p.consume_if(TT::Question);
+          // TypeScript-style recovery: skip optional marker (`?`) in destructuring
+          // patterns (invalid syntax; helps with recovery).
+          if p.should_recover() {
+            let _ = p.consume_if(TT::Question);
+          }
 
           let default_value = p
             .consume_if(TT::Equals)
@@ -193,14 +200,16 @@ impl<'a> Parser<'a> {
           // TypeScript: For error recovery, allow initializer on rest element
           // even though it's semantically invalid (e.g., [...x = a])
           // The type checker will catch this error
-          if p.consume_if(TT::Equals).is_match() {
+          if p.should_recover() && p.consume_if(TT::Equals).is_match() {
             // Parse and discard the initializer
             p.expr(ctx, [TT::BracketClose])?;
           }
           // TypeScript: For error recovery, allow trailing comma after rest element
           // even though it's semantically invalid (e.g., [...x,])
           // The type checker will catch this error
-          let _ = p.consume_if(TT::Comma);
+          if p.should_recover() {
+            let _ = p.consume_if(TT::Comma);
+          }
           break;
         };
 
@@ -243,7 +252,7 @@ impl<'a> Parser<'a> {
       TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
       // TypeScript: For error recovery, create synthetic identifier when pattern is missing
       // Handles cases like `var;`, `let;`, `const;`, `export var;`
-      TT::Semicolon | TT::Comma | TT::EOF => Node::new(
+      TT::Semicolon | TT::Comma | TT::EOF if self.should_recover() => Node::new(
         t.loc,
         IdPat {
           name: String::from(""),
@@ -253,7 +262,7 @@ impl<'a> Parser<'a> {
       // TypeScript: Allow any keyword as pattern identifier for error recovery
       // Examples: `var { while: while } = x` or `let [if] = arr`
       // The type checker will validate these semantically
-      t if KEYWORDS_MAPPING.contains_key(&t) => self
+      t if self.should_recover() && KEYWORDS_MAPPING.contains_key(&t) => self
         .with_loc(|p| {
           let name = p.consume_as_string();
           Ok(IdPat { name })
@@ -262,7 +271,7 @@ impl<'a> Parser<'a> {
       // TypeScript: Error recovery - private names in patterns/parameters
       // Examples: `const #foo = 3;` or `function f(#x: string) {}`
       // The type checker will catch these as semantic errors
-      TT::PrivateMember => self
+      TT::PrivateMember if self.should_recover() => self
         .with_loc(|p| {
           let name = p.consume_as_string();
           Ok(IdPat { name })
@@ -271,7 +280,7 @@ impl<'a> Parser<'a> {
       // TypeScript: Error recovery - template literals as patterns
       // Example: `function f(`hello`) {}` - template literal used as parameter name
       // The type checker will catch this as a semantic error
-      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd if self.should_recover() => self
         .with_loc(|p| {
           let name = p.consume_as_string();
           Ok(IdPat { name })

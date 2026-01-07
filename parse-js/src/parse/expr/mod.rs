@@ -152,20 +152,22 @@ impl<'a> Parser<'a> {
   /// Parses a parenthesised expression like `(a + b)`.
   pub fn grouping(&mut self, ctx: ParseCtx, asi: &mut Asi) -> SyntaxResult<Node<Expr>> {
     self.require(TT::ParenthesisOpen)?;
-    // TypeScript: Allow empty parenthesized expressions for error recovery: ()
-    // Also handles comma operator with missing operands: (, x) or (x, )
-    let mut expr = if self.peek().typ == TT::ParenthesisClose {
-      // Empty expression: () - create synthetic undefined
-      let loc = self.peek().loc;
-      self.create_synthetic_undefined(loc)
+    // TypeScript-style recovery: Allow empty parenthesized expressions `()` and
+    // comma operators with missing operands like `(, x)` or `(x, )`.
+    let mut expr = if self.should_recover() {
+      if self.peek().typ == TT::ParenthesisClose {
+        let loc = self.peek().loc;
+        self.create_synthetic_undefined(loc)
+      } else {
+        self
+          .expr_with_min_prec(ctx, 1, [TT::ParenthesisClose], asi)
+          .unwrap_or_else(|_| {
+            let loc = self.peek().loc;
+            self.create_synthetic_undefined(loc)
+          })
+      }
     } else {
-      self
-        .expr_with_min_prec(ctx, 1, [TT::ParenthesisClose], asi)
-        .unwrap_or_else(|_| {
-          // If expression parsing fails, create synthetic undefined for error recovery
-          let loc = self.peek().loc;
-          self.create_synthetic_undefined(loc)
-        })
+      self.expr_with_min_prec(ctx, 1, [TT::ParenthesisClose], asi)?
     };
     self.require(TT::ParenthesisClose)?;
     expr.assoc.set(ParenthesizedExpr);
@@ -646,7 +648,7 @@ impl<'a> Parser<'a> {
                 && next_token.typ != TT::BracketClose
                 && next_token.typ != TT::BraceClose
                 && !terminators.contains(&next_token.typ)
-            } else {
+            } else if p.should_recover() {
               // TypeScript: For other unary operators, allow missing operand for error recovery
               // Accept semicolon, closing braces/brackets/parens as missing operand
               next_token.typ != TT::Semicolon
@@ -655,6 +657,8 @@ impl<'a> Parser<'a> {
                 && next_token.typ != TT::BraceClose
                 && next_token.typ != TT::EOF
                 && !terminators.contains(&next_token.typ)
+            } else {
+              true
             };
 
             let operand = if has_operand {
@@ -691,9 +695,9 @@ impl<'a> Parser<'a> {
 
     // Check for other valid pattern identifiers.
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
-      // Error recovery: `yield *` should be treated as yield expression even at top level
-      // This handles cases like bare `yield *;` for error recovery
-      if t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
+      // TypeScript-style recovery: `yield *` should be treated as a yield
+      // expression even when `yield` is currently allowed as an identifier.
+      if self.should_recover() && t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
         return Ok(
           self
             .with_loc(|p| {
@@ -867,8 +871,9 @@ impl<'a> Parser<'a> {
           continue;
         }
         // TypeScript: Non-null assertion: expr!
-        // We need to distinguish between non-null assertion (expr!) and inequality operators (!= and !==)
-        TT::Exclamation if !t.preceded_by_line_terminator => {
+        // We need to distinguish between non-null assertion (expr!) and
+        // inequality operators (!= and !==).
+        TT::Exclamation if self.is_typescript() && !t.preceded_by_line_terminator => {
           let next = self.peek();
           if next.typ != TT::Equals && next.typ != TT::EqualsEquals {
             // This is a non-null assertion: expr!
@@ -906,7 +911,7 @@ impl<'a> Parser<'a> {
           continue;
         }
         // TypeScript: Type assertion: expr as Type or expr as const
-        TT::KeywordAs => {
+        TT::KeywordAs if self.is_typescript() => {
           if asi_allowed && t.preceded_by_line_terminator {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
@@ -941,7 +946,7 @@ impl<'a> Parser<'a> {
           continue;
         }
         // TypeScript: Satisfies expression: expr satisfies Type
-        TT::KeywordSatisfies => {
+        TT::KeywordSatisfies if self.is_typescript() => {
           if asi_allowed && t.preceded_by_line_terminator {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
@@ -1020,39 +1025,39 @@ impl<'a> Parser<'a> {
             asi.did_end_with_asi = true;
             break;
           };
-          // TypeScript: Allow semicolons to terminate expressions
-          // This makes the parser more permissive for error recovery
-          if t.typ == TT::Semicolon {
-            self.restore_checkpoint(cp);
-            break;
-          };
-          // TypeScript: Trigger ASI when identifier/keyword follows expression
-          // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements)
-          if asi_allowed && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
-            self.restore_checkpoint(cp);
-            asi.did_end_with_asi = true;
-            break;
-          };
-          // TypeScript: For error recovery, trigger ASI when we see tokens that typically start new constructs
-          // This handles cases like `await 1` (in contexts where await is an identifier),
-          // arrow functions with malformed types `(a): =>`, object literals after expressions, etc.
-          if asi_allowed
-            && matches!(
-              t.typ,
-              TT::Colon |           // Arrow function malformed type annotation: (a):
-            TT::BraceOpen |       // New object/block after expression
-            TT::LiteralNumber |   // Number after identifier: `await 1` where await is identifier
-            TT::LiteralString |   // String after expression
-            TT::LiteralTrue |     // Boolean after expression
-            TT::LiteralFalse |    // Boolean after expression
-            TT::LiteralNull |     // Null after expression
-            TT::ChevronLeftSlash // JSX closing tag: </div> after JSX element with text children
-            )
-          {
-            self.restore_checkpoint(cp);
-            asi.did_end_with_asi = true;
-            break;
-          };
+          if self.should_recover() {
+            // TypeScript-style recovery: Allow semicolons to terminate expressions.
+            if t.typ == TT::Semicolon {
+              self.restore_checkpoint(cp);
+              break;
+            };
+            // TypeScript-style recovery: Trigger ASI when identifier/keyword follows expression.
+            // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements).
+            if asi_allowed && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
+              self.restore_checkpoint(cp);
+              asi.did_end_with_asi = true;
+              break;
+            };
+            // TypeScript-style recovery: Trigger ASI when we see tokens that typically start
+            // new constructs.
+            if asi_allowed
+              && matches!(
+                t.typ,
+                TT::Colon | // Arrow function malformed type annotation: (a):
+                TT::BraceOpen | // New object/block after expression
+                TT::LiteralNumber | // Number after identifier: `await 1` where await is identifier
+                TT::LiteralString | // String after expression
+                TT::LiteralTrue | // Boolean after expression
+                TT::LiteralFalse | // Boolean after expression
+                TT::LiteralNull | // Null after expression
+                TT::ChevronLeftSlash // JSX closing tag: </div> after JSX element with text children
+              )
+            {
+              self.restore_checkpoint(cp);
+              asi.did_end_with_asi = true;
+              break;
+            };
+          }
           return Err(t.error(SyntaxErrorType::ExpectedSyntax("expression operator")));
         }
         Some(operator) => {
@@ -1083,15 +1088,19 @@ impl<'a> Parser<'a> {
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
-              // TypeScript: Allow empty bracket expressions for error recovery: obj[]
-              let member = if self.peek().typ == TT::BracketClose {
-                let loc = self.peek().loc;
-                self.create_synthetic_undefined(loc)
-              } else {
-                self.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
+              // TypeScript-style recovery: Allow empty bracket expressions like `obj[]`.
+              let member = if self.should_recover() {
+                if self.peek().typ == TT::BracketClose {
                   let loc = self.peek().loc;
                   self.create_synthetic_undefined(loc)
-                })
+                } else {
+                  self.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
+                    let loc = self.peek().loc;
+                    self.create_synthetic_undefined(loc)
+                  })
+                }
+              } else {
+                self.expr(ctx, [TT::BracketClose])?
               };
               let end = self.require(TT::BracketClose)?;
               Node::new(
@@ -1137,9 +1146,11 @@ impl<'a> Parser<'a> {
                   prop = self.string(right);
                 }
                 _ => {
-                  // Error recovery: if the next token is a likely terminator for the containing
-                  // expression/block, don't consume it; instead, fabricate an empty property name
-                  // and let the outer parser handle the terminator.
+                  if !self.should_recover() {
+                    return Err(right_tok.error(SyntaxErrorType::ExpectedSyntax(
+                      "property name",
+                    )));
+                  }
                   if matches!(
                     right_tok.typ,
                     TT::BraceClose
@@ -1148,6 +1159,10 @@ impl<'a> Parser<'a> {
                       | TT::Semicolon
                       | TT::EOF
                   ) {
+                    // TypeScript-style recovery: if the next token is a likely
+                    // terminator for the containing expression/block, don't
+                    // consume it; instead, fabricate an empty property name and
+                    // let the outer parser handle the terminator.
                     self.restore_checkpoint(checkpoint);
                     right = left.loc;
                     prop.clear();
