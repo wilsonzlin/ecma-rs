@@ -15,6 +15,12 @@
 //! let out = emit_top_level_diagnostic(FileId(0), &ast, EmitOptions::minified()).unwrap();
 //! println!("{out}");
 //! ```
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p emit-js --example basic
+//! ```
 
 pub mod asi;
 mod emitter;

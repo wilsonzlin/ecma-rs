@@ -129,6 +129,12 @@ fn emit_minified(
 /// minify(TopLevelMode::Global, code, &mut out).unwrap();
 /// assert_eq!(out.as_slice(), b"const main=()=>{let a=1;return a;};");
 /// ```
+///
+/// For a runnable example that avoids filesystem I/O:
+///
+/// ```bash
+/// cargo run -p minify-js --example basic
+/// ```
 /// Options controlling how input is parsed before minification.
 pub struct MinifyOptions {
   /// Whether to parse the file as a script or module.

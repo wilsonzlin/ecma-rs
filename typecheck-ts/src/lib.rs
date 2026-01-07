@@ -122,6 +122,16 @@
 //! assert_eq!(program.display_type(total_type).to_string(), "number");
 //! ```
 //!
+//! # Runnable examples
+//!
+//! For larger, copy/paste-friendly setups see the compiled examples under
+//! `typecheck-ts/examples/`:
+//!
+//! ```bash
+//! cargo run -p typecheck-ts --example memory_host_basic
+//! cargo run -p typecheck-ts --example json_snapshot
+//! ```
+//!
 //! # Features
 //!
 //! - `bundled-libs` (default): embeds the official TypeScript `lib.*.d.ts` files

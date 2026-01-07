@@ -15,6 +15,12 @@
 //! let lowered = lower_from_source_with_kind(FileKind::Ts, "export const x = 1;").unwrap();
 //! assert_eq!(lowered.hir.file_kind, FileKind::Ts);
 //! ```
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p hir-js --example basic_lowering
+//! ```
 
 pub mod hir;
 pub mod ids;
