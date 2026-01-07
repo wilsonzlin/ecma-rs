@@ -41,10 +41,7 @@ impl FileSpanIndex {
 
   /// Innermost body covering the offset, based on the lowered span map.
   pub fn body_at(&self, offset: u32) -> Option<BodyId> {
-    self
-      .span_map
-      .expr_span_at_offset(offset)
-      .map(|res| res.id.0)
+    self.span_map.body_at_offset(offset)
   }
 
   /// Innermost expression covering the offset, including the span used to select

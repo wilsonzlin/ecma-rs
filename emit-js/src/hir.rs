@@ -1064,40 +1064,20 @@ fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatI
       // `VarDecl` statements in HIR do not record whether they were preceded by
       // an `export` keyword, so we infer that by looking up the definition that
       // corresponds to the binding pattern.
-      //
-      // Most of the time `SpanMap::def_at_offset` returns the correct def, but
-      // TypeScript lowering (e.g. enums/namespaces) can synthesize multiple defs
-      // with the exact same span start (notably the `var` binding, its
-      // `VarDeclarator` wrapper, and the IIFE parameter that shadows it). In
-      // those cases, the span map tie-breaker may return a non-binding def (like
-      // the parameter), causing us to drop `export` on the `var` declaration and
-      // silently change module exports.
-      //
-      // To keep emission correct, validate that the span map lookup refers to
-      // the expected var def, and fall back to a direct scan for a matching var
-      // binding when it doesn't.
-
-      if let Some(def_id) = ctx.lowered.hir.span_map.def_at_offset(pat.span.start) {
-        if let Some(def) = ctx.def(def_id) {
-          if matches!(
+      ctx
+        .lowered
+        .hir
+        .span_map
+        .def_at_offset(pat.span.start)
+        .and_then(|def_id| ctx.def(def_id).map(|def| (def_id, def)))
+        .is_some_and(|(def_id, def)| {
+          matches!(
             def.path.kind,
             hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
           ) && def.name == *name
             && def.span == pat.span
             && def_is_root_export(ctx, def_id)
-          {
-            return true;
-          }
-        }
-      }
-      ctx.lowered.defs.iter().any(|def| {
-        matches!(
-          def.path.kind,
-          hir_js::DefKind::Var | hir_js::DefKind::VarDeclarator
-        ) && def.name == *name
-          && def.span == pat.span
-          && def_is_root_export(ctx, def.id)
-      })
+        })
     }
     PatKind::Array(array) => {
       array

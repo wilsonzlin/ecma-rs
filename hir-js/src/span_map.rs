@@ -1,9 +1,11 @@
 use crate::ids::BodyId;
 use crate::ids::DefId;
+use crate::ids::DefKind;
 use crate::ids::ExportSpecifierId;
 use crate::ids::ExprId;
 use crate::ids::ImportSpecifierId;
 use crate::ids::PatId;
+use crate::ids::StmtId;
 use crate::ids::TypeExprId;
 use crate::ids::TypeMemberId;
 use crate::ids::TypeParamId;
@@ -11,13 +13,82 @@ use diagnostics::TextRange;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Internal key used for definition span indexing.
+///
+/// `SpanIndex` breaks ties for identical spans by comparing the span entry's
+/// `id`. When definitions share an identical span, we want the chosen result to
+/// be semantically stable (based on `DefKind`) rather than depending on raw
+/// numeric `DefId` ordering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DefSpanKey {
+  kind_rank: u8,
+  id: DefId,
+}
+
+impl DefSpanKey {
+  fn new(kind: DefKind, id: DefId) -> Self {
+    Self {
+      kind_rank: def_kind_rank(kind),
+      id,
+    }
+  }
+}
+
+impl Ord for DefSpanKey {
+  fn cmp(&self, other: &Self) -> Ordering {
+    (self.kind_rank, self.id).cmp(&(other.kind_rank, other.id))
+  }
+}
+
+impl PartialOrd for DefSpanKey {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+/// Stable priority ordering for definition kinds when their spans are identical.
+///
+/// Lower values win. This prefers binding-like defs (e.g. `var` bindings) over
+/// wrapper/synthetic defs for the same range. In particular, `Var` and
+/// `VarDeclarator` outrank `Param` so tools that query `def_at_offset` at an
+/// identifier span get the binding definition even when TypeScript lowering
+/// synthesizes shadowing parameters with the same span.
+fn def_kind_rank(kind: DefKind) -> u8 {
+  match kind {
+    DefKind::Var => 0,
+    DefKind::VarDeclarator => 1,
+    DefKind::ImportBinding => 2,
+    DefKind::Param => 3,
+    DefKind::Function => 4,
+    DefKind::Class => 5,
+    DefKind::Method => 6,
+    DefKind::Getter => 7,
+    DefKind::Setter => 8,
+    DefKind::Constructor => 9,
+    DefKind::Field => 10,
+    DefKind::StaticBlock => 11,
+    DefKind::Enum => 12,
+    DefKind::EnumMember => 13,
+    DefKind::Namespace => 14,
+    DefKind::Module => 15,
+    DefKind::TypeAlias => 16,
+    DefKind::Interface => 17,
+    DefKind::TypeParam => 18,
+    DefKind::ExportAlias => 19,
+    DefKind::Unknown => 20,
+  }
+}
+
 /// An index of expression, definition, and type expression spans that supports
 /// deterministic, logarithmic lookups for the innermost span that contains an
 /// offset.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SpanMap {
   exprs: SpanIndex<(BodyId, ExprId)>,
-  defs: SpanIndex<DefId>,
+  defs: SpanIndex<DefSpanKey>,
+  def_keys: BTreeMap<DefId, DefSpanKey>,
+  bodies: SpanIndex<BodyId>,
+  stmts: SpanIndex<(BodyId, StmtId)>,
   type_exprs: SpanIndex<(DefId, TypeExprId)>,
   type_members: SpanIndex<(DefId, TypeMemberId)>,
   type_params: SpanIndex<(DefId, TypeParamId)>,
@@ -35,8 +106,18 @@ impl SpanMap {
     self.exprs.add(range, (body, id));
   }
 
-  pub fn add_def(&mut self, range: TextRange, id: DefId) {
-    self.defs.add(range, id);
+  pub fn add_def(&mut self, range: TextRange, kind: DefKind, id: DefId) {
+    let key = DefSpanKey::new(kind, id);
+    self.def_keys.insert(id, key);
+    self.defs.add(range, key);
+  }
+
+  pub fn add_body(&mut self, range: TextRange, id: BodyId) {
+    self.bodies.add(range, id);
+  }
+
+  pub fn add_stmt(&mut self, range: TextRange, body: BodyId, id: StmtId) {
+    self.stmts.add(range, (body, id));
   }
 
   pub fn add_type_expr(&mut self, range: TextRange, owner: DefId, id: TypeExprId) {
@@ -67,6 +148,8 @@ impl SpanMap {
   pub fn finalize(&mut self) {
     self.exprs.finalize();
     self.defs.finalize();
+    self.bodies.finalize();
+    self.stmts.finalize();
     self.type_exprs.finalize();
     self.type_members.finalize();
     self.type_params.finalize();
@@ -83,6 +166,22 @@ impl SpanMap {
 
   pub fn expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<(BodyId, ExprId)>> {
     self.exprs.query_span(offset)
+  }
+
+  pub fn body_at_offset(&self, offset: u32) -> Option<BodyId> {
+    self.bodies.query(offset)
+  }
+
+  pub fn body_span_at_offset(&self, offset: u32) -> Option<SpanResult<BodyId>> {
+    self.bodies.query_span(offset)
+  }
+
+  pub fn stmt_at_offset(&self, offset: u32) -> Option<(BodyId, StmtId)> {
+    self.stmts.query(offset)
+  }
+
+  pub fn stmt_span_at_offset(&self, offset: u32) -> Option<SpanResult<(BodyId, StmtId)>> {
+    self.stmts.query_span(offset)
   }
 
   pub fn type_expr_at_offset(&self, offset: u32) -> Option<(DefId, TypeExprId)> {
@@ -145,11 +244,14 @@ impl SpanMap {
   /// Returns the innermost definition that contains the offset, preferring the
   /// smallest range length and breaking ties by start offset then id.
   pub fn def_at_offset(&self, offset: u32) -> Option<DefId> {
-    self.defs.query(offset)
+    self.defs.query(offset).map(|key| key.id)
   }
 
   pub fn def_span_at_offset(&self, offset: u32) -> Option<SpanResult<DefId>> {
-    self.defs.query_span(offset)
+    self.defs.query_span(offset).map(|res| SpanResult {
+      range: res.range,
+      id: res.id.id,
+    })
   }
 
   pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<TextRange> {
@@ -157,7 +259,18 @@ impl SpanMap {
   }
 
   pub fn def_span(&self, def: DefId) -> Option<TextRange> {
-    self.defs.span_of(def)
+    self
+      .def_keys
+      .get(&def)
+      .and_then(|key| self.defs.span_of(*key))
+  }
+
+  pub fn body_span(&self, body: BodyId) -> Option<TextRange> {
+    self.bodies.span_of(body)
+  }
+
+  pub fn stmt_span(&self, body: BodyId, stmt: StmtId) -> Option<TextRange> {
+    self.stmts.span_of((body, stmt))
   }
 
   pub fn type_expr_span(&self, owner: DefId, type_expr: TypeExprId) -> Option<TextRange> {
@@ -463,6 +576,7 @@ mod tests {
   use super::SpanMap;
   use crate::ids::BodyId;
   use crate::ids::DefId;
+  use crate::ids::DefKind;
   use crate::ids::ExportSpecifierId;
   use crate::ids::ExprId;
   use crate::ids::ImportSpecifierId;
@@ -511,9 +625,19 @@ mod tests {
   #[test]
   fn def_lookup_is_stable() {
     let mut map = SpanMap::new();
-    map.add_def(TextRange::new(0, 5), DefId(0));
-    map.add_def(TextRange::new(0, 4), DefId(1));
+    map.add_def(TextRange::new(0, 5), DefKind::Var, DefId(0));
+    map.add_def(TextRange::new(0, 4), DefKind::Var, DefId(1));
     map.finalize();
+    assert_eq!(map.def_at_offset(1), Some(DefId(1)));
+  }
+
+  #[test]
+  fn def_lookup_prefers_var_over_param_for_identical_spans() {
+    let mut map = SpanMap::new();
+    map.add_def(TextRange::new(0, 3), DefKind::Param, DefId(0));
+    map.add_def(TextRange::new(0, 3), DefKind::Var, DefId(1));
+    map.finalize();
+
     assert_eq!(map.def_at_offset(1), Some(DefId(1)));
   }
 

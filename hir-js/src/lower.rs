@@ -600,7 +600,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
       items.push(def_id);
     }
 
-    span_map.add_def(desc.span, def_id);
+    span_map.add_def(desc.span, desc.kind, def_id);
 
     let body_id = body.map(|b| b.id);
     let mut def_data = DefData {
@@ -651,7 +651,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
       // nested syntax and can be referenced by multiple `DefData` entries. Make
       // sure each `BodyId` is lowered and stored exactly once.
       if !body_index.contains_key(&body.id) {
-        let body_arc = lower_body_from_source(
+        let lowered_body = lower_body_from_source(
           def_id,
           body.id,
           &desc.source,
@@ -662,8 +662,12 @@ pub fn lower_file_with_diagnostics_with_cancellation(
           &mut span_map,
           &mut ctx,
         )
-        .map(Arc::new)
-        .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind, desc.span)));
+        .unwrap_or_else(|| {
+          let placeholder = empty_body(def_id, body.kind, desc.span);
+          span_map.add_body(placeholder.span, body.id);
+          placeholder
+        });
+        let body_arc = Arc::new(lowered_body);
         let idx = bodies.len();
         body_ids.push(body.id);
         body_index.insert(body.id, idx);
@@ -2625,6 +2629,7 @@ impl<'a> BodyBuilder<'a> {
   fn alloc_stmt(&mut self, span: TextRange, kind: StmtKind) -> StmtId {
     let id = StmtId(self.stmts.len() as u32);
     self.stmts.push(Stmt { span, kind });
+    self.span_map.add_stmt(span, self.body_id, id);
     id
   }
 
@@ -2637,6 +2642,25 @@ impl<'a> BodyBuilder<'a> {
   }
 
   fn finish(self) -> Body {
+    let mut body_span: Option<TextRange> = None;
+    let mut include = |span: TextRange| {
+      body_span = Some(match body_span {
+        Some(existing) => TextRange::new(existing.start.min(span.start), existing.end.max(span.end)),
+        None => span,
+      });
+    };
+    for expr in &self.exprs {
+      include(expr.span);
+    }
+    for stmt in &self.stmts {
+      include(stmt.span);
+    }
+    for pat in &self.pats {
+      include(pat.span);
+    }
+    let body_span = body_span.filter(|span| !span.is_empty()).unwrap_or(self.span);
+    self.span_map.add_body(body_span, self.body_id);
+
     Body {
       owner: self.owner,
       span: self.span,
