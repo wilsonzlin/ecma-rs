@@ -60,16 +60,20 @@ pub fn emit_hir_file(em: &mut Emitter, lowered: &LowerResult) -> EmitResult {
   struct ItemWithSpan<'a> {
     start: u32,
     kind: u8,
+    seq: u32,
     item: ModuleItem<'a>,
   }
 
   let mut items: Vec<ItemWithSpan<'_>> = Vec::new();
+  let mut seq: u32 = 0;
   for import in &ctx.lowered.hir.imports {
     items.push(ItemWithSpan {
       start: import.span.start,
       kind: 0,
+      seq,
       item: ModuleItem::Import(import),
     });
+    seq += 1;
   }
   for export in &ctx.lowered.hir.exports {
     // `hir-js` records exported declarations both as root-body statements with
@@ -98,18 +102,22 @@ pub fn emit_hir_file(em: &mut Emitter, lowered: &LowerResult) -> EmitResult {
     items.push(ItemWithSpan {
       start: export.span.start,
       kind: 1,
+      seq,
       item: ModuleItem::Export(export),
     });
+    seq += 1;
   }
   for stmt_id in root_body.root_stmts.iter().copied() {
     let stmt = ctx.stmt(root_body, stmt_id);
     items.push(ItemWithSpan {
       start: stmt.span.start,
       kind: 2,
+      seq,
       item: ModuleItem::Stmt(stmt_id),
     });
+    seq += 1;
   }
-  items.sort_by(|a, b| (a.start, a.kind).cmp(&(b.start, b.kind)));
+  items.sort_by(|a, b| (a.start, a.kind, a.seq).cmp(&(b.start, b.kind, b.seq)));
 
   let mut first = true;
   for item in items {
