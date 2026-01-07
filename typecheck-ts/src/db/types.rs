@@ -66,7 +66,9 @@ unsafe impl Update for SharedTypeStore {
 
 #[derive(Clone)]
 pub struct SharedDeclTypes {
-  /// Stable digest of the declaration tables, used for cheap change detection.
+  /// Stable digest of the declaration type tables, used for cheap change
+  /// detection. This intentionally excludes diagnostics so a change to the
+  /// diagnostics list does not force a rebuild of the interned type tables.
   pub fingerprint: u64,
   pub decls: Arc<DeclTypes>,
 }

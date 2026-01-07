@@ -64,7 +64,6 @@ impl ProgramState {
       for (def, kind) in decls.intrinsics.iter() {
         self.interned_intrinsics.insert(*def, *kind);
       }
-      self.diagnostics.extend(decls.diagnostics.iter().cloned());
     }
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let mut declared_type_cache: HashMap<(FileId, TextRange), Option<TypeId>> = HashMap::new();

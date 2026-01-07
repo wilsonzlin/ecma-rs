@@ -2022,41 +2022,6 @@ fn decl_types_digest(decls: &DeclTypes) -> u64 {
     hasher.write_str(kind.as_str());
   }
 
-  let mut diagnostics: Vec<_> = decls.diagnostics.iter().collect();
-  diagnostics.sort();
-  hasher.write_u32(diagnostics.len() as u32);
-  for diagnostic in diagnostics {
-    hasher.write_str(diagnostic.code.as_str());
-    hasher.write_u8(match diagnostic.severity {
-      diagnostics::Severity::Error => 0,
-      diagnostics::Severity::Warning => 1,
-      diagnostics::Severity::Note => 2,
-      diagnostics::Severity::Help => 3,
-    });
-    hasher.write_str(&diagnostic.message);
-    hasher.write_u32(diagnostic.primary.file.0);
-    hasher.write_u32(diagnostic.primary.range.start);
-    hasher.write_u32(diagnostic.primary.range.end);
-
-    let mut labels: Vec<_> = diagnostic.labels.iter().collect();
-    labels.sort();
-    hasher.write_u32(labels.len() as u32);
-    for label in labels {
-      hasher.write_u32(label.span.file.0);
-      hasher.write_u32(label.span.range.start);
-      hasher.write_u32(label.span.range.end);
-      hasher.write_str(&label.message);
-      hasher.write_u8(label.is_primary as u8);
-    }
-
-    let mut notes: Vec<_> = diagnostic.notes.iter().collect();
-    notes.sort();
-    hasher.write_u32(notes.len() as u32);
-    for note in notes {
-      hasher.write_str(note);
-    }
-  }
-
   hasher.finish()
 }
 
@@ -3566,6 +3531,7 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
+    lower_diags.extend(decl_types(db, *file).diagnostics.iter().cloned());
     module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
