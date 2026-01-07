@@ -94,6 +94,7 @@ walkdir = "2.5"
 [patch.crates-io]
 derive-visitor = { path = "third_party/derive-visitor" }
 derive-visitor-macros = { path = "third_party/derive-visitor-macros" }
+socket2 = { path = "third_party/socket2" }
 
 [profile.release]
 codegen-units = 1
