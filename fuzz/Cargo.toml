@@ -12,11 +12,10 @@ libfuzzer-sys = "0.4"
 
 [dependencies.types-ts-interned]
 path = "../types-ts-interned"
-features = ["fuzzing"]
+features = ["fuzzing", "serde-json"]
 
 [[bin]]
 name = "type_graph"
 path = "fuzz_targets/type_graph.rs"
 test = false
 doc = false
-

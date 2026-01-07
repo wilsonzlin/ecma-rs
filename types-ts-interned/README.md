@@ -2,6 +2,13 @@
 
 Interned, deterministic TypeScript type representation + evaluator/relation engine.
 
+## Features
+
+- `serde`: enables `serde` support for the core interned data structures (IDs,
+  `TypeKind`, snapshots, etc.).
+- `serde-json`: enables JSON helpers such as `TypeStore::debug_json`. Implies
+  `serde`.
+
 ## Runnable example
 
 ```bash
@@ -13,7 +20,8 @@ run assignability checks via [`RelateCtx`].
 
 ## Fuzzing
 
-This crate exposes a fuzz entry point behind the `fuzzing` feature:
+This crate exposes a fuzz entry point behind the `fuzzing` and `serde-json`
+features:
 `types_ts_interned::fuzz_type_graph(&[u8])`.
 
 The `fuzz/type_graph` harness (wired up via `cargo-fuzz`) feeds arbitrary bytes
