@@ -40,7 +40,7 @@ use crate::parse::operator::UNARY_OPERATOR_MAPPING;
 use crate::token::TT;
 use pat::is_valid_pattern_identifier;
 use pat::ParsePatternRules;
-use util::lhs_expr_to_assign_target;
+use util::lhs_expr_to_assign_target_with_recover;
 
 pub struct Asi {
   pub can_end_with_asi: bool,
@@ -752,7 +752,7 @@ impl<'a> Parser<'a> {
     };
 
     // Decorated class expression: `@dec class C {}`.
-    if t0.typ == TT::At {
+    if self.should_recover() && t0.typ == TT::At {
       let checkpoint = self.checkpoint();
       match self.class_expr_with_decorators(ctx) {
         Ok(class) => return Ok(class.into_wrapped()),
@@ -1211,9 +1211,9 @@ impl<'a> Parser<'a> {
                   return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
                 }
               }
-              if operator.name.is_assignment() {
-                left = lhs_expr_to_assign_target(left, operator.name)?;
-              };
+               if operator.name.is_assignment() {
+                 left = lhs_expr_to_assign_target_with_recover(left, operator.name, self.should_recover())?;
+               };
               let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
               Node::new(
                 left.loc + right.loc,

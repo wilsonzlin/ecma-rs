@@ -174,8 +174,12 @@ impl<'a> Parser<'a> {
         continue;
       }
       let member = self.with_loc(|p| {
-        // TypeScript: parse decorators for members
-        let decorators = p.decorators(ctx)?;
+        // TypeScript-style recovery: parse decorators for members.
+        let decorators = if p.should_recover() {
+          p.decorators(ctx)?
+        } else {
+          Vec::new()
+        };
 
         // Parse TypeScript modifiers in order:
         // [accessibility] [abstract] [override] [static] [readonly]
@@ -262,10 +266,12 @@ impl<'a> Parser<'a> {
           accessor = true;
         }
 
-        // TypeScript: Error recovery - skip decorators in invalid positions
+        // TypeScript-style recovery: skip decorators in invalid positions
         // e.g., `public @dec get foo()` - decorator after modifier is invalid
-        while p.peek().typ == TT::At {
-          let _ = p.decorators(ctx);
+        if p.should_recover() {
+          while p.peek().typ == TT::At {
+            let _ = p.decorators(ctx);
+          }
         }
 
         // TypeScript: check for index signature [key: type]: type

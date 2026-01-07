@@ -14,6 +14,7 @@ use crate::ast::expr::pat::ObjPatProp;
 use crate::ast::expr::pat::Pat;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::Expr;
+use crate::ast::node::ParenthesizedExpr;
 use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
@@ -23,18 +24,46 @@ use crate::token::TT;
 /// Converts a literal expression subtree into a pattern (assignment target).
 /// `{ a: [b] }` could be an object literal or object pattern. This function is useful for when a pattern was misinterpreted as a literal expression, without needing to rewind and reparse.
 pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
+  lit_to_pat_with_recover(node, true)
+}
+
+pub(crate) fn lit_to_pat_with_recover(node: Node<Expr>, recover: bool) -> SyntaxResult<Node<Pat>> {
   let loc = node.loc;
-  // TypeScript: Accept member expressions for error recovery, even with optional chaining
-  // Check for member expressions first (without moving the value).
-  match node.stx.as_ref() {
-    Expr::Member(_) => {
-      return Ok(Node::new(loc, Pat::AssignTarget(node)));
-    }
-    Expr::ComputedMember(_) => {
-      return Ok(Node::new(loc, Pat::AssignTarget(node)));
-    }
-    _ => {}
+
+  // Parenthesized assignment targets are invalid in ECMAScript (e.g. `(a) = b`,
+  // `([a]) = b`, `({a}) = b`). Preserve TypeScript-style recovery behaviour in
+  // non-strict dialects.
+  if !recover && node.assoc.get::<ParenthesizedExpr>().is_some() {
+    return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
   }
+
+  // TypeScript: Accept member expressions for error recovery, even with optional chaining.
+  // Check for member expressions first (without moving the value).
+  let is_member = match node.stx.as_ref() {
+    Expr::Member(member) => {
+      if !recover && member.stx.optional_chaining {
+        return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
+      }
+      true
+    }
+    _ => false,
+  };
+  if is_member {
+    return Ok(Node::new(loc, Pat::AssignTarget(node)));
+  }
+  let is_computed_member = match node.stx.as_ref() {
+    Expr::ComputedMember(member) => {
+      if !recover && member.stx.optional_chaining {
+        return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
+      }
+      true
+    }
+    _ => false,
+  };
+  if is_computed_member {
+    return Ok(Node::new(loc, Pat::AssignTarget(node)));
+  }
+
   match *node.stx {
     Expr::LitArr(n) => {
       let LitArrExpr { elements } = *n.stx;
@@ -57,18 +86,34 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                   return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
                 };
                 pat_elements.push(Some(ArrPatElem {
-                  target: lit_to_pat(left)?,
+                  target: lit_to_pat_with_recover(left, recover)?,
                   default_value: Some(right),
                 }));
               }
               _ => pat_elements.push(Some(ArrPatElem {
-                target: lit_to_pat(elem)?,
+                target: lit_to_pat_with_recover(elem, recover)?,
                 default_value: None,
               })),
             };
           }
           LitArrElem::Rest(expr) => {
-            rest = Some(lit_to_pat(expr)?);
+            if recover {
+              rest = Some(lit_to_pat_with_recover(expr, recover)?);
+            } else {
+              // Rest elements must be assignment targets (not patterns) in strict
+              // ECMAScript mode.
+              let rest_target = match expr.stx.as_ref() {
+                Expr::Id(_) => lit_to_pat_with_recover(expr, recover)?,
+                Expr::Member(member) if !member.stx.optional_chaining => {
+                  Node::new(expr.loc, Pat::AssignTarget(expr))
+                }
+                Expr::ComputedMember(member) if !member.stx.optional_chaining => {
+                  Node::new(expr.loc, Pat::AssignTarget(expr))
+                }
+                _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
+              };
+              rest = Some(rest_target);
+            }
           }
           LitArrElem::Empty => pat_elements.push(None),
         };
@@ -107,9 +152,9 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                     if operator != OperatorName::Assignment {
                       return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
                     };
-                    (lit_to_pat(left)?, Some(right))
+                    (lit_to_pat_with_recover(left, recover)?, Some(right))
                   }
-                  _ => (lit_to_pat(initializer)?, None),
+                  _ => (lit_to_pat_with_recover(initializer, recover)?, None),
                 },
                 _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
               };
@@ -142,10 +187,25 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
               ));
             }
             ObjMemberType::Rest { val: value } => {
-              // TypeScript: For error recovery, allow any pattern in rest position
-              // e.g., {...{}} or {...[]}
-              // The type checker will validate these semantically
-              rest = Some(lit_to_pat(value)?);
+              if recover {
+                // TypeScript: For error recovery, allow any pattern in rest position
+                // e.g., `{...{}}` or `{...[]}`.
+                rest = Some(lit_to_pat_with_recover(value, recover)?);
+              } else {
+                // Rest properties must be assignment targets (not patterns) in
+                // strict ECMAScript mode.
+                let rest_target = match value.stx.as_ref() {
+                  Expr::Id(_) => lit_to_pat_with_recover(value, recover)?,
+                  Expr::Member(member) if !member.stx.optional_chaining => {
+                    Node::new(loc, Pat::AssignTarget(value))
+                  }
+                  Expr::ComputedMember(member) if !member.stx.optional_chaining => {
+                    Node::new(loc, Pat::AssignTarget(value))
+                  }
+                  _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
+                };
+                rest = Some(rest_target);
+              }
             }
           },
         };
@@ -168,7 +228,13 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     // TypeScript: For any other expression type, wrap it as an assignment target for error recovery
     // This allows destructuring with call expressions, unary operators, etc.
     // The type checker will validate these patterns semantically.
-    _ => Ok(Node::new(loc, Pat::AssignTarget(node))),
+    _ => {
+      if recover {
+        Ok(Node::new(loc, Pat::AssignTarget(node)))
+      } else {
+        Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None))
+      }
+    }
   }
 }
 
@@ -180,13 +246,44 @@ pub fn lhs_expr_to_assign_target(
   lhs: Node<Expr>,
   operator_name: OperatorName,
 ) -> SyntaxResult<Node<Expr>> {
+  lhs_expr_to_assign_target_with_recover(lhs, operator_name, true)
+}
+
+pub(crate) fn lhs_expr_to_assign_target_with_recover(
+  lhs: Node<Expr>,
+  operator_name: OperatorName,
+  recover: bool,
+) -> SyntaxResult<Node<Expr>> {
+  // Parenthesized assignment targets are invalid in ECMAScript (e.g. `(a) = b`,
+  // `(obj.prop) = b`). Preserve TypeScript-style recovery behaviour in non-strict
+  // dialects.
+  if !recover && lhs.assoc.get::<ParenthesizedExpr>().is_some() {
+    return Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget));
+  }
+
+  if !recover {
+    return match lhs.stx.as_ref() {
+      e @ (Expr::LitArr(_) | Expr::LitObj(_) | Expr::Id(_)) => {
+        if operator_name != OperatorName::Assignment && !matches!(e, Expr::Id(_)) {
+          return Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget));
+        }
+        // We must transform into a pattern.
+        let root = lit_to_pat_with_recover(lhs, false)?;
+        Ok(root.into_stx())
+      }
+      Expr::ComputedMember(member) if !member.stx.optional_chaining => Ok(lhs),
+      Expr::Member(member) if !member.stx.optional_chaining => Ok(lhs),
+      _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
+    };
+  }
+
   match lhs.stx.as_ref() {
     e @ (Expr::LitArr(_) | Expr::LitObj(_) | Expr::Id(_)) => {
       if operator_name != OperatorName::Assignment && !matches!(e, Expr::Id(_)) {
         return Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget));
       }
       // We must transform into a pattern.
-      let root = lit_to_pat(lhs)?;
+      let root = lit_to_pat_with_recover(lhs, true)?;
       Ok(root.into_stx())
     }
     // TypeScript: Accept member/computed member expressions for error recovery, even with optional chaining

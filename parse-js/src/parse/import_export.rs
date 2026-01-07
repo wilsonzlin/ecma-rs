@@ -177,7 +177,7 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordImport)?;
 
     // TypeScript: import type
-    let type_only = if self.starts_with_type_only_import(ctx) {
+    let type_only = if !self.is_strict_ecmascript() && self.starts_with_type_only_import(ctx) {
       self.consume();
       true
     } else {
@@ -187,7 +187,7 @@ impl<'a> Parser<'a> {
       let alias = self.id_pat_decl(ctx)?;
 
       // TypeScript: import equals: import id = require("module") or import id = EntityName
-      if self.peek().typ == TT::Equals {
+      if self.is_typescript() && self.peek().typ == TT::Equals {
         self.consume(); // =
         return self.import_equals_decl(export, type_only, alias, start);
       }
@@ -222,7 +222,7 @@ impl<'a> Parser<'a> {
         let checkpoint = p.checkpoint();
         let first = p.peek();
         let is_type_modifier = first.typ == TT::KeywordType
-          || (first.typ == TT::Identifier && p.str(first.loc) == "type");
+          || (!p.is_strict_ecmascript() && first.typ == TT::Identifier && p.str(first.loc) == "type");
         let (type_only, (target, alias)) = if is_type_modifier {
           p.consume(); // type modifier
           match p.import_or_export_name(ctx, false) {
@@ -370,7 +370,8 @@ impl<'a> Parser<'a> {
         true
       } else {
         let next = p.peek();
-        let looks_like_statement_level_type = next.typ == TT::Identifier
+        let looks_like_statement_level_type = !p.is_strict_ecmascript()
+          && next.typ == TT::Identifier
           && p.str(next.loc) == "type"
           && matches!(p.peek_n::<2>()[1].typ, TT::BraceOpen | TT::Asterisk);
         if looks_like_statement_level_type {
@@ -389,7 +390,7 @@ impl<'a> Parser<'a> {
             let checkpoint = p.checkpoint();
             let first = p.peek();
             let is_type_modifier = first.typ == TT::KeywordType
-              || (first.typ == TT::Identifier && p.str(first.loc) == "type");
+              || (!p.is_strict_ecmascript() && first.typ == TT::Identifier && p.str(first.loc) == "type");
             let (type_only, (target, alias)) = if is_type_modifier {
               p.consume(); // type modifier
               match p.import_or_export_name(ctx, true) {
@@ -524,7 +525,8 @@ impl<'a> Parser<'a> {
 
     // TypeScript (allowJs): `export type { ... }` and `export type * from "mod"` when `type` is
     // lexed as an identifier.
-    if t1.typ == TT::Identifier
+    if !self.is_strict_ecmascript()
+      && t1.typ == TT::Identifier
       && self.str(t1.loc) == "type"
       && matches!(t2.typ, TT::BraceOpen | TT::Asterisk)
     {
@@ -534,7 +536,7 @@ impl<'a> Parser<'a> {
     }
 
     // TypeScript: export = expression (export assignment)
-    if t1.typ == TT::Equals {
+    if self.is_typescript() && t1.typ == TT::Equals {
       return self
         .with_loc(|p| {
           p.require(TT::KeywordExport)?;
@@ -576,7 +578,7 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass | TT::KeywordAbstract, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       // TypeScript: export const enum
-      (TT::KeywordConst, TT::KeywordEnum) => {
+      (TT::KeywordConst, TT::KeywordEnum) if !self.is_strict_ecmascript() => {
         self.consume(); // export
         self.consume(); // const
         self.enum_decl(ctx, true, false, true)?.into_wrapped()
@@ -584,37 +586,39 @@ impl<'a> Parser<'a> {
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing | TT::KeywordAwait, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)
-      (TT::KeywordType, TT::BraceOpen | TT::Asterisk) => self.export_list_stmt(ctx)?.into_wrapped(),
+      (TT::KeywordType, TT::BraceOpen | TT::Asterisk) if self.is_typescript() => {
+        self.export_list_stmt(ctx)?.into_wrapped()
+      },
       // TypeScript: export import a = A (exported import alias)
-      (TT::KeywordImport, _) => {
+      (TT::KeywordImport, _) if self.is_typescript() => {
         self.consume(); // export
         self.import_stmt(ctx, true)?
       },
       // TypeScript: export interface, export type, export enum, export namespace, export declare
-      (TT::KeywordInterface, _) => {
+      (TT::KeywordInterface, _) if self.is_typescript() => {
         self.consume(); // export
         self.interface_decl(ctx, true, false)?.into_wrapped()
       },
-      (TT::KeywordType, _) => {
+      (TT::KeywordType, _) if self.is_typescript() => {
         self.consume(); // export
         self.type_alias_decl(ctx, true, false)?.into_wrapped()
       },
-      (TT::KeywordEnum, _) => {
+      (TT::KeywordEnum, _) if self.is_typescript() && !self.is_strict_ecmascript() => {
         self.consume(); // export
         self.enum_decl(ctx, true, false, false)?.into_wrapped()
       },
-      (TT::KeywordNamespace, _) => {
+      (TT::KeywordNamespace, _) if self.is_typescript() => {
         self.consume(); // export
         self.namespace_decl(ctx, true, false)?.into_wrapped()
       },
       // TypeScript: export @decorator class (decorator on exported class)
       // Error recovery: allow decorators after export
-      (TT::At, _) => {
+      (TT::At, _) if self.should_recover() => {
         self.consume(); // export
         // The class_decl function will handle the decorators
         self.class_decl(ctx)?.into_wrapped()
       },
-      (TT::KeywordDeclare, _) => {
+      (TT::KeywordDeclare, _) if self.is_typescript() => {
         // For "export declare", we need to handle it specially to pass export=true
         self.consume(); // export
         self.consume(); // declare

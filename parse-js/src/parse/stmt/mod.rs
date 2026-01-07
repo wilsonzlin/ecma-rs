@@ -76,7 +76,7 @@ impl<'a> Parser<'a> {
       TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped(),
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
       // TypeScript: const enum
-      TT::KeywordConst if t1.typ == TT::KeywordEnum => {
+      TT::KeywordConst if !self.is_strict_ecmascript() && t1.typ == TT::KeywordEnum => {
         self.consume(); // consume 'const'
         self.enum_decl(ctx, false, false, true)?.into_wrapped()
       },
@@ -142,7 +142,9 @@ impl<'a> Parser<'a> {
       // TypeScript declarations
       TT::KeywordInterface => self.interface_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordType if self.starts_with_type_alias_decl(ctx) => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
-      TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
+      TT::KeywordEnum if !self.is_strict_ecmascript() => {
+        self.enum_decl(ctx, false, false, false)?.into_wrapped()
+      }
       // `module` and `namespace` are contextual keywords - only treat as declarations if followed by identifier/string
       // Allow `module.exports` and `namespace.something` to be parsed as expressions
       TT::KeywordNamespace | TT::KeywordModule if matches!(t1.typ, TT::Identifier | TT::LiteralString) => self.namespace_or_module_decl(ctx, false, false)?,
@@ -156,9 +158,10 @@ impl<'a> Parser<'a> {
         self.consume(); // skip 'accessor'
         self.stmt(ctx)?
       },
-      // Decorators can appear before class declarations
-      // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
-      TT::At => {
+      // Decorators can appear before class declarations.
+      // For TypeScript-style recovery, if decorators are followed by non-class,
+      // skip decorators and parse the statement.
+      TT::At if self.should_recover() => {
         let checkpoint = self.checkpoint();
         match self.class_decl_impl(ctx, false) {
           Ok(class_decl) => class_decl.into_wrapped(),
@@ -622,9 +625,9 @@ impl<'a> Parser<'a> {
       _ => {
         // Parse as expression (which handles member expressions, patterns, etc.)
         // then convert to pattern/assignment target
-        use super::expr::util::lit_to_pat;
+        use super::expr::util::lit_to_pat_with_recover;
         let expr = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf])?;
-        let pat = lit_to_pat(expr)?;
+        let pat = lit_to_pat_with_recover(expr, self.should_recover())?;
         ForInOfLhs::Assign(pat)
       }
     })
