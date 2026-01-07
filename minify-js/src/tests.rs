@@ -538,6 +538,37 @@ fn does_not_rewrite_proto_object_literal_value_properties_to_shorthand() {
 }
 
 #[test]
+fn renaming_expands_object_literal_shorthand_properties() {
+  // When bindings are renamed, object literal shorthands must be expanded to keep
+  // the original property key strings in sync with member accesses.
+  let result = minified(
+    TopLevelMode::Module,
+    "const x=1;const obj={x};console.log(obj.x);",
+  );
+  assert_eq!(result, "const b=1;const a={x:b};console.log(a.x);");
+}
+
+#[test]
+fn renaming_expands_object_pattern_shorthand_properties() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const obj={x:1};const {x}=obj;console.log(x);",
+  );
+  assert_eq!(result, "const a={x:1};const{x:b}=a;console.log(b);");
+}
+
+#[test]
+fn object_literal_shorthand_rewrite_runs_after_renaming() {
+  // `{x:x}` can only be rewritten to `{x}` when `x` is not renamed; ensure the
+  // rewrite runs after renaming so we don't desync property keys from accesses.
+  let result = minified(
+    TopLevelMode::Module,
+    "const x=1;const obj={x:x};console.log(obj.x);",
+  );
+  assert_eq!(result, "const b=1;const a={x:b};console.log(a.x);");
+}
+
+#[test]
 fn rewrites_if_to_logical_and() {
   let result = minified(TopLevelMode::Global, "if(foo)bar();");
   assert_eq!(result, "foo&&bar();");

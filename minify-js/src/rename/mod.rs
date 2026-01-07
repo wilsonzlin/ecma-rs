@@ -1,7 +1,12 @@
 use ahash::{HashMap, HashSet};
 use derive_visitor::{DriveMut, VisitorMut};
-use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
+use parse_js::ast::class_or_object::{
+  ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
+};
+use parse_js::ast::expr::lit::{LitNullExpr, LitStrExpr};
+use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat, ObjPatProp, Pat};
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::{Expr};
 use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
@@ -9,7 +14,9 @@ use parse_js::ast::stmt::ExportListStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
 use parse_js::lex::{lex_next, LexMode, Lexer};
+use parse_js::loc::Loc;
 use parse_js::parse::expr::pat::{is_valid_pattern_identifier, ParsePatternRules};
+use parse_js::token::{keyword_from_str, TT};
 use parse_js::Dialect;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};
 use semantic_js::js::{JsSemantics, ScopeId, ScopeKind, SymbolId, TopLevelMode};
@@ -63,6 +70,8 @@ type ExportListStmtNode = Node<ExportListStmt>;
 type FuncDeclNode = Node<FuncDecl>;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
+type ObjMemberNode = Node<ObjMember>;
+type ObjPatPropNode = Node<ObjPatProp>;
 type TopLevelNode = Node<TopLevel>;
 type VarDeclNode = Node<VarDecl>;
 
@@ -597,7 +606,9 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
   ExportListStmtNode(enter, exit),
   ExportNameNode(enter),
   IdExprNode(enter),
-  IdPatNode(enter)
+  IdPatNode(enter),
+  ObjMemberNode(enter),
+  ObjPatPropNode(enter)
 )]
 struct ApplyVisitor<'a> {
   renames: &'a HashMap<SymbolId, String>,
@@ -606,6 +617,101 @@ struct ApplyVisitor<'a> {
 }
 
 impl<'a> ApplyVisitor<'a> {
+  fn enter_obj_member_node(&mut self, node: &mut ObjMemberNode) {
+    let ObjMemberType::Shorthand { id } = &node.stx.typ else {
+      return;
+    };
+    let Some(sym) = resolved_symbol(&id.assoc) else {
+      return;
+    };
+    let Some(new_name) = self.renames.get(&sym) else {
+      return;
+    };
+    if &id.stx.name == new_name {
+      return;
+    }
+
+    let dummy = ObjMemberType::Rest {
+      val: Node::new(Loc(0, 0), Expr::LitNull(Node::new(Loc(0, 0), LitNullExpr {}))),
+    };
+    let typ = std::mem::replace(&mut node.stx.typ, dummy);
+    let ObjMemberType::Shorthand { mut id } = typ else {
+      node.stx.typ = typ;
+      return;
+    };
+
+    let old_name = id.stx.name.clone();
+    let key_end = id.loc.0 + old_name.len();
+    if old_name == "__proto__" {
+      self.replacements.push(Replacement {
+        start: id.loc.0,
+        end: key_end,
+        text: r#"["__proto__"]"#.to_string(),
+      });
+    }
+    self.replacements.push(Replacement {
+      start: key_end,
+      end: key_end,
+      text: format!(":{new_name}"),
+    });
+
+    id.stx.name = new_name.clone();
+
+    let key = if old_name == "__proto__" {
+      ClassOrObjKey::Computed(Node::new(
+        id.loc,
+        Expr::LitStr(Node::new(
+          id.loc,
+          LitStrExpr {
+            value: old_name.clone(),
+          },
+        )),
+      ))
+    } else {
+      let tt = keyword_from_str(&old_name).unwrap_or(TT::Identifier);
+      ClassOrObjKey::Direct(Node::new(
+        id.loc,
+        ClassOrObjMemberDirectKey {
+          key: old_name.clone(),
+          tt,
+        },
+      ))
+    };
+
+    node.stx.typ = ObjMemberType::Valued {
+      key,
+      val: ClassOrObjVal::Prop(Some(Node::new(id.loc, Expr::Id(id)))),
+    };
+  }
+
+  fn enter_obj_pat_prop_node(&mut self, node: &mut ObjPatPropNode) {
+    if !node.stx.shorthand {
+      return;
+    }
+    let Pat::Id(id) = node.stx.target.stx.as_mut() else {
+      return;
+    };
+    let Some(sym) = resolved_symbol(&id.assoc) else {
+      return;
+    };
+    let Some(new_name) = self.renames.get(&sym) else {
+      return;
+    };
+    if &id.stx.name == new_name {
+      return;
+    }
+
+    let old_name = id.stx.name.clone();
+    let insert_pos = id.loc.0 + old_name.len();
+    self.replacements.push(Replacement {
+      start: insert_pos,
+      end: insert_pos,
+      text: format!(":{new_name}"),
+    });
+    id.stx.name = new_name.clone();
+    node.stx.shorthand = false;
+  }
+
   fn enter_export_list_stmt_node(&mut self, _node: &mut ExportListStmtNode) {
     self.in_export_list += 1;
   }

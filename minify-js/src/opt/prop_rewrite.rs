@@ -26,10 +26,9 @@ impl Pass for PropRewritePass {
 }
 
 type ExprNode = Node<Expr>;
-type ObjMemberNode = Node<ObjMember>;
 
 #[derive(VisitorMut)]
-#[visitor(ExprNode(exit), ObjMemberNode(exit))]
+#[visitor(ExprNode(exit))]
 struct PropRewriteVisitor {
   changed: bool,
 }
@@ -50,15 +49,6 @@ impl PropRewriteVisitor {
     let (replacement, changed) = simplify_computed_member(member, node.loc);
     self.changed |= changed;
     *node.stx = replacement;
-  }
-
-  fn exit_obj_member_node(&mut self, node: &mut ObjMemberNode) {
-    let dummy = dummy_obj_member_type();
-    let typ = std::mem::replace(&mut node.stx.typ, dummy);
-
-    let (typ, changed) = try_shorthand_prop(typ);
-    node.stx.typ = typ;
-    self.changed |= changed;
   }
 }
 
@@ -193,4 +183,28 @@ fn dummy_obj_member_type() -> ObjMemberType {
   ObjMemberType::Rest {
     val: Node::new(Loc(0, 0), dummy_expr(Loc(0, 0))),
   }
+}
+
+pub(crate) fn rewrite_object_shorthand_props(top: &mut Node<TopLevel>) -> bool {
+  type ObjMemberNode = Node<ObjMember>;
+
+  #[derive(VisitorMut)]
+  #[visitor(ObjMemberNode(exit))]
+  struct ShorthandVisitor {
+    changed: bool,
+  }
+
+  impl ShorthandVisitor {
+    fn exit_obj_member_node(&mut self, node: &mut ObjMemberNode) {
+      let dummy = dummy_obj_member_type();
+      let typ = std::mem::replace(&mut node.stx.typ, dummy);
+      let (typ, changed) = try_shorthand_prop(typ);
+      node.stx.typ = typ;
+      self.changed |= changed;
+    }
+  }
+
+  let mut visitor = ShorthandVisitor { changed: false };
+  top.drive_mut(&mut visitor);
+  visitor.changed
 }

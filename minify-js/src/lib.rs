@@ -271,6 +271,7 @@ pub fn minify_with_options(
   #[cfg(feature = "emit-minify")]
   {
     apply_renames(&mut top_level_node, &renames);
+    opt::rewrite_object_shorthand_props(&mut top_level_node);
     let file_kind = match used_dialect {
       Dialect::Js => FileKind::Js,
       Dialect::Jsx => FileKind::Jsx,

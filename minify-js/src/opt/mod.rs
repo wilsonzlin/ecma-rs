@@ -17,6 +17,10 @@ mod side_effects;
 mod stmt_rewrite;
 mod traverse;
 
+pub(crate) fn rewrite_object_shorthand_props(top: &mut Node<TopLevel>) -> bool {
+  prop_rewrite::rewrite_object_shorthand_props(top)
+}
+
 pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Node<TopLevel>) {
   let mut cx = OptCtx::new(file, top_level_mode);
 
