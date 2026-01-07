@@ -693,7 +693,19 @@ impl<'a> Parser<'a> {
         // - In modules, top-level `await` is allowed but `yield` is never allowed outside a
         //   generator function.
         match operator.name {
-          OperatorName::Await => ctx.rules.await_expr_allowed,
+          OperatorName::Await => {
+            // `await` always requires an operand. If one cannot appear here (e.g. `await]`),
+            // prefer treating `await` as an identifier for recovery so we don't fabricate a
+            // synthetic operand.
+            ctx.rules.await_expr_allowed
+              && t1.typ != TT::EOF
+              && t1.typ != TT::Semicolon
+              && t1.typ != TT::Comma
+              && t1.typ != TT::ParenthesisClose
+              && t1.typ != TT::BracketClose
+              && t1.typ != TT::BraceClose
+              && !terminators.contains(&t1.typ)
+          }
           OperatorName::Yield => ctx.rules.yield_expr_allowed,
           _ => true,
         }
@@ -892,6 +904,15 @@ impl<'a> Parser<'a> {
         let name = p.consume_as_string();
         Ok(IdExpr { name })
       })?.into_wrapped(),
+      // TypeScript recovery: allow keywords in expression position as identifier references.
+      // This matches pattern recovery and keeps parsing moving for invalid programs like
+      // `var x = [await];` in module contexts.
+      t if self.should_recover() && KEYWORDS_MAPPING.contains_key(&t) => self
+        .with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdExpr { name })
+        })?
+        .into_wrapped(),
       TT::Invalid => {
         let raw = self.bytes(t0.loc);
         let starts_like_number = raw
