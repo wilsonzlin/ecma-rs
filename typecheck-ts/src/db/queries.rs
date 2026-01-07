@@ -1617,7 +1617,7 @@ fn symbol_index_for(db: &dyn Db, file: FileInput) -> SymbolIndex {
     }
   };
   let semantics = ts_semantics_for(db);
-  symbols::symbol_index_for_file(file_id, kind, ast, Some(semantics.semantics.as_ref()))
+  symbols::symbol_index_for_file(file_id, ast, Some(semantics.semantics.as_ref()))
 }
 
 fn empty_sem_hir(file: FileId, kind: FileKind) -> sem_ts::HirFile {

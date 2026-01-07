@@ -2,7 +2,7 @@ use super::*;
 use crate::assoc::{js, ts};
 use crate::hash::stable_hash;
 use crate::ts::from_hir_js::lower_to_ts_hir;
-use crate::ts::locals::{bind_ts_locals, map_module_scope_locals_to_program};
+use crate::ts::locals::{bind_ts_locals, map_module_scope_locals_to_program, ScopeKind};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
@@ -164,7 +164,7 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
 fn locals_resolve_object_literal_shorthand() {
   let source = "const x = 1; const obj = { x };";
   let mut ast = parse(source).expect("parse object literal shorthand");
-  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+  let locals = bind_ts_locals(&mut ast, FileId(0));
 
   let occs = positions(source, "x");
   assert!(
@@ -196,7 +196,7 @@ fn locals_type_only_namespace_import_resolves_qualified_type_reference() {
     type T = NS.Foo;
   "#;
   let mut ast = parse(source).expect("parse type-only namespace import");
-  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+  let locals = bind_ts_locals(&mut ast, FileId(0));
 
   let root = locals.root_scope();
   let (ns_symbol, ns_data) = locals
@@ -2815,7 +2815,7 @@ fn locals_imports_use_expected_namespaces() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(98), true);
+  let locals = bind_ts_locals(&mut ast, FileId(98));
   let root = locals.root_scope();
 
   let symbol_named = |name: &str| {
@@ -2867,7 +2867,7 @@ fn module_scope_locals_map_to_program_symbols() {
 
   let lower_a = lower_file(file_a, HirFileKind::Ts, &ast_a);
   let lower_b = lower_file(file_b, HirFileKind::Ts, &ast_b);
-  let locals_b = bind_ts_locals(&mut ast_b, file_b, true);
+  let locals_b = bind_ts_locals(&mut ast_b, file_b);
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
     file_a => Arc::new(lower_to_ts_hir(&ast_a, &lower_a)),
@@ -2915,7 +2915,7 @@ fn locals_resolve_block_shadowing() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(90), true);
+  let locals = bind_ts_locals(&mut ast, FileId(90));
   let lowered = lower_file(FileId(90), HirFileKind::Ts, &ast);
   let body = body_by_name(&lowered, "f", DefKind::Function);
 
@@ -2951,7 +2951,7 @@ fn locals_hoist_var_declarations() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(91), true);
+  let locals = bind_ts_locals(&mut ast, FileId(91));
   let lowered = lower_file(FileId(91), HirFileKind::Ts, &ast);
   let body = body_by_name(&lowered, "g", DefKind::Function);
 
@@ -2978,7 +2978,7 @@ fn locals_separate_value_and_type_namespaces() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(92), true);
+  let locals = bind_ts_locals(&mut ast, FileId(92));
   let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
 
   let mut type_ref = None;
@@ -3028,7 +3028,7 @@ fn type_only_imports_skip_value_resolution() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(93), true);
+  let locals = bind_ts_locals(&mut ast, FileId(93));
   let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
 
   let mut type_ref = None;
@@ -3074,7 +3074,7 @@ fn type_only_imports_skip_value_resolution() {
 fn typeof_queries_use_value_namespace() {
   let source = "type Foo = number;\nconst Foo = 1;\ntype Q = typeof Foo;\n";
   let mut ast = parse(source).unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(94), true);
+  let locals = bind_ts_locals(&mut ast, FileId(94));
 
   let type_alias_offset = source.find("type Foo").unwrap() + "type ".len();
   let type_sym = locals
@@ -3104,7 +3104,7 @@ fn typeof_queries_use_value_namespace() {
 fn qualified_type_references_use_namespace_space() {
   let source = "namespace NS { export type Foo = number; }\ntype Bar = NS.Foo;\n";
   let mut ast = parse(source).unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(95), true);
+  let locals = bind_ts_locals(&mut ast, FileId(95));
 
   let ns_decl = ast
     .stx
@@ -3142,7 +3142,7 @@ fn import_type_qualifier_ignores_local_symbols() {
     type Bar = import("pkg").Foo;
   "#;
   let mut ast = parse(src).unwrap();
-  let locals = bind_ts_locals(&mut ast, FileId(130), true);
+  let locals = bind_ts_locals(&mut ast, FileId(130));
 
   let local_foo = locals
     .resolve_expr_at_offset(src.find("Foo = number").expect("local Foo present") as u32)
@@ -3162,7 +3162,7 @@ fn import_type_qualifier_ignores_local_symbols() {
 
 #[test]
 fn block_function_is_lexical_in_modules() {
-  let source = "function outer() { if (true) { function foo() {} foo; } foo; }";
+  let source = "function outer() { if (true) { function foo() {} foo; } foo; }\nexport {};";
   let mut ast = parse_js::parse_with_options(
     source,
     ParseOptions {
@@ -3172,7 +3172,7 @@ fn block_function_is_lexical_in_modules() {
   )
   .expect("parse module source");
 
-  let locals = bind_ts_locals(&mut ast, FileId(200), true);
+  let locals = bind_ts_locals(&mut ast, FileId(200));
   let positions = positions(source, "foo");
   assert_eq!(positions.len(), 3, "expected three foo occurrences");
   let decl_symbol = locals
@@ -3207,7 +3207,7 @@ fn block_function_hoists_in_scripts() {
   )
   .expect("parse script source");
 
-  let locals = bind_ts_locals(&mut ast, FileId(201), false);
+  let locals = bind_ts_locals(&mut ast, FileId(201));
   let positions = positions(source, "foo");
   assert_eq!(positions.len(), 3, "expected three foo occurrences");
   let decl_symbol = locals
@@ -3227,5 +3227,97 @@ fn block_function_hoists_in_scripts() {
   assert_eq!(
     decl_symbol, outer_use_symbol,
     "non-module scripts hoist block function declarations"
+  );
+}
+
+#[test]
+fn top_level_block_function_is_lexical_in_modules() {
+  let source = "if (true) { function foo() {} foo; } foo;\nexport {};";
+  let mut ast = parse_js::parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Js,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse module source");
+
+  let locals = bind_ts_locals(&mut ast, FileId(202));
+  let positions = positions(source, "foo");
+  assert_eq!(positions.len(), 3, "expected three foo occurrences");
+
+  let decl_symbol = locals
+    .resolve_expr_at_offset(positions[0])
+    .map(|(_, sym)| sym)
+    .expect("function declaration resolves");
+  let inner_use_symbol = locals
+    .resolve_expr_at_offset(positions[1])
+    .map(|(_, sym)| sym)
+    .expect("inner block use resolves");
+  let outer_symbol = locals.resolve_expr_at_offset(positions[2]);
+
+  assert_eq!(
+    decl_symbol, inner_use_symbol,
+    "block use should see block-scoped function binding in modules"
+  );
+  assert!(
+    outer_symbol.is_none(),
+    "block-scoped function should not resolve outside its block in modules"
+  );
+}
+
+#[test]
+fn top_level_block_function_hoists_in_scripts() {
+  let source = "if (true) { function foo() {} foo; } foo;";
+  let mut ast = parse_js::parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Js,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse script source");
+
+  let locals = bind_ts_locals(&mut ast, FileId(203));
+  let positions = positions(source, "foo");
+  assert_eq!(positions.len(), 3, "expected three foo occurrences");
+
+  let decl_symbol = locals
+    .resolve_expr_at_offset(positions[0])
+    .map(|(_, sym)| sym)
+    .expect("function declaration resolves");
+  let inner_use_symbol = locals
+    .resolve_expr_at_offset(positions[1])
+    .map(|(_, sym)| sym)
+    .expect("inner block use resolves");
+  let outer_use_symbol = locals
+    .resolve_expr_at_offset(positions[2])
+    .map(|(_, sym)| sym)
+    .expect("outer use should resolve in scripts");
+
+  assert_eq!(decl_symbol, inner_use_symbol, "inner use matches decl");
+  assert_eq!(
+    decl_symbol, outer_use_symbol,
+    "non-module scripts hoist block function declarations"
+  );
+}
+
+#[test]
+fn declare_global_without_module_syntax_is_script() {
+  let source = "declare global { interface Foo {} }";
+  let mut ast = parse_js::parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Dts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse dts source");
+
+  let locals = bind_ts_locals(&mut ast, FileId(204));
+  assert_eq!(
+    locals.scope(locals.root_scope()).kind,
+    ScopeKind::Script,
+    "d.ts files without imports/exports should use script semantics"
   );
 }

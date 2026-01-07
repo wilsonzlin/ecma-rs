@@ -22,7 +22,7 @@ pub fn parse_lower_with_locals(source: &str) -> Parsed {
     },
   )
   .expect("parse");
-  let semantics = bind_ts_locals(&mut ast, FileId(0), true);
+  let semantics = bind_ts_locals(&mut ast, FileId(0));
   let lowered = lower_file(FileId(0), FileKind::Ts, &ast);
   Parsed {
     ast,

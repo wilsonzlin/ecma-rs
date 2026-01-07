@@ -5897,9 +5897,8 @@ impl ProgramState {
       self.check_cancelled()?;
       match parsed {
         Ok(mut ast) => {
-          let is_module = !matches!(file_kind, FileKind::Js | FileKind::Jsx);
           let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
-            sem_ts::locals::bind_ts_locals(locals_ast, file, is_module)
+            sem_ts::locals::bind_ts_locals(locals_ast, file)
           } else {
             let mut owned = match parse_js_with_options_cancellable(
               text.as_ref(),
@@ -5926,7 +5925,7 @@ impl ProgramState {
                 panic!("reparse locals failed unexpectedly: {err}");
               }
             };
-            sem_ts::locals::bind_ts_locals(&mut owned, file, is_module)
+            sem_ts::locals::bind_ts_locals(&mut owned, file)
           };
           self.local_semantics.insert(file, locals);
           self.asts.insert(file, Arc::clone(&ast));
@@ -7918,7 +7917,7 @@ impl ProgramState {
         Ok(mut ast) => {
           self.check_cancelled()?;
           let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
-            sem_ts::locals::bind_ts_locals(locals_ast, file_id, true)
+            sem_ts::locals::bind_ts_locals(locals_ast, file_id)
           } else {
             let mut owned = match parse_js_with_options_cancellable(
               lib.text.as_ref(),
@@ -7936,7 +7935,7 @@ impl ProgramState {
                 panic!("reparse lib locals failed unexpectedly: {err}");
               }
             };
-            sem_ts::locals::bind_ts_locals(&mut owned, file_id, true)
+            sem_ts::locals::bind_ts_locals(&mut owned, file_id)
           };
           self.local_semantics.insert(file_id, locals);
           self.asts.insert(file_id, Arc::clone(&ast));

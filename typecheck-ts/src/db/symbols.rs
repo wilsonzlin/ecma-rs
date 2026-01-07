@@ -7,7 +7,6 @@ use diagnostics::{FileId, TextRange};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 
-use crate::lib_support::FileKind;
 use crate::symbols::{semantic_js, SymbolOccurrence};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,12 +35,10 @@ impl SymbolIndex {
 /// single file.
 pub(crate) fn symbol_index_for_file(
   file: FileId,
-  kind: FileKind,
   mut ast: Node<TopLevel>,
   semantics: Option<&sem_ts::TsProgramSemantics>,
 ) -> SymbolIndex {
-  let is_module = !matches!(kind, FileKind::Js | FileKind::Jsx);
-  let locals = locals::bind_ts_locals(&mut ast, file, is_module);
+  let locals = locals::bind_ts_locals(&mut ast, file);
 
   let mut occurrences = Vec::new();
   let mut locals_info: BTreeMap<semantic_js::SymbolId, LocalSymbolInfo> = BTreeMap::new();

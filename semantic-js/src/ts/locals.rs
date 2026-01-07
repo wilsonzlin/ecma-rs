@@ -19,7 +19,7 @@ use parse_js::ast::stmt::{
   ForTripleStmtInit, Stmt as AstStmt,
 };
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{ImportEqualsDecl, ModuleDecl, NamespaceDecl};
+use parse_js::ast::ts_stmt::{ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, NamespaceDecl};
 use parse_js::ast::type_expr::{
   TypeConstructor, TypeEntityName, TypeExpr, TypeFunction, TypeReference,
 };
@@ -406,8 +406,97 @@ impl SemanticsBuilder {
   }
 }
 
+fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
+  fn walk(stmts: &[Node<AstStmt>]) -> bool {
+    for stmt in stmts.iter() {
+      match stmt.stx.as_ref() {
+        AstStmt::Import(_)
+        | AstStmt::ExportList(_)
+        | AstStmt::ExportDefaultExpr(_)
+        | AstStmt::ExportAssignmentDecl(_)
+        | AstStmt::ExportAsNamespaceDecl(_)
+        | AstStmt::ImportTypeDecl(_)
+        | AstStmt::ExportTypeDecl(_) => return true,
+        AstStmt::ImportEqualsDecl(import_equals) => match import_equals.stx.rhs {
+          ImportEqualsRhs::Require { .. } => return true,
+          ImportEqualsRhs::EntityName { .. } => {
+            if import_equals.stx.export {
+              return true;
+            }
+          }
+        },
+        AstStmt::VarDecl(var) => {
+          if var.stx.export {
+            return true;
+          }
+        }
+        AstStmt::FunctionDecl(func) => {
+          if func.stx.export {
+            return true;
+          }
+        }
+        AstStmt::ClassDecl(class) => {
+          if class.stx.export {
+            return true;
+          }
+        }
+        AstStmt::InterfaceDecl(interface) => {
+          if interface.stx.export {
+            return true;
+          }
+        }
+        AstStmt::TypeAliasDecl(alias) => {
+          if alias.stx.export {
+            return true;
+          }
+        }
+        AstStmt::EnumDecl(en) => {
+          if en.stx.export {
+            return true;
+          }
+        }
+        AstStmt::NamespaceDecl(ns) => {
+          if ns.stx.export {
+            return true;
+          }
+        }
+        AstStmt::ModuleDecl(module) => {
+          if module.stx.export {
+            return true;
+          }
+        }
+        AstStmt::AmbientVarDecl(av) => {
+          if av.stx.export {
+            return true;
+          }
+        }
+        AstStmt::AmbientFunctionDecl(af) => {
+          if af.stx.export {
+            return true;
+          }
+        }
+        AstStmt::AmbientClassDecl(ac) => {
+          if ac.stx.export {
+            return true;
+          }
+        }
+        AstStmt::GlobalDecl(global) => {
+          if walk(&global.stx.body) {
+            return true;
+          }
+        }
+        _ => {}
+      }
+    }
+    false
+  }
+
+  walk(&ast.stx.body)
+}
+
 /// Build deterministic TS local scopes and resolution tables for a parsed file.
-pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId, is_module: bool) -> TsLocalSemantics {
+pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId) -> TsLocalSemantics {
+  let is_module = ast_has_module_syntax(top);
   let kind = if is_module {
     ScopeKind::Module
   } else {
@@ -432,8 +521,8 @@ pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId, is_module: bool) -
 pub fn bind_ts_locals_tables(
   top: &Node<TopLevel>,
   file: FileId,
-  is_module: bool,
 ) -> (TsLocalSemantics, ts::TsAssocTables) {
+  let is_module = ast_has_module_syntax(top);
   let kind = if is_module {
     ScopeKind::Module
   } else {
@@ -442,7 +531,7 @@ pub fn bind_ts_locals_tables(
   let root_span = TextRange::new(top.loc.0 as u32, top.loc.1 as u32);
   let (builder, root) = SemanticsBuilder::new(file, kind, root_span);
   let (builder, tables) = {
-    let mut decl = DeclareTablesPass::new(builder, root);
+    let mut decl = DeclareTablesPass::new(builder, root, is_module);
     decl.walk_top(top);
     decl.finish()
   };
@@ -570,9 +659,13 @@ impl DeclarePass {
       AstStmt::VarDecl(var) => self.walk_var_decl(var),
       AstStmt::FunctionDecl(func) => {
         let in_block = self.current_scope_kind() == ScopeKind::Block;
-        let block_scoped_func = self.is_module && in_block;
-        if block_scoped_func {
-          self.enter_decl_target(DeclTarget::Lexical);
+        if in_block {
+          let target = if self.is_module {
+            DeclTarget::Lexical
+          } else {
+            DeclTarget::Hoisted
+          };
+          self.enter_decl_target(target);
         }
         if let Some(name) = &mut func.stx.name {
           self.declare(
@@ -582,7 +675,7 @@ impl DeclarePass {
             Some(span_for_name(name.loc, &name.stx.name)),
           );
         }
-        if block_scoped_func {
+        if in_block {
           self.exit_decl_target();
         }
         self.walk_func(&mut func.stx.function);
@@ -1912,15 +2005,17 @@ impl<'a> ResolvePass<'a> {
 
 struct DeclareTablesPass {
   builder: SemanticsBuilder,
+  is_module: bool,
   scope_stack: Vec<ScopeId>,
   decl_target: Vec<DeclTarget>,
   tables: ts::TsAssocTables,
 }
 
 impl DeclareTablesPass {
-  fn new(builder: SemanticsBuilder, root: ScopeId) -> Self {
+  fn new(builder: SemanticsBuilder, root: ScopeId, is_module: bool) -> Self {
     Self {
       builder,
+      is_module,
       scope_stack: vec![root],
       decl_target: vec![DeclTarget::Lexical],
       tables: ts::TsAssocTables::default(),
@@ -1929,6 +2024,15 @@ impl DeclareTablesPass {
 
   fn current_scope(&self) -> ScopeId {
     *self.scope_stack.last().unwrap()
+  }
+
+  fn current_scope_kind(&self) -> ScopeKind {
+    self
+      .builder
+      .scopes
+      .get(&self.current_scope())
+      .map(|s| s.kind)
+      .expect("scope data for current scope")
   }
 
   fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
@@ -2002,12 +2106,24 @@ impl DeclareTablesPass {
       }
       AstStmt::VarDecl(var) => self.walk_var_decl(var),
       AstStmt::FunctionDecl(func) => {
+        let in_block = self.current_scope_kind() == ScopeKind::Block;
+        if in_block {
+          let target = if self.is_module {
+            DeclTarget::Lexical
+          } else {
+            DeclTarget::Hoisted
+          };
+          self.enter_decl_target(target);
+        }
         if let Some(name) = &func.stx.name {
           self.declare(
             &name.stx.name,
             Namespace::VALUE,
             span_for_name(name.loc, &name.stx.name),
           );
+        }
+        if in_block {
+          self.exit_decl_target();
         }
         self.walk_func(&func.stx.function);
       }
@@ -3338,7 +3454,7 @@ mod tests {
       },
     )
     .expect("parse TSX source");
-    let locals = bind_ts_locals(&mut ast, FileId(0), true);
+    let locals = bind_ts_locals(&mut ast, FileId(0));
 
     let occs: Vec<u32> = source
       .match_indices("foo")

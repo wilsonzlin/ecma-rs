@@ -350,7 +350,7 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
     },
   )
   .expect("parse");
-  let locals = locals::bind_ts_locals(&mut ast, FileId(0), true);
+  let locals = locals::bind_ts_locals(&mut ast, FileId(0));
   let value_symbols: Vec<_> = locals
     .symbols
     .values()

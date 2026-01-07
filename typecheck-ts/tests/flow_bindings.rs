@@ -16,7 +16,7 @@ fn flow_bindings_distinguish_shadowed_bindings() {
     },
   )
   .expect("parse source");
-  let sem = bind_ts_locals(&mut ast, FileId(0), true);
+  let sem = bind_ts_locals(&mut ast, FileId(0));
   let lowered = hir_js::lower_file(FileId(0), hir_js::FileKind::Ts, &ast);
   let body = lowered.body(lowered.root_body()).expect("root body");
 
@@ -72,7 +72,7 @@ fn flow_bindings_fall_back_to_offset_resolution() {
     },
   )
   .expect("parse source");
-  let sem = bind_ts_locals(&mut ast, FileId(0), true);
+  let sem = bind_ts_locals(&mut ast, FileId(0));
   let lowered = hir_js::lower_file(FileId(0), hir_js::FileKind::Ts, &ast);
   let names = lowered.names.clone();
   let body = lowered.body(lowered.root_body()).expect("root body");

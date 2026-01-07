@@ -23,7 +23,7 @@ fn parse_and_lower_with_locals(
     },
   )
   .expect("parse");
-  let sem = bind_ts_locals(&mut ast, FileId(0), true);
+  let sem = bind_ts_locals(&mut ast, FileId(0));
   let (lowered, _) = lower_file_with_diagnostics(FileId(0), HirFileKind::Ts, &ast);
   (lowered, sem)
 }
