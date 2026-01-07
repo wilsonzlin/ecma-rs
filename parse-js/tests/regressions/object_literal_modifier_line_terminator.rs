@@ -64,3 +64,57 @@ fn object_literal_set_allows_line_terminator_after_keyword() {
   }
   assert!(matches!(val, ClassOrObjVal::Setter(_)));
 }
+
+#[test]
+fn object_literal_get_computed_allows_line_terminator_after_keyword() {
+  let ast = parse_with_options("({ get\n[foo](){} })", ecma_script_opts()).unwrap();
+  assert_eq!(ast.stx.body.len(), 1);
+
+  let members = match ast.stx.body[0].stx.as_ref() {
+    Stmt::Expr(stmt) => match stmt.stx.expr.stx.as_ref() {
+      Expr::LitObj(obj) => &obj.stx.members,
+      other => panic!("expected object literal, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  assert_eq!(members.len(), 1);
+
+  let ObjMemberType::Valued { key, val } = &members[0].stx.typ else {
+    panic!("expected valued object member");
+  };
+  match key {
+    ClassOrObjKey::Computed(expr) => match expr.stx.as_ref() {
+      Expr::Id(id) => assert_eq!(id.stx.name, "foo"),
+      other => panic!("expected IdExpr, got {other:?}"),
+    },
+    other => panic!("expected computed key, got {other:?}"),
+  }
+  assert!(matches!(val, ClassOrObjVal::Getter(_)));
+}
+
+#[test]
+fn object_literal_set_computed_allows_line_terminator_after_keyword() {
+  let ast = parse_with_options("({ set\n[foo](v){} })", ecma_script_opts()).unwrap();
+  assert_eq!(ast.stx.body.len(), 1);
+
+  let members = match ast.stx.body[0].stx.as_ref() {
+    Stmt::Expr(stmt) => match stmt.stx.expr.stx.as_ref() {
+      Expr::LitObj(obj) => &obj.stx.members,
+      other => panic!("expected object literal, got {other:?}"),
+    },
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  assert_eq!(members.len(), 1);
+
+  let ObjMemberType::Valued { key, val } = &members[0].stx.typ else {
+    panic!("expected valued object member");
+  };
+  match key {
+    ClassOrObjKey::Computed(expr) => match expr.stx.as_ref() {
+      Expr::Id(id) => assert_eq!(id.stx.name, "foo"),
+      other => panic!("expected IdExpr, got {other:?}"),
+    },
+    other => panic!("expected computed key, got {other:?}"),
+  }
+  assert!(matches!(val, ClassOrObjVal::Setter(_)));
+}
