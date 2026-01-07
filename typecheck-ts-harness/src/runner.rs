@@ -1940,20 +1940,25 @@ pub(crate) fn build_tsc_request(
 }
 
 #[derive(Clone)]
-struct SnapshotStore {
+pub(crate) struct SnapshotStore {
+  suite_name: String,
   base: PathBuf,
 }
 
 impl SnapshotStore {
-  fn new(root: &Path) -> Self {
+  pub(crate) fn new(root: &Path) -> Self {
     let suite_name = root
       .file_name()
       .map(|p| p.to_string_lossy().to_string())
       .unwrap_or_else(|| "conformance".to_string());
     let base = Path::new(env!("CARGO_MANIFEST_DIR"))
       .join("baselines")
-      .join(suite_name);
-    SnapshotStore { base }
+      .join(&suite_name);
+    SnapshotStore { suite_name, base }
+  }
+
+  pub(crate) fn suite_name(&self) -> &str {
+    &self.suite_name
   }
 
   fn has_any(&self) -> bool {
@@ -1979,7 +1984,7 @@ impl SnapshotStore {
     path
   }
 
-  fn load(&self, id: &str) -> std::io::Result<TscDiagnostics> {
+  pub(crate) fn load(&self, id: &str) -> std::io::Result<TscDiagnostics> {
     let path = self.path_for(id);
     let file = match std::fs::File::open(&path) {
       Ok(file) => file,
@@ -2016,7 +2021,7 @@ impl SnapshotStore {
     Ok(parsed)
   }
 
-  fn save(&self, id: &str, diagnostics: &TscDiagnostics) -> std::io::Result<()> {
+  pub(crate) fn save(&self, id: &str, diagnostics: &TscDiagnostics) -> std::io::Result<()> {
     let path = self.path_for(id);
     if let Some(parent) = path.parent() {
       std::fs::create_dir_all(parent)?;
@@ -2919,6 +2924,7 @@ mod tests {
   fn snapshots_preserve_extension_and_load_legacy_paths() {
     let tmp = tempdir().unwrap();
     let store = SnapshotStore {
+      suite_name: "conformance".to_string(),
       base: tmp.path().to_path_buf(),
     };
 

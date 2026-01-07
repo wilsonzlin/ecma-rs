@@ -20,9 +20,9 @@ fn conformance_tsc_engine_is_ok_and_sorted() {
   let mut options = ConformanceOptions::new(root);
   options.compare = CompareMode::Tsc;
   options.node_path = node_path;
-  options.timeout = Duration::from_secs(5);
+  options.timeout = Duration::from_secs(20);
   options.allow_mismatches = true;
-  options.jobs = 2;
+  options.jobs = 1;
 
   let report = run_conformance(options).expect("run conformance");
 

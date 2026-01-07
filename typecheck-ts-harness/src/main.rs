@@ -12,10 +12,12 @@ use typecheck_ts_harness::difftsc::DifftscArgs;
 use typecheck_ts_harness::difftsc::{self};
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::triage;
+use typecheck_ts_harness::verify_snapshots;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::Shard;
+use typecheck_ts_harness::VerifySnapshotsOptions;
 
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";
 const DEFAULT_TIMEOUT: u64 = 10;
@@ -131,6 +133,45 @@ enum Commands {
     /// Number of top groups/cases to include
     #[arg(long, default_value_t = triage::DEFAULT_TOP)]
     top: usize,
+  },
+
+  /// Verify stored conformance snapshots against live tsc output.
+  VerifySnapshots {
+    /// Glob or regex to filter tests
+    #[arg(long)]
+    filter: Option<String>,
+
+    /// Comma-separated list of allowed extensions
+    #[arg(long)]
+    extensions: Option<String>,
+
+    /// Run only a shard (zero-based): `i/n`
+    #[arg(long)]
+    shard: Option<String>,
+
+    /// Emit JSON output (stdout-only)
+    #[arg(long)]
+    json: bool,
+
+    /// Path to the Node.js executable
+    #[arg(long, default_value = "node")]
+    node: std::path::PathBuf,
+
+    /// Timeout per test case
+    #[arg(long, default_value_t = DEFAULT_TIMEOUT)]
+    timeout_secs: u64,
+
+    /// Enable structured tracing logs on stderr (JSONL)
+    #[arg(long)]
+    trace: bool,
+
+    /// Override the conformance root directory
+    #[arg(long)]
+    root: Option<std::path::PathBuf>,
+
+    /// Number of worker threads to use (defaults to CPU count)
+    #[arg(long, default_value_t = default_jobs())]
+    jobs: usize,
   },
 }
 
@@ -332,6 +373,92 @@ fn main() -> ExitCode {
       }
 
       ExitCode::SUCCESS
+    }
+    Commands::VerifySnapshots {
+      filter,
+      extensions,
+      shard,
+      json,
+      node,
+      timeout_secs,
+      trace,
+      root,
+      jobs,
+    } => {
+      let filter = match build_filter(filter.as_deref()) {
+        Ok(filter) => filter,
+        Err(err) => return print_error(err),
+      };
+      let shard = match shard {
+        Some(raw) => match Shard::parse(&raw) {
+          Ok(shard) => Some(shard),
+          Err(err) => return print_error(err),
+        },
+        None => None,
+      };
+
+      let extensions = match extensions {
+        Some(raw) => raw
+          .split(',')
+          .map(|s| s.trim().to_string())
+          .filter(|s| !s.is_empty())
+          .collect(),
+        None => Vec::new(),
+      };
+
+      let root_dir = root.unwrap_or_else(|| DEFAULT_ROOT.into());
+      let opts = VerifySnapshotsOptions {
+        root: root_dir,
+        filter,
+        shard,
+        extensions,
+        node_path: node,
+        timeout: Duration::from_secs(timeout_secs),
+        jobs,
+        trace,
+      };
+
+      match verify_snapshots(opts) {
+        Ok(report) => {
+          if json {
+            let stdout = std::io::stdout();
+            let mut handle = stdout.lock();
+            if let Err(err) = serde_json::to_writer_pretty(&mut handle, &report) {
+              return print_error(err);
+            }
+            if let Err(err) = writeln!(&mut handle) {
+              return print_error(err);
+            }
+          } else {
+            println!(
+              "verify-snapshots: suite `{}` — total={}, ok={}, missing_snapshot={}, drift={}, tsc_crashed={}, timeout={}",
+              report.suite_name,
+              report.summary.total,
+              report.summary.ok,
+              report.summary.missing_snapshot,
+              report.summary.drift,
+              report.summary.tsc_crashed,
+              report.summary.timeout
+            );
+            for case in report.cases.iter().filter(|c| {
+              c.status != typecheck_ts_harness::snapshot_verify::VerifySnapshotsStatus::Ok
+            }) {
+              if let Some(detail) = &case.detail {
+                eprintln!("  {}: {:?} ({detail})", case.id, case.status);
+              } else {
+                eprintln!("  {}: {:?}", case.id, case.status);
+              }
+            }
+          }
+
+          if report.summary.has_failures() {
+            ExitCode::from(1)
+          } else {
+            ExitCode::SUCCESS
+          }
+        }
+        Err(err) => print_error(err),
+      }
     }
   }
 }

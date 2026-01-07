@@ -13,6 +13,7 @@ pub mod profile;
 mod resolve;
 pub mod runner;
 mod serde_helpers;
+pub mod snapshot_verify;
 pub mod triage;
 pub mod tsc;
 mod tsc_codes;
@@ -68,6 +69,9 @@ pub use runner::Summary;
 pub use runner::TestOptions;
 pub use runner::TestOutcome;
 pub use runner::TestResult;
+pub use snapshot_verify::verify_snapshots;
+pub use snapshot_verify::VerifySnapshotsOptions;
+pub use snapshot_verify::VerifySnapshotsReport;
 
 /// Read a UTF-8 file from disk, returning a friendly error if the contents are
 /// not valid UTF-8.

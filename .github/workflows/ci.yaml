@@ -166,12 +166,30 @@ jobs:
           --json
           > difftsc-live-tsc.json
 
+      - name: Verify conformance snapshots (tsc vs baselines)
+        run: >
+          cargo run -p typecheck-ts-harness --release --locked --
+          verify-snapshots
+          --root typecheck-ts-harness/fixtures/conformance-mini
+          --node node
+          --jobs 2
+          --timeout-secs 20
+          --json
+          > conformance-mini-snapshot-verify.json
+
       - name: Upload live difftsc report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: difftsc-live-tsc
           path: difftsc-live-tsc.json
+
+      - name: Upload conformance snapshot verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-mini-snapshot-verify
+          path: conformance-mini-snapshot-verify.json
 
   test262-parser:
     runs-on: ubuntu-24.04

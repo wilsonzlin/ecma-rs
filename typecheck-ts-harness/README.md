@@ -130,6 +130,31 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   test id with `.json` appended (so single-file tests preserve their original
   extension, e.g. `match/basic.ts` → `baselines/conformance-mini/match/basic.ts.json`).
 
+## Snapshot integrity (`verify-snapshots`)
+
+`verify-snapshots` checks that stored conformance snapshots under
+`typecheck-ts-harness/baselines/<suite>/` still match the *current* pinned
+TypeScript oracle for the same discovered tests.
+
+This is **not** a Rust-vs-tsc comparison; it is snapshot-vs-tsc (baseline
+integrity).
+
+```
+cargo run -p typecheck-ts-harness --release -- \
+  verify-snapshots \
+  --root typecheck-ts-harness/fixtures/conformance-mini \
+  --jobs 2 \
+  --timeout-secs 20 \
+  --json > conformance-mini-snapshot-verify.json
+```
+
+- The suite name is derived from `--root`'s final path component, matching
+  `conformance --compare snapshot` (e.g. `.../conformance-mini` → `baselines/conformance-mini/`).
+- The command exits non-zero if any case is missing a snapshot, has drifted from
+  live `tsc`, `tsc` crashes, or times out.
+- `--json` emits a deterministic report on stdout; pass `--trace` to enable
+  structured tracing logs on stderr (keeping stdout parseable for CI redirects).
+
 **GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
 
 Run 8–16 shards in parallel matrix jobs to keep wall time low:
