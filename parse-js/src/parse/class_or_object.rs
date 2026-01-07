@@ -402,6 +402,16 @@ impl<'a> Parser<'a> {
             }
           };
 
+        if p.is_strict_ecmascript() && matches!(value, ClassOrObjVal::Prop(_)) {
+          let next = p.peek();
+          if next.typ != TT::Semicolon
+            && next.typ != TT::BraceClose
+            && !next.preceded_by_line_terminator
+            && next.typ != TT::EOF
+          {
+            return Err(next.error(SyntaxErrorType::RequiredTokenNotFound(TT::Semicolon)));
+          }
+        }
         let _ = p.consume_if(TT::Semicolon);
         Ok(ClassMember {
           decorators,

@@ -107,6 +107,9 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("({ *(){} })");
   assert_reject("({ async *(){} })");
   assert_reject("class C { *(){} }");
+  assert_reject("class C { a b }");
+  assert_reject("class C { a b(){} }");
+  assert_reject("class C { a [foo](){} }");
 
   // Invalid assignment targets.
   assert_reject("foo() = 1;");
