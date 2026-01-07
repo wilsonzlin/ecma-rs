@@ -25,6 +25,10 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   // TS-only constructs.
   assert_reject("x as y;");
   assert_reject("a!;");
+  assert_reject("let x: y;");
+  assert_reject("function f(x: y) { return x; }");
+  assert_reject("class C<T> {}");
+  assert_reject("try {} catch (e: any) {}");
 
   // Recovery-only constructs that should be syntax errors in strict ECMAScript.
   assert_reject("();");

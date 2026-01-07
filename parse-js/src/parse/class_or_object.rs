@@ -282,7 +282,7 @@ impl<'a> Parser<'a> {
             };
             p.restore_checkpoint(checkpoint);
 
-            if looks_like_index_sig {
+            if looks_like_index_sig && !p.is_strict_ecmascript() {
               // Parse index signature
               let index_sig = p.parse_index_signature(ctx)?;
               // Fabricate a key (unused for index signatures) and wrap in IndexSignature variant
@@ -301,13 +301,15 @@ impl<'a> Parser<'a> {
               let key = p.class_or_obj_key(ctx)?;
 
               // TypeScript: definite assignment assertion (! after key)
-              let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+              let definite_assignment =
+                !p.is_strict_ecmascript() && p.consume_if(TT::Exclamation).is_match();
 
               // TypeScript: optional property (? after key)
-              let optional = p.consume_if(TT::Question).is_match();
+              let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
 
               // TypeScript: type annotation (: type)
-              let type_annotation = if p.consume_if(TT::Colon).is_match() {
+              let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match()
+              {
                 Some(p.type_expr(ctx)?)
               } else {
                 None
@@ -351,13 +353,15 @@ impl<'a> Parser<'a> {
               let key = p.class_or_obj_key(ctx)?;
 
               // TypeScript: definite assignment assertion (! after key)
-              let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+              let definite_assignment =
+                !p.is_strict_ecmascript() && p.consume_if(TT::Exclamation).is_match();
 
               // TypeScript: optional property (? after key)
-              let optional = p.consume_if(TT::Question).is_match();
+              let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
 
               // TypeScript: type annotation (: type)
-              let type_annotation = if p.consume_if(TT::Colon).is_match() {
+              let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match()
+              {
                 Some(p.type_expr(ctx)?)
               } else {
                 None
@@ -470,15 +474,17 @@ impl<'a> Parser<'a> {
         let method = self.with_loc(|p| {
           let func = p.with_loc(|p| {
             // TypeScript: generic type parameters
-            let type_parameters =
-              if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
-                Some(p.type_parameters(ctx)?)
-              } else {
-                None
-              };
+            let type_parameters = if !p.is_strict_ecmascript()
+              && p.peek().typ == TT::ChevronLeft
+              && p.is_start_of_type_arguments()
+            {
+              Some(p.type_parameters(ctx)?)
+            } else {
+              None
+            };
             let parameters = p.func_params(ctx)?;
             // TypeScript: return type annotation
-            let return_type = if p.consume_if(TT::Colon).is_match() {
+            let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
             } else {
               None
@@ -543,14 +549,17 @@ impl<'a> Parser<'a> {
     };
     let func = self.with_loc(|p| {
       // TypeScript: generic type parameters
-      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+      let type_parameters = if !p.is_strict_ecmascript()
+        && p.peek().typ == TT::ChevronLeft
+        && p.is_start_of_type_arguments()
+      {
         Some(p.type_parameters(ctx)?)
       } else {
         None
       };
       let parameters = p.func_params(ctx)?;
       // TypeScript: return type annotation - may be type predicate
-      let return_type = if p.consume_if(TT::Colon).is_match() {
+      let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
         Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
@@ -602,7 +611,10 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
       // TypeScript: generic type parameters
-      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+      let type_parameters = if !p.is_strict_ecmascript()
+        && p.peek().typ == TT::ChevronLeft
+        && p.is_start_of_type_arguments()
+      {
         Some(p.type_parameters(ctx)?)
       } else {
         None
@@ -630,7 +642,7 @@ impl<'a> Parser<'a> {
       // TypeScript: Check for optional `this` parameter in getter
       // Syntax: get x(this: Type): ReturnType
       let mut parameters = Vec::new();
-      if p.peek().typ == TT::KeywordThis {
+      if !p.is_strict_ecmascript() && p.peek().typ == TT::KeywordThis {
         let [_, next] = p.peek_n::<2>();
         if next.typ == TT::Colon {
           // Parse this parameter: this: Type
@@ -676,7 +688,7 @@ impl<'a> Parser<'a> {
       let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
       // TypeScript: return type annotation - may be type predicate
-      let return_type = if p.consume_if(TT::Colon).is_match() {
+      let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
         Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
@@ -725,7 +737,10 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
       // TypeScript: generic type parameters
-      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+      let type_parameters = if !p.is_strict_ecmascript()
+        && p.peek().typ == TT::ChevronLeft
+        && p.is_start_of_type_arguments()
+      {
         Some(p.type_parameters(ctx)?)
       } else {
         None
@@ -785,7 +800,7 @@ impl<'a> Parser<'a> {
       // TypeScript: Check for optional `this` parameter in setter
       // Syntax: set x(this: Type, value: ValueType)
       let mut parameters = Vec::new();
-      if p.peek().typ == TT::KeywordThis {
+      if !p.is_strict_ecmascript() && p.peek().typ == TT::KeywordThis {
         let [_, next] = p.peek_n::<2>();
         if next.typ == TT::Colon {
           // Parse this parameter: this: Type
@@ -857,7 +872,7 @@ impl<'a> Parser<'a> {
       } else {
         let pattern = p.pat_decl(setter_ctx)?;
         // TypeScript: type annotation for setter parameter
-        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+        let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr(ctx)?)
         } else {
           None
@@ -1044,15 +1059,17 @@ impl<'a> Parser<'a> {
         let method = self.with_loc(|p| {
           let func = p.with_loc(|p| {
             // TypeScript: generic type parameters
-            let type_parameters =
-              if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
-                Some(p.type_parameters(ctx)?)
-              } else {
-                None
-              };
+            let type_parameters = if !p.is_strict_ecmascript()
+              && p.peek().typ == TT::ChevronLeft
+              && p.is_start_of_type_arguments()
+            {
+              Some(p.type_parameters(ctx)?)
+            } else {
+              None
+            };
             let parameters = p.func_params(ctx)?;
             // TypeScript: return type annotation
-            let return_type = if p.consume_if(TT::Colon).is_match() {
+            let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
             } else {
               None

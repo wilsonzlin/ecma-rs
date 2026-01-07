@@ -77,12 +77,12 @@ impl<'a> Parser<'a> {
         let pattern = p.pat_decl(ctx)?;
 
         // TypeScript: definite assignment assertion
-        let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+        let definite_assignment = !p.is_strict_ecmascript() && p.consume_if(TT::Exclamation).is_match();
 
         // TypeScript: type annotation
         // Note: We use type_expr_or_predicate for error recovery - type predicates
         // are semantically invalid in variable declarations but should parse
-        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+        let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
@@ -161,7 +161,10 @@ impl<'a> Parser<'a> {
       };
       let function = p.with_loc(|p| {
         // TypeScript: generic type parameters
-        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        let type_parameters = if !p.is_strict_ecmascript()
+          && p.peek().typ == TT::ChevronLeft
+          && p.is_start_of_type_arguments()
+        {
           Some(p.type_parameters(ctx)?)
         } else {
           None
@@ -173,7 +176,7 @@ impl<'a> Parser<'a> {
         });
         let parameters = p.func_params(fn_ctx)?;
         // TypeScript: return type annotation (may be type predicate)
-        let return_type = if p.consume_if(TT::Colon).is_match() {
+        let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
@@ -226,7 +229,10 @@ impl<'a> Parser<'a> {
       };
 
       // TypeScript: generic type parameters
-      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+      let type_parameters = if !p.is_strict_ecmascript()
+        && p.peek().typ == TT::ChevronLeft
+        && p.is_start_of_type_arguments()
+      {
         Some(p.type_parameters(ctx)?)
       } else {
         None

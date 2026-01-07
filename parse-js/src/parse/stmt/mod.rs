@@ -519,7 +519,7 @@ impl<'a> Parser<'a> {
         };
 
         // TypeScript: type annotation (parse and discard for error recovery)
-        if self.consume_if(TT::Colon).is_match() {
+        if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
           let _ = self.type_expr(ctx);
         }
         self.recover_for_in_of_initializer(ctx);
@@ -538,7 +538,7 @@ impl<'a> Parser<'a> {
           let _ = self.pat_decl(ctx);
 
           // Parse and discard type annotation if present
-          if self.consume_if(TT::Colon).is_match() {
+          if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
             let _ = self.type_expr(ctx);
           }
         }
@@ -563,7 +563,7 @@ impl<'a> Parser<'a> {
           };
 
           // TypeScript: type annotation (parse and discard for error recovery)
-          if self.consume_if(TT::Colon).is_match() {
+          if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
             let _ = self.type_expr(ctx);
           }
           self.recover_for_in_of_initializer(ctx);
@@ -578,7 +578,7 @@ impl<'a> Parser<'a> {
 
             let _ = self.pat_decl(ctx);
 
-            if self.consume_if(TT::Colon).is_match() {
+            if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
               let _ = self.type_expr(ctx);
             }
           }
@@ -597,7 +597,7 @@ impl<'a> Parser<'a> {
         };
 
         // TypeScript: type annotation (parse and discard for error recovery)
-        if self.consume_if(TT::Colon).is_match() {
+        if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
           let _ = self.type_expr(ctx);
         }
         self.recover_for_in_of_initializer(ctx);
@@ -612,7 +612,7 @@ impl<'a> Parser<'a> {
 
           let _ = self.pat_decl(ctx);
 
-          if self.consume_if(TT::Colon).is_match() {
+          if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
             let _ = self.type_expr(ctx);
           }
         }
@@ -875,7 +875,8 @@ impl<'a> Parser<'a> {
             let pattern = p.pat_decl(ctx)?;
             // TypeScript: optional type annotation in catch clause
             // e.g. `catch (e: any)` or `catch (e: unknown)`
-            let type_annotation = if p.consume_if(TT::Colon).is_match() {
+            let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match()
+            {
               Some(p.type_expr(ctx)?)
             } else {
               None

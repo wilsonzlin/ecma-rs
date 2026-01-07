@@ -14,7 +14,7 @@ impl<'a> Parser<'a> {
     let parameters = self.list_with_loc(TT::Comma, TT::ParenthesisClose, |p| {
       // TypeScript: check for `this` parameter (can only be first parameter)
       // Syntax: `this: Type`
-      if p.peek().typ == TT::KeywordThis {
+      if !p.is_strict_ecmascript() && p.peek().typ == TT::KeywordThis {
         let [_, next] = p.peek_n::<2>();
         if next.typ == TT::Colon {
           // This is a `this` parameter
@@ -54,7 +54,11 @@ impl<'a> Parser<'a> {
       }
 
       // TypeScript: parse decorators for parameters (before modifiers)
-      let mut decorators = p.decorators(ctx)?;
+      let mut decorators = if p.is_typescript() {
+        p.decorators(ctx)?
+      } else {
+        Vec::new()
+      };
 
       // TypeScript: accessibility modifiers and readonly can appear in either order
       // e.g. `readonly public x` or `public readonly x` are both valid
@@ -91,7 +95,7 @@ impl<'a> Parser<'a> {
 
       // TypeScript: Also allow decorators after modifiers for error recovery
       // e.g. `public @dec p` in addition to `@dec public p`
-      if p.peek().typ == TT::At {
+      if p.is_typescript() && p.peek().typ == TT::At {
         let post_modifiers_decorators = p.decorators(ctx)?;
         decorators.extend(post_modifiers_decorators);
       }
@@ -100,10 +104,10 @@ impl<'a> Parser<'a> {
       let pattern = p.pat_decl(ctx)?;
 
       // TypeScript: optional parameter
-      let optional = p.consume_if(TT::Question).is_match();
+      let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
 
       // TypeScript: type annotation
-      let type_annotation = if p.consume_if(TT::Colon).is_match() {
+      let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
         Some(p.type_expr(ctx)?)
       } else {
         None
