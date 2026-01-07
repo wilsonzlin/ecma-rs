@@ -23,6 +23,14 @@ The workspace dependency graph in [`docs/deps.md`](./docs/deps.md) is generated;
 
 ## Quick start
 
+If you're setting up a checkout for TypeScript conformance / differential testing and you have [`just`](https://github.com/casey/just) + Node.js installed:
+
+```bash
+just setup
+```
+
+This bootstraps submodules + `typecheck-ts-harness` npm deps, generates `Cargo.lock`, and runs a small sanity check. See [`docs/quickstart.md`](./docs/quickstart.md) for details.
+
 This workspace intentionally does **not** commit `Cargo.lock` (it is gitignored). To run commands that match CI’s `--locked` behaviour, generate it first:
 
 ```bash
@@ -40,6 +48,8 @@ Note: CI runs the same commands with `--locked` after generating `Cargo.lock`; t
 `just ci` runs:
 
 - `cargo fmt --all --check`
+- `./scripts/check_utf8_apis.sh`
+- `./scripts/check_diagnostic_codes.sh`
 - `cargo clippy --workspace --all-targets --all-features`
 - `cargo check --workspace --all-targets`
 - `cargo test --workspace`
@@ -129,6 +139,8 @@ Init them as needed:
 git submodule update --init --recursive parse-js/tests/TypeScript
 git submodule update --init test262/data
 ```
+
+(Or `just submodules`; `just setup` also does this.)
 
 Which CI jobs use them:
 

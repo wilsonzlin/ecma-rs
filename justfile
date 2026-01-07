@@ -1,5 +1,19 @@
 default: lint
 
+setup: submodules node-deps lockfile
+  cargo check -p typecheck-ts-harness --locked
+  node typecheck-ts-harness/scripts/typescript_probe.js
+
+submodules:
+  git submodule update --init --recursive parse-js/tests/TypeScript
+  git submodule update --init test262/data
+
+node-deps:
+  cd typecheck-ts-harness && npm ci
+
+lockfile:
+  cargo generate-lockfile
+
 fmt:
   cargo fmt --all --check
 

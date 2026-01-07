@@ -6,6 +6,20 @@ For an overview of the workspace and the intended architecture, start with
 
 This repository pins the Rust toolchain (including `rustfmt`) via `rust-toolchain.toml` so formatting output is reproducible across CI and developer machines. If `cargo fmt --all --check` fails unexpectedly, ensure you're using the pinned toolchain.
 
+## Developer setup (recommended)
+
+If you have [`just`](https://github.com/casey/just) and Node.js installed, start with:
+
+- `just setup`
+
+This bootstraps a clean checkout for TypeScript conformance work by:
+
+- Initializing the required git submodules (TypeScript + test262 fixtures)
+- Installing npm dependencies for `typecheck-ts-harness` (`npm ci`)
+- Generating an untracked workspace `Cargo.lock`
+- Running a cheap sanity check (`cargo check -p typecheck-ts-harness --locked`)
+- Probing that the pinned `typescript` npm package is usable
+
 This workspace is kept warning-free and treats `Cargo.lock` as a generated artifact (the repository is a library workspace). CI regenerates the lockfile and runs with `--locked`; generate one locally before running the same checks:
 
 - `cargo generate-lockfile` (untracked because `Cargo.lock` is gitignored)
@@ -21,7 +35,11 @@ Clippy focuses on correctness and suspicious lints while allowing the noisier st
 
 If you have [`just`](https://github.com/casey/just) installed, the root `justfile` provides shortcuts:
 
+- `just setup` bootstraps submodules + Node deps + lockfile + sanity checks
+- `just submodules` fetches the required git submodules
+- `just node-deps` installs `typecheck-ts-harness` npm dependencies
+- `just lockfile` generates an untracked workspace `Cargo.lock`
 - `just fmt` checks Rust formatting (CI uses the same check)
 - `just fmt-fix` applies Rust formatting (`cargo fmt --all`)
-- `just lint` runs `fmt` and `clippy`
-- `just ci` runs the full `fmt` + `clippy` + `check` + `test` suite and enforces `docs/deps.md` stays in sync
+- `just lint` runs formatting + sanity checks (`utf8-apis`, `diagnostic-codes`) + `clippy`
+- `just ci` runs the full suite (`lint`, `check`, `test`, `docs`) and enforces `docs/deps.md` stays in sync

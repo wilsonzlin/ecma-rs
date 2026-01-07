@@ -4,6 +4,22 @@ This repo is a Rust workspace (toolchain pinned via [`rust-toolchain.toml`](../r
 
 If you only want to build and run the core crates/CLIs, you **do not** need Node or submodules.
 
+## One-command bootstrap (recommended)
+
+If you're setting up a checkout for TypeScript conformance / differential testing and you have [`just`](https://github.com/casey/just) + Node.js installed:
+
+```bash
+just setup
+```
+
+`just setup` is safe to run multiple times. It:
+
+- Fetches the required git submodules (TypeScript + test262 data)
+- Installs npm dependencies for `typecheck-ts-harness` (`npm ci`)
+- Generates an untracked workspace `Cargo.lock`
+- Runs a small sanity check (`cargo check -p typecheck-ts-harness --locked`)
+- Verifies the pinned `typescript` npm package is usable
+
 ## 0) Generate a lockfile (Cargo.lock is untracked)
 
 CI generates `Cargo.lock` on the fly and then uses `--locked` for reproducible resolution. Locally:
@@ -11,6 +27,8 @@ CI generates `Cargo.lock` on the fly and then uses `--locked` for reproducible r
 ```bash
 cargo generate-lockfile
 ```
+
+(Or `just lockfile` if you have `just` installed.)
 
 ## 1) Run the local CI shorthand
 
@@ -20,7 +38,7 @@ If you have [`just`](https://github.com/casey/just):
 just ci
 ```
 
-This runs the `fmt`/`clippy`/`check`/`test` suite and regenerates [`docs/deps.md`](./deps.md).
+This runs the main `lint`/`check`/`test` suite and regenerates [`docs/deps.md`](./deps.md).
 CI runs the underlying `cargo` commands with `--locked` after generating `Cargo.lock`.
 
 ## 2) Run the in-repo examples (no filesystem I/O)
@@ -46,6 +64,8 @@ git submodule update --init --recursive parse-js/tests/TypeScript
 # test262 parser corpus (for test262 runner)
 git submodule update --init test262/data
 ```
+
+(Or `just submodules` if you have `just` installed.)
 
 ### Running the test262 parser job locally
 
@@ -74,6 +94,8 @@ The harness has a pinned `package-lock.json`, so `npm ci` is the recommended way
 git submodule update --init --recursive parse-js/tests/TypeScript
 cd typecheck-ts-harness && npm ci
 ```
+
+(Or `just node-deps` to install npm dependencies; `just setup` does everything.)
 
 Then run a shard of conformance tests (this is similar to `.github/workflows/nightly.yaml`):
 
