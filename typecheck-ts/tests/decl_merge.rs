@@ -377,14 +377,18 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
   let key = fk(6);
   host.insert(
     key.clone(),
-    "function foo() { return foo.bar; }\nnamespace foo { export const bar = 1; }\nexport { foo };",
+    "namespace foo { export const bar = 1; }\nfunction foo() { return foo.bar; }\nexport { foo };",
   );
 
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
-    diagnostics.is_empty(),
-    "unexpected diagnostics: {diagnostics:?}"
+    !diagnostics.is_empty(),
+    "expected TS2434 diagnostic, got none"
+  );
+  assert!(
+    diagnostics.iter().all(|d| d.code == "TS2434"),
+    "expected only TS2434 diagnostics, got {diagnostics:?}"
   );
 
   let file_id = program.file_id(&key).expect("file id");
@@ -405,8 +409,16 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     2,
     "expected two merged defs for foo, got {foo_defs:?}"
   );
-  let func_def = foo_defs[0];
-  let namespace_def = foo_defs[1];
+  let func_def = foo_defs
+    .iter()
+    .copied()
+    .find(|d| program.body_of_def(*d).is_some())
+    .expect("callable foo definition");
+  let namespace_def = foo_defs
+    .iter()
+    .copied()
+    .find(|d| *d != func_def)
+    .expect("namespace foo definition");
   let exported = program
     .exports_of(file_id)
     .get("foo")

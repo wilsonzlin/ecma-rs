@@ -152,7 +152,8 @@ impl ProgramState {
         }
 
         if ns_span.start < val_span.start {
-          has_error = true;
+          // Match tsc: TS2434 still reports, but the merge continues so namespace
+          // members remain visible on the merged value.
           self.push_program_diagnostic(codes::NAMESPACE_BEFORE_MERGE_TARGET.error(
             "A namespace declaration cannot be located prior to a class or function with which it is merged.",
             Span::new(file, namespace_name_span),

@@ -110,6 +110,7 @@ unsafe impl Sync for AstIndex {}
 struct VarInfo {
   initializer: Option<*const Node<AstExpr>>,
   type_annotation: Option<*const Node<parse_js::ast::type_expr::TypeExpr>>,
+  mode: VarDeclMode,
 }
 
 #[derive(Clone, Debug)]
@@ -382,6 +383,7 @@ impl AstIndex {
         VarInfo {
           initializer: declarator.initializer.as_ref().map(|n| n as *const _),
           type_annotation: declarator.type_annotation.as_ref().map(|n| n as *const _),
+          mode: decl.stx.mode,
         },
       );
       self.index_pat(&declarator.pattern.stx.pat, file, cancelled);
@@ -1620,7 +1622,21 @@ impl<'a> Checker<'a> {
             .unwrap_or(pat_span);
           self.check_assignable(init, init_ty, annotation, Some(range_override));
         }
-        let ty = annotation.unwrap_or(init_ty);
+        let prim = self.store.primitive_ids();
+        let binding_ty = match info.mode {
+          VarDeclMode::Const | VarDeclMode::Using | VarDeclMode::AwaitUsing => init_ty,
+          _ => self.base_type(init_ty),
+        };
+        let mut ty = annotation.unwrap_or(binding_ty);
+        if self.no_implicit_any && annotation.is_none() && ty == prim.unknown {
+          if let Some(pat) = self.index.pats.get(&pat_span).copied() {
+            let pat = unsafe { &*pat };
+            self.report_implicit_any_in_pat(pat);
+          } else {
+            self.report_implicit_any(pat_span, None);
+          }
+          ty = prim.any;
+        }
         if let Some(pat) = self.index.pats.get(&pat_span).copied() {
           let pat = unsafe { &*pat };
           self.bind_pattern(pat, ty);
