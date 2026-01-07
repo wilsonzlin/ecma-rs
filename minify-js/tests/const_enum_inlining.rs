@@ -257,6 +257,52 @@ fn export_list_entries_for_erased_const_enums_are_dropped() {
 }
 
 #[test]
+fn shadowed_const_enum_base_is_not_inlined() {
+  // Use direct eval to disable renaming so we can assert on the raw binding name
+  // without having to track renames.
+  let src = r#"
+    eval("x");
+    const enum E { A = 1 }
+    function f(E: { A: number }) { return E.A; }
+    export const x = f({ A: 2 });
+  "#;
+  let (code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+
+  let func = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => decl.stx.name.as_ref().map(|name| (&decl.stx.function, name)),
+      _ => None,
+    })
+    .expect("expected function declaration");
+  assert_eq!(func.1.stx.name, "f");
+
+  let body = match func.0.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(body)) => body,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+  let ret = body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::Return(ret) => ret.stx.value.as_ref(),
+      _ => None,
+    })
+    .expect("expected return statement");
+  match ret.stx.as_ref() {
+    Expr::Member(member) => {
+      assert_eq!(member.stx.right, "A");
+      assert!(
+        matches!(member.stx.left.stx.as_ref(), Expr::Id(_)),
+        "expected member base to be a (possibly renamed) parameter binding. output: {code}"
+      );
+    }
+    other => panic!("expected return value to be E.A member access, got {other:?}. output: {code}"),
+  }
+}
+
+#[test]
 fn preserve_const_enums_option_keeps_runtime_lowering() {
   let src = r#"eval("x");const enum E{A=1,B=A}export const x=E.B;"#;
   let ts_erase_options = TsEraseOptions {
