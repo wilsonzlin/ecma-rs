@@ -229,10 +229,7 @@ fn ts_preserve_const_enums_changes_output() {
     inlined_out
   );
 
-  let preserved = run_minify(
-    &["--mode", "module", "--ts-preserve-const-enums"],
-    source,
-  );
+  let preserved = run_minify(&["--mode", "module", "--ts-preserve-const-enums"], source);
   assert!(
     preserved.status.success(),
     "expected minify-js to succeed with --ts-preserve-const-enums, got status: {:?}, stderr: {}",
