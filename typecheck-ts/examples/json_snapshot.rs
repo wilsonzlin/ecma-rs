@@ -23,7 +23,7 @@
 
 use std::collections::BTreeMap;
 
-use diagnostics::{sort_diagnostics, Diagnostic, FileId, Label, Severity, Span, TextRange};
+use diagnostics::{sort_diagnostics, sort_labels, Diagnostic, FileId, Label, Severity, Span, TextRange};
 use serde::Serialize;
 use typecheck_ts::{FileKey, MemoryHost, Program, TypeId};
 
@@ -130,8 +130,11 @@ fn main() {
     ),
   ]);
 
-  let add_offset = INDEX_TS.rfind("add(1, 2)").expect("add call exists") as u32;
-  let add_ty = program.type_at(index_file, add_offset).expect("type_at succeeded");
+  let call_start = INDEX_TS.find("add(1, 2)").expect("add call exists") as u32;
+  let call_expr_offset = call_start + 3; // points at `(` in `add(1, 2)`
+  let call_ty = program
+    .type_at(index_file, call_expr_offset)
+    .expect("type_at succeeded");
 
   let total_offset = INDEX_TS
     .find("total =")
@@ -153,8 +156,8 @@ fn main() {
       exports_of,
       type_at: vec![TypeAtSnapshot {
         file: index_key.as_str().to_string(),
-        offset: add_offset,
-        ty: program.display_type(add_ty).to_string(),
+        offset: call_expr_offset,
+        ty: program.display_type(call_ty).to_string(),
       }],
       symbol_at: vec![SymbolAtSnapshot {
         file: index_key.as_str().to_string(),
@@ -185,7 +188,9 @@ fn exports_to_snapshot(program: &Program, file: FileId) -> BTreeMap<String, Stri
     .collect()
 }
 
-fn diagnostic_to_snapshot(program: &Program, diagnostic: Diagnostic) -> DiagnosticSnapshot {
+fn diagnostic_to_snapshot(program: &Program, mut diagnostic: Diagnostic) -> DiagnosticSnapshot {
+  sort_labels(&mut diagnostic.labels);
+  diagnostic.notes.sort();
   DiagnosticSnapshot {
     code: diagnostic.code.as_str().to_string(),
     severity: severity_to_string(diagnostic.severity),

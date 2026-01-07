@@ -106,14 +106,25 @@ fn main() {
   println!("type_of_def(total) = {}", program.display_type(total_ty));
 
   // 3) type_at + display_type
-  let add_offset = INDEX_TS
-    .rfind("add(1, 2)")
+  let call_start = INDEX_TS
+    .find("add(1, 2)")
     .expect("add call exists") as u32;
-  let add_ty = program
-    .type_at(index_file, add_offset)
-    .expect("type_at should find an expression");
+  let call_expr_offset = call_start + 3; // points at the `(` in `add(1, 2)`
+  let add_ident_ty = program
+    .type_at(index_file, call_start)
+    .expect("type_at should find the callee identifier");
+  let call_ty = program
+    .type_at(index_file, call_expr_offset)
+    .expect("type_at should find the call expression");
   println!();
-  println!("type_at(index.ts@{add_offset}) = {}", program.display_type(add_ty));
+  println!(
+    "type_at(index.ts@{call_start}) = {}",
+    program.display_type(add_ident_ty)
+  );
+  println!(
+    "type_at(index.ts@{call_expr_offset}) = {}",
+    program.display_type(call_ty)
+  );
 
   // 4) symbol_at
   let total_ref_offset = INDEX_TS
