@@ -136,9 +136,7 @@ fn main() {
     .type_at(index_file, call_expr_offset)
     .expect("type_at succeeded");
 
-  let total_offset = INDEX_TS
-    .find("total =")
-    .expect("total declaration exists") as u32;
+  let total_offset = (INDEX_TS.find("${total}").expect("template literal has total") + 2) as u32;
   let symbol_id = program.symbol_at(index_file, total_offset).expect("symbol_at succeeded");
   let symbol_info = program.symbol_info(symbol_id);
   let symbol_ty = symbol_info

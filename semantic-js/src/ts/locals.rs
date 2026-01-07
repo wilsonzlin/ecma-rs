@@ -989,6 +989,13 @@ impl DeclarePass {
           }
         }
       }
+      AstExpr::LitTemplate(tmpl) => {
+        for part in tmpl.stx.parts.iter_mut() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter_mut() {
           match elem {
@@ -1721,6 +1728,13 @@ impl<'a> ResolvePass<'a> {
           }
         }
       }
+      AstExpr::LitTemplate(tmpl) => {
+        for part in tmpl.stx.parts.iter_mut() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter_mut() {
           match elem {
@@ -2425,6 +2439,13 @@ impl DeclareTablesPass {
       AstExpr::TaggedTemplate(tag) => {
         self.walk_expr(&tag.stx.function);
         for part in tag.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
+      AstExpr::LitTemplate(tmpl) => {
+        for part in tmpl.stx.parts.iter() {
           if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
             self.walk_expr(expr);
           }
@@ -3135,6 +3156,13 @@ impl<'a> ResolveTablesPass<'a> {
       AstExpr::TaggedTemplate(tag) => {
         self.walk_expr(&tag.stx.function);
         for part in tag.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
+      AstExpr::LitTemplate(tmpl) => {
+        for part in tmpl.stx.parts.iter() {
           if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
             self.walk_expr(expr);
           }

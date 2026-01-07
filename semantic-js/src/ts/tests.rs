@@ -190,10 +190,39 @@ fn locals_resolve_object_literal_shorthand() {
 }
 
 #[test]
+fn locals_resolve_template_literal_substitution() {
+  let source = "const x = 1; const msg = `value=${x}`;";
+  let mut ast = parse(source).expect("parse template literal");
+  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+
+  let occs = positions(source, "x");
+  assert!(
+    occs.len() >= 2,
+    "expected declaration and template substitution occurrences: {occs:?}"
+  );
+  let decl_offset = occs[0];
+  let template_offset = occs[1];
+
+  let decl_symbol = locals
+    .resolve_expr_at_offset(decl_offset)
+    .map(|(_, id)| id)
+    .expect("declaration should resolve");
+  let template_symbol = locals
+    .resolve_expr_at_offset(template_offset)
+    .map(|(_, id)| id)
+    .expect("template substitution should resolve");
+
+  assert_eq!(
+    decl_symbol, template_symbol,
+    "template substitution identifier should resolve to declared binding"
+  );
+}
+
+#[test]
 fn locals_type_only_namespace_import_resolves_qualified_type_reference() {
   let source = r#"
-    import type * as NS from "mod";
-    type T = NS.Foo;
+     import type * as NS from "mod";
+     type T = NS.Foo;
   "#;
   let mut ast = parse(source).expect("parse type-only namespace import");
   let locals = bind_ts_locals(&mut ast, FileId(0));

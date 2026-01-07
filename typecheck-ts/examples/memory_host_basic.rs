@@ -127,9 +127,8 @@ fn main() {
   );
 
   // 4) symbol_at
-  let total_ref_offset = INDEX_TS
-    .find("total =")
-    .expect("total declaration exists") as u32;
+  let total_ref_offset =
+    (INDEX_TS.find("${total}").expect("template literal has total") + 2) as u32;
   let symbol = program
     .symbol_at(index_file, total_ref_offset)
     .expect("symbol_at should find `total`");
