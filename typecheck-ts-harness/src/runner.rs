@@ -4,7 +4,8 @@ use crate::diagnostic_norm::{
 };
 use crate::directives::HarnessOptions;
 use crate::discover::{
-  discover_conformance_test_paths, Filter, Shard, TestCase, TestCasePath, DEFAULT_EXTENSIONS,
+  discover_conformance_test_paths, Filter, Shard, ShardStrategy, TestCase, TestCasePath,
+  DEFAULT_EXTENSIONS,
 };
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::{is_normalized_virtual_path, normalize_name_into};
@@ -128,6 +129,7 @@ pub struct ConformanceOptions {
   pub filter: Filter,
   pub filter_pattern: Option<String>,
   pub shard: Option<Shard>,
+  pub shard_strategy: ShardStrategy,
   pub json: bool,
   pub update_snapshots: bool,
   pub timeout: Duration,
@@ -152,6 +154,7 @@ impl ConformanceOptions {
       filter: Filter::All,
       filter_pattern: None,
       shard: None,
+      shard_strategy: ShardStrategy::Index,
       json: false,
       update_snapshots: false,
       timeout: Duration::from_secs(10),
@@ -565,12 +568,18 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   };
 
   if let Some(shard) = opts.shard {
-    cases = cases
-      .into_iter()
-      .enumerate()
-      .filter(|(idx, _)| shard.includes(*idx))
-      .map(|(_, case)| case)
-      .collect();
+    cases = match opts.shard_strategy {
+      ShardStrategy::Index => cases
+        .into_iter()
+        .enumerate()
+        .filter(|(idx, _)| shard.includes(*idx))
+        .map(|(_, case)| case)
+        .collect(),
+      ShardStrategy::Hash => cases
+        .into_iter()
+        .filter(|case| shard.includes_hash(&case.id))
+        .collect(),
+    };
   }
 
   let planned_cases: Vec<PlannedCase> = cases
@@ -3274,6 +3283,7 @@ echo '{"diagnostics":[]}'
       filter: crate::build_filter(None).unwrap(),
       filter_pattern: None,
       shard: None,
+      shard_strategy: ShardStrategy::Index,
       json: false,
       update_snapshots: false,
       timeout: Duration::from_secs(5),
@@ -3344,6 +3354,7 @@ echo '{"diagnostics":[]}'
       filter: crate::build_filter(None).unwrap(),
       filter_pattern: None,
       shard: None,
+      shard_strategy: ShardStrategy::Index,
       json: false,
       update_snapshots: false,
       timeout: Duration::from_secs(1),

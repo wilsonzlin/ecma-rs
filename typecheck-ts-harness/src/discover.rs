@@ -5,10 +5,12 @@ use crate::read_utf8_file;
 use crate::HarnessError;
 use crate::Result;
 use crate::VirtualFile;
+use clap::ValueEnum;
 use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
@@ -37,6 +39,13 @@ pub enum Filter {
   All,
   Glob(GlobSet),
   Regex(Regex),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum ShardStrategy {
+  Index,
+  Hash,
 }
 
 pub fn build_filter(pattern: Option<&str>) -> Result<Filter> {
@@ -74,6 +83,25 @@ pub struct Shard {
   pub total: usize,
 }
 
+fn stable_hash64(input: &str) -> u64 {
+  const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+  const FNV_PRIME: u64 = 0x100000001b3;
+
+  let mut hash = FNV_OFFSET_BASIS;
+  for &byte in input.as_bytes() {
+    hash ^= u64::from(byte);
+    hash = hash.wrapping_mul(FNV_PRIME);
+  }
+  hash
+}
+
+fn shard_for_id(id: &str, total: usize) -> usize {
+  if total == 0 {
+    return 0;
+  }
+  (stable_hash64(id) % total as u64) as usize
+}
+
 impl Shard {
   pub fn parse(raw: &str) -> Result<Shard> {
     let parts: Vec<_> = raw.split('/').collect();
@@ -97,6 +125,10 @@ impl Shard {
 
   pub fn includes(&self, position: usize) -> bool {
     position % self.total == self.index
+  }
+
+  pub fn includes_hash(&self, id: &str) -> bool {
+    shard_for_id(id, self.total) == self.index
   }
 }
 
@@ -373,5 +405,59 @@ mod tests {
     assert_eq!(case.options.strict, Some(true));
     assert_eq!(case.files.len(), 1);
     assert_eq!(case.files[0].name, "subdir/foo.ts");
+  }
+
+  #[test]
+  fn stable_hash64_matches_reference_vectors() {
+    assert_eq!(stable_hash64(""), 0xcbf29ce484222325);
+    assert_eq!(stable_hash64("a"), 0xaf63dc4c8601ec8c);
+    assert_eq!(stable_hash64("foo"), 0xdcb27518fed9d577);
+  }
+
+  #[test]
+  fn hash_sharding_is_deterministic() {
+    let ids = [
+      "match/basic.ts",
+      "mismatch/type_error.ts",
+      "some/dir/file.ts",
+    ];
+    let total = 8;
+
+    let first: Vec<_> = ids.iter().map(|id| shard_for_id(id, total)).collect();
+    let second: Vec<_> = ids.iter().map(|id| shard_for_id(id, total)).collect();
+    assert_eq!(first, second);
+  }
+
+  #[test]
+  fn hash_sharding_is_stable_under_insertion() {
+    let shard = Shard { index: 0, total: 4 };
+    let before = [
+      "case/a.ts",
+      "case/b.ts",
+      "case/c.ts",
+      "case/d.ts",
+      "case/e.ts",
+    ];
+    let before_selected: Vec<_> = before
+      .iter()
+      .copied()
+      .filter(|id| shard.includes_hash(id))
+      .collect();
+
+    let after = [
+      "case/a.ts",
+      "case/b.ts",
+      "case/inserted.ts",
+      "case/c.ts",
+      "case/d.ts",
+      "case/e.ts",
+    ];
+    let after_selected: Vec<_> = after
+      .iter()
+      .copied()
+      .filter(|id| shard.includes_hash(id) && *id != "case/inserted.ts")
+      .collect();
+
+    assert_eq!(before_selected, after_selected);
   }
 }

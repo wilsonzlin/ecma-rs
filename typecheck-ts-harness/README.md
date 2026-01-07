@@ -13,7 +13,7 @@ git submodule update --init --recursive parse-js/tests/TypeScript
 cd typecheck-ts-harness && npm ci
 
 # 3) Run the Rust conformance harness
-cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
+cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8 --shard-strategy hash
 
 # 4) (Optional) Regenerate difftsc baselines for local fixtures
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
@@ -95,8 +95,11 @@ cargo run -p typecheck-ts-harness --release -- conformance \
 
 - Filters accept globs or regexes; they match the path under the root (e.g.
   `**/es2020/**`, `optionalChaining`).
-- Shards are zero-based (`i/n`) and are applied after sorting cases by id; run
-  each shard in a separate process/job for parallelism.
+- Shards are zero-based (`i/n`).
+  - `--shard-strategy index` (default) shards based on the sorted index.
+  - `--shard-strategy hash` shards based on a stable hash of the test id. This is
+    recommended for CI so shard contents stay stable when the upstream TypeScript
+    suite adds/removes tests.
 - `--extensions <csv>` controls which test files are discovered (default:
   `ts,tsx,d.ts`). Values are treated as file suffixes (leading `.` optional) and
   are matched using a longest-suffix-wins rule, so `types.d.ts` is **not**
@@ -163,7 +166,7 @@ Run 8–16 shards in parallel matrix jobs to keep wall time low:
 matrix:
   shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
 
-run: cargo run -p typecheck-ts-harness --release -- conformance --shard ${{matrix.shard}}/16 --timeout-secs 20 --json
+run: cargo run -p typecheck-ts-harness --release -- conformance --shard ${{matrix.shard}}/16 --shard-strategy hash --timeout-secs 20 --json
 ```
 
 If the TypeScript suite is missing the command errors with setup instructions

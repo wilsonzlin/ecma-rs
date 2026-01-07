@@ -16,6 +16,7 @@ use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::Shard;
+use typecheck_ts_harness::ShardStrategy;
 use typecheck_ts_harness::VerifySnapshotsOptions;
 
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";
@@ -56,6 +57,10 @@ enum Commands {
     /// Run only a shard (zero-based): `i/n`
     #[arg(long)]
     shard: Option<String>,
+
+    /// Sharding strategy (default: index)
+    #[arg(long, value_enum, default_value_t = ShardStrategy::Index)]
+    shard_strategy: ShardStrategy,
 
     /// Emit JSON output in addition to the human summary
     #[arg(long)]
@@ -210,6 +215,7 @@ fn main() -> ExitCode {
       filter,
       extensions,
       shard,
+      shard_strategy,
       json,
       update_snapshots,
       compare,
@@ -253,6 +259,7 @@ fn main() -> ExitCode {
       options.filter = filter;
       options.filter_pattern = filter_pattern;
       options.shard = shard;
+      options.shard_strategy = shard_strategy;
       options.json = json;
       options.update_snapshots = update_snapshots;
       options.timeout = Duration::from_secs(timeout_secs);
