@@ -19,7 +19,7 @@ use parse_js::ast::stmt::{
   ForTripleStmtInit, Stmt as AstStmt,
 };
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, NamespaceDecl};
+use parse_js::ast::ts_stmt::{ImportEqualsDecl, ModuleDecl, NamespaceDecl};
 use parse_js::ast::type_expr::{
   TypeConstructor, TypeEntityName, TypeExpr, TypeFunction, TypeReference,
 };
@@ -418,91 +418,7 @@ impl SemanticsBuilder {
 ///   module.
 /// - The same checks apply within `declare global { ... }`.
 pub fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
-  fn walk(stmts: &[Node<AstStmt>]) -> bool {
-    for stmt in stmts.iter() {
-      match stmt.stx.as_ref() {
-        AstStmt::Import(_)
-        | AstStmt::ExportList(_)
-        | AstStmt::ExportDefaultExpr(_)
-        | AstStmt::ExportAssignmentDecl(_)
-        | AstStmt::ExportAsNamespaceDecl(_)
-        | AstStmt::ImportTypeDecl(_)
-        | AstStmt::ExportTypeDecl(_) => return true,
-        AstStmt::ImportEqualsDecl(import_equals) => match import_equals.stx.rhs {
-          ImportEqualsRhs::Require { .. } => return true,
-          ImportEqualsRhs::EntityName { .. } => {
-            if import_equals.stx.export {
-              return true;
-            }
-          }
-        },
-        AstStmt::VarDecl(var) => {
-          if var.stx.export {
-            return true;
-          }
-        }
-        AstStmt::FunctionDecl(func) => {
-          if func.stx.export || func.stx.export_default {
-            return true;
-          }
-        }
-        AstStmt::ClassDecl(class_decl) => {
-          if class_decl.stx.export || class_decl.stx.export_default {
-            return true;
-          }
-        }
-        AstStmt::InterfaceDecl(interface) => {
-          if interface.stx.export {
-            return true;
-          }
-        }
-        AstStmt::TypeAliasDecl(alias) => {
-          if alias.stx.export {
-            return true;
-          }
-        }
-        AstStmt::EnumDecl(en) => {
-          if en.stx.export {
-            return true;
-          }
-        }
-        AstStmt::NamespaceDecl(ns) => {
-          if ns.stx.export {
-            return true;
-          }
-        }
-        AstStmt::ModuleDecl(module) => {
-          if module.stx.export {
-            return true;
-          }
-        }
-        AstStmt::AmbientVarDecl(av) => {
-          if av.stx.export {
-            return true;
-          }
-        }
-        AstStmt::AmbientFunctionDecl(af) => {
-          if af.stx.export {
-            return true;
-          }
-        }
-        AstStmt::AmbientClassDecl(ac) => {
-          if ac.stx.export {
-            return true;
-          }
-        }
-        AstStmt::GlobalDecl(global) => {
-          if walk(&global.stx.body) {
-            return true;
-          }
-        }
-        _ => {}
-      }
-    }
-    false
-  }
-
-  walk(&ast.stx.body)
+  super::module_syntax::ast_has_module_syntax(ast)
 }
 
 /// Build deterministic TS local scopes and resolution tables for a parsed file.
