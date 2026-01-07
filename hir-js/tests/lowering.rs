@@ -1272,6 +1272,47 @@ fn span_map_indexes_class_members() {
 }
 
 #[test]
+fn span_map_resolves_static_block_expr_to_static_block_body() {
+  let source = "class C { static { foo(); } }";
+  let result = lower_from_source(source).expect("lower");
+  let span_map = &result.hir.span_map;
+
+  let class_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Class && result.names.resolve(def.name) == Some("C"))
+    .expect("class definition");
+  let class_body_id = class_def.body.expect("class body id");
+  let class_body = result.body(class_body_id).expect("class body");
+
+  let static_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::StaticBlock)
+    .expect("static block def");
+  let static_body_id = static_def.body.expect("static block body id");
+  let static_body = result.body(static_body_id).expect("static block body");
+
+  let foo_offset = source.find("foo").expect("foo offset") as u32;
+  let (mapped_body, mapped_expr) = span_map.expr_at_offset(foo_offset).expect("expr at offset");
+  assert_eq!(
+    mapped_body, static_body_id,
+    "SpanMap should point into the static block body"
+  );
+
+  let mapped_expr = &static_body.exprs[mapped_expr.0 as usize];
+  assert!(
+    matches!(mapped_expr.kind, ExprKind::Ident(name) if result.names.resolve(name) == Some("foo")),
+    "expected SpanMap to return `foo` identifier expression"
+  );
+  let ident_span = mapped_expr.span;
+  assert!(
+    !class_body.exprs.iter().any(|expr| expr.span == ident_span),
+    "class body should not duplicate static block expressions"
+  );
+}
+
+#[test]
 fn accessor_def_kinds_are_distinct() {
   let source = "class C { get x(){return 1} set x(v){} }";
   let result = lower_from_source(source).expect("lower");

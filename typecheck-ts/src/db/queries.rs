@@ -2626,6 +2626,27 @@ fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId
         _ => {}
       }
     }
+
+    if let Some(class) = body.class.as_ref() {
+      for member in class.members.iter() {
+        match &member.kind {
+          hir_js::ClassMemberKind::Constructor { body: Some(child), .. } => {
+            record_parent(&mut parents, *child, body_id)
+          }
+          hir_js::ClassMemberKind::Method { body: Some(child), .. } => {
+            record_parent(&mut parents, *child, body_id)
+          }
+          hir_js::ClassMemberKind::Field {
+            initializer: Some(child),
+            ..
+          } => record_parent(&mut parents, *child, body_id),
+          hir_js::ClassMemberKind::StaticBlock { body: child, .. } => {
+            record_parent(&mut parents, *child, body_id)
+          }
+          _ => {}
+        }
+      }
+    }
   }
 
   let root_body = lowered.hir.root_body;

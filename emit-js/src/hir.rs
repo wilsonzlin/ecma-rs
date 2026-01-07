@@ -587,7 +587,7 @@ fn emit_class_member(
     ClassMemberKind::Constructor { def, .. }
     | ClassMemberKind::Method { def, .. }
     | ClassMemberKind::Field { def, .. } => Some(*def),
-    ClassMemberKind::StaticBlock { .. } => None,
+    ClassMemberKind::StaticBlock { def, .. } => Some(*def),
   };
   if let Some(def_id) = member_def {
     let def = ctx
@@ -597,9 +597,12 @@ fn emit_class_member(
   }
 
   match &member.kind {
-    ClassMemberKind::StaticBlock { stmt } => {
+    ClassMemberKind::StaticBlock { body, .. } => {
       em.write_keyword("static");
-      emit_stmt(em, ctx, class_body, *stmt)
+      let block_body = ctx
+        .body(*body)
+        .ok_or_else(|| EmitError::unsupported("class static block body missing"))?;
+      emit_block_like(em, ctx, block_body, &block_body.root_stmts)
     }
     ClassMemberKind::Field {
       initializer, key, ..

@@ -628,7 +628,8 @@ pub enum ClassMemberKind {
     key: ClassMemberKey,
   },
   StaticBlock {
-    stmt: StmtId,
+    def: DefId,
+    body: BodyId,
   },
 }
 
@@ -676,8 +677,11 @@ pub enum BodyKind {
   TopLevel,
   /// Executable body of a function-like item (functions, methods, accessors).
   Function,
-  /// Body attached to a class definition. Root statements correspond to static
-  /// initialization blocks.
+  /// Body attached to a class definition or class static block.
+  ///
+  /// For class definitions, root statements model class-level evaluation (e.g.
+  /// decorator expressions). Class `static { ... }` blocks are lowered as their
+  /// own bodies and referenced from [`ClassMemberKind::StaticBlock`].
   Class,
   /// Body synthesized for initializer expressions (e.g. `const x = 1;`).
   Initializer,

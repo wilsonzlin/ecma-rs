@@ -253,7 +253,7 @@ fn visit_body(body: &Body, visited: &mut HashSet<hir_js::ExprId>) {
           visit_class_member_key(body, key, visited);
         }
         hir_js::ClassMemberKind::Constructor { .. } => {}
-        hir_js::ClassMemberKind::StaticBlock { stmt } => visit_stmt(body, *stmt, visited),
+        hir_js::ClassMemberKind::StaticBlock { .. } => {}
       }
     }
   }

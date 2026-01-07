@@ -1228,9 +1228,6 @@ fn lower_class_body<'a>(
       node: &'a Node<AstDecorator>,
       target: DecoratorTarget,
     },
-    StaticBlock {
-      node: &'a Node<ClassStaticBlock>,
-    },
   }
 
   struct ClassEvalItem<'a> {
@@ -1261,7 +1258,6 @@ fn lower_class_body<'a>(
 
   let extends = extends.map(|expr| lower_expr(expr, &mut builder, ctx));
   let mut class_members: Vec<HirClassMember> = Vec::new();
-  let mut static_blocks: HashMap<RawNode, usize> = HashMap::new();
 
   let mut items: Vec<ClassEvalItem<'a>> = Vec::new();
 
@@ -1306,13 +1302,18 @@ fn lower_class_body<'a>(
     let member_span = ctx.to_range(member.loc);
     match &member.stx.val {
       ClassOrObjVal::StaticBlock(block) => {
-        static_blocks.insert(RawNode::from(block), class_members.len());
+        let def = builder
+          .def_lookup
+          .def_for_node(block)
+          .expect("class static block definition missing");
+        let body = builder
+          .def_lookup
+          .body_for(def)
+          .expect("class static block body missing");
         class_members.push(HirClassMember {
           span: member_span,
           static_: true,
-          kind: HirClassMemberKind::StaticBlock {
-            stmt: StmtId(u32::MAX),
-          },
+          kind: HirClassMemberKind::StaticBlock { def, body },
         });
       }
       ClassOrObjVal::Prop(_) => {
@@ -1434,15 +1435,6 @@ fn lower_class_body<'a>(
         _ => {}
       }
     }
-
-    if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
-      let range = ctx.to_range(block.loc);
-      items.push(ClassEvalItem {
-        range,
-        order: items.len(),
-        kind: ClassEvalKind::StaticBlock { node: block },
-      });
-    }
   }
 
   items.sort_by(|a, b| {
@@ -1474,21 +1466,6 @@ fn lower_class_body<'a>(
               params.resize_with(index + 1, Vec::new);
             }
             params[index].push(decorator);
-          }
-        }
-      }
-      ClassEvalKind::StaticBlock { node } => {
-        let mut block_stmts = Vec::new();
-        for stmt in node.stx.body.iter() {
-          let stmt_id = lower_stmt(stmt, &mut builder, ctx);
-          block_stmts.push(stmt_id);
-        }
-        let stmt_id = builder.alloc_stmt(item.range, StmtKind::Block(block_stmts));
-        builder.root_stmt(stmt_id);
-
-        if let Some(idx) = static_blocks.get(&RawNode::from(node)).copied() {
-          if let HirClassMemberKind::StaticBlock { stmt } = &mut class_members[idx].kind {
-            *stmt = stmt_id;
           }
         }
       }
