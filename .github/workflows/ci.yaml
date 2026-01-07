@@ -34,6 +34,9 @@ jobs:
       - name: cargo fmt --all --check
         run: cargo fmt --all --check
 
+      - name: Check UTF-8 source-text public APIs
+        run: ./scripts/check_utf8_apis.sh
+
       - name: cargo clippy (workspace)
         run: >
           cargo clippy --workspace --all-targets --all-features --locked --

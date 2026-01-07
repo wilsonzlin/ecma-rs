@@ -16,7 +16,11 @@ pattern_bytes='pub(?:\s*\([^)]*\))?(?:\s+(?:async|const|unsafe))*\s+fn\s+(?!fuzz
 pattern_vec='pub(?:\s*\([^)]*\))?(?:\s+(?:async|const|unsafe))*\s+fn\s+(?!fuzz_)[^(]+\((?![^)]*&mut\s*Vec<u8>)[^)]*Vec<u8>'
 
 if rg --pcre2 --multiline -n "$pattern_bytes" "$repo_root" --glob '*.rs'; then
-  echo "error: public API taking &[u8] found; source text should use &str/Arc<str> (fuzz_* are allowed)" >&2
+  echo "error: UTF-8 source-text API policy violation: public API taking \`&[u8]\` found" >&2
+  echo "help: accept source text as \`&str\` or \`Arc<str>\` and validate/convert bytes at IO boundaries" >&2
+  echo "note: \`pub fn fuzz_*\` entrypoints are allowed to accept bytes" >&2
+  echo "note: byte output buffers like \`&mut Vec<u8>\` are allowed" >&2
+  echo "note: run \`just utf8-apis\` (or \`./scripts/check_utf8_apis.sh\`) to reproduce locally" >&2
   exit 1
 else
   status=$?
@@ -26,7 +30,11 @@ else
 fi
 
 if rg --pcre2 --multiline -n "$pattern_vec" "$repo_root" --glob '*.rs'; then
-  echo "error: public API taking Vec<u8> found; source text should use &str/Arc<str> (fuzz_* are allowed, &mut Vec<u8> outputs are fine)" >&2
+  echo "error: UTF-8 source-text API policy violation: public API taking \`Vec<u8>\` found" >&2
+  echo "help: accept source text as \`&str\` or \`Arc<str>\` and validate/convert bytes at IO boundaries" >&2
+  echo "note: \`pub fn fuzz_*\` entrypoints are allowed to accept bytes" >&2
+  echo "note: byte output buffers like \`&mut Vec<u8>\` are allowed" >&2
+  echo "note: run \`just utf8-apis\` (or \`./scripts/check_utf8_apis.sh\`) to reproduce locally" >&2
   exit 1
 else
   status=$?

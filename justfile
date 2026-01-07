@@ -6,6 +6,9 @@ fmt:
 fmt-fix:
   cargo fmt --all
 
+utf8-apis:
+  ./scripts/check_utf8_apis.sh
+
 clippy:
   cargo clippy --workspace --all-targets --all-features --
     -A clippy::style
@@ -25,7 +28,7 @@ test:
 docs:
   ./scripts/gen_deps_graph.sh
 
-lint: fmt clippy
+lint: fmt utf8-apis clippy
 
-ci: fmt clippy check test docs
+ci: fmt utf8-apis clippy check test docs
   git diff --exit-code docs/deps.md
