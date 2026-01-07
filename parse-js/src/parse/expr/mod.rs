@@ -795,8 +795,9 @@ impl<'a> Parser<'a> {
             let op_tok = p.consume_with_mode(LexMode::SlashIsRegex);
             let operator = match operator.name {
               OperatorName::Yield if p.peek().typ == TT::Asterisk => {
-                if p.peek().preceded_by_line_terminator {
-                  return Err(op_tok.error(SyntaxErrorType::LineTerminatorAfterYield));
+                let star_tok = p.peek();
+                if star_tok.preceded_by_line_terminator {
+                  return Err(star_tok.error(SyntaxErrorType::LineTerminatorAfterYield));
                 }
                 p.consume(); // *
                 &OPERATORS[&OperatorName::YieldDelegated]
@@ -867,6 +868,7 @@ impl<'a> Parser<'a> {
                 || matches!(typ, TT::Slash | TT::SlashEquals)
                 || (p.should_recover() && typ == TT::At)
             };
+
             let has_operand = match operator.name {
               // `yield` without an operand is valid. `yield` with an operand
               // requires no line terminator.
@@ -945,10 +947,10 @@ impl<'a> Parser<'a> {
               }
             }
 
-            return Ok(UnaryExpr {
+            Ok(UnaryExpr {
               operator: operator.name,
               argument: operand,
-            });
+            })
           })?
           .into_wrapped(),
       );
