@@ -1,5 +1,7 @@
 #[path = "regressions/asi_and_keywords.rs"]
 mod asi_and_keywords;
+#[path = "regressions/await_yield.rs"]
+mod await_yield;
 #[path = "regressions/async_arrow_line_terminator.rs"]
 mod async_arrow_line_terminator;
 #[path = "regressions/async_arrow_type_params.rs"]
