@@ -1264,7 +1264,7 @@ fn query_symbol_at(
         }
       });
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
-      (info.def.map(|d| d.0), def_file, typ, info.name)
+      (info.def.map(|d| u64::from(d.0)), def_file, typ, info.name)
     }
     None => (None, None, None, None),
   };
@@ -1302,7 +1302,7 @@ fn query_exports(
       name,
       ExportEntryJson {
         symbol: entry.symbol.0,
-        def: entry.def.map(|d| d.0),
+        def: entry.def.map(|d| u64::from(d.0)),
         typ,
       },
     );
