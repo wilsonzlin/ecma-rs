@@ -364,7 +364,7 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        let body = p.parse_func_block_body(fn_ctx)?.into();
+        let body = p.parse_non_arrow_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
@@ -1266,12 +1266,17 @@ impl<'a> Parser<'a> {
 
   pub fn new_target(&mut self) -> SyntaxResult<Node<NewTarget>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordNew)?;
+      let start = p.require(TT::KeywordNew)?;
       p.require(TT::Dot)?;
       let prop = p.require(TT::Identifier)?;
       if p.str(prop.loc) != "target" {
         return Err(prop.error(SyntaxErrorType::ExpectedSyntax("`target` property")));
       };
+      if p.is_strict_ecmascript() && p.new_target_allowed == 0 {
+        return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+          "new.target expression not allowed outside functions",
+        )));
+      }
       Ok(NewTarget {}.into())
     })
   }

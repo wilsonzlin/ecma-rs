@@ -227,11 +227,14 @@ impl<'a> Parser<'a> {
               let prev_in_iteration = p.in_iteration;
               let prev_in_switch = p.in_switch;
               let prev_labels = std::mem::take(&mut p.labels);
+              let prev_new_target_allowed = p.new_target_allowed;
               p.in_iteration = 0;
               p.in_switch = 0;
+              p.new_target_allowed += 1;
               let body = p.stmts(ctx.non_top_level(), TT::BraceClose);
               p.in_iteration = prev_in_iteration;
               p.in_switch = prev_in_switch;
+              p.new_target_allowed = prev_new_target_allowed;
               p.labels = prev_labels;
               let body = body?;
               p.require(TT::BraceClose)?;
@@ -527,7 +530,7 @@ impl<'a> Parser<'a> {
               let _ = p.consume_if(TT::Semicolon);
               None
             } else {
-              Some(p.parse_func_block_body(fn_ctx)?.into())
+              Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
             };
             Ok(Func {
               arrow: false,
@@ -546,8 +549,12 @@ impl<'a> Parser<'a> {
       // Property with initializer
       TT::Equals => {
         self.require(TT::Equals)?;
+        let prev_new_target_allowed = self.new_target_allowed;
+        self.new_target_allowed += 1;
         let initializer =
-          self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can())?;
+          self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
+        self.new_target_allowed = prev_new_target_allowed;
+        let initializer = initializer?;
         Ok(ClassOrObjVal::Prop(Some(initializer)))
       }
       // Property without initializer
@@ -604,7 +611,7 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
-        Some(p.parse_func_block_body(fn_ctx)?.into())
+        Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
       };
       Ok(Func {
         arrow: false,
@@ -726,7 +733,7 @@ impl<'a> Parser<'a> {
       } else {
         let is_module = p.is_module();
         Some(
-          p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+          p.parse_non_arrow_func_block_body(ctx.with_rules(ParsePatternRules {
             await_allowed: !is_module,
             yield_allowed: !is_module,
             await_expr_allowed: false,
@@ -939,7 +946,7 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
-        Some(p.parse_func_block_body(setter_ctx)?.into())
+        Some(p.parse_non_arrow_func_block_body(setter_ctx)?.into())
       };
       Ok(Func {
         arrow: false,
@@ -984,11 +991,23 @@ impl<'a> Parser<'a> {
     let initializer = has_init
       .then(|| {
         self.require(value_delimiter)?;
-        Ok(self.expr_with_asi(
-          ctx,
-          [statement_delimiter, TT::BraceClose],
-          property_initialiser_asi,
-        )?)
+        if value_delimiter == TT::Equals {
+          let prev_new_target_allowed = self.new_target_allowed;
+          self.new_target_allowed += 1;
+          let expr = self.expr_with_asi(
+            ctx,
+            [statement_delimiter, TT::BraceClose],
+            property_initialiser_asi,
+          );
+          self.new_target_allowed = prev_new_target_allowed;
+          Ok(expr?)
+        } else {
+          Ok(self.expr_with_asi(
+            ctx,
+            [statement_delimiter, TT::BraceClose],
+            property_initialiser_asi,
+          )?)
+        }
       })
       .transpose()?;
     Ok((key, initializer))
@@ -1043,7 +1062,7 @@ impl<'a> Parser<'a> {
       let method = self.with_loc(|p| {
         let func = p.with_loc(|p| {
           let parameters = Vec::new();
-          let body = Some(p.parse_func_block_body(ctx)?.into());
+          let body = Some(p.parse_non_arrow_func_block_body(ctx)?.into());
           Ok(Func {
             arrow: false,
             async_: false,
@@ -1119,7 +1138,7 @@ impl<'a> Parser<'a> {
                 let _ = p.consume_if(TT::Semicolon);
                 None
               } else {
-                Some(p.parse_func_block_body(fn_ctx)?.into())
+                Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
               };
             Ok(Func {
               arrow: false,
@@ -1137,11 +1156,23 @@ impl<'a> Parser<'a> {
       } else {
         let initializer = if self.peek().typ == value_delimiter {
           self.require(value_delimiter)?;
-          Some(self.expr_with_asi(
-            ctx,
-            [statement_delimiter, TT::BraceClose],
-            property_initialiser_asi,
-          )?)
+          if value_delimiter == TT::Equals {
+            let prev_new_target_allowed = self.new_target_allowed;
+            self.new_target_allowed += 1;
+            let expr = self.expr_with_asi(
+              ctx,
+              [statement_delimiter, TT::BraceClose],
+              property_initialiser_asi,
+            );
+            self.new_target_allowed = prev_new_target_allowed;
+            Some(expr?)
+          } else {
+            Some(self.expr_with_asi(
+              ctx,
+              [statement_delimiter, TT::BraceClose],
+              property_initialiser_asi,
+            )?)
+          }
         } else {
           None
         };

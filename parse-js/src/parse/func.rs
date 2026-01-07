@@ -151,4 +151,12 @@ impl<'a> Parser<'a> {
     self.labels = prev_labels;
     res
   }
+
+  pub fn parse_non_arrow_func_block_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<Stmt>>> {
+    let prev_new_target_allowed = self.new_target_allowed;
+    self.new_target_allowed += 1;
+    let res = self.parse_func_block_body(ctx);
+    self.new_target_allowed = prev_new_target_allowed;
+    res
+  }
 }

@@ -109,6 +109,13 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("for (const x, y of z) {}");
   assert_reject("import.meta;");
   assert_reject_module("import.meta = 1;");
+
+  // `new.target` is only valid when a `new.target` binding exists (functions and class
+  // field/static-block initialisers), not in global code.
+  assert_reject("new.target;");
+  assert_reject_module("new.target;");
+  assert_reject("(() => new.target);");
+  assert_reject("class A { [new.target] = 1 }");
 }
 
 #[test]
@@ -123,6 +130,12 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("foo: { break foo; }");
   assert_accept("foo: while (true) { continue foo; }");
   assert_accept("a: b: while (true) { continue a; }");
+  assert_accept("function f() { new.target; }");
+  assert_accept("function f() { (() => new.target)(); }");
+  assert_accept("function f() { class A { [new.target] = 1 } }");
+  assert_accept("class A { x = new.target; }");
+  assert_accept("class A { x = (() => new.target)(); }");
+  assert_accept("class A { static { new.target; } }");
   assert_accept("function f(x) { return x; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");
