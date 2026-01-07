@@ -431,19 +431,29 @@ fn snapshot_restoration_preserves_pat_span_queries() {
   );
 
   let entry_id = program.file_id(&key(FileId(0))).expect("entry id");
-  let top_body = program.file_body(entry_id).expect("top-level body");
-  let result = program.check_body(top_body);
+  let total_def = program
+    .exports_of(entry_id)
+    .get("total")
+    .and_then(|entry| entry.def)
+    .expect("total def");
+  let init = program
+    .var_initializer(total_def)
+    .expect("var initializer for total");
+  let init_body = init.body;
   let total_start = entry_source.find("total").expect("total offset") as u32;
   let total_end = total_start + "total".len() as u32;
-  let expected = typecheck_ts::TextRange::new(total_start, total_end);
-  let pat_index = result
-    .pat_spans()
-    .iter()
-    .position(|span| *span == expected)
-    .expect("pat span for total");
-  let pat_id = typecheck_ts::PatId(pat_index as u32);
+  let expected = init.span.expect("binding span for total");
+  assert_eq!(
+    expected.start, total_start,
+    "binding span should start at the `total` identifier"
+  );
+  assert!(
+    expected.end >= total_end,
+    "binding span should cover the `total` identifier"
+  );
+  let pat_id = init.pat.expect("pat id for total");
 
-  let span = program.pat_span(top_body, pat_id).expect("pat span");
+  let span = program.pat_span(init_body, pat_id).expect("pat span");
   assert_eq!(span.file, entry_id);
   assert_eq!(span.range, expected);
 
@@ -451,12 +461,8 @@ fn snapshot_restoration_preserves_pat_span_queries() {
   let restored = Program::from_snapshot(host, snapshot);
 
   let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
-  let restored_body = restored
-    .file_body(restored_entry)
-    .expect("restored top body");
-  assert_eq!(restored_body, top_body);
   let restored_span = restored
-    .pat_span(restored_body, pat_id)
+    .pat_span(init_body, pat_id)
     .expect("restored pat span");
   assert_eq!(restored_span.file, restored_entry);
   assert_eq!(restored_span.range, expected);
@@ -484,17 +490,27 @@ fn snapshot_restoration_preserves_expr_span_and_id_queries() {
     .expr_at(entry_id, call_offset)
     .expect("expr at call");
 
+  let total_def = program
+    .exports_of(entry_id)
+    .get("total")
+    .and_then(|entry| entry.def)
+    .expect("total def");
+  let init = program
+    .var_initializer(total_def)
+    .expect("var initializer for total");
   let top_body = program.file_body(entry_id).expect("top-level body");
-  let result = program.check_body(top_body);
   let total_start = entry_source.find("total").expect("total offset") as u32;
   let total_end = total_start + "total".len() as u32;
-  let expected_pat = typecheck_ts::TextRange::new(total_start, total_end);
-  let pat_index = result
-    .pat_spans()
-    .iter()
-    .position(|span| *span == expected_pat)
-    .expect("pat span for total");
-  let pat_id = typecheck_ts::PatId(pat_index as u32);
+  let expected_pat = init.span.expect("binding span for total");
+  assert_eq!(
+    expected_pat.start, total_start,
+    "binding span should start at the `total` identifier"
+  );
+  assert!(
+    expected_pat.end >= total_end,
+    "binding span should cover the `total` identifier"
+  );
+  let pat_id = init.pat.expect("pat id for total");
 
   let snapshot = program.snapshot();
   reset_parse_call_count();
@@ -516,7 +532,10 @@ fn snapshot_restoration_preserves_expr_span_and_id_queries() {
   assert!(restored
     .exprs_in_body(restored_body)
     .contains(&restored_expr));
-  assert!(restored.pats_in_body(restored_top_body).contains(&pat_id));
+  assert!(
+    restored.pats_in_body(init.body).contains(&pat_id),
+    "expected pat id to be visible in initializer body"
+  );
   let parses_after = parse_call_count();
   assert_eq!(
     parses_after.saturating_sub(parses_before),
