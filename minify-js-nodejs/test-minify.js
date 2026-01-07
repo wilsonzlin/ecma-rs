@@ -40,6 +40,34 @@ assert(
   `expected preserve mode to keep enum member access, got: ${preservedConstEnum}`,
 );
 
+// Legacy option name should continue to work.
+const preservedConstEnumLegacy = utf8(
+  minify("module", 'eval("x");const enum E{A=1}export const x=E.A;', {
+    dialect: "ts",
+    tsPreserveConstEnums: true,
+  }),
+);
+assert(
+  preservedConstEnumLegacy.includes("var E") ||
+    preservedConstEnumLegacy.includes("let E"),
+  `expected legacy option to emit runtime enum scaffolding, got: ${preservedConstEnumLegacy}`,
+);
+assert(
+  preservedConstEnumLegacy.includes("export const x=E.A"),
+  `expected legacy option to keep enum member access, got: ${preservedConstEnumLegacy}`,
+);
+
+// Passing both option names with conflicting values should throw.
+assert.throws(
+  () =>
+    minify("module", 'eval("x");const enum E{A=1}export const x=E.A;', {
+      dialect: "ts",
+      preserveConstEnums: true,
+      tsPreserveConstEnums: false,
+    }),
+  (err) => err instanceof TypeError && err.message.includes("must match"),
+);
+
 // Invalid JavaScript should surface deterministic diagnostics.
 try {
   minify("global", "let x = ;");

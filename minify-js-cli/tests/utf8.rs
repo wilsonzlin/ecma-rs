@@ -247,4 +247,14 @@ fn preserve_const_enums_changes_output() {
     "expected preserve mode to keep enum member access, got: {}",
     preserved_out
   );
+
+  // Legacy flag (kept as an alias) should behave the same.
+  let legacy = run_minify(&["--mode", "module", "--ts-preserve-const-enums"], source);
+  assert!(
+    legacy.status.success(),
+    "expected minify-js to succeed with --ts-preserve-const-enums, got status: {:?}, stderr: {}",
+    legacy.status,
+    String::from_utf8_lossy(&legacy.stderr)
+  );
+  assert_eq!(String::from_utf8_lossy(&legacy.stdout), preserved_out);
 }
