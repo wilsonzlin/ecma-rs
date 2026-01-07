@@ -289,7 +289,12 @@ fn dce_stmt_in_list(
       let mut kept = Vec::with_capacity(decl.stx.declarators.len());
       let mut pending_effects = Vec::new();
       for declarator in decl.stx.declarators.into_iter() {
-        if can_remove_declarator(&declarator.pattern.stx.pat, declarator.initializer.as_ref(), cx, used) {
+        if can_remove_declarator(
+          &declarator.pattern.stx.pat,
+          declarator.initializer.as_ref(),
+          cx,
+          used,
+        ) {
           match declarator.initializer {
             None => {
               *changed = true;

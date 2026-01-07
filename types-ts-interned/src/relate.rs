@@ -1689,10 +1689,13 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::TypeParam(_), _) => Some(matches!(dst, TypeKind::Any | TypeKind::Unknown)),
       // `NoInfer<T>` is transparent for assignability. The evaluator usually
       // erases `NoInfer`, but keep this shortcut for SKIP_NORMALIZE checks.
-      (TypeKind::Intrinsic {
-        kind: IntrinsicKind::NoInfer,
-        ty,
-      }, _) => self.assignable_special(&self.store.type_kind(*ty), dst),
+      (
+        TypeKind::Intrinsic {
+          kind: IntrinsicKind::NoInfer,
+          ty,
+        },
+        _,
+      ) => self.assignable_special(&self.store.type_kind(*ty), dst),
       (
         _,
         TypeKind::Intrinsic {
@@ -1718,20 +1721,18 @@ impl<'a> RelateCtx<'a> {
       // String-mapping intrinsics (Uppercase/Lowercase/Capitalize/Uncapitalize)
       // are always string-like. When used as destinations, treat them like
       // `string` (accept only string-like sources).
-      (
-        TypeKind::Intrinsic { kind, .. },
-        TypeKind::String,
-      ) if is_string_mapping_intrinsic(*kind) => Some(true),
-      (
-        src,
-        TypeKind::Intrinsic { kind, .. },
-      ) if is_string_mapping_intrinsic(*kind) => match src {
+      (TypeKind::Intrinsic { kind, .. }, TypeKind::String)
+        if is_string_mapping_intrinsic(*kind) =>
+      {
+        Some(true)
+      }
+      (src, TypeKind::Intrinsic { kind, .. }) if is_string_mapping_intrinsic(*kind) => match src {
         // Preserve the meaning of `any` and `never`, which are handled below.
         TypeKind::Any | TypeKind::Never => None,
         TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_) => Some(true),
-        TypeKind::Intrinsic {
-          kind: src_kind, ..
-        } if is_string_mapping_intrinsic(*src_kind) => Some(true),
+        TypeKind::Intrinsic { kind: src_kind, .. } if is_string_mapping_intrinsic(*src_kind) => {
+          Some(true)
+        }
         // Defer composite types to the structural relation engine so it can
         // distribute unions/intersections and expand references.
         TypeKind::Union(_)
