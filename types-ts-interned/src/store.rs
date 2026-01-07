@@ -78,29 +78,44 @@ impl NameInterner {
       return *id;
     }
 
-    #[cfg(not(feature = "strict-determinism"))]
-    let mut salt = 0u64;
     #[cfg(feature = "strict-determinism")]
-    let salt = 0u64;
-    loop {
+    {
+      let salt = 0u64;
       let id = Self::hash_name(&name, salt);
       match self.by_id.get(&id) {
         None => {
           self.by_name.insert(name.clone(), id);
           self.by_id.insert(id, name);
-          return id;
+          id
         }
         Some(existing) if existing == &name => {
           self.by_name.insert(name.clone(), id);
-          return id;
+          id
         }
-        Some(_existing) => {
-          #[cfg(feature = "strict-determinism")]
+        Some(existing) => {
           panic!(
-            "strict-determinism: name ID collision for {id:?} (existing={_existing:?}, new={name:?})"
+            "strict-determinism: name ID collision for {id:?} (existing={existing:?}, new={name:?})"
           );
-          #[cfg(not(feature = "strict-determinism"))]
-          {
+        }
+      }
+    }
+
+    #[cfg(not(feature = "strict-determinism"))]
+    {
+      let mut salt = 0u64;
+      loop {
+        let id = Self::hash_name(&name, salt);
+        match self.by_id.get(&id) {
+          None => {
+            self.by_name.insert(name.clone(), id);
+            self.by_id.insert(id, name);
+            return id;
+          }
+          Some(existing) if existing == &name => {
+            self.by_name.insert(name.clone(), id);
+            return id;
+          }
+          Some(_) => {
             salt = salt.wrapping_add(1);
           }
         }
@@ -273,32 +288,43 @@ impl TypeStore {
     Id: Copy + Eq + Hash + std::fmt::Debug,
     MakeId: FnMut(&T, u64) -> Id,
   {
-    #[cfg(not(feature = "strict-determinism"))]
-    let mut salt = 0u64;
     #[cfg(feature = "strict-determinism")]
-    let salt = 0u64;
-    loop {
+    {
+      let salt = 0u64;
       let id = make_id(&value, salt);
       match map.entry(id) {
         Entry::Occupied(entry) => {
           if entry.get() == &value {
             return id;
           }
-          #[cfg(feature = "strict-determinism")]
-          {
-            let next_id = make_id(&value, salt.wrapping_add(1));
-            panic!(
-              "strict-determinism: {_kind} ID collision for {id:?} (next candidate: {next_id:?})"
-            );
-          }
-          #[cfg(not(feature = "strict-determinism"))]
-          {
-            salt = salt.wrapping_add(1);
-          }
+          let next_id = make_id(&value, salt.wrapping_add(1));
+          panic!(
+            "strict-determinism: {_kind} ID collision for {id:?} (next candidate: {next_id:?})"
+          );
         }
         Entry::Vacant(entry) => {
           entry.insert(value);
           return id;
+        }
+      }
+    }
+
+    #[cfg(not(feature = "strict-determinism"))]
+    {
+      let mut salt = 0u64;
+      loop {
+        let id = make_id(&value, salt);
+        match map.entry(id) {
+          Entry::Occupied(entry) => {
+            if entry.get() == &value {
+              return id;
+            }
+            salt = salt.wrapping_add(1);
+          }
+          Entry::Vacant(entry) => {
+            entry.insert(value);
+            return id;
+          }
         }
       }
     }

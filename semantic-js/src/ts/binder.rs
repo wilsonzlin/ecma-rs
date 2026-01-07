@@ -1790,7 +1790,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       return;
     };
 
-    if module.symbols.get(base).is_none() {
+    if !module.symbols.contains_key(base) {
       self.diagnostics.push(Diagnostic::error(
         "BIND1002",
         format!("cannot find export assignment target '{}'", path.join(".")),
