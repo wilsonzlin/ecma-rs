@@ -1245,7 +1245,14 @@ impl DeclareVisitor {
     }
   }
 
-  fn enter_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
+  fn enter_class_or_obj_val(&mut self, node: &mut ClassOrObjVal) {
+    if matches!(
+      node,
+      ClassOrObjVal::Method(_) | ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_)
+    ) {
+      self.strict_stack.push(true);
+    }
+
     let Some(phase) = self.class_member_phase_stack.last_mut() else {
       return;
     };
@@ -1262,21 +1269,28 @@ impl DeclareVisitor {
     }
   }
 
-  fn exit_class_or_obj_val(&mut self, _node: &mut ClassOrObjVal) {
-    let Some(phase) = self.class_member_phase_stack.last_mut() else {
-      return;
-    };
+  fn exit_class_or_obj_val(&mut self, node: &mut ClassOrObjVal) {
+    let phase = self.class_member_phase_stack.last_mut();
 
-    match phase {
-      ClassMemberPhase::InVal { depth } => {
-        if *depth <= 1 {
-          self.new_target_stack.pop();
-          *phase = ClassMemberPhase::Done;
-        } else {
-          *depth -= 1;
+    if let Some(phase) = phase {
+      match phase {
+        ClassMemberPhase::InVal { depth } => {
+          if *depth <= 1 {
+            self.new_target_stack.pop();
+            *phase = ClassMemberPhase::Done;
+          } else {
+            *depth -= 1;
+          }
         }
+        _ => {}
       }
-      _ => {}
+    }
+
+    if matches!(
+      node,
+      ClassOrObjVal::Method(_) | ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_)
+    ) {
+      self.strict_stack.pop();
     }
   }
 

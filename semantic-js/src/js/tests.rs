@@ -7,7 +7,7 @@ use diagnostics::FileId;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
-use parse_js::parse;
+use parse_js::{parse, parse_with_options, Dialect, ParseOptions, SourceType};
 use std::fmt::Write;
 
 #[derive(Default, VisitorMut)]
@@ -1400,6 +1400,17 @@ fn slice_range<'a>(source: &'a str, diagnostic: &Diagnostic) -> &'a str {
   &source[range.start as usize..range.end as usize]
 }
 
+fn parse_js_script(source: &str) -> Node<parse_js::ast::stx::TopLevel> {
+  parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Js,
+      source_type: SourceType::Script,
+    },
+  )
+  .unwrap()
+}
+
 #[test]
 fn reports_lexical_redeclaration_errors() {
   let source = "let a = 1; let a = 2;";
@@ -1786,6 +1797,61 @@ fn duplicate_parameters_in_sloppy_simple_functions_are_allowed() {
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn object_literal_method_duplicate_parameters_are_reported_in_sloppy_scripts() {
+  let source = "!{ a(b, b){} };";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(200));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0006"),
+    "expected BIND0006, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn object_literal_generator_method_duplicate_parameters_are_reported_in_sloppy_scripts() {
+  let source = "!{ *a(b, b){} };";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(201));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0006"),
+    "expected BIND0006, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn object_literal_methods_are_strict_mode_for_reserved_words() {
+  let source = "({ a(yield){} });";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(202));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0013"),
+    "expected BIND0013, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn object_literal_methods_are_strict_mode_for_eval_and_arguments() {
+  let source = "({ a(eval){} });";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(203));
+  assert!(
+    diagnostics.iter().any(|d| d.code.as_str() == "BIND0005"),
+    "expected BIND0005, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn sloppy_script_allows_duplicate_parameters_in_functions() {
+  let source = "function f(a, a){};";
+  let mut ast = parse_js_script(source);
+  let (_sem, diagnostics) = bind_js(&mut ast, TopLevelMode::Global, FileId(204));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0006"),
+    "unexpected BIND0006, got {diagnostics:?}"
   );
 }
 
