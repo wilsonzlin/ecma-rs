@@ -3,6 +3,7 @@
 The workspace ships a small set of compiled examples intended for copy/paste
 setups in downstream tools. They avoid filesystem I/O by using in-memory hosts
 and produce deterministic output (stable ordering of diagnostics and queries).
+These examples are compiled by CI via `cargo check --workspace --all-targets`.
 
 ## `diagnostics`
 
