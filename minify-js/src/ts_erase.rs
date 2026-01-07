@@ -180,6 +180,9 @@ impl RewriteIdExprName<'_> {
 pub struct TsEraseOptions {
   pub lower_class_fields: bool,
   pub use_define_for_class_fields: bool,
+  /// When enabled, `const enum` declarations are lowered to runtime enums instead of
+  /// being erased/inlined like `tsc` does by default.
+  pub preserve_const_enums: bool,
 }
 
 impl Default for TsEraseOptions {
@@ -187,6 +190,7 @@ impl Default for TsEraseOptions {
     Self {
       lower_class_fields: false,
       use_define_for_class_fields: true,
+      preserve_const_enums: false,
     }
   }
 }
@@ -196,6 +200,7 @@ struct StripContext {
   top_level_mode: TopLevelMode,
   value_bindings_stack: Vec<HashSet<String>>,
   top_level_module_exports: HashSet<String>,
+  erased_const_enum_bindings: HashSet<String>,
   emitted_export_var: HashSet<String>,
   fresh_internal_names: FreshInternalNameGenerator,
   runtime_namespace_param_idents: HashMap<String, String>,
@@ -434,10 +439,15 @@ pub fn erase_types_with_options(
   top_level: &mut Node<TopLevel>,
   ts_erase_options: TsEraseOptions,
 ) -> Result<(), Vec<Diagnostic>> {
+  let erased_const_enum_bindings = if ts_erase_options.preserve_const_enums {
+    HashSet::new()
+  } else {
+    inline_const_enums(top_level)
+  };
   let all_identifier_strings = collect_all_identifier_strings(top_level);
   let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
   let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
-    collect_top_level_module_exports(&top_level.stx.body)
+    collect_top_level_module_exports(&top_level.stx.body, &erased_const_enum_bindings)
   } else {
     HashSet::new()
   };
@@ -446,6 +456,7 @@ pub fn erase_types_with_options(
     top_level_mode,
     value_bindings_stack: vec![top_level_value_bindings],
     top_level_module_exports,
+    erased_const_enum_bindings,
     emitted_export_var: HashSet::new(),
     fresh_internal_names: FreshInternalNameGenerator::new(all_identifier_strings),
     runtime_namespace_param_idents: HashMap::new(),
@@ -766,7 +777,10 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
   names
 }
 
-fn collect_top_level_module_exports(stmts: &[Node<Stmt>]) -> HashSet<String> {
+fn collect_top_level_module_exports(
+  stmts: &[Node<Stmt>],
+  erased_const_enum_bindings: &HashSet<String>,
+) -> HashSet<String> {
   let mut names = HashSet::new();
   for stmt in stmts {
     match stmt.stx.as_ref() {
@@ -795,6 +809,13 @@ fn collect_top_level_module_exports(stmts: &[Node<Stmt>]) -> HashSet<String> {
         ExportNames::Specific(entries) => {
           for entry in entries {
             if !entry.stx.type_only {
+              if export_stmt.stx.from.is_none() {
+                if let ModuleExportImportName::Ident(local) = &entry.stx.exportable {
+                  if erased_const_enum_bindings.contains(local) {
+                    continue;
+                  }
+                }
+              }
               names.insert(entry.stx.alias.stx.name.clone());
             }
           }
@@ -1101,7 +1122,18 @@ fn strip_export_list(
   match &mut export_stmt.stx.names {
     ExportNames::Specific(names) => {
       let was_empty = names.is_empty();
-      names.retain(|name| !name.stx.type_only);
+      names.retain(|name| {
+        if name.stx.type_only {
+          return false;
+        }
+        if export_stmt.stx.from.is_some() {
+          return true;
+        }
+        let ModuleExportImportName::Ident(local) = &name.stx.exportable else {
+          return true;
+        };
+        !ctx.erased_const_enum_bindings.contains(local)
+      });
       for name in names.iter_mut() {
         name.stx.type_only = false;
       }
@@ -1191,6 +1223,961 @@ fn eval_number_expr(expr: &Node<Expr>) -> Option<f64> {
     }
     _ => None,
   }
+}
+
+#[derive(Clone, Debug)]
+enum ConstEnumValue {
+  Number(f64),
+  String(String),
+}
+
+fn unwrap_ts_const_expr<'a>(mut expr: &'a Node<Expr>) -> &'a Node<Expr> {
+  loop {
+    match expr.stx.as_ref() {
+      Expr::TypeAssertion(assert) => expr = assert.stx.expression.as_ref(),
+      Expr::NonNullAssertion(assert) => expr = assert.stx.expression.as_ref(),
+      Expr::SatisfiesExpr(assert) => expr = assert.stx.expression.as_ref(),
+      _ => return expr,
+    }
+  }
+}
+
+fn eval_const_enum_expr(
+  enum_name: &str,
+  expr: &Node<Expr>,
+  prior_members: &HashMap<String, ConstEnumValue>,
+) -> Option<ConstEnumValue> {
+  let expr = unwrap_ts_const_expr(expr);
+  match expr.stx.as_ref() {
+    Expr::LitNum(num) => Some(ConstEnumValue::Number(num.stx.value.0)),
+    Expr::LitStr(str) => Some(ConstEnumValue::String(str.stx.value.clone())),
+    Expr::LitTemplate(tpl) if is_template_literal_without_substitutions(expr) => {
+      let mut value = String::new();
+      for part in &tpl.stx.parts {
+        if let LitTemplatePart::String(seg) = part {
+          value.push_str(seg);
+        }
+      }
+      Some(ConstEnumValue::String(value))
+    }
+    Expr::Unary(unary)
+      if matches!(
+        unary.stx.operator,
+        OperatorName::UnaryNegation | OperatorName::UnaryPlus
+      ) =>
+    {
+      let value = eval_const_enum_expr(enum_name, &unary.stx.argument, prior_members)?;
+      let ConstEnumValue::Number(num) = value else {
+        return None;
+      };
+      match unary.stx.operator {
+        OperatorName::UnaryNegation => Some(ConstEnumValue::Number(-num)),
+        OperatorName::UnaryPlus => Some(ConstEnumValue::Number(num)),
+        _ => unreachable!(),
+      }
+    }
+    Expr::Binary(bin)
+      if matches!(
+        bin.stx.operator,
+        OperatorName::Addition | OperatorName::Subtraction
+      ) =>
+    {
+      let left = eval_const_enum_expr(enum_name, &bin.stx.left, prior_members)?;
+      let right = eval_const_enum_expr(enum_name, &bin.stx.right, prior_members)?;
+      let (ConstEnumValue::Number(left), ConstEnumValue::Number(right)) = (left, right) else {
+        return None;
+      };
+      match bin.stx.operator {
+        OperatorName::Addition => Some(ConstEnumValue::Number(left + right)),
+        OperatorName::Subtraction => Some(ConstEnumValue::Number(left - right)),
+        _ => unreachable!(),
+      }
+    }
+    Expr::Id(id) => prior_members.get(&id.stx.name).cloned(),
+    Expr::Member(member) => match member.stx.left.stx.as_ref() {
+      Expr::Id(left) if left.stx.name == enum_name => prior_members.get(&member.stx.right).cloned(),
+      _ => None,
+    },
+    Expr::ComputedMember(member) => {
+      let Expr::Id(left) = member.stx.object.stx.as_ref() else {
+        return None;
+      };
+      if left.stx.name != enum_name {
+        return None;
+      }
+      let member_expr = unwrap_ts_const_expr(&member.stx.member);
+      let Expr::LitStr(key) = member_expr.stx.as_ref() else {
+        return None;
+      };
+      prior_members.get(&key.stx.value).cloned()
+    }
+    _ => None,
+  }
+}
+
+fn compute_const_enum_values(decl: &EnumDecl) -> Option<HashMap<String, ConstEnumValue>> {
+  let mut out = HashMap::new();
+  let mut next_numeric: Option<f64> = Some(0.0);
+  for member in &decl.members {
+    let name = member.stx.name.clone();
+    let value = match member.stx.initializer.as_ref() {
+      Some(initializer) => {
+        let value = eval_const_enum_expr(&decl.name, initializer, &out)?;
+        if let ConstEnumValue::Number(num) = value {
+          next_numeric = Some(num + 1.0);
+        } else {
+          next_numeric = None;
+        }
+        value
+      }
+      None => {
+        let value = ConstEnumValue::Number(next_numeric?);
+        if let ConstEnumValue::Number(num) = value {
+          next_numeric = Some(num + 1.0);
+        }
+        value
+      }
+    };
+    out.insert(name, value);
+  }
+  Some(out)
+}
+
+fn extract_static_member_chain(expr: &Node<Expr>) -> Option<(String, Vec<String>)> {
+  let mut parts = Vec::new();
+  let mut cursor = expr;
+  loop {
+    let current = unwrap_ts_const_expr(cursor);
+    match current.stx.as_ref() {
+      Expr::Member(member) if !member.stx.optional_chaining => {
+        parts.push(member.stx.right.clone());
+        cursor = &member.stx.left;
+      }
+      Expr::ComputedMember(member) if !member.stx.optional_chaining => {
+        let member_expr = unwrap_ts_const_expr(&member.stx.member);
+        let Expr::LitStr(key) = member_expr.stx.as_ref() else {
+          return None;
+        };
+        parts.push(key.stx.value.clone());
+        cursor = &member.stx.object;
+      }
+      Expr::Id(id) => {
+        parts.reverse();
+        return Some((id.stx.name.clone(), parts));
+      }
+      _ => return None,
+    }
+  }
+}
+
+fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
+  #[derive(Default)]
+  struct Inliner {
+    const_enums: Vec<HashMap<Vec<String>, HashMap<String, ConstEnumValue>>>,
+    shadowed: Vec<HashSet<String>>,
+    erased_top_level: HashSet<String>,
+  }
+
+  impl Inliner {
+    fn is_shadowed(&self, name: &str) -> bool {
+      self.shadowed.iter().any(|scope| scope.contains(name))
+    }
+
+    fn lookup_const_enum_member(
+      &self,
+      enum_path: &[String],
+      member: &str,
+    ) -> Option<ConstEnumValue> {
+      for scope in self.const_enums.iter().rev() {
+        let Some(enum_members) = scope.get(enum_path) else {
+          continue;
+        };
+        return enum_members.get(member).cloned();
+      }
+      None
+    }
+
+    fn try_inline_member_access(&self, expr: &mut Node<Expr>) -> bool {
+      let Some((base, parts)) = extract_static_member_chain(expr) else {
+        return false;
+      };
+      if parts.is_empty() || self.is_shadowed(&base) {
+        return false;
+      }
+      let (enum_parts, member) = parts.split_at(parts.len() - 1);
+      let mut enum_path = Vec::with_capacity(1 + enum_parts.len());
+      enum_path.push(base);
+      enum_path.extend(enum_parts.iter().cloned());
+      let Some(value) = self.lookup_const_enum_member(&enum_path, &member[0]) else {
+        return false;
+      };
+
+      let loc = expr.loc;
+      let assoc = std::mem::take(&mut expr.assoc);
+      let mut replacement = match value {
+        ConstEnumValue::Number(num) => ts_lower::number(loc, num),
+        ConstEnumValue::String(value) => ts_lower::string(loc, value),
+      };
+      replacement.assoc = assoc;
+      *expr = replacement;
+      true
+    }
+
+    fn collect_pat_declared(&self, pat: &Node<Pat>, out: &mut HashSet<String>) {
+      match pat.stx.as_ref() {
+        Pat::Id(id) => {
+          out.insert(id.stx.name.clone());
+        }
+        Pat::Arr(arr) => {
+          for elem in arr.stx.elements.iter().flatten() {
+            self.collect_pat_declared(&elem.target, out);
+          }
+          if let Some(rest) = &arr.stx.rest {
+            self.collect_pat_declared(rest, out);
+          }
+        }
+        Pat::Obj(obj) => {
+          for prop in &obj.stx.properties {
+            self.collect_pat_declared(&prop.stx.target, out);
+          }
+          if let Some(rest) = &obj.stx.rest {
+            self.collect_pat_declared(rest, out);
+          }
+        }
+        Pat::AssignTarget(_) => {}
+      }
+    }
+
+    fn collect_var_declared_names_in_stmt(&self, stmt: &Node<Stmt>, out: &mut HashSet<String>) {
+      match stmt.stx.as_ref() {
+        Stmt::VarDecl(decl) if decl.stx.mode == VarDeclMode::Var => {
+          for declarator in &decl.stx.declarators {
+            self.collect_pat_declared(&declarator.pattern.stx.pat, out);
+          }
+        }
+        Stmt::ForTriple(for_stmt) => {
+          if let ForTripleStmtInit::Decl(decl) = &for_stmt.stx.init {
+            if decl.stx.mode == VarDeclMode::Var {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, out);
+              }
+            }
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::ForIn(for_stmt) => {
+          if let ForInOfLhs::Decl((VarDeclMode::Var, pat)) = &for_stmt.stx.lhs {
+            self.collect_pat_declared(&pat.stx.pat, out);
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::ForOf(for_stmt) => {
+          if let ForInOfLhs::Decl((VarDeclMode::Var, pat)) = &for_stmt.stx.lhs {
+            self.collect_pat_declared(&pat.stx.pat, out);
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::Block(block) => {
+          for stmt in &block.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::If(if_stmt) => {
+          self.collect_var_declared_names_in_stmt(&if_stmt.stx.consequent, out);
+          if let Some(alt) = &if_stmt.stx.alternate {
+            self.collect_var_declared_names_in_stmt(alt, out);
+          }
+        }
+        Stmt::While(while_stmt) => {
+          self.collect_var_declared_names_in_stmt(&while_stmt.stx.body, out)
+        }
+        Stmt::DoWhile(do_stmt) => self.collect_var_declared_names_in_stmt(&do_stmt.stx.body, out),
+        Stmt::With(with_stmt) => self.collect_var_declared_names_in_stmt(&with_stmt.stx.body, out),
+        Stmt::Label(label) => self.collect_var_declared_names_in_stmt(&label.stx.statement, out),
+        Stmt::Switch(switch_stmt) => {
+          for branch in &switch_stmt.stx.branches {
+            for stmt in &branch.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+        }
+        Stmt::Try(try_stmt) => {
+          for stmt in &try_stmt.stx.wrapped.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+          if let Some(catch) = &try_stmt.stx.catch {
+            for stmt in &catch.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+          if let Some(finally) = &try_stmt.stx.finally {
+            for stmt in &finally.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+        }
+        Stmt::FunctionDecl(_) | Stmt::ClassDecl(_) => {}
+        _ => {}
+      }
+    }
+
+    fn collect_block_declared_names(&self, stmts: &[Node<Stmt>]) -> HashSet<String> {
+      let mut out = HashSet::new();
+      for stmt in stmts {
+        match stmt.stx.as_ref() {
+          Stmt::VarDecl(decl)
+            if matches!(
+              decl.stx.mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) =>
+          {
+            for declarator in &decl.stx.declarators {
+              self.collect_pat_declared(&declarator.pattern.stx.pat, &mut out);
+            }
+          }
+          Stmt::FunctionDecl(func_decl) => {
+            if let Some(name) = func_decl
+              .stx
+              .name
+              .as_ref()
+              .map(|name| name.stx.name.clone())
+            {
+              out.insert(name);
+            }
+          }
+          Stmt::ClassDecl(class_decl) => {
+            if let Some(name) = class_decl
+              .stx
+              .name
+              .as_ref()
+              .map(|name| name.stx.name.clone())
+            {
+              out.insert(name);
+            }
+          }
+          Stmt::EnumDecl(decl) if !decl.stx.const_ => {
+            out.insert(decl.stx.name.clone());
+          }
+          _ => {}
+        }
+      }
+      out
+    }
+
+    fn collect_exported_const_enums_from_namespace(
+      &self,
+      decl: &NamespaceDecl,
+      prefix: &mut Vec<String>,
+      out: &mut HashMap<Vec<String>, HashMap<String, ConstEnumValue>>,
+    ) {
+      match &decl.body {
+        NamespaceBody::Block(stmts) => {
+          for stmt in stmts {
+            match stmt.stx.as_ref() {
+              Stmt::EnumDecl(enum_decl) if enum_decl.stx.export && enum_decl.stx.const_ => {
+                if let Some(values) = compute_const_enum_values(&enum_decl.stx) {
+                  let mut path = prefix.clone();
+                  path.push(enum_decl.stx.name.clone());
+                  out.insert(path, values);
+                }
+              }
+              Stmt::NamespaceDecl(ns_decl) if ns_decl.stx.export => {
+                prefix.push(ns_decl.stx.name.clone());
+                self.collect_exported_const_enums_from_namespace(&ns_decl.stx, prefix, out);
+                prefix.pop();
+              }
+              _ => {}
+            }
+          }
+        }
+        NamespaceBody::Namespace(inner) => {
+          prefix.push(inner.stx.name.clone());
+          self.collect_exported_const_enums_from_namespace(&inner.stx, prefix, out);
+          prefix.pop();
+        }
+      }
+    }
+
+    fn collect_const_enums_in_scope(
+      &mut self,
+      stmts: &mut [Node<Stmt>],
+      is_top_level: bool,
+    ) -> HashMap<Vec<String>, HashMap<String, ConstEnumValue>> {
+      let mut out = HashMap::new();
+      for stmt in stmts.iter_mut() {
+        match stmt.stx.as_mut() {
+          Stmt::EnumDecl(decl) if decl.stx.const_ => {
+            if let Some(values) = compute_const_enum_values(&decl.stx) {
+              if is_top_level {
+                self.erased_top_level.insert(decl.stx.name.clone());
+              }
+              out.insert(vec![decl.stx.name.clone()], values);
+            } else if decl.stx.declare {
+              decl.stx.declare = false;
+            }
+          }
+          Stmt::NamespaceDecl(decl) => {
+            let mut prefix = vec![decl.stx.name.clone()];
+            self.collect_exported_const_enums_from_namespace(&decl.stx, &mut prefix, &mut out);
+          }
+          _ => {}
+        }
+      }
+      out
+    }
+
+    fn rewrite_stmts_in_block(&mut self, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
+      let scope = self.collect_block_declared_names(stmts);
+      let enums = self.collect_const_enums_in_scope(stmts, is_top_level);
+      self.shadowed.push(scope);
+      self.const_enums.push(enums);
+
+      let mut rewritten = Vec::with_capacity(stmts.len());
+      for mut stmt in stmts.drain(..) {
+        if matches!(stmt.stx.as_ref(), Stmt::EnumDecl(decl) if decl.stx.const_)
+          && self
+            .const_enums
+            .last()
+            .expect("const enum stack should never be empty")
+            .contains_key(&match stmt.stx.as_ref() {
+              Stmt::EnumDecl(decl) => vec![decl.stx.name.clone()],
+              _ => unreachable!(),
+            })
+        {
+          continue;
+        }
+        self.rewrite_stmt(&mut stmt);
+        rewritten.push(stmt);
+      }
+      *stmts = rewritten;
+
+      self.const_enums.pop();
+      self.shadowed.pop();
+    }
+
+    fn rewrite_pat(&mut self, pat: &mut Node<Pat>) {
+      match pat.stx.as_mut() {
+        Pat::Arr(arr) => {
+          for elem in arr.stx.elements.iter_mut().flatten() {
+            self.rewrite_pat(&mut elem.target);
+            if let Some(default) = elem.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = arr.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Pat::Obj(obj) => {
+          for prop in obj.stx.properties.iter_mut() {
+            self.rewrite_pat(&mut prop.stx.target);
+            if let Some(default) = prop.stx.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = obj.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Pat::AssignTarget(expr) => self.rewrite_expr(expr),
+        Pat::Id(_) => {}
+      }
+    }
+
+    fn rewrite_var_decl(&mut self, decl: &mut VarDecl) {
+      for declarator in decl.declarators.iter_mut() {
+        self.rewrite_pat(&mut declarator.pattern.stx.pat);
+        if let Some(init) = declarator.initializer.as_mut() {
+          self.rewrite_expr(init);
+        }
+      }
+    }
+
+    fn rewrite_func(&mut self, func: &mut Func, func_name: Option<&str>) {
+      let mut scope = HashSet::new();
+      for param in func.parameters.iter() {
+        self.collect_pat_declared(&param.stx.pattern.stx.pat, &mut scope);
+      }
+      if let Some(name) = func_name {
+        scope.insert(name.to_string());
+      }
+      if let Some(FuncBody::Block(body)) = &func.body {
+        for stmt in body {
+          self.collect_var_declared_names_in_stmt(stmt, &mut scope);
+        }
+      }
+
+      self.shadowed.push(scope);
+      for param in func.parameters.iter_mut() {
+        self.rewrite_pat(&mut param.stx.pattern.stx.pat);
+        if let Some(default) = param.stx.default_value.as_mut() {
+          self.rewrite_expr(default);
+        }
+        for decorator in param.stx.decorators.iter_mut() {
+          self.rewrite_expr(&mut decorator.stx.expression);
+        }
+      }
+      match func.body.as_mut() {
+        Some(FuncBody::Block(body)) => self.rewrite_stmts_in_block(body, false),
+        Some(FuncBody::Expression(expr)) => self.rewrite_expr(expr),
+        None => {}
+      }
+      self.shadowed.pop();
+    }
+
+    fn rewrite_class_members(&mut self, members: &mut Vec<Node<ClassMember>>) {
+      for member in members.iter_mut() {
+        if let ClassOrObjKey::Computed(expr) = &mut member.stx.key {
+          self.rewrite_expr(expr);
+        }
+        for decorator in member.stx.decorators.iter_mut() {
+          self.rewrite_expr(&mut decorator.stx.expression);
+        }
+        match &mut member.stx.val {
+          ClassOrObjVal::Getter(get) => self.rewrite_func(&mut get.stx.func.stx, None),
+          ClassOrObjVal::Setter(set) => self.rewrite_func(&mut set.stx.func.stx, None),
+          ClassOrObjVal::Method(method) => self.rewrite_func(&mut method.stx.func.stx, None),
+          ClassOrObjVal::Prop(Some(expr)) => self.rewrite_expr(expr),
+          ClassOrObjVal::Prop(None) | ClassOrObjVal::IndexSignature(_) => {}
+          ClassOrObjVal::StaticBlock(block) => {
+            self.rewrite_stmts_in_block(&mut block.stx.body, false)
+          }
+        }
+      }
+    }
+
+    fn rewrite_jsx_elem(&mut self, elem: &mut Node<JsxElem>) {
+      for attr in elem.stx.attributes.iter_mut() {
+        match attr {
+          JsxAttr::Named { value, .. } => {
+            if let Some(value) = value {
+              match value {
+                JsxAttrVal::Expression(expr) => self.rewrite_expr(&mut expr.stx.value),
+                JsxAttrVal::Element(elem) => self.rewrite_jsx_elem(elem),
+                JsxAttrVal::Text(_) => {}
+              }
+            }
+          }
+          JsxAttr::Spread { value } => self.rewrite_expr(&mut value.stx.value),
+        }
+      }
+      for child in elem.stx.children.iter_mut() {
+        match child {
+          JsxElemChild::Element(elem) => self.rewrite_jsx_elem(elem),
+          JsxElemChild::Expr(expr) => self.rewrite_expr(&mut expr.stx.value),
+          JsxElemChild::Text(_) => {}
+        }
+      }
+    }
+
+    fn rewrite_obj_member(&mut self, member: &mut Node<ObjMember>) {
+      match &mut member.stx.typ {
+        ObjMemberType::Valued { key, val } => {
+          if let ClassOrObjKey::Computed(expr) = key {
+            self.rewrite_expr(expr);
+          }
+          match val {
+            ClassOrObjVal::Getter(get) => self.rewrite_func(&mut get.stx.func.stx, None),
+            ClassOrObjVal::Setter(set) => self.rewrite_func(&mut set.stx.func.stx, None),
+            ClassOrObjVal::Method(method) => self.rewrite_func(&mut method.stx.func.stx, None),
+            ClassOrObjVal::Prop(Some(expr)) => self.rewrite_expr(expr),
+            ClassOrObjVal::Prop(None)
+            | ClassOrObjVal::IndexSignature(_)
+            | ClassOrObjVal::StaticBlock(_) => {}
+          }
+        }
+        ObjMemberType::Rest { val } => self.rewrite_expr(val),
+        ObjMemberType::Shorthand { .. } => {}
+      }
+    }
+
+    fn rewrite_switch(&mut self, switch_stmt: &mut SwitchStmt) {
+      let mut scope = HashSet::new();
+      for branch in switch_stmt.branches.iter() {
+        for stmt in branch.stx.body.iter() {
+          match stmt.stx.as_ref() {
+            Stmt::VarDecl(decl)
+              if matches!(
+                decl.stx.mode,
+                VarDeclMode::Const
+                  | VarDeclMode::Let
+                  | VarDeclMode::Using
+                  | VarDeclMode::AwaitUsing
+              ) =>
+            {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, &mut scope);
+              }
+            }
+            Stmt::FunctionDecl(func_decl) => {
+              if let Some(name) = func_decl
+                .stx
+                .name
+                .as_ref()
+                .map(|name| name.stx.name.clone())
+              {
+                scope.insert(name);
+              }
+            }
+            Stmt::ClassDecl(class_decl) => {
+              if let Some(name) = class_decl
+                .stx
+                .name
+                .as_ref()
+                .map(|name| name.stx.name.clone())
+              {
+                scope.insert(name);
+              }
+            }
+            Stmt::EnumDecl(decl) if !decl.stx.const_ => {
+              scope.insert(decl.stx.name.clone());
+            }
+            _ => {}
+          }
+        }
+      }
+
+      self.shadowed.push(scope);
+      self.rewrite_expr(&mut switch_stmt.test);
+      for branch in switch_stmt.branches.iter_mut() {
+        if let Some(case) = branch.stx.case.as_mut() {
+          self.rewrite_expr(case);
+        }
+        for stmt in branch.stx.body.iter_mut() {
+          self.rewrite_stmt(stmt);
+        }
+      }
+      self.shadowed.pop();
+    }
+
+    fn rewrite_namespace_decl(&mut self, decl: &mut NamespaceDecl) {
+      match &mut decl.body {
+        NamespaceBody::Block(stmts) => self.rewrite_stmts_in_block(stmts, false),
+        NamespaceBody::Namespace(inner) => self.rewrite_namespace_decl(&mut inner.stx),
+      }
+    }
+
+    fn rewrite_stmt(&mut self, stmt: &mut Node<Stmt>) {
+      match stmt.stx.as_mut() {
+        Stmt::Block(block) => self.rewrite_stmts_in_block(&mut block.stx.body, false),
+        Stmt::Expr(expr_stmt) => self.rewrite_expr(&mut expr_stmt.stx.expr),
+        Stmt::If(if_stmt) => {
+          self.rewrite_expr(&mut if_stmt.stx.test);
+          self.rewrite_stmt(&mut if_stmt.stx.consequent);
+          if let Some(alt) = if_stmt.stx.alternate.as_mut() {
+            self.rewrite_stmt(alt);
+          }
+        }
+        Stmt::ForTriple(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForTripleStmtInit::Decl(decl) = &for_stmt.stx.init {
+            if matches!(
+              decl.stx.mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, &mut loop_scope);
+              }
+            }
+          }
+          self.shadowed.push(loop_scope);
+          match &mut for_stmt.stx.init {
+            ForTripleStmtInit::Expr(expr) => self.rewrite_expr(expr),
+            ForTripleStmtInit::Decl(decl) => self.rewrite_var_decl(&mut decl.stx),
+            ForTripleStmtInit::None => {}
+          }
+          if let Some(cond) = for_stmt.stx.cond.as_mut() {
+            self.rewrite_expr(cond);
+          }
+          if let Some(post) = for_stmt.stx.post.as_mut() {
+            self.rewrite_expr(post);
+          }
+          self.rewrite_stmts_in_block(&mut for_stmt.stx.body.stx.body, false);
+          self.shadowed.pop();
+        }
+        Stmt::ForIn(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForInOfLhs::Decl((mode, pat)) = &for_stmt.stx.lhs {
+            if matches!(
+              mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              self.collect_pat_declared(&pat.stx.pat, &mut loop_scope);
+            }
+          }
+          self.shadowed.push(loop_scope);
+          match &mut for_stmt.stx.lhs {
+            ForInOfLhs::Assign(pat) => self.rewrite_pat(pat),
+            ForInOfLhs::Decl((_, pat)) => self.rewrite_pat(&mut pat.stx.pat),
+          }
+          self.rewrite_expr(&mut for_stmt.stx.rhs);
+          self.rewrite_stmts_in_block(&mut for_stmt.stx.body.stx.body, false);
+          self.shadowed.pop();
+        }
+        Stmt::ForOf(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForInOfLhs::Decl((mode, pat)) = &for_stmt.stx.lhs {
+            if matches!(
+              mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              self.collect_pat_declared(&pat.stx.pat, &mut loop_scope);
+            }
+          }
+          self.shadowed.push(loop_scope);
+          match &mut for_stmt.stx.lhs {
+            ForInOfLhs::Assign(pat) => self.rewrite_pat(pat),
+            ForInOfLhs::Decl((_, pat)) => self.rewrite_pat(&mut pat.stx.pat),
+          }
+          self.rewrite_expr(&mut for_stmt.stx.rhs);
+          self.rewrite_stmts_in_block(&mut for_stmt.stx.body.stx.body, false);
+          self.shadowed.pop();
+        }
+        Stmt::While(while_stmt) => {
+          self.rewrite_expr(&mut while_stmt.stx.condition);
+          self.rewrite_stmt(&mut while_stmt.stx.body);
+        }
+        Stmt::DoWhile(do_stmt) => {
+          self.rewrite_stmt(&mut do_stmt.stx.body);
+          self.rewrite_expr(&mut do_stmt.stx.condition);
+        }
+        Stmt::With(with_stmt) => {
+          self.rewrite_expr(&mut with_stmt.stx.object);
+          self.rewrite_stmt(&mut with_stmt.stx.body);
+        }
+        Stmt::Label(label) => self.rewrite_stmt(&mut label.stx.statement),
+        Stmt::Switch(switch_stmt) => self.rewrite_switch(&mut switch_stmt.stx),
+        Stmt::Try(try_stmt) => {
+          self.rewrite_stmts_in_block(&mut try_stmt.stx.wrapped.stx.body, false);
+          if let Some(catch) = try_stmt.stx.catch.as_mut() {
+            let mut scope = HashSet::new();
+            if let Some(param) = &catch.stx.parameter {
+              self.collect_pat_declared(&param.stx.pat, &mut scope);
+            }
+            scope.extend(self.collect_block_declared_names(&catch.stx.body));
+            self.shadowed.push(scope);
+            for stmt in catch.stx.body.iter_mut() {
+              self.rewrite_stmt(stmt);
+            }
+            self.shadowed.pop();
+          }
+          if let Some(finally) = try_stmt.stx.finally.as_mut() {
+            self.rewrite_stmts_in_block(&mut finally.stx.body, false);
+          }
+        }
+        Stmt::Throw(throw_stmt) => self.rewrite_expr(&mut throw_stmt.stx.value),
+        Stmt::Return(ret_stmt) => {
+          if let Some(expr) = ret_stmt.stx.value.as_mut() {
+            self.rewrite_expr(expr);
+          }
+        }
+        Stmt::VarDecl(decl) => self.rewrite_var_decl(&mut decl.stx),
+        Stmt::FunctionDecl(func_decl) => {
+          let func_name = func_decl
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.as_str());
+          self.rewrite_func(&mut func_decl.stx.function.stx, func_name);
+        }
+        Stmt::ClassDecl(class_decl) => {
+          if let Some(extends) = class_decl.stx.extends.as_mut() {
+            self.rewrite_expr(extends);
+          }
+          for decorator in class_decl.stx.decorators.iter_mut() {
+            self.rewrite_expr(&mut decorator.stx.expression);
+          }
+          self.rewrite_class_members(&mut class_decl.stx.members);
+        }
+        Stmt::EnumDecl(enum_decl) => {
+          for member in enum_decl.stx.members.iter_mut() {
+            if let Some(init) = member.stx.initializer.as_mut() {
+              self.rewrite_expr(init);
+            }
+          }
+        }
+        Stmt::NamespaceDecl(ns_decl) => self.rewrite_namespace_decl(&mut ns_decl.stx),
+        Stmt::ModuleDecl(module_decl) => {
+          if let Some(body) = module_decl.stx.body.as_mut() {
+            self.rewrite_stmts_in_block(body, false);
+          }
+        }
+        Stmt::ExportDefaultExpr(export_default) => {
+          self.rewrite_expr(&mut export_default.stx.expression)
+        }
+        Stmt::Debugger(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Empty(_)
+        | Stmt::ExportList(_)
+        | Stmt::Import(_)
+        | Stmt::InterfaceDecl(_)
+        | Stmt::TypeAliasDecl(_)
+        | Stmt::GlobalDecl(_)
+        | Stmt::AmbientVarDecl(_)
+        | Stmt::AmbientFunctionDecl(_)
+        | Stmt::AmbientClassDecl(_)
+        | Stmt::ImportTypeDecl(_)
+        | Stmt::ExportTypeDecl(_)
+        | Stmt::ImportEqualsDecl(_)
+        | Stmt::ExportAssignmentDecl(_)
+        | Stmt::ExportAsNamespaceDecl(_) => {}
+      }
+    }
+
+    fn rewrite_expr(&mut self, expr: &mut Node<Expr>) {
+      if self.try_inline_member_access(expr) {
+        return;
+      }
+
+      match expr.stx.as_mut() {
+        Expr::ArrowFunc(arrow) => self.rewrite_func(&mut arrow.stx.func.stx, None),
+        Expr::Func(func_expr) => {
+          let func_name = func_expr
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.as_str());
+          self.rewrite_func(&mut func_expr.stx.func.stx, func_name);
+        }
+        Expr::Class(class_expr) => {
+          let mut scope = HashSet::new();
+          if let Some(name) = class_expr
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.clone())
+          {
+            scope.insert(name);
+          }
+          self.shadowed.push(scope);
+          if let Some(extends) = class_expr.stx.extends.as_mut() {
+            self.rewrite_expr(extends);
+          }
+          for decorator in class_expr.stx.decorators.iter_mut() {
+            self.rewrite_expr(&mut decorator.stx.expression);
+          }
+          self.rewrite_class_members(&mut class_expr.stx.members);
+          self.shadowed.pop();
+        }
+        Expr::Binary(bin) => {
+          self.rewrite_expr(&mut bin.stx.left);
+          self.rewrite_expr(&mut bin.stx.right);
+        }
+        Expr::Call(call) => {
+          self.rewrite_expr(&mut call.stx.callee);
+          for arg in call.stx.arguments.iter_mut() {
+            self.rewrite_expr(&mut arg.stx.value);
+          }
+        }
+        Expr::ComputedMember(member) => {
+          self.rewrite_expr(&mut member.stx.object);
+          self.rewrite_expr(&mut member.stx.member);
+        }
+        Expr::Cond(cond) => {
+          self.rewrite_expr(&mut cond.stx.test);
+          self.rewrite_expr(&mut cond.stx.consequent);
+          self.rewrite_expr(&mut cond.stx.alternate);
+        }
+        Expr::Import(import) => {
+          self.rewrite_expr(&mut import.stx.module);
+          if let Some(attrs) = import.stx.attributes.as_mut() {
+            self.rewrite_expr(attrs);
+          }
+        }
+        Expr::Member(member) => {
+          self.rewrite_expr(&mut member.stx.left);
+        }
+        Expr::TaggedTemplate(tagged) => {
+          self.rewrite_expr(&mut tagged.stx.function);
+          for part in tagged.stx.parts.iter_mut() {
+            if let LitTemplatePart::Substitution(expr) = part {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::Unary(unary) => self.rewrite_expr(&mut unary.stx.argument),
+        Expr::UnaryPostfix(unary) => self.rewrite_expr(&mut unary.stx.argument),
+        Expr::LitArr(arr) => {
+          for elem in arr.stx.elements.iter_mut() {
+            if let LitArrElem::Single(expr) | LitArrElem::Rest(expr) = elem {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::LitObj(obj) => {
+          for member in obj.stx.members.iter_mut() {
+            self.rewrite_obj_member(member);
+          }
+        }
+        Expr::LitTemplate(tpl) => {
+          for part in tpl.stx.parts.iter_mut() {
+            if let LitTemplatePart::Substitution(expr) = part {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::ArrPat(pat) => {
+          for elem in pat.stx.elements.iter_mut().flatten() {
+            self.rewrite_pat(&mut elem.target);
+            if let Some(default) = elem.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = pat.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Expr::ObjPat(pat) => {
+          for prop in pat.stx.properties.iter_mut() {
+            if let ClassOrObjKey::Computed(expr) = &mut prop.stx.key {
+              self.rewrite_expr(expr);
+            }
+            self.rewrite_pat(&mut prop.stx.target);
+            if let Some(default) = prop.stx.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = pat.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Expr::JsxElem(elem) => self.rewrite_jsx_elem(elem),
+        Expr::JsxExprContainer(expr) => self.rewrite_expr(&mut expr.stx.value),
+        Expr::JsxSpreadAttr(spread) => self.rewrite_expr(&mut spread.stx.value),
+        Expr::TypeAssertion(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),
+        Expr::NonNullAssertion(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),
+        Expr::SatisfiesExpr(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),
+        Expr::Id(_)
+        | Expr::ImportMeta(_)
+        | Expr::NewTarget(_)
+        | Expr::Super(_)
+        | Expr::This(_)
+        | Expr::JsxMember(_)
+        | Expr::JsxName(_)
+        | Expr::JsxText(_)
+        | Expr::LitBigInt(_)
+        | Expr::LitBool(_)
+        | Expr::LitNull(_)
+        | Expr::LitNum(_)
+        | Expr::LitRegex(_)
+        | Expr::LitStr(_)
+        | Expr::IdPat(_) => {}
+      }
+    }
+  }
+
+  let mut inliner = Inliner::default();
+  inliner.shadowed.push(HashSet::new());
+  inliner.const_enums.push(HashMap::new());
+  inliner.rewrite_stmts_in_block(&mut top_level.stx.body, true);
+  inliner.erased_top_level
 }
 
 fn rewrite_enum_member_refs(
