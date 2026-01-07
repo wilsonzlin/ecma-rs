@@ -188,6 +188,13 @@ fn strict_mode_directives_trigger_ecma_early_errors() {
 }
 
 #[test]
+fn tagged_templates_do_not_create_directive_prologues() {
+  // `use strict` must be a standalone string literal expression statement; when it is used as a
+  // tagged template "tag", it does not enable strict mode.
+  assert_accept("\"use strict\"\n`x`\nyield;");
+}
+
+#[test]
 fn classes_are_strict_ecma_regions() {
   assert_reject("class yield {}");
   assert_reject("class eval {}");

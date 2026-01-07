@@ -365,12 +365,12 @@ impl<'a> Parser<'a> {
   }
 
   fn token_continues_expression_after_directive_string(next: &Token) -> bool {
-    // Tagged templates require no line terminator between the tag expression and the template.
+    // Tagged templates allow line terminators between the tag expression and the template.
     if matches!(
       next.typ,
       TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
     ) {
-      return !next.preceded_by_line_terminator;
+      return true;
     }
     // Postfix update operators require no line terminator between operand and operator.
     if matches!(next.typ, TT::PlusPlus | TT::HyphenHyphen) {
