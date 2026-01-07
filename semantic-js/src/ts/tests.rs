@@ -2111,6 +2111,27 @@ fn script_exports_report_single_diagnostic_with_span() {
 }
 
 #[test]
+fn export_import_equals_entity_name_is_not_treated_as_script() {
+  let file = FileId(206);
+  let source = "export import Foo = Bar;";
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(file, HirFileKind::Ts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+  assert_eq!(hir.module_kind, ModuleKind::Module);
+
+  let files: HashMap<FileId, Arc<HirFile>> = HashMap::from([(file, Arc::new(hir))]);
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+  assert!(
+    diags.iter().all(|d| d.code != "BIND1003"),
+    "unexpected BIND1003 diagnostics: {:?}",
+    diags
+  );
+}
+
+#[test]
 fn export_assignment_reports_span() {
   let file = FileId(94);
   let mut hir = HirFile::module(file);
@@ -2793,6 +2814,42 @@ fn nested_module_syntax_stays_in_ambient_module() {
     .decls
     .iter()
     .any(|d| d.name == "Local" && matches!(d.kind, DeclKind::Interface)));
+}
+
+#[test]
+fn lower_export_import_equals_entity_name_is_module() {
+  let source = "export import Foo = Bar;";
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(202), HirFileKind::Ts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+  assert_eq!(hir.module_kind, ModuleKind::Module);
+}
+
+#[test]
+fn lower_export_default_function_is_module() {
+  let source = "export default function f() {}";
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(203), HirFileKind::Ts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+  assert_eq!(hir.module_kind, ModuleKind::Module);
+}
+
+#[test]
+fn lower_export_default_class_is_module() {
+  let source = "export default class C {}";
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(204), HirFileKind::Ts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+  assert_eq!(hir.module_kind, ModuleKind::Module);
+}
+
+#[test]
+fn lower_ambient_module_does_not_make_ts_file_module() {
+  let source = r#"declare module "pkg" {}"#;
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(205), HirFileKind::Ts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+  assert_eq!(hir.module_kind, ModuleKind::Script);
 }
 
 fn body_by_name<'a>(

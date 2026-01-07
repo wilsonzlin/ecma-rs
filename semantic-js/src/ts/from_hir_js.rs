@@ -3,6 +3,7 @@ use crate::ts::{
   FileKind, HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed,
   ImportNamespace, ModuleKind, NamedExport, TypeImport as TsTypeImport,
 };
+use crate::ts::module_syntax::ast_has_module_syntax;
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
 use parse_js::ast::expr::pat::Pat;
@@ -57,6 +58,12 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       })
   };
 
+  let module_kind = if ast_has_module_syntax(ast) {
+    ModuleKind::Module
+  } else {
+    ModuleKind::Script
+  };
+
   let block = lower_block(
     &ast.stx.body,
     lower,
@@ -64,12 +71,6 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
     &import_specifier_span,
     &export_specifier_span,
   );
-
-  let module_kind = if block.has_module_syntax {
-    ModuleKind::Module
-  } else {
-    ModuleKind::Script
-  };
 
   let finalized = finalize_block(block, lower, module_kind);
   let type_imports = collect_type_imports(lower);
@@ -134,7 +135,6 @@ struct BlockResult {
   exports: Vec<Export>,
   export_as_namespace: Vec<ExportAsNamespace>,
   ambient_modules: Vec<AmbientModule>,
-  has_module_syntax: bool,
 }
 
 struct LoweredBlock {
@@ -165,14 +165,12 @@ fn lower_block(
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
-    has_module_syntax: false,
   };
 
   for stmt in stmts.iter() {
     let stmt_range = to_range(stmt.loc);
     match stmt.stx.as_ref() {
       Stmt::Import(import) => {
-        result.has_module_syntax = true;
         let mut default = None;
         if let Some(pat) = import.stx.default.as_ref() {
           if let Some(name) = pat_name(&pat.stx.pat) {
@@ -223,13 +221,10 @@ fn lower_block(
       }
       Stmt::ImportEqualsDecl(import_eq) => {
         let target = match &import_eq.stx.rhs {
-          ImportEqualsRhs::Require { module } => {
-            result.has_module_syntax = true;
-            ImportEqualsTarget::Require {
-              specifier: module.clone(),
-              specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
-            }
-          }
+          ImportEqualsRhs::Require { module } => ImportEqualsTarget::Require {
+            specifier: module.clone(),
+            specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
+          },
           ImportEqualsRhs::EntityName { path } => ImportEqualsTarget::EntityName {
             path: path.clone(),
             span: stmt_range,
@@ -255,7 +250,6 @@ fn lower_block(
         });
       }
       Stmt::ExportList(list) => {
-        result.has_module_syntax = true;
         match &list.stx.names {
           ExportNames::All(alias) => {
             if let Some(specifier) = list.stx.from.clone() {
@@ -317,7 +311,6 @@ fn lower_block(
         }
       }
       Stmt::ExportDefaultExpr(_) => {
-        result.has_module_syntax = true;
         mark_defs_in_span(
           &result.local_defs,
           lower,
@@ -328,7 +321,6 @@ fn lower_block(
         );
       }
       Stmt::ExportAssignmentDecl(assign) => {
-        result.has_module_syntax = true;
         let expr_span = to_range(assign.stx.expression.loc);
         let path = entity_name_path(&assign.stx.expression);
         result.exports.push(Export::ExportAssignment {
@@ -338,14 +330,12 @@ fn lower_block(
         });
       }
       Stmt::ExportAsNamespaceDecl(decl) => {
-        result.has_module_syntax = true;
         result.export_as_namespace.push(ExportAsNamespace {
           name: decl.stx.name.clone(),
           span: stmt_range,
         });
       }
       Stmt::ImportTypeDecl(import_type) => {
-        result.has_module_syntax = true;
         let named = import_type
           .stx
           .names
@@ -368,7 +358,6 @@ fn lower_block(
         });
       }
       Stmt::ExportTypeDecl(export_type) => {
-        result.has_module_syntax = true;
         let items = export_type
           .stx
           .names
@@ -393,7 +382,6 @@ fn lower_block(
       }
       Stmt::VarDecl(var) => {
         if var.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -406,7 +394,6 @@ fn lower_block(
       }
       Stmt::FunctionDecl(func) => {
         if func.stx.export || func.stx.export_default {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -423,7 +410,6 @@ fn lower_block(
       }
       Stmt::ClassDecl(class_decl) => {
         if class_decl.stx.export || class_decl.stx.export_default {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -440,7 +426,6 @@ fn lower_block(
       }
       Stmt::InterfaceDecl(intf) => {
         if intf.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -453,7 +438,6 @@ fn lower_block(
       }
       Stmt::TypeAliasDecl(alias) => {
         if alias.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -466,7 +450,6 @@ fn lower_block(
       }
       Stmt::EnumDecl(en) => {
         if en.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -479,7 +462,6 @@ fn lower_block(
       }
       Stmt::NamespaceDecl(ns) => {
         if ns.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -493,7 +475,6 @@ fn lower_block(
       Stmt::ModuleDecl(module) => match &module.stx.name {
         ModuleName::Identifier(_) => {
           if module.stx.export {
-            result.has_module_syntax = true;
             mark_defs_in_span(
               &result.local_defs,
               lower,
@@ -505,9 +486,6 @@ fn lower_block(
           }
         }
         ModuleName::String(spec) => {
-          if module.stx.export {
-            result.has_module_syntax = true;
-          }
           let name_span = to_range(module.stx.name_loc);
           let nested = lower_block(
             module.stx.body.as_deref().unwrap_or(&[]),
@@ -547,11 +525,9 @@ fn lower_block(
           .export_as_namespace
           .extend(nested.export_as_namespace);
         result.ambient_modules.extend(nested.ambient_modules);
-        result.has_module_syntax |= nested.has_module_syntax;
       }
       Stmt::AmbientVarDecl(av) => {
         if av.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -564,7 +540,6 @@ fn lower_block(
       }
       Stmt::AmbientFunctionDecl(af) => {
         if af.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
@@ -577,7 +552,6 @@ fn lower_block(
       }
       Stmt::AmbientClassDecl(ac) => {
         if ac.stx.export {
-          result.has_module_syntax = true;
           mark_defs_in_span(
             &result.local_defs,
             lower,
