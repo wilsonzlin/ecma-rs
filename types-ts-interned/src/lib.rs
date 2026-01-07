@@ -31,6 +31,12 @@
 //!   "number"
 //! );
 //! ```
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p types-ts-interned --example basic
+//! ```
 
 mod cache;
 mod display;

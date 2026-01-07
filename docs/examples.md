@@ -26,6 +26,16 @@ cargo run -p typecheck-ts --example json_snapshot
 - `json_snapshot` prints a minimal JSON payload (with a `schema_version`) that
   can be redirected to a file for snapshot tests.
 
+## `types-ts-interned`
+
+```bash
+cargo run -p types-ts-interned --example basic
+```
+
+This example builds a few interned types (`{ x: number }`, union types, callable
+signatures), prints their display forms, and demonstrates assignability queries
+via `RelateCtx`.
+
 ## `hir-js`
 
 ```bash
