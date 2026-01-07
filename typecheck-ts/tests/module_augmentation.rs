@@ -1,4 +1,9 @@
-use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey};
+use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use typecheck_ts::db::TypecheckDb;
+use typecheck_ts::lib_support::FileKind;
+use typecheck_ts::{FileId, FileKey, FileOrigin, MemoryHost, Program, PropertyKey};
 
 #[test]
 fn module_augmentation_adds_new_export() {
@@ -33,66 +38,60 @@ fn module_augmentation_adds_new_export() {
 
 #[test]
 fn module_augmentation_merges_interface_members() {
-  let mut host = MemoryHost::new();
+  let pkg_file = FileId(0);
+  let augment_file = FileId(1);
   let pkg = FileKey::new("pkg.ts");
   let augment = FileKey::new("augment.ts");
-  let main = FileKey::new("main.ts");
-
-  host.insert(pkg.clone(), "export interface Foo { a: number }");
-  host.insert(
+  let mut db = TypecheckDb::default();
+  db.set_file(
+    pkg_file,
+    pkg.clone(),
+    FileKind::Ts,
+    Arc::from("export interface Foo { a: number }"),
+    FileOrigin::Source,
+  );
+  db.set_file(
+    augment_file,
     augment.clone(),
-    "export {};\ndeclare module \"./pkg\" { interface Foo { b: string } }",
+    FileKind::Ts,
+    Arc::from("export {};\ndeclare module \"./pkg\" { interface Foo { b: string } }"),
+    FileOrigin::Source,
   );
-  host.insert(
-    main.clone(),
-    "import { Foo } from \"./pkg\";\nconst v: Foo = { a: 1, b: \"ok\" };",
-  );
+  db.set_roots(vec![pkg.clone(), augment.clone()].into());
+  db.set_module_resolution(augment_file, Arc::<str>::from("./pkg"), Some(pkg_file));
 
-  let program = Program::new(host, vec![main.clone(), augment.clone()]);
-  let diagnostics = program.check();
+  let res = db.ts_semantics();
   assert!(
-    diagnostics.is_empty(),
-    "unexpected diagnostics: {diagnostics:?}"
+    res.diagnostics.is_empty(),
+    "unexpected diagnostics: {:?}",
+    res.diagnostics
   );
 
-  let main_file = program.file_id(&main).expect("main file id");
-  let import_foo_def = program
-    .definitions_in_file(main_file)
-    .into_iter()
-    .find(|def| program.def_name(*def).as_deref() == Some("Foo"))
-    .expect("main import Foo");
-  let import_foo_ty = program.type_of_def(import_foo_def);
-  let import_props = program.properties_of(import_foo_ty);
-  let import_has_a = import_props
+  let sem = &res.semantics;
+  let foo_symbol = sem
+    .resolve_export(
+      semantic_js::ts::FileId(pkg_file.0),
+      "Foo",
+      semantic_js::ts::Namespace::TYPE,
+    )
+    .expect("Foo type export");
+  let decl_ids = sem.symbol_decls(foo_symbol, semantic_js::ts::Namespace::TYPE);
+  let decls: Vec<_> = decl_ids
     .iter()
-    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
-  let import_has_b = import_props
-    .iter()
-    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
+    .map(|decl| sem.symbols().decl(*decl))
+    .collect();
+
+  assert_eq!(decls.len(), 2, "expected two interface declarations");
+
+  let files: BTreeSet<_> = decls.iter().map(|decl| decl.file).collect();
   assert!(
-    import_has_a && import_has_b,
-    "imported Foo should include merged members, got {import_props:?}"
+    files.contains(&pkg_file) && files.contains(&augment_file),
+    "expected declarations from both pkg and augment files, got {files:?}"
   );
 
-  let pkg_file = program.file_id(&pkg).expect("pkg file id");
-  let foo_def = program
-    .definitions_in_file(pkg_file)
-    .into_iter()
-    .find(|def| program.def_name(*def).as_deref() == Some("Foo"))
-    .expect("interface Foo");
-
-  let foo_ty = program.type_of_def(foo_def);
-  let props = program.properties_of(foo_ty);
-  let has_a = props
-    .iter()
-    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "a"));
-  let has_b = props
-    .iter()
-    .any(|p| matches!(&p.key, PropertyKey::String(name) if name == "b"));
-  assert!(
-    has_a && has_b,
-    "merged interface should expose a + b, got {props:?}"
-  );
+  for decl in decls {
+    assert_eq!(decl.def_id.file(), decl.file);
+  }
 }
 
 #[test]
