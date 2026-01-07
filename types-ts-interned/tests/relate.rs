@@ -1576,7 +1576,11 @@ fn unevaluated_conditional_types_flow_like_union_of_branches() {
   assert!(explain.result);
   let reason = explain.reason.expect("expected reason tree");
   assert_eq!(reason.note.as_deref(), Some("conditional source"));
-  assert_eq!(reason.children.len(), 2, "expected both branch checks to be recorded");
+  assert_eq!(
+    reason.children.len(),
+    2,
+    "expected both branch checks to be recorded"
+  );
   assert_eq!(reason.children[0].src, primitives.number);
   assert_eq!(reason.children[1].src, primitives.boolean);
 
@@ -1584,7 +1588,11 @@ fn unevaluated_conditional_types_flow_like_union_of_branches() {
   assert!(!explain.result);
   let reason = explain.reason.expect("expected reason tree");
   assert_eq!(reason.note.as_deref(), Some("conditional target"));
-  assert_eq!(reason.children.len(), 2, "expected both branch checks to be recorded");
+  assert_eq!(
+    reason.children.len(),
+    2,
+    "expected both branch checks to be recorded"
+  );
   assert_eq!(reason.children[0].dst, primitives.number);
   assert_eq!(reason.children[1].dst, primitives.boolean);
 
