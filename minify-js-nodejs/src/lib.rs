@@ -94,7 +94,7 @@ fn json_to_js_value<'a>(cx: &mut FunctionContext<'a>, value: &Value) -> JsResult
     Value::Number(v) => Ok(cx.number(v.as_f64().unwrap_or(0.0)).upcast()),
     Value::String(v) => Ok(cx.string(v.as_str()).upcast()),
     Value::Array(values) => {
-      let js_array = JsArray::new(cx, values.len() as u32);
+      let js_array = JsArray::new(cx, values.len());
       for (idx, child) in values.iter().enumerate() {
         let js_value = json_to_js_value(cx, child)?;
         js_array.set(cx, idx as u32, js_value)?;
@@ -241,7 +241,7 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
 
   let mut out = Vec::new();
   match minify_js::minify_with_options(options, &source, &mut out) {
-    Ok(()) => Ok(JsBuffer::external(&mut cx, out)),
+    Ok(()) => JsBuffer::from_slice(&mut cx, &out),
     Err(diagnostics) => {
       let provider = SingleFileSource {
         name: "<input>",
