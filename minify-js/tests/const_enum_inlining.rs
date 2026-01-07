@@ -273,7 +273,11 @@ fn shadowed_const_enum_base_is_not_inlined() {
     .body
     .iter()
     .find_map(|stmt| match stmt.stx.as_ref() {
-      Stmt::FunctionDecl(decl) => decl.stx.name.as_ref().map(|name| (&decl.stx.function, name)),
+      Stmt::FunctionDecl(decl) => decl
+        .stx
+        .name
+        .as_ref()
+        .map(|name| (&decl.stx.function, name)),
       _ => None,
     })
     .expect("expected function declaration");

@@ -1009,14 +1009,14 @@ impl ProgramTypeResolver {
     if !Self::matches_namespace(kind, ns) {
       return u8::MAX;
     }
-      if ns.contains(sem_ts::Namespace::VALUE) {
-        return match kind {
-          DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
-          DefKind::Var(var) if var.body != MISSING_BODY => 1,
-          DefKind::Namespace(_) | DefKind::Module(_) => 2,
-          DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
-          DefKind::Var(_) => 4,
-          DefKind::VarDeclarator(_) => 5,
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return match kind {
+        DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
+        DefKind::Var(var) if var.body != MISSING_BODY => 1,
+        DefKind::Namespace(_) | DefKind::Module(_) => 2,
+        DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
+        DefKind::Var(_) => 4,
+        DefKind::VarDeclarator(_) => 5,
         DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }

@@ -1,5 +1,6 @@
 use diagnostics::FileId;
 use diagnostics::TextRange;
+use hir_js::ids::MISSING_BODY;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source;
@@ -22,7 +23,6 @@ use hir_js::StmtKind;
 use hir_js::TypeExprKind;
 use hir_js::TypeName;
 use hir_js::VarDeclKind;
-use hir_js::ids::MISSING_BODY;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;

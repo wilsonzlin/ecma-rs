@@ -593,9 +593,7 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
-        Some(
-          p.parse_func_block_body(fn_ctx)?.into(),
-        )
+        Some(p.parse_func_block_body(fn_ctx)?.into())
       };
       Ok(Func {
         arrow: false,

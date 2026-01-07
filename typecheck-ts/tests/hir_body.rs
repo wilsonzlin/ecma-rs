@@ -9,8 +9,7 @@ use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::lib_support::ScriptTarget;
 use typecheck_ts::{
-  parse_call_count, reset_parse_call_count, ExprId, FileKey, MemoryHost, Program,
-  TypeKindSummary,
+  parse_call_count, reset_parse_call_count, ExprId, FileKey, MemoryHost, Program, TypeKindSummary,
 };
 use types_ts_interned::{TypeKind, TypeStore};
 

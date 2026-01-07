@@ -6044,37 +6044,49 @@ mod tests {
       source_type: parse_js::SourceType::Module,
     };
 
-    with_test_def_path_hasher(|_| 1, || {
-      with_test_body_path_hasher(|_| 1, || {
-        let ast0 = parse_with_options(source, parse_opts).expect("parse file 0");
-        let ast1 = parse_with_options(source, parse_opts).expect("parse file 1");
+    with_test_def_path_hasher(
+      |_| 1,
+      || {
+        with_test_body_path_hasher(
+          |_| 1,
+          || {
+            let ast0 = parse_with_options(source, parse_opts).expect("parse file 0");
+            let ast1 = parse_with_options(source, parse_opts).expect("parse file 1");
 
-        let (file0, diags0) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast0);
-        let (file1, diags1) = lower_file_with_diagnostics(FileId(1), FileKind::Ts, &ast1);
+            let (file0, diags0) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast0);
+            let (file1, diags1) = lower_file_with_diagnostics(FileId(1), FileKind::Ts, &ast1);
 
-        assert!(diags0.is_empty(), "unexpected diagnostics for file 0: {diags0:?}");
-        assert!(diags1.is_empty(), "unexpected diagnostics for file 1: {diags1:?}");
+            assert!(
+              diags0.is_empty(),
+              "unexpected diagnostics for file 0: {diags0:?}"
+            );
+            assert!(
+              diags1.is_empty(),
+              "unexpected diagnostics for file 1: {diags1:?}"
+            );
 
-        let def_ids0: HashSet<_> = file0.defs.iter().map(|def| def.id).collect();
-        let def_ids1: HashSet<_> = file1.defs.iter().map(|def| def.id).collect();
-        assert!(
-          def_ids0.is_disjoint(&def_ids1),
-          "DefIds should be globally unique across files",
-        );
+            let def_ids0: HashSet<_> = file0.defs.iter().map(|def| def.id).collect();
+            let def_ids1: HashSet<_> = file1.defs.iter().map(|def| def.id).collect();
+            assert!(
+              def_ids0.is_disjoint(&def_ids1),
+              "DefIds should be globally unique across files",
+            );
 
-        let body_ids0: HashSet<_> = file0.hir.bodies.iter().copied().collect();
-        let body_ids1: HashSet<_> = file1.hir.bodies.iter().copied().collect();
-        assert!(
-          body_ids0.is_disjoint(&body_ids1),
-          "BodyIds should be globally unique across files",
-        );
+            let body_ids0: HashSet<_> = file0.hir.bodies.iter().copied().collect();
+            let body_ids1: HashSet<_> = file1.hir.bodies.iter().copied().collect();
+            assert!(
+              body_ids0.is_disjoint(&body_ids1),
+              "BodyIds should be globally unique across files",
+            );
 
-        // Sanity check: file bits should match the lowered file.
-        assert_eq!(file0.root_body().file(), FileId(0));
-        assert_eq!(file1.root_body().file(), FileId(1));
-        assert!(file0.defs.iter().all(|def| def.id.file() == FileId(0)));
-        assert!(file1.defs.iter().all(|def| def.id.file() == FileId(1)));
-      })
-    });
+            // Sanity check: file bits should match the lowered file.
+            assert_eq!(file0.root_body().file(), FileId(0));
+            assert_eq!(file1.root_body().file(), FileId(1));
+            assert!(file0.defs.iter().all(|def| def.id.file() == FileId(0)));
+            assert!(file1.defs.iter().all(|def| def.id.file() == FileId(1)));
+          },
+        )
+      },
+    );
   }
 }

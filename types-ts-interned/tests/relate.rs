@@ -1649,7 +1649,7 @@ fn explain_assignable_reason_tree_truncates_large_unions_deterministically() {
   let mut members = Vec::new();
   for idx in 0u32..300 {
     members.push(store.intern_type(TypeKind::Ref {
-      def: DefId(idx),
+      def: DefId(idx.into()),
       args: Vec::new(),
     }));
   }

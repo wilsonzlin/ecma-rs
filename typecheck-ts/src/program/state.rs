@@ -5,12 +5,12 @@ use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
 use ahash::AHashSet;
+use hir_js::ids::{MISSING_BODY, MISSING_DEF};
 use hir_js::{
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
   ExprKind as HirExprKind, LowerResult, NameId, PatId as HirPatId, PatKind as HirPatKind,
   VarDeclKind as HirVarDeclKind,
 };
-use hir_js::ids::{MISSING_BODY, MISSING_DEF};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::Expr;
@@ -1696,7 +1696,8 @@ impl ProgramState {
       let key = self
         .file_key_for_id(file)
         .unwrap_or_else(|| FileKey::new(format!("file{}.ts", file.0)));
-      let def = alloc_synthetic_def_id(file, &mut taken_ids, &("ts_module_namespace", key.as_str()));
+      let def =
+        alloc_synthetic_def_id(file, &mut taken_ids, &("ts_module_namespace", key.as_str()));
       self.module_namespace_defs.insert(file, def);
     }
   }
@@ -4254,8 +4255,11 @@ impl ProgramState {
         DefKind::Enum(_) => 2u32,
         _ => continue,
       };
-      let value_def =
-        alloc_synthetic_def_id(file, &mut taken_ids, &("ts_value_def", file.0, type_def.0, tag));
+      let value_def = alloc_synthetic_def_id(
+        file,
+        &mut taken_ids,
+        &("ts_value_def", file.0, type_def.0, tag),
+      );
       self.value_defs.insert(type_def, value_def);
       new_def_data.entry(value_def).or_insert_with(|| DefData {
         name: type_data.name.clone(),

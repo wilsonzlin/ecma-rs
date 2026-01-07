@@ -35,7 +35,7 @@ impl Resolver for StaticResolver {
 
 fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
   Decl {
-    def_id: DefId(def),
+    def_id: DefId(def.into()),
     name: name.to_string(),
     kind,
     is_ambient: false,

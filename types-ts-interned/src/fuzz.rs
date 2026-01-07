@@ -310,7 +310,7 @@ fn resolve_index(
         .map(|arg| resolve_index(graph, store, cache, visiting, *arg, depth + 1))
         .collect();
       store.intern_type(TypeKind::Ref {
-        def: DefId(def),
+        def: DefId(def.into()),
         args,
       })
     }

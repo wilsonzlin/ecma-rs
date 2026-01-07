@@ -221,7 +221,7 @@ where
           .prop_map(move |ty| keyof_store.intern_type(TypeKind::KeyOf(ty))),
         (ref_def, prop::collection::vec(inner.clone(), 0..3)).prop_map(move |(def, args)| {
           ref_store.intern_type(TypeKind::Ref {
-            def: DefId(def),
+            def: DefId(def.into()),
             args,
           })
         }),
@@ -281,7 +281,7 @@ fn store_with_cyclic_pairs(
           defs
             .into_iter()
             .enumerate()
-            .map(|(idx, ty)| (DefId(idx as u32), ty))
+            .map(|(idx, ty)| (DefId(idx as u64), ty))
             .collect::<Vec<_>>()
         });
       let pair = (root.clone(), root.clone());
@@ -303,7 +303,7 @@ fn store_with_cyclic_graph(
           defs
             .into_iter()
             .enumerate()
-            .map(|(idx, ty)| (DefId(idx as u32), ty))
+            .map(|(idx, ty)| (DefId(idx as u64), ty))
             .collect::<Vec<_>>()
         });
       (root, defs).prop_map(move |(root, defs)| (store.clone(), root, defs))
@@ -321,7 +321,7 @@ fn store_with_defs(
         defs
           .into_iter()
           .enumerate()
-          .map(|(idx, ty)| (DefId(idx as u32), ty))
+          .map(|(idx, ty)| (DefId(idx as u64), ty))
           .collect::<Vec<_>>()
       },
     );

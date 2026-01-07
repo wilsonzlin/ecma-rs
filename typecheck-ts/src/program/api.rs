@@ -14,8 +14,8 @@ use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
 use crate::{FatalError, HostError, Ice, SymbolBinding, SymbolInfo, SymbolOccurrence};
-use hir_js::{BinaryOp as HirBinaryOp, ExprKind as HirExprKind};
 use hir_js::ids::MISSING_BODY;
+use hir_js::{BinaryOp as HirBinaryOp, ExprKind as HirExprKind};
 use semantic_js_crate::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

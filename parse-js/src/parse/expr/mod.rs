@@ -194,10 +194,7 @@ impl<'a> Parser<'a> {
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)
       let next_token = p.peek().typ;
-      let is_unparenthesised_single_param = is_valid_pattern_identifier(
-        next_token,
-        ctx.rules,
-      ) && {
+      let is_unparenthesised_single_param = is_valid_pattern_identifier(next_token, ctx.rules) && {
         // Need to peek further to see if there's => coming up
         let peek2 = p.peek_n::<2>()[1].typ;
         // Could be either:

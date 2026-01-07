@@ -483,9 +483,7 @@ pub mod body_check {
   use std::time::Instant;
 
   use diagnostics::{Diagnostic, FileId, Span, TextRange};
-  use hir_js::{
-    Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, NameInterner,
-  };
+  use hir_js::{Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, NameInterner};
   use hir_js::{PatId as HirPatId, PatKind as HirPatKind};
   use parse_js::ast::node::Node;
   use parse_js::ast::stx::TopLevel;
