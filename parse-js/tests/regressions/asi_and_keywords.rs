@@ -27,11 +27,7 @@ fn asi_does_not_split_before_brace_without_line_terminator() {
 
 #[test]
 fn await_allows_line_terminator_before_operand() {
-  assert!(parse_with_options(
-    "async function f(){ await\nfoo(); }",
-    ecma_script_opts()
-  )
-  .is_ok());
+  assert!(parse_with_options("async function f(){ await\nfoo(); }", ecma_script_opts()).is_ok());
 }
 
 #[test]
@@ -44,7 +40,6 @@ fn await_requires_operand() {
 
 #[test]
 fn yield_star_disallows_line_terminator_between_yield_and_star() {
-  let err =
-    parse_with_options("function* g(){ yield\n* other; }", ecma_script_opts()).unwrap_err();
+  let err = parse_with_options("function* g(){ yield\n* other; }", ecma_script_opts()).unwrap_err();
   assert_eq!(err.typ, SyntaxErrorType::LineTerminatorAfterYield);
 }

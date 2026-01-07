@@ -1,9 +1,9 @@
+#[path = "regressions/asi_and_keywords.rs"]
+mod asi_and_keywords;
 #[path = "regressions/class_heritage.rs"]
 mod class_heritage;
 #[path = "regressions/class_method_overload.rs"]
 mod class_method_overload;
-#[path = "regressions/asi_and_keywords.rs"]
-mod asi_and_keywords;
 #[path = "regressions/destructuring_type_params.rs"]
 mod destructuring_type_params;
 #[path = "regressions/exponentiation.rs"]
