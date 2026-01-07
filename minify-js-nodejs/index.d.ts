@@ -68,6 +68,14 @@ export interface MinifyOptions {
    * Preserve TypeScript `const enum` declarations at runtime instead of
    * inlining/erasing them.
    */
+  preserveConstEnums?: boolean;
+
+  /**
+   * Preserve TypeScript `const enum` declarations at runtime instead of
+   * inlining/erasing them.
+   *
+   * @deprecated Use `preserveConstEnums`.
+   */
   tsPreserveConstEnums?: boolean;
 }
 

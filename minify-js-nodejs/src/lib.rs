@@ -129,7 +129,7 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   };
 
   let options_arg = cx.argument_opt(2);
-  let (dialect_raw, ts_lower_class_fields, ts_use_define_for_class_fields, ts_preserve_const_enums): (
+  let (dialect_raw, ts_lower_class_fields, ts_use_define_for_class_fields, preserve_const_enums): (
     Option<String>,
     Option<bool>,
     Option<bool>,
@@ -172,7 +172,19 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         return cx.throw_type_error("options.tsUseDefineForClassFields must be a boolean");
       };
 
-      let ts_preserve_const_enums: Handle<JsValue> = options.get(&mut cx, "tsPreserveConstEnums")?;
+      let preserve_const_enums: Handle<JsValue> = options.get(&mut cx, "preserveConstEnums")?;
+      let preserve_const_enums = if preserve_const_enums.is_a::<JsUndefined, _>(&mut cx)
+        || preserve_const_enums.is_a::<JsNull, _>(&mut cx)
+      {
+        None
+      } else if let Ok(value) = preserve_const_enums.downcast::<JsBoolean, _>(&mut cx) {
+        Some(value.value(&mut cx))
+      } else {
+        return cx.throw_type_error("options.preserveConstEnums must be a boolean");
+      };
+
+      let ts_preserve_const_enums: Handle<JsValue> =
+        options.get(&mut cx, "tsPreserveConstEnums")?;
       let ts_preserve_const_enums = if ts_preserve_const_enums.is_a::<JsUndefined, _>(&mut cx)
         || ts_preserve_const_enums.is_a::<JsNull, _>(&mut cx)
       {
@@ -183,11 +195,22 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         return cx.throw_type_error("options.tsPreserveConstEnums must be a boolean");
       };
 
+      let preserve_const_enums = match (preserve_const_enums, ts_preserve_const_enums) {
+        (Some(value), Some(legacy)) if value != legacy => {
+          return cx.throw_type_error(
+            "options.preserveConstEnums and options.tsPreserveConstEnums must match",
+          );
+        }
+        (Some(value), _) => Some(value),
+        (None, Some(value)) => Some(value),
+        (None, None) => None,
+      };
+
       (
         dialect_raw,
         ts_lower_class_fields,
         ts_use_define_for_class_fields,
-        ts_preserve_const_enums,
+        preserve_const_enums,
       )
     } else {
       return cx.throw_type_error("options must be an object");
@@ -200,7 +223,7 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
     dialect_raw.as_deref(),
     ts_lower_class_fields,
     ts_use_define_for_class_fields,
-    ts_preserve_const_enums,
+    preserve_const_enums,
   ) {
     Ok(parsed) => parsed,
     Err(err) => return cx.throw_type_error(err),

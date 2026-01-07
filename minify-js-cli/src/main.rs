@@ -60,7 +60,7 @@ struct Cli {
   ts_use_define_for_class_fields: bool,
 
   /// Preserve `const enum` declarations at runtime instead of inlining/erasing them.
-  #[arg(long)]
+  #[arg(long = "preserve-const-enums", alias = "ts-preserve-const-enums")]
   ts_preserve_const_enums: bool,
 }
 

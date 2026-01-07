@@ -28,7 +28,7 @@ expectMinify(
 const preservedConstEnum = utf8(
   minify("module", 'eval("x");const enum E{A=1}export const x=E.A;', {
     dialect: "ts",
-    tsPreserveConstEnums: true,
+    preserveConstEnums: true,
   }),
 );
 assert(

@@ -207,7 +207,7 @@ fn lowering_class_fields_changes_output() {
 }
 
 #[test]
-fn ts_preserve_const_enums_changes_output() {
+fn preserve_const_enums_changes_output() {
   let source = br#"eval("x");const enum E{A=1}export const x=E.A;"#;
 
   let inlined = run_minify(&["--mode", "module"], source);
@@ -229,10 +229,10 @@ fn ts_preserve_const_enums_changes_output() {
     inlined_out
   );
 
-  let preserved = run_minify(&["--mode", "module", "--ts-preserve-const-enums"], source);
+  let preserved = run_minify(&["--mode", "module", "--preserve-const-enums"], source);
   assert!(
     preserved.status.success(),
-    "expected minify-js to succeed with --ts-preserve-const-enums, got status: {:?}, stderr: {}",
+    "expected minify-js to succeed with --preserve-const-enums, got status: {:?}, stderr: {}",
     preserved.status,
     String::from_utf8_lossy(&preserved.stderr)
   );

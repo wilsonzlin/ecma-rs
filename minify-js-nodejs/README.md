@@ -39,7 +39,7 @@ const {minify} = require("@minify-js/node");
 // Keep TypeScript const enums as runtime enums (instead of inlining/erasing).
 const out = minify("module", "const enum E { A = 1 } export const x = E.A;", {
   dialect: "ts",
-  tsPreserveConstEnums: true,
+  preserveConstEnums: true,
 });
 ```
 
