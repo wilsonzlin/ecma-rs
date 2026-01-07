@@ -175,6 +175,7 @@ struct JsonQueries {
 struct JsonOutput {
   files: Vec<String>,
   diagnostics: Vec<Diagnostic>,
+  compiler_options: CompilerOptions,
   queries: JsonQueries,
 }
 
@@ -420,6 +421,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     let output = JsonOutput {
       files,
       diagnostics: diagnostics.clone(),
+      compiler_options: host.compiler_options.clone(),
       queries: JsonQueries {
         type_at,
         symbol_at,

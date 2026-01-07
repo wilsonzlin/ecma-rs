@@ -1147,3 +1147,140 @@ fn project_mode_uses_include_from_extended_config() {
     "expected include from extended config to include main.ts, got {files:?}"
   );
 }
+
+#[test]
+fn project_mode_honors_module_kind_from_tsconfig() {
+  let esm = fixture("project_mode/module_kind/tsconfig.esm.json");
+  let cjs = fixture("project_mode/module_kind/tsconfig.cjs.json");
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(esm.as_os_str())
+    .arg("--json")
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TS1202")),
+    "expected module=ESNext to reject import assignment (TS1202), got {diagnostics:?}"
+  );
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(cjs.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.is_empty(),
+    "expected module=CommonJS to accept import assignment, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn project_mode_use_define_for_class_fields_controls_diagnostics() {
+  let define = fixture("project_mode/use_define_for_class_fields/tsconfig.define.json");
+  let assign = fixture("project_mode/use_define_for_class_fields/tsconfig.assign.json");
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(define.as_os_str())
+    .arg("--json")
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TS2729")),
+    "expected useDefineForClassFields=true to report TS2729, got {diagnostics:?}"
+  );
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.get("code").and_then(|c| c.as_str()) == Some("TS2612")),
+    "expected useDefineForClassFields=true to report TS2612, got {diagnostics:?}"
+  );
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(assign.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.is_empty(),
+    "expected useDefineForClassFields=false to suppress TS2729/TS2612 diagnostics, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn project_mode_serializes_emit_related_compiler_options() {
+  let tsconfig = fixture("project_mode/emit_flags/tsconfig.json");
+
+  let output = typecheck_cli()
+    .timeout(CLI_TIMEOUT)
+    .args(["typecheck"])
+    .arg("--project")
+    .arg(tsconfig.as_os_str())
+    .arg("--json")
+    .assert()
+    .success()
+    .get_output()
+    .stdout
+    .clone();
+  let json: Value = serde_json::from_slice(&output).expect("valid JSON output");
+  let options = json
+    .get("compiler_options")
+    .and_then(|o| o.as_object())
+    .expect("compiler_options object");
+  assert_eq!(options.get("no_emit").and_then(|v| v.as_bool()), Some(false));
+  assert_eq!(
+    options.get("no_emit_on_error").and_then(|v| v.as_bool()),
+    Some(true)
+  );
+  assert_eq!(
+    options.get("declaration").and_then(|v| v.as_bool()),
+    Some(true)
+  );
+}

@@ -1,0 +1,8 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true
+  },
+  "files": ["src/main.ts"]
+}
+

@@ -3,7 +3,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use typecheck_ts::lib_support::{CompilerOptions, JsxMode, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, JsxMode, LibName, ModuleKind, ScriptTarget};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -41,6 +41,8 @@ struct RawCompilerOptions {
   #[serde(default)]
   target: Option<String>,
   #[serde(default)]
+  module: Option<String>,
+  #[serde(default)]
   lib: Option<Vec<String>>,
   #[serde(default)]
   types: Option<Vec<String>>,
@@ -50,6 +52,12 @@ struct RawCompilerOptions {
   module_resolution: Option<String>,
   #[serde(default)]
   skip_lib_check: Option<bool>,
+  #[serde(default)]
+  no_emit: Option<bool>,
+  #[serde(default)]
+  no_emit_on_error: Option<bool>,
+  #[serde(default)]
+  declaration: Option<bool>,
   #[serde(default)]
   strict: Option<bool>,
   #[serde(default)]
@@ -66,6 +74,8 @@ struct RawCompilerOptions {
   no_lib: Option<bool>,
   #[serde(default)]
   no_default_lib: Option<bool>,
+  #[serde(default)]
+  use_define_for_class_fields: Option<bool>,
   #[serde(default)]
   jsx: Option<String>,
   #[serde(default)]
@@ -341,11 +351,15 @@ fn merge_raw_compiler_options(
 ) -> RawCompilerOptions {
   RawCompilerOptions {
     target: overlay.target.or(base.target),
+    module: overlay.module.or(base.module),
     lib: overlay.lib.or(base.lib),
     types: overlay.types.or(base.types),
     type_roots: overlay.type_roots.or(base.type_roots),
     module_resolution: overlay.module_resolution.or(base.module_resolution),
     skip_lib_check: overlay.skip_lib_check.or(base.skip_lib_check),
+    no_emit: overlay.no_emit.or(base.no_emit),
+    no_emit_on_error: overlay.no_emit_on_error.or(base.no_emit_on_error),
+    declaration: overlay.declaration.or(base.declaration),
     strict: overlay.strict.or(base.strict),
     no_implicit_any: overlay.no_implicit_any.or(base.no_implicit_any),
     strict_null_checks: overlay.strict_null_checks.or(base.strict_null_checks),
@@ -358,6 +372,9 @@ fn merge_raw_compiler_options(
       .or(base.no_unchecked_indexed_access),
     no_lib: overlay.no_lib.or(base.no_lib),
     no_default_lib: overlay.no_default_lib.or(base.no_default_lib),
+    use_define_for_class_fields: overlay
+      .use_define_for_class_fields
+      .or(base.use_define_for_class_fields),
     jsx: overlay.jsx.or(base.jsx),
     jsx_import_source: overlay.jsx_import_source.or(base.jsx_import_source),
     base_url: overlay.base_url.or(base.base_url),
@@ -371,6 +388,17 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
   if let Some(raw) = raw.target.as_deref() {
     options.target =
       parse_script_target(raw).ok_or_else(|| format!("unknown compilerOptions.target '{raw}'"))?;
+  }
+
+  if let Some(raw) = raw.module.as_deref() {
+    let raw = raw.trim();
+    if !raw.is_empty() {
+      const MODULE_KIND_VALUES: &str =
+        "none, commonjs, amd, umd, system, es2015, es2020, es2022, esnext, node16, nodenext";
+      options.module = Some(parse_module_kind(raw).ok_or_else(|| {
+        format!("unknown compilerOptions.module '{raw}' (expected one of: {MODULE_KIND_VALUES})")
+      })?);
+    }
   }
 
   if let Some(libs) = raw.lib.as_ref() {
@@ -402,6 +430,16 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
     options.skip_lib_check = value;
   }
 
+  if let Some(value) = raw.no_emit {
+    options.no_emit = value;
+  }
+  if let Some(value) = raw.no_emit_on_error {
+    options.no_emit_on_error = value;
+  }
+  if let Some(value) = raw.declaration {
+    options.declaration = value;
+  }
+
   if let Some(strict) = raw.strict {
     options.strict_null_checks = strict;
     options.no_implicit_any = strict;
@@ -425,6 +463,10 @@ fn compiler_options_from_raw(raw: &RawCompilerOptions) -> Result<CompilerOptions
 
   if let Some(types) = raw.types.as_ref() {
     options.types = normalize_string_list(types);
+  }
+
+  if let Some(value) = raw.use_define_for_class_fields {
+    options.use_define_for_class_fields = value;
   }
 
   if let Some(raw) = raw.jsx.as_deref() {
@@ -460,6 +502,24 @@ fn parse_script_target(raw: &str) -> Option<ScriptTarget> {
     "es2021" => Some(ScriptTarget::Es2021),
     "es2022" => Some(ScriptTarget::Es2022),
     "esnext" => Some(ScriptTarget::EsNext),
+    _ => None,
+  }
+}
+
+fn parse_module_kind(raw: &str) -> Option<ModuleKind> {
+  let normalized = raw.trim().to_ascii_lowercase();
+  match normalized.as_str() {
+    "none" => Some(ModuleKind::None),
+    "commonjs" => Some(ModuleKind::CommonJs),
+    "amd" => Some(ModuleKind::Amd),
+    "umd" => Some(ModuleKind::Umd),
+    "system" => Some(ModuleKind::System),
+    "es2015" | "es6" => Some(ModuleKind::Es2015),
+    "es2020" => Some(ModuleKind::Es2020),
+    "es2022" => Some(ModuleKind::Es2022),
+    "esnext" => Some(ModuleKind::EsNext),
+    "node16" => Some(ModuleKind::Node16),
+    "nodenext" => Some(ModuleKind::NodeNext),
     _ => None,
   }
 }

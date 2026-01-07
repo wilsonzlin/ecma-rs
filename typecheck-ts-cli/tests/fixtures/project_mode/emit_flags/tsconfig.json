@@ -1,0 +1,9 @@
+{
+  "compilerOptions": {
+    "noEmit": false,
+    "noEmitOnError": true,
+    "declaration": true
+  },
+  "files": ["src/main.ts"]
+}
+
