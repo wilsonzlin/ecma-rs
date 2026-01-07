@@ -120,7 +120,7 @@ pub fn rename_targets_for_ssa_construction(cfg: &mut Cfg, dom: &Dom, c_temp: &mu
   // Prune phi nodes that no longer need to exist and rewrite all uses of their targets to the
   // surviving incoming value to avoid dangling SSA variables.
   let mut replacements = HashMap::<u32, Arg>::new();
-  for (label, bblock) in cfg.bblocks.all_mut() {
+  for (_label, bblock) in cfg.bblocks.all_mut() {
     let mut i = 0;
     while i < bblock.len() {
       if bblock[i].t != InstTyp::Phi {
@@ -128,13 +128,15 @@ pub fn rename_targets_for_ssa_construction(cfg: &mut Cfg, dom: &Dom, c_temp: &mu
       }
       let inst = &mut bblock[i];
       #[cfg(debug_assertions)]
-      let parents = cfg.graph.parents_sorted(label);
-      debug_assert!(
-        inst.labels.len() == parents.len() || inst.labels.len() <= 1,
-        "phi node at block {label} expected one incoming per parent {:?}, got {:?}",
-        parents,
-        inst.labels
-      );
+      {
+        let parents = cfg.graph.parents_sorted(_label);
+        debug_assert!(
+          inst.labels.len() == parents.len() || inst.labels.len() <= 1,
+          "phi node at block {_label} expected one incoming per parent {:?}, got {:?}",
+          parents,
+          inst.labels
+        );
+      }
       if inst.labels.len() <= 1 {
         let tgt = inst.tgts[0];
         let replacement = inst
