@@ -1,7 +1,7 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::Diagnostic;
 use diagnostics::FileId;
-use minify_js::TopLevelMode;
+use minify_js::{Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
 use serde_json::Value;
@@ -12,6 +12,43 @@ fn parse_top_level_mode(value: &str) -> Option<TopLevelMode> {
     "module" => Some(TopLevelMode::Module),
     _ => None,
   }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ParsedOptions {
+  dialect: Option<Dialect>,
+  ts_erase_options: TsEraseOptions,
+}
+
+fn parse_minify_options(
+  dialect: Option<&str>,
+  ts_lower_class_fields: Option<bool>,
+  ts_use_define_for_class_fields: Option<bool>,
+) -> Result<ParsedOptions, String> {
+  let dialect = match dialect {
+    None | Some("auto") => None,
+    Some("js") => Some(Dialect::Js),
+    Some("jsx") => Some(Dialect::Jsx),
+    Some("ts") => Some(Dialect::Ts),
+    Some("tsx") => Some(Dialect::Tsx),
+    Some("dts") => Some(Dialect::Dts),
+    Some(other) => return Err(format!(
+      "invalid dialect {other:?} (expected \"auto\", \"js\", \"jsx\", \"ts\", \"tsx\", or \"dts\")"
+    )),
+  };
+
+  let mut ts_erase_options = TsEraseOptions::default();
+  if let Some(value) = ts_lower_class_fields {
+    ts_erase_options.lower_class_fields = value;
+  }
+  if let Some(value) = ts_use_define_for_class_fields {
+    ts_erase_options.use_define_for_class_fields = value;
+  }
+
+  Ok(ParsedOptions {
+    dialect,
+    ts_erase_options,
+  })
 }
 
 struct SingleFileSource<'a> {
@@ -85,8 +122,78 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
     return cx.throw_type_error("src must be a string or Buffer");
   };
 
+  let options_arg = cx.argument_opt(2);
+  let (dialect_raw, ts_lower_class_fields, ts_use_define_for_class_fields): (
+    Option<String>,
+    Option<bool>,
+    Option<bool>,
+  ) = if let Some(options) = options_arg {
+    if options.is_a::<JsUndefined, _>(&mut cx) || options.is_a::<JsNull, _>(&mut cx) {
+      (None, None, None)
+    } else if let Ok(options) = options.downcast::<JsObject, _>(&mut cx) {
+      let dialect_raw: Handle<JsValue> = options.get(&mut cx, "dialect")?;
+      let dialect_raw =
+        if dialect_raw.is_a::<JsUndefined, _>(&mut cx) || dialect_raw.is_a::<JsNull, _>(&mut cx) {
+          None
+        } else if let Ok(value) = dialect_raw.downcast::<JsString, _>(&mut cx) {
+          Some(value.value(&mut cx))
+        } else {
+          return cx.throw_type_error("options.dialect must be a string");
+        };
+
+      let ts_lower_class_fields: Handle<JsValue> = options.get(&mut cx, "tsLowerClassFields")?;
+      let ts_lower_class_fields = if ts_lower_class_fields.is_a::<JsUndefined, _>(&mut cx)
+        || ts_lower_class_fields.is_a::<JsNull, _>(&mut cx)
+      {
+        None
+      } else if let Ok(value) = ts_lower_class_fields.downcast::<JsBoolean, _>(&mut cx) {
+        Some(value.value(&mut cx))
+      } else {
+        return cx.throw_type_error("options.tsLowerClassFields must be a boolean");
+      };
+
+      let ts_use_define_for_class_fields: Handle<JsValue> =
+        options.get(&mut cx, "tsUseDefineForClassFields")?;
+      let ts_use_define_for_class_fields = if ts_use_define_for_class_fields
+        .is_a::<JsUndefined, _>(&mut cx)
+        || ts_use_define_for_class_fields.is_a::<JsNull, _>(&mut cx)
+      {
+        None
+      } else if let Ok(value) = ts_use_define_for_class_fields.downcast::<JsBoolean, _>(&mut cx) {
+        Some(value.value(&mut cx))
+      } else {
+        return cx.throw_type_error("options.tsUseDefineForClassFields must be a boolean");
+      };
+
+      (
+        dialect_raw,
+        ts_lower_class_fields,
+        ts_use_define_for_class_fields,
+      )
+    } else {
+      return cx.throw_type_error("options must be an object");
+    }
+  } else {
+    (None, None, None)
+  };
+
+  let parsed_options = match parse_minify_options(
+    dialect_raw.as_deref(),
+    ts_lower_class_fields,
+    ts_use_define_for_class_fields,
+  ) {
+    Ok(parsed) => parsed,
+    Err(err) => return cx.throw_type_error(err),
+  };
+
+  let mut options =
+    MinifyOptions::new(top_level_mode).with_ts_erase_options(parsed_options.ts_erase_options);
+  if let Some(dialect) = parsed_options.dialect {
+    options = options.with_dialect(dialect);
+  }
+
   let mut out = Vec::new();
-  match minify_js::minify(top_level_mode, &source, &mut out) {
+  match minify_js::minify_with_options(options, &source, &mut out) {
     Ok(()) => Ok(JsBuffer::external(&mut cx, out)),
     Err(diagnostics) => {
       let provider = SingleFileSource {
@@ -124,5 +231,37 @@ mod tests {
     assert_eq!(parse_top_level_mode("global"), Some(TopLevelMode::Global));
     assert_eq!(parse_top_level_mode("module"), Some(TopLevelMode::Module));
     assert_eq!(parse_top_level_mode("unknown"), None);
+  }
+
+  #[test]
+  fn parses_minify_options_defaults() {
+    let parsed = parse_minify_options(None, None, None).unwrap();
+    assert_eq!(parsed.dialect, None);
+    assert!(!parsed.ts_erase_options.lower_class_fields);
+    assert!(parsed.ts_erase_options.use_define_for_class_fields);
+  }
+
+  #[test]
+  fn parses_minify_options_dialect() {
+    let parsed = parse_minify_options(Some("auto"), None, None).unwrap();
+    assert_eq!(parsed.dialect, None);
+
+    let parsed = parse_minify_options(Some("js"), None, None).unwrap();
+    assert_eq!(parsed.dialect, Some(Dialect::Js));
+
+    let parsed = parse_minify_options(Some("tsx"), None, None).unwrap();
+    assert_eq!(parsed.dialect, Some(Dialect::Tsx));
+  }
+
+  #[test]
+  fn parses_minify_options_ts_erase_flags() {
+    let parsed = parse_minify_options(None, Some(true), Some(false)).unwrap();
+    assert!(parsed.ts_erase_options.lower_class_fields);
+    assert!(!parsed.ts_erase_options.use_define_for_class_fields);
+  }
+
+  #[test]
+  fn rejects_invalid_dialect() {
+    assert!(parse_minify_options(Some("wat"), None, None).is_err());
   }
 }

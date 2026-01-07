@@ -1,10 +1,9 @@
 use clap::builder::PossibleValuesParser;
 use clap::builder::TypedValueParser;
-use clap::Parser;
+use clap::{ArgAction, Parser, ValueEnum};
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{host_error, FileId, Severity, Span, TextRange};
-use minify_js::minify;
-use minify_js::TopLevelMode;
+use minify_js::{minify_with_options, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
 use std::fs::File;
 use std::io::stdin;
 use std::io::stdout;
@@ -37,6 +36,38 @@ struct Cli {
         }),
   )]
   mode: TopLevelMode,
+
+  /// Parser dialect. `auto` matches the default behaviour (try TS then TSX).
+  #[arg(
+    long,
+    value_enum,
+    default_value_t = DialectArg::Auto,
+    value_name = "auto|js|jsx|ts|tsx|dts"
+  )]
+  dialect: DialectArg,
+
+  /// Lower TypeScript class fields to constructor assignments/`Object.defineProperty`.
+  #[arg(long)]
+  ts_lower_class_fields: bool,
+
+  /// TypeScript class field semantics when lowering (`true` uses `Object.defineProperty`).
+  #[arg(
+    long,
+    action = ArgAction::Set,
+    default_value_t = true,
+    value_name = "true|false"
+  )]
+  ts_use_define_for_class_fields: bool,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum DialectArg {
+  Auto,
+  Js,
+  Jsx,
+  Ts,
+  Tsx,
+  Dts,
 }
 
 struct SingleFileSource<'a> {
@@ -98,7 +129,22 @@ fn main() {
     }
   };
   let mut output = Vec::new();
-  match minify(args.mode, source, &mut output) {
+  let ts_erase_options = TsEraseOptions {
+    lower_class_fields: args.ts_lower_class_fields,
+    use_define_for_class_fields: args.ts_use_define_for_class_fields,
+  };
+  let mut options = MinifyOptions::new(args.mode).with_ts_erase_options(ts_erase_options);
+  if let Some(dialect) = match args.dialect {
+    DialectArg::Auto => None,
+    DialectArg::Js => Some(Dialect::Js),
+    DialectArg::Jsx => Some(Dialect::Jsx),
+    DialectArg::Ts => Some(Dialect::Ts),
+    DialectArg::Tsx => Some(Dialect::Tsx),
+    DialectArg::Dts => Some(Dialect::Dts),
+  } {
+    options = options.with_dialect(dialect);
+  }
+  match minify_with_options(options, source, &mut output) {
     Ok(()) => {
       let write_result = match args.output.as_ref() {
         Some(p) => File::create(p)

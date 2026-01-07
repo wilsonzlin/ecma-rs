@@ -40,6 +40,33 @@ export interface Diagnostic {
  *
  * @param topLevelType - Parse mode for the top level ("global" or "module")
  * @param src - Source JS/TS code as a string or UTF-8 Buffer
+ * @param options - Optional parsing / TypeScript lowering options
  * @returns Minified JS code as a UTF-8 Buffer
  */
-export function minify(topLevelType: "global" | "module", src: string | Buffer): Buffer;
+export interface MinifyOptions {
+  /**
+   * Explicit parser dialect.
+   *
+   * - `"auto"` (default) matches the existing behaviour (try TS then TSX).
+   * - Other values force a single dialect.
+   */
+  dialect?: "auto" | "js" | "jsx" | "ts" | "tsx" | "dts";
+
+  /**
+   * Whether to lower TypeScript/JS class fields into constructor assignments or
+   * `Object.defineProperty` calls.
+   */
+  tsLowerClassFields?: boolean;
+
+  /**
+   * Class field lowering semantics. When `true` (default), lowering uses
+   * `Object.defineProperty`.
+   */
+  tsUseDefineForClassFields?: boolean;
+}
+
+export function minify(
+  topLevelType: "global" | "module",
+  src: string | Buffer,
+  options?: MinifyOptions,
+): Buffer;
