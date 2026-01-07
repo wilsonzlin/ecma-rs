@@ -72,6 +72,10 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject_module("var yield = 1;");
   assert_reject_module("yield;");
 
+  // `return` is only valid within functions.
+  assert_reject("return 1;");
+  assert_reject_module("return 1;");
+
   // Recovery-only constructs that should be syntax errors in strict ECMAScript.
   assert_reject("();");
   assert_reject("({ [x] })");

@@ -147,6 +147,7 @@ pub struct Parser<'a> {
   next_tok_i: usize,
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
+  in_function: u32,
   cancel: Option<Arc<AtomicBool>>,
 }
 
@@ -173,6 +174,7 @@ impl<'a> Parser<'a> {
       next_tok_i: 0,
       options,
       allow_bare_ts_type_args: false,
+      in_function: 0,
       cancel,
     }
   }

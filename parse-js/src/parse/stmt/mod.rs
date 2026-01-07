@@ -843,7 +843,12 @@ impl<'a> Parser<'a> {
 
   pub fn return_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ReturnStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordReturn)?;
+      let start = p.require(TT::KeywordReturn)?;
+      if p.is_strict_ecmascript() && p.in_function == 0 {
+        return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+          "return statement not allowed outside functions",
+        )));
+      }
       let value = if p.peek().preceded_by_line_terminator || p.peek().typ == TT::BraceClose {
         // Automatic Semicolon Insertion.
         None
