@@ -378,7 +378,8 @@ impl<'a> Parser<'a> {
                 | (TT::KeywordAsync, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, TT::BracketOpen, _)
-            ) || (matches!(t0.typ, TT::KeywordGet | TT::KeywordSet) && accessor_name_start);
+            ) || (matches!(t0.typ, TT::KeywordGet | TT::KeywordSet)
+              && accessor_name_start);
 
             if needs_special_handling {
               // Use the original class_or_obj_member for these special cases
