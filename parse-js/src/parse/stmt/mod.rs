@@ -1033,7 +1033,12 @@ impl<'a> Parser<'a> {
 
   pub fn with_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<WithStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordWith)?;
+      let start = p.require(TT::KeywordWith)?;
+      if p.is_strict_ecmascript() && p.is_module() {
+        return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+          "with statement not allowed in modules",
+        )));
+      }
       p.require(TT::ParenthesisOpen)?;
       let object = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;

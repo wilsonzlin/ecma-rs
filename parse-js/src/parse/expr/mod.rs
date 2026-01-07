@@ -783,6 +783,15 @@ impl<'a> Parser<'a> {
               }
             };
 
+            // ES strict mode (incl. modules): `delete IdentifierReference` is a syntax error.
+            if operator.name == OperatorName::Delete && p.is_strict_ecmascript() && p.is_module() {
+              if matches!(operand.stx.as_ref(), Expr::Id(_)) {
+                return Err(op_tok.error(SyntaxErrorType::ExpectedSyntax(
+                  "delete of an unqualified identifier in modules",
+                )));
+              }
+            }
+
             return Ok(UnaryExpr {
               operator: operator.name,
               argument: operand,

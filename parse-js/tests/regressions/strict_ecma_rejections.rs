@@ -110,6 +110,9 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("for (let x, y of z) {}");
   assert_reject("for (const x, y of z) {}");
   assert_reject("import.meta;");
+  assert_reject_module("with ({}) {}");
+  assert_reject_module("delete x;");
+  assert_reject_module("delete (x);");
   assert_reject_module("import.meta = 1;");
 
   // `new.target` is only valid when a `new.target` binding exists (functions and class
@@ -160,6 +163,8 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("class A { x = super.foo; }");
   assert_accept("class B {} class A extends B { static { super.foo; } }");
   assert_accept("class A { static { super.foo; } }");
+  assert_accept("with ({}) {}");
+  assert_accept("delete x;");
   assert_accept("function f(x) { return x; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");
