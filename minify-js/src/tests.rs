@@ -309,6 +309,45 @@ fn preserves_side_effect_only_imports() {
 }
 
 #[test]
+fn removes_unused_named_import_specifiers() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import {foo,bar} from "x";console.log(foo);"#,
+  );
+  assert_eq!(result, r#"import{foo as a}from"x";console.log(a);"#);
+}
+
+#[test]
+fn unused_default_import_becomes_side_effect_import() {
+  let result = minified(TopLevelMode::Module, r#"import foo from "x";console.log(1);"#);
+  assert_eq!(result, r#"import"x";console.log(1);"#);
+}
+
+#[test]
+fn unused_namespace_import_becomes_side_effect_import() {
+  let result = minified(TopLevelMode::Module, r#"import * as ns from "x";console.log(1);"#);
+  assert_eq!(result, r#"import"x";console.log(1);"#);
+}
+
+#[test]
+fn keeps_import_bindings_when_direct_eval_present() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import foo from "x";eval("foo");console.log(1);"#,
+  );
+  assert_eq!(result, r#"import foo from"x";eval("foo");console.log(1);"#);
+}
+
+#[test]
+fn pruned_import_preserves_attributes() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import {foo} from "x" with { type: "json" };console.log(1);"#,
+  );
+  assert_eq!(result, r#"import"x"with{type:"json"};console.log(1);"#);
+}
+
+#[test]
 fn type_only_import_does_not_become_side_effect_import() {
   let result = minified(
     TopLevelMode::Module,

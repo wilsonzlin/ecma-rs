@@ -9,6 +9,7 @@ use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{BinaryExpr, Expr, UnaryExpr};
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::import_export::ExportName;
+use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::ExprStmt;
 use parse_js::ast::stmt::decl::VarDeclMode;
@@ -143,6 +144,64 @@ fn dce_stmt_in_list(
 ) -> Vec<Node<Stmt>> {
   let Node { loc, assoc, stx } = stmt;
   match *stx {
+    Stmt::Import(mut import_stmt) => {
+      // Pruning unused import bindings assumes the module graph is valid.
+      //
+      // Dropping an unused specifier can change module-linking errors (e.g. a
+      // missing export that previously caused a link-time failure). We assume
+      // users only care about preserving runtime semantics for valid programs.
+      if let Some(default) = import_stmt.stx.default.take() {
+        let remove_default = match default.stx.pat.stx.as_ref() {
+          Pat::Id(id) => should_prune_import_binding(id, cx, used),
+          _ => false,
+        };
+        if remove_default {
+          *changed = true;
+        } else {
+          import_stmt.stx.default = Some(default);
+        }
+      }
+
+      if let Some(names) = import_stmt.stx.names.take() {
+        match names {
+          ImportNames::All(alias) => {
+            let remove_ns = match alias.stx.pat.stx.as_ref() {
+              Pat::Id(id) => should_prune_import_binding(id, cx, used),
+              _ => false,
+            };
+            if remove_ns {
+              *changed = true;
+            } else {
+              import_stmt.stx.names = Some(ImportNames::All(alias));
+            }
+          }
+          ImportNames::Specific(entries) => {
+            let mut kept = Vec::with_capacity(entries.len());
+            for entry in entries {
+              let remove_entry = match entry.stx.alias.stx.pat.stx.as_ref() {
+                Pat::Id(id) => should_prune_import_binding(id, cx, used),
+                _ => false,
+              };
+              if remove_entry {
+                *changed = true;
+              } else {
+                kept.push(entry);
+              }
+            }
+            if !kept.is_empty() {
+              import_stmt.stx.names = Some(ImportNames::Specific(kept));
+            } else {
+              // Keep the statement as a side-effect import.
+              import_stmt.stx.names = None;
+            }
+          }
+        }
+      }
+
+      // If both `default` and `names` are now `None`, this is a side-effect-only
+      // import (`import "mod";`). Keep it so module evaluation still happens.
+      new_node(loc, assoc, Stmt::Import(import_stmt))
+    }
     Stmt::Block(mut block) => {
       let body = std::mem::take(&mut block.stx.body);
       block.stx.body = dce_stmts(body, cx, used, changed);
@@ -353,6 +412,22 @@ fn empty_stmt() -> Node<Stmt> {
     Loc(0, 0),
     Stmt::Empty(Node::new(Loc(0, 0), parse_js::ast::stmt::EmptyStmt {})),
   )
+}
+
+fn should_prune_import_binding(id: &Node<IdPat>, cx: &OptCtx, used: &HashSet<SymbolId>) -> bool {
+  let Some(sym) = declared_symbol(&id.assoc) else {
+    return false;
+  };
+  if used.contains(&sym) {
+    return false;
+  }
+  if cx
+    .disabled_scopes
+    .contains(&cx.sem().symbol(sym).decl_scope)
+  {
+    return false;
+  }
+  true
 }
 
 fn dce_for_body(
