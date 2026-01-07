@@ -181,14 +181,18 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
   );
 
   let param_offset = source.find("value: number").unwrap() as u32;
-  let param_ty = program.type_at(file_id, param_offset).expect("type at param");
+  let param_ty = program
+    .type_at(file_id, param_offset)
+    .expect("type at param");
   assert_eq!(
     program.display_type(param_ty).to_string(),
     "number",
     "parameter annotation should be respected"
   );
 
-  let ty = program.type_at(file_id, offset).expect("type at inner identifier");
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type at inner identifier");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 

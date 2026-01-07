@@ -359,7 +359,10 @@ fn pruned_import_preserves_attributes() {
 
 #[test]
 fn empty_reexport_from_becomes_import() {
-  let result = minified(TopLevelMode::Module, r#"export {} from "x";console.log(1);"#);
+  let result = minified(
+    TopLevelMode::Module,
+    r#"export {} from "x";console.log(1);"#,
+  );
   assert_eq!(result, r#"import"x";console.log(1);"#);
 }
 
