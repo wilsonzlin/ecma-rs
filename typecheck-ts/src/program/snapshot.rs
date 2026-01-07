@@ -13,8 +13,6 @@ impl Program {
   /// populated.
   #[cfg(feature = "serde")]
   pub fn snapshot(&self) -> ProgramSnapshot {
-    use sha2::{Digest, Sha256};
-
     let mut state = self.lock_state();
     state.ensure_analyzed(&self.host, &self.roots);
     if let Err(fatal) = state.ensure_interned_types(&self.host, &self.roots) {
@@ -54,9 +52,14 @@ impl Program {
           .and_then(|key| self.host.file_text(&key).ok())
       });
       let hash = if let Some(text) = text.as_ref() {
-        let mut hasher = Sha256::new();
-        hasher.update(text.as_bytes());
-        format!("{:x}", hasher.finalize())
+        const OFFSET_BASIS: u64 = 14_695_981_039_346_656_037;
+        const PRIME: u64 = 1_099_511_628_211;
+        let mut hash = OFFSET_BASIS;
+        for byte in text.as_bytes() {
+          hash ^= u64::from(*byte);
+          hash = hash.wrapping_mul(PRIME);
+        }
+        format!("{hash:016x}")
       } else {
         String::new()
       };
