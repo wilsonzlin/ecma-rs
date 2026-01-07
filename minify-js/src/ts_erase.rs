@@ -1612,9 +1612,9 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       out: &mut HashMap<Vec<String>, ConstEnumBinding>,
     ) {
       match &decl.body {
-        NamespaceBody::Block(stmts) => self.collect_exported_const_enums_from_namespace_like_stmts(
-          stmts, prefix, out,
-        ),
+        NamespaceBody::Block(stmts) => {
+          self.collect_exported_const_enums_from_namespace_like_stmts(stmts, prefix, out)
+        }
         NamespaceBody::Namespace(inner) => {
           prefix.push(inner.stx.name.clone());
           self.collect_exported_const_enums_from_namespace(&inner.stx, prefix, out);

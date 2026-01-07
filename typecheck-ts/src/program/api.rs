@@ -10,25 +10,27 @@ use crate::files::FileOrigin;
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 use crate::profile::{CacheKind, CacheStat, QueryStats, QueryStatsCollector};
 use crate::semantic_js;
-use crate::type_queries::{IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries};
+use crate::type_queries::{
+  IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
+};
 use crate::{FatalError, HostError, Ice, SymbolBinding, SymbolInfo, SymbolOccurrence};
 use hir_js::{BinaryOp as HirBinaryOp, ExprKind as HirExprKind};
+use semantic_js_crate::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use semantic_js_crate::ts as sem_ts;
 use std::collections::{BTreeMap, HashMap};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use types_ts_interned::{self as tti, RelateCtx, TypeId};
 
-use super::{
-  display_type_from_state, lookup_interned_property_type, DefKind, ExportMap, ExplainTree,
-  ProgramState, ProgramTypeExpander, TypeDisplay,
-};
 use super::check::caches::{CheckerCacheStats, CheckerCaches};
 use super::check::relate_hooks;
 use super::fatal_to_diagnostic;
+use super::{
+  display_type_from_state, lookup_interned_property_type, DefKind, ExplainTree, ExportMap,
+  ProgramState, ProgramTypeExpander, TypeDisplay,
+};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -142,7 +144,10 @@ impl BodyCheckResult {
   }
 }
 
-pub(super) fn body_extent_from_spans(expr_spans: &[TextRange], pat_spans: &[TextRange]) -> Option<TextRange> {
+pub(super) fn body_extent_from_spans(
+  expr_spans: &[TextRange],
+  pat_spans: &[TextRange],
+) -> Option<TextRange> {
   let mut spans = expr_spans.iter().chain(pat_spans.iter());
   let first = spans.next().copied()?;
   let mut start = first.start;
@@ -2124,5 +2129,4 @@ impl Program {
       Ok(res.expr_span(expr).map(|range| Span::new(meta.file, range)))
     })
   }
-
 }

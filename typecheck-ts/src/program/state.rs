@@ -108,8 +108,8 @@ use crate::lib_support::{
 #[path = "api.rs"]
 mod api;
 
-pub use api::{BodyCheckResult, Host, Program};
 use api::body_extent_from_spans;
+pub use api::{BodyCheckResult, Host, Program};
 
 fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
   match kind {
