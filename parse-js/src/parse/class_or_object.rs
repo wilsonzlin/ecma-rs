@@ -393,7 +393,9 @@ impl<'a> Parser<'a> {
               (TT::KeywordAsync, TT::Asterisk, _)
                 | (TT::KeywordAsync, TT::BracketOpen, _)
                 | (TT::KeywordAsync, _, TT::ParenthesisOpen)
+                | (TT::KeywordAsync, _, TT::ChevronLeft)
                 | (TT::Asterisk, _, TT::ParenthesisOpen)
+                | (TT::Asterisk, _, TT::ChevronLeft)
                 | (TT::Asterisk, TT::BracketOpen, _)
             ) || (is_get_or_set
               && accessor_name_start
