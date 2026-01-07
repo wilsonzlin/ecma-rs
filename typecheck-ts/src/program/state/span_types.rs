@@ -1,7 +1,11 @@
 use super::*;
 
 impl ProgramState {
-  pub(super) fn declared_type_for_span(&mut self, file: FileId, target: TextRange) -> Option<TypeId> {
+  pub(super) fn declared_type_for_span(
+    &mut self,
+    file: FileId,
+    target: TextRange,
+  ) -> Option<TypeId> {
     fn walk_namespace(
       state: &mut ProgramState,
       file: FileId,
@@ -596,7 +600,10 @@ impl ProgramState {
       })
   }
 
-  pub(super) fn module_namespace_object_type(&mut self, exports: &ExportMap) -> Result<TypeId, FatalError> {
+  pub(super) fn module_namespace_object_type(
+    &mut self,
+    exports: &ExportMap,
+  ) -> Result<TypeId, FatalError> {
     if let Some(store) = self.interned_store.as_ref().cloned() {
       let mut shape = tti::Shape::new();
       for (name, entry) in exports.iter() {
@@ -783,5 +790,4 @@ impl ProgramState {
     self.module_namespace_types.insert(file, ty);
     Ok(ty)
   }
-
 }
