@@ -190,10 +190,26 @@ pub(in super::super) fn callable_return_is_unknown(
   ty: TypeId,
 ) -> bool {
   let prim = store.primitive_ids();
-  match store.type_kind(ty) {
-    tti::TypeKind::Callable { overloads } => overloads
-      .iter()
-      .any(|sig_id| store.signature(*sig_id).ret == prim.unknown),
-    _ => false,
+  let mut seen = HashSet::new();
+  let mut pending = vec![store.canon(ty)];
+  while let Some(ty) = pending.pop() {
+    if !seen.insert(ty) {
+      continue;
+    }
+    match store.type_kind(ty) {
+      tti::TypeKind::Callable { overloads } => {
+        if overloads
+          .iter()
+          .any(|sig_id| store.signature(*sig_id).ret == prim.unknown)
+        {
+          return true;
+        }
+      }
+      tti::TypeKind::Union(members) | tti::TypeKind::Intersection(members) => {
+        pending.extend(members.iter().copied());
+      }
+      _ => {}
+    }
   }
+  false
 }

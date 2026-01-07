@@ -310,20 +310,14 @@ impl LibSet {
 
   /// Compute the default lib set for a given compiler configuration.
   pub fn for_options(options: &CompilerOptions) -> Self {
-    // TypeScript always loads a baseline ES lib (derived from `target`) so that
-    // core global types like `Array`/`String` exist, even when users provide an
-    // explicit `compilerOptions.lib` list (e.g. `["dom"]` / `["webworker"]`).
+    // TypeScript's `compilerOptions.lib` replaces the default library set
+    // entirely (including the baseline `es5`/`es2015` lib implied by `target`).
     //
-    // The explicit list should be treated as replacing the *additional* default
-    // libs (like `dom`), not the baseline ES lib itself.
+    // This means specifying `lib` without a foundational ES lib produces
+    // `TS2318` diagnostics ("Cannot find global type ...") because core global
+    // types like `Array`/`String` are missing.
     if !options.libs.is_empty() {
-      if options.no_default_lib {
-        return LibSet::from(options.libs.clone());
-      }
-
-      let mut libs = vec![es_lib_for_target(options.target)];
-      libs.extend(options.libs.clone());
-      return LibSet::from(libs);
+      return LibSet::from(options.libs.clone());
     }
 
     if options.no_default_lib {
@@ -425,6 +419,22 @@ mod tests {
     options.target = ScriptTarget::Es3;
     let libs = LibSet::for_options(&options);
     assert_eq!(libs.libs(), &[lib_name("dom"), lib_name("es5")]);
+
+    let mut options = CompilerOptions::default();
+    options.target = ScriptTarget::Es2015;
+    options.libs = vec![
+      LibName::parse("dom.iterable").unwrap(),
+      LibName::parse("es2015.promise").unwrap(),
+    ];
+    let libs = LibSet::for_options(&options);
+    assert_eq!(
+      libs.libs(),
+      &[
+        LibName::parse("dom.iterable").unwrap(),
+        LibName::parse("es2015.promise").unwrap()
+      ],
+      "explicit libs should override defaults (no implicit ES lib)"
+    );
 
     let mut options = CompilerOptions::default();
     options.target = ScriptTarget::EsNext;

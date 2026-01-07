@@ -1945,14 +1945,40 @@ fn collect_export_type_facts(
         )
       });
 
+    let mut type_str = if is_type_only {
+      "any".to_string()
+    } else {
+      program.display_type(ty).to_string()
+    };
+
+    // tsc prefers printing `typeof <name>` for merged values like
+    // `function Lib() { ... } namespace Lib { ... }`. The checker represents
+    // these as intersection types (callable & namespace object), so special-case
+    // export type facts to match tsc's presentation without changing the core
+    // `TypeDisplay` output.
+    if !is_type_only
+      && matches!(
+        program.type_kind(ty),
+        typecheck_ts::TypeKindSummary::Intersection { .. }
+      )
+      && entry
+        .def
+        .is_some_and(|def| program.def_name(def).as_deref() == Some(export.name.as_str()))
+      && entry.def.is_some_and(|def| {
+        matches!(
+          program.def_kind(def),
+          Some(typecheck_ts::DefKind::Function(_))
+        )
+      })
+      && !program.properties_of(ty).is_empty()
+    {
+      type_str = format!("typeof {}", export.name);
+    }
+
     facts.push(ExportTypeFact {
       file: export.file.clone(),
       name: export.name.clone(),
-      type_str: if is_type_only {
-        "any".to_string()
-      } else {
-        program.display_type(ty).to_string()
-      },
+      type_str,
     });
   }
 

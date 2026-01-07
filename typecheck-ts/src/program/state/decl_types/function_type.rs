@@ -3,7 +3,6 @@ use super::*;
 impl ProgramState {
   pub(super) fn infer_cached_callable_return_type(
     &mut self,
-    def: DefId,
     func: &FuncData,
     store: &Arc<tti::TypeStore>,
     callable_ty: TypeId,
@@ -50,17 +49,6 @@ impl ProgramState {
     let callable_ty = store.canon(store.intern_type(tti::TypeKind::Callable {
       overloads: vec![sig_id],
     }));
-    self.interned_def_types.insert(def, callable_ty);
-    self.def_types.insert(def, callable_ty);
-    if let Some(def_data) = self.def_data.get(&def) {
-      if let Some(file_state) = self.files.get_mut(&def_data.file) {
-        if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
-          if binding.def == Some(def) {
-            binding.type_id = Some(callable_ty);
-          }
-        }
-      }
-    }
     Ok(Some(callable_ty))
   }
 

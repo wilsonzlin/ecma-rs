@@ -133,7 +133,6 @@ impl ProgramState {
           if let DefKind::Function(func) = &def_data.kind {
             if func.return_ann.is_none()
               && func.body.is_some()
-              && matches!(store.type_kind(ty), tti::TypeKind::Callable { .. })
               && callable_return_is_unknown(&store, ty)
             {
               let has_overloads = self.def_data.iter().any(|(other, data)| {
@@ -142,10 +141,83 @@ impl ProgramState {
                   && matches!(data.kind, DefKind::Function(_))
               });
               if !has_overloads {
-                if let Some(updated) =
-                  self.infer_cached_callable_return_type(def, func, &store, ty)?
+                let old_ty = ty;
+                let (callable_ty, intersection_members, callable_index) = match store.type_kind(ty)
                 {
-                  ty = updated;
+                  tti::TypeKind::Callable { .. } => (ty, None, None),
+                  tti::TypeKind::Intersection(members) => {
+                    let prim = store.primitive_ids();
+                    let idx = members
+                      .iter()
+                      .position(|member| match store.type_kind(*member) {
+                        tti::TypeKind::Callable { overloads } => overloads
+                          .iter()
+                          .any(|sig_id| store.signature(*sig_id).ret == prim.unknown),
+                        _ => false,
+                      });
+                    if let Some(idx) = idx {
+                      (members[idx], Some(members.clone()), Some(idx))
+                    } else {
+                      (ty, None, None)
+                    }
+                  }
+                  _ => (ty, None, None),
+                };
+                if intersection_members.is_some()
+                  || matches!(store.type_kind(callable_ty), tti::TypeKind::Callable { .. })
+                {
+                  if let Some(updated_callable) =
+                    self.infer_cached_callable_return_type(func, &store, callable_ty)?
+                  {
+                    let updated_ty = if let (Some(mut members), Some(idx)) =
+                      (intersection_members, callable_index)
+                    {
+                      members[idx] = updated_callable;
+                      store.intersection(members)
+                    } else {
+                      updated_callable
+                    };
+
+                    let update_binding = |state: &mut ProgramState, def: DefId, ty: TypeId| {
+                      state.interned_def_types.insert(def, ty);
+                      state.def_types.insert(def, ty);
+                      if let Some(def_data) = state.def_data.get(&def) {
+                        if let Some(file_state) = state.files.get_mut(&def_data.file) {
+                          if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
+                            if binding.def == Some(def) {
+                              binding.type_id = Some(ty);
+                            }
+                          }
+                        }
+                      }
+                    };
+
+                    let mut defs_to_update = vec![def];
+                    for (other, data) in self.def_data.iter() {
+                      if *other == def {
+                        continue;
+                      }
+                      if data.file != def_data.file
+                        || data.name != def_data.name
+                        || !matches!(data.kind, DefKind::Namespace(_) | DefKind::Module(_))
+                      {
+                        continue;
+                      }
+                      let Some(existing) = self.interned_def_types.get(other).copied() else {
+                        continue;
+                      };
+                      if store.canon(existing) == old_ty {
+                        defs_to_update.push(*other);
+                      }
+                    }
+                    defs_to_update.sort_by_key(|id| id.0);
+                    defs_to_update.dedup();
+                    for def in defs_to_update {
+                      update_binding(self, def, updated_ty);
+                    }
+
+                    ty = updated_ty;
+                  }
                 }
               }
             }

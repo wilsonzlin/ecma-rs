@@ -1804,6 +1804,11 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     Some(cancelled_flag.as_ref()),
   );
   panic_if_cancelled(db);
+  // `semantic-js` emits binder diagnostics for namespace/value merges (TS2395/TS2434),
+  // but the checker also reports these with tsc-aligned identifier spans. The binder
+  // currently points at whole-declaration spans, which causes duplicate diagnostics
+  // in the difftsc harness. Filter these until the binder spans are fixed.
+  bind_diags.retain(|diag| !matches!(diag.code.as_str(), "TS2395" | "TS2434"));
   diagnostics.append(&mut bind_diags);
   diagnostics.sort();
   diagnostics.dedup();
