@@ -77,3 +77,15 @@ fn yield_is_restricted_production_across_line_terminators() {
     other => panic!("expected yield initializer, got {other:?}"),
   }
 }
+
+#[test]
+fn yield_requires_parentheses_in_higher_precedence_expressions() {
+  let err =
+    parse_with_options("function* g(){ return 1 + yield 2; }", ecma_script_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+
+  parse_with_options("function* g(){ return 1 + (yield 2); }", ecma_script_opts()).unwrap();
+}

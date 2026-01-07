@@ -916,6 +916,25 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<Expr>> {
     let mut left = self.expr_operand(ctx, terminators, asi)?;
     let asi_allowed = asi.can_end_with_asi && ctx.asi.allows_asi();
+    let yield_precedence = OPERATORS[&OperatorName::Yield].precedence;
+
+    // In ECMAScript, `yield` expressions are restricted productions: they can
+    // only appear in positions that accept an `AssignmentExpression` unless
+    // parenthesized. This forbids using bare `yield`/`yield*` as a subexpression
+    // of higher-precedence operators (e.g. `1 + yield 2`, `+yield 1`, `2 ** yield`).
+    if min_prec > yield_precedence
+      && matches!(
+        left.stx.as_ref(),
+        Expr::Unary(unary)
+          if matches!(unary.stx.operator, OperatorName::Yield | OperatorName::YieldDelegated)
+      )
+      && left.assoc.get::<ParenthesizedExpr>().is_none()
+    {
+      return Err(left.loc.error(
+        SyntaxErrorType::ExpectedSyntax("parenthesized expression"),
+        None,
+      ));
+    }
 
     loop {
       let cp = self.checkpoint();
