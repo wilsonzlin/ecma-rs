@@ -65,7 +65,7 @@ with code 0.
 ## Runnable example
 
 ```bash
-cargo run -p diagnostics --example basic
+cargo run -p diagnostics --example diagnostics_basic
 ```
 
 This prints a rendered diagnostic using [`SimpleFiles`](./src/files.rs) as the

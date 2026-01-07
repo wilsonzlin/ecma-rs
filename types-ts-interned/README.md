@@ -12,7 +12,7 @@ Interned, deterministic TypeScript type representation + evaluator/relation engi
 ## Runnable example
 
 ```bash
-cargo run -p types-ts-interned --example basic
+cargo run -p types-ts-interned --example types_ts_interned_basic
 ```
 
 This example shows how to create a [`TypeStore`], intern structural types, and

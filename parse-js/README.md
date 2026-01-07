@@ -7,7 +7,7 @@ git submodule.
 For a small, copy/paste-friendly parsing example (no filesystem I/O):
 
 ```bash
-cargo run -p parse-js --example basic
+cargo run -p parse-js --example parse_js_basic
 ```
 
 To run the conformance suite locally you must first initialize the submodule:

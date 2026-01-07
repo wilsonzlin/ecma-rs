@@ -15,7 +15,7 @@ cargo generate-lockfile
 ## `diagnostics`
 
 ```bash
-cargo run -p diagnostics --example basic
+cargo run -p diagnostics --example diagnostics_basic
 ```
 
 This example builds a `Diagnostic` and renders it with caret highlighting using
@@ -24,7 +24,7 @@ This example builds a `Diagnostic` and renders it with caret highlighting using
 ## `parse-js`
 
 ```bash
-cargo run -p parse-js --example basic
+cargo run -p parse-js --example parse_js_basic
 ```
 
 This example parses a small TypeScript module with explicit `ParseOptions` and
@@ -50,7 +50,7 @@ cargo run -p typecheck-ts --example json_snapshot
 ## `types-ts-interned`
 
 ```bash
-cargo run -p types-ts-interned --example basic
+cargo run -p types-ts-interned --example types_ts_interned_basic
 ```
 
 This example builds a few interned types (`{ x: number }`, union types, callable
@@ -78,7 +78,7 @@ top-level symbols plus identifier resolutions.
 ## `emit-js`
 
 ```bash
-cargo run -p emit-js --example basic
+cargo run -p emit-js --example emit_js_basic
 ```
 
 This example parses a small TypeScript snippet with `parse-js` and prints the
@@ -87,7 +87,7 @@ minified emitted output.
 ## `optimize-js`
 
 ```bash
-cargo run -p optimize-js --example basic
+cargo run -p optimize-js --example optimize_js_basic
 ```
 
 This example compiles a small JS snippet to SSA, runs the optimizer, and
@@ -96,7 +96,7 @@ decompiles the result back to emitted JavaScript.
 ## `minify-js`
 
 ```bash
-cargo run -p minify-js --example basic
+cargo run -p minify-js --example minify_js_basic
 ```
 
 This example minifies a small TypeScript snippet and prints the emitted
