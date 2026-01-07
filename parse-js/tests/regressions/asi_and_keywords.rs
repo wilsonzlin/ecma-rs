@@ -146,3 +146,15 @@ fn await_accepts_regex_operand() {
   )
   .unwrap();
 }
+
+#[test]
+fn yield_requires_parentheses_before_relational_operator() {
+  let err =
+    parse_with_options("function* g(){ return yield < 1; }", ecma_script_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+
+  parse_with_options("function* g(){ return (yield) < 1; }", ecma_script_opts()).unwrap();
+}

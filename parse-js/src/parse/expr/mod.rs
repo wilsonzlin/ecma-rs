@@ -765,7 +765,6 @@ impl<'a> Parser<'a> {
                     | TT::KeywordNew
                     | TT::KeywordImport
                     | TT::PrivateMember
-                    | TT::ChevronLeft
                     | TT::LiteralBigInt
                     | TT::LiteralTrue
                     | TT::LiteralFalse
@@ -777,9 +776,13 @@ impl<'a> Parser<'a> {
                     | TT::LiteralTemplatePartStringEnd
                     | TT::Invalid
                 )
-              // Unary operators.
-              || matches!(
-                typ,
+                // `<` can start JSX elements or TypeScript angle-bracket
+                // assertions in dialects that support them.
+                || (typ == TT::ChevronLeft
+                  && (p.allows_jsx() || p.allows_angle_bracket_type_assertions()))
+                // Unary operators.
+                || matches!(
+                  typ,
                   TT::Plus
                     | TT::Hyphen
                     | TT::PlusPlus
