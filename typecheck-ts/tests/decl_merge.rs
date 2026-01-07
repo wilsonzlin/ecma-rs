@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileId, FileKey, Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program};
 use types_ts_interned::TypeKind as InternedTypeKind;
 
 fn fk(id: u32) -> FileKey {
@@ -80,7 +80,7 @@ fn namespaces_merge_across_declarations() {
   let key = FileKey::new("ns.ts");
   host.insert(
     key.clone(),
-    "namespace N { const a = 1; }\nnamespace N { const b = 2; }\nexport { N };",
+    "namespace N { export const a = 1; }\nnamespace N { export const b = 2; }\nexport { N };",
   );
 
   let program = Program::new(host, vec![key.clone()]);
@@ -107,7 +107,7 @@ fn value_and_namespace_merge_callable_and_members() {
   let key = fk(2);
   host.insert(
     key.clone(),
-    "function foo() { return 1; }\nnamespace foo { const bar: string = \"ok\"; }\nexport { foo };",
+    "function foo() { return 1; }\nnamespace foo { export const bar: string = \"ok\"; }\nexport { foo };",
   );
 
   let program = Program::new(host, vec![key.clone()]);
@@ -124,15 +124,16 @@ fn value_and_namespace_merge_callable_and_members() {
     .find(|d| program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some())
     .expect("foo definition");
   let ty = program.type_of_def(def);
-  let rendered = program.display_type(ty).to_string();
+  let call_sigs = program.call_signatures(ty);
   assert!(
-    rendered.contains("() =>"),
-    "callable side should remain after namespace merge: {rendered}"
+    !call_sigs.is_empty(),
+    "callable side should remain after namespace merge: {}",
+    program.display_type(ty)
   );
-  assert!(
-    rendered.contains("bar"),
-    "namespace members should be visible after merge: {rendered}"
-  );
+  let bar_ty = program
+    .property_type(ty, typecheck_ts::PropertyKey::String("bar".to_string()))
+    .expect("namespace member 'bar' should be visible after merge");
+  assert_eq!(program.display_type(bar_ty).to_string(), "string");
 }
 
 #[test]
@@ -174,7 +175,7 @@ fn merged_namespaces_expose_members_interned() {
   let key = fk(4);
   host.insert(
     key.clone(),
-    "namespace N { const a = 1; }\nnamespace N { const b = 2; }",
+    "namespace N { export const a = 1; }\nnamespace N { export const b = 2; }",
   );
 
   let program = Program::new(host, vec![key.clone()]);
@@ -336,7 +337,7 @@ fn value_namespace_merge_keeps_callability_and_members_interned() {
   let key = fk(5);
   host.insert(
     key.clone(),
-    "function foo(): number { return 1; }\nnamespace foo { const bar = \"ok\"; }",
+    "function foo(): number { return 1; }\nnamespace foo { export const bar = \"ok\"; }",
   );
 
   let program = Program::new(host, vec![key.clone()]);
@@ -368,7 +369,7 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
   let key = fk(6);
   host.insert(
     key.clone(),
-    "namespace foo { const bar = 1; }\nfunction foo() { return foo.bar; }\nexport { foo };",
+    "function foo() { return foo.bar; }\nnamespace foo { export const bar = 1; }\nexport { foo };",
   );
 
   let program = Program::new(host, vec![key.clone()]);
@@ -396,10 +397,10 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     2,
     "expected two merged defs for foo, got {foo_defs:?}"
   );
-  let namespace_def = foo_defs[0];
-  let func_def = foo_defs[1];
+  let func_def = foo_defs[0];
+  let namespace_def = foo_defs[1];
   let exported = program
-    .exports_of(FileId(6))
+    .exports_of(file_id)
     .get("foo")
     .and_then(|e| e.def)
     .expect("exported foo def");

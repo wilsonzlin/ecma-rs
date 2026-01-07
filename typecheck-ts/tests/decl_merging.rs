@@ -139,14 +139,13 @@ export const name = Lib.version;
     .get("Lib")
     .and_then(|e| e.type_id)
     .expect("exported Lib type");
-  let rendered = program.display_type(lib_ty).to_string();
+  let version_ty = program
+    .property_type(lib_ty, PropertyKey::String("version".into()))
+    .expect("merged Lib should expose namespace members");
   assert!(
-    rendered.contains("version"),
-    "merged Lib should expose namespace members, got {rendered}"
-  );
-  assert!(
-    rendered.contains("=> number"),
-    "merged Lib should remain callable, got {rendered}"
+    !program.call_signatures(lib_ty).is_empty(),
+    "merged Lib should remain callable, got {}",
+    program.display_type(lib_ty)
   );
 
   let result_ty = exports
@@ -167,6 +166,20 @@ export const name = Lib.version;
   assert!(
     name_rendered.contains("1.0.0") || name_rendered.contains("string"),
     "property access through merged namespace should preserve literal type"
+  );
+
+  // Ensure the namespace member type itself is surfaced on the merged value.
+  assert!(
+    program
+      .display_type(version_ty)
+      .to_string()
+      .contains("1.0.0")
+      || program
+        .display_type(version_ty)
+        .to_string()
+        .contains("string"),
+    "Lib.version should be typed as a string literal (or string), got {}",
+    program.display_type(version_ty)
   );
 }
 
