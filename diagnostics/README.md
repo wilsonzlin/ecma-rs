@@ -24,16 +24,24 @@ the tool cannot continue and should bubble up as `Result::Err`.
 
 ## Code prefix registry
 
-Reserved, non-exhaustive prefixes:
+Reserved, non-exhaustive prefixes (see `docs/diagnostic-codes.md` for the full
+repo-wide policy and registry):
 
-- `PARSE####`: `parse-js` parser
+- `PS####`: `parse-js` parser
 - `BIND####`: `semantic-js` binder
+- `LOWER####`: `hir-js` lowering
 - `TC####`: `typecheck-ts` type checker
+- `TS####` / `TS#####`: upstream TypeScript compiler codes (used for parity)
 - `OPT####`: `optimize-js`
-- `MINIFY####`: `minify-js`
+- `MINIFYTS####`: `minify-js` TypeScript erasure/minification
+- `MINIFY####`: minify tooling (e.g. benchmarks)
 - `EMIT####`: `emit-js` emitter
+- `CONF####`: parser conformance tooling
+- `T262####`: test262 tooling
 - `HOST####`: Host/environment failures
 - `ICE####`: Internal compiler errors
+- `CANCEL####`: Cancellation
+- `OOM####`: Out of memory
 
 ## Severity and CLI exit codes
 

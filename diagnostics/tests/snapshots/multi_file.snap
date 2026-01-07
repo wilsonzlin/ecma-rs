@@ -1,4 +1,4 @@
-error[TEST_MULTI_FILE]: uses two files
+error[TEST0100]: uses two files
  --> b.js:1:7
   |
 1 | const b = 2;

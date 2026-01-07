@@ -20,7 +20,7 @@ fn snapshot_multi_file_diagnostic() {
   let b = files.add("b.js", "const b = 2;\n");
 
   let diagnostic = Diagnostic::error(
-    "TEST_MULTI_FILE",
+    "TEST0100",
     "uses two files",
     Span::new(b, TextRange::new(6, 7)),
   )
@@ -40,7 +40,7 @@ fn snapshot_multi_line_label() {
   let file = files.add("main.ts", text);
 
   let diagnostic = Diagnostic::error(
-    "TEST_MULTI_LINE",
+    "TEST0101",
     "broken function",
     Span::new(file, TextRange::new(0, text.len() as u32)),
   );
@@ -58,10 +58,10 @@ fn snapshot_overlapping_label_ordering_is_stable() {
   let overlap = Label::secondary(Span::new(file, TextRange::new(3, 5)), "overlap");
   let tail = Label::secondary(Span::new(file, TextRange::new(7, 10)), "tail");
 
-  let diagnostic_a = Diagnostic::error("TEST_OVERLAP", "main", primary)
+  let diagnostic_a = Diagnostic::error("TEST0102", "main", primary)
     .with_label(tail.clone())
     .with_label(overlap.clone());
-  let diagnostic_b = Diagnostic::error("TEST_OVERLAP", "main", primary)
+  let diagnostic_b = Diagnostic::error("TEST0102", "main", primary)
     .with_label(overlap)
     .with_label(tail);
 
@@ -81,7 +81,7 @@ fn snapshot_utf8_boundary_clamping() {
   let file = files.add("utf8.js", "écho\n");
 
   let diagnostic = Diagnostic::error(
-    "TEST_UTF8",
+    "TEST0103",
     "inside utf8 char",
     Span::new(file, TextRange::new(1, 2)),
   );

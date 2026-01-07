@@ -1,4 +1,4 @@
-error[TEST_UTF8]: inside utf8 char
+error[TEST0103]: inside utf8 char
  --> utf8.js:1:1
   |
 1 | écho

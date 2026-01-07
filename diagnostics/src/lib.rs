@@ -478,7 +478,7 @@ mod tests {
   fn sorts_diagnostics_by_span_then_code() {
     let mut diagnostics = vec![
       Diagnostic::error(
-        "CODE2",
+        "TEST9002",
         "later",
         Span {
           file: FileId(0),
@@ -486,7 +486,7 @@ mod tests {
         },
       ),
       Diagnostic::error(
-        "CODE1",
+        "TEST9001",
         "earlier",
         Span {
           file: FileId(0),
@@ -496,8 +496,8 @@ mod tests {
     ];
 
     sort_diagnostics(&mut diagnostics);
-    assert_eq!(diagnostics[0].code.as_str(), "CODE1");
-    assert_eq!(diagnostics[1].code.as_str(), "CODE2");
+    assert_eq!(diagnostics[0].code.as_str(), "TEST9001");
+    assert_eq!(diagnostics[1].code.as_str(), "TEST9002");
   }
 
   #[test]
@@ -880,7 +880,7 @@ mod tests {
     let file = FileId(0);
     let mut diagnostics = vec![
       Diagnostic::error(
-        "CODE1",
+        "TEST9011",
         "later span",
         Span {
           file,
@@ -888,7 +888,7 @@ mod tests {
         },
       ),
       Diagnostic::error(
-        "CODE1",
+        "TEST9011",
         "message tie",
         Span {
           file,
@@ -896,7 +896,7 @@ mod tests {
         },
       ),
       Diagnostic::warning(
-        "CODE1",
+        "TEST9011",
         "warning",
         Span {
           file,
@@ -904,7 +904,7 @@ mod tests {
         },
       ),
       Diagnostic::error(
-        "CODE0",
+        "TEST9010",
         "alpha",
         Span {
           file,
@@ -912,7 +912,7 @@ mod tests {
         },
       ),
       Diagnostic::error(
-        "CODE1",
+        "TEST9011",
         "earlier span",
         Span {
           file,
@@ -939,31 +939,31 @@ mod tests {
       vec![
         (
           Severity::Error,
-          DiagnosticCode::from("CODE0"),
+          DiagnosticCode::from("TEST9010"),
           4,
           "alpha".to_string()
         ),
         (
           Severity::Error,
-          DiagnosticCode::from("CODE1"),
+          DiagnosticCode::from("TEST9011"),
           3,
           "earlier span".to_string()
         ),
         (
           Severity::Error,
-          DiagnosticCode::from("CODE1"),
+          DiagnosticCode::from("TEST9011"),
           5,
           "later span".to_string()
         ),
         (
           Severity::Error,
-          DiagnosticCode::from("CODE1"),
+          DiagnosticCode::from("TEST9011"),
           5,
           "message tie".to_string()
         ),
         (
           Severity::Warning,
-          DiagnosticCode::from("CODE1"),
+          DiagnosticCode::from("TEST9011"),
           0,
           "warning".to_string()
         ),
@@ -975,7 +975,7 @@ mod tests {
   #[test]
   fn serde_roundtrip_parse_error_code() {
     let diagnostic = Diagnostic::error(
-      "PS0015",
+      "TEST9015",
       "unexpected end of input",
       Span {
         file: FileId(1),
@@ -987,7 +987,7 @@ mod tests {
     let deserialized: Diagnostic = serde_json::from_str(&first).unwrap();
     let second = serde_json::to_string(&deserialized).unwrap();
 
-    assert_eq!(deserialized.code, "PS0015");
+    assert_eq!(deserialized.code, "TEST9015");
     assert_eq!(first, second);
   }
 
