@@ -64,7 +64,11 @@ impl ProgramState {
     object
   }
 
-  pub(super) fn merge_object_types(&mut self, mut base: ObjectType, extra: ObjectType) -> ObjectType {
+  pub(super) fn merge_object_types(
+    &mut self,
+    mut base: ObjectType,
+    extra: ObjectType,
+  ) -> ObjectType {
     for (name, prop) in extra.props.into_iter() {
       match base.props.entry(name) {
         Entry::Vacant(entry) => {
@@ -401,5 +405,4 @@ impl ProgramState {
       _ => self.builtin.unknown,
     }
   }
-
 }
