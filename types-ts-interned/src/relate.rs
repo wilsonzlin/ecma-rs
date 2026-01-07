@@ -20,7 +20,6 @@ use crate::TypeKind;
 use crate::TypeOptions;
 use crate::TypeStore;
 use bitflags::bitflags;
-use serde::{Deserialize, Serialize};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
@@ -41,7 +40,8 @@ thread_local! {
   static NORMALIZE_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RelationKind {
   Assignable,
   Comparable,
@@ -68,7 +68,8 @@ pub struct RelationResult {
   pub reason: Option<ReasonNode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReasonNode {
   pub src: TypeId,
   pub dst: TypeId,

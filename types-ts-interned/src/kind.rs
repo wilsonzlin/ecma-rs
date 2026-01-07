@@ -7,10 +7,9 @@ use crate::ids::TypeParamId;
 use crate::shape::Shape;
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use serde::Deserialize;
-use serde::Serialize;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MappedModifier {
   Add,
   Remove,
@@ -23,7 +22,8 @@ impl Default for MappedModifier {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MappedType {
   /// Type parameter used for the mapped key variable.
   pub param: TypeParamId,
@@ -43,19 +43,22 @@ pub struct MappedType {
   pub as_type: Option<TypeId>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TemplateLiteralType {
   pub head: String,
   pub spans: Vec<TemplateChunk>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TemplateChunk {
   pub literal: String,
   pub ty: TypeId,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IntrinsicKind {
   Uppercase,
   Lowercase,
@@ -90,7 +93,8 @@ impl IntrinsicKind {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TupleElem {
   pub ty: TypeId,
   pub optional: bool,
@@ -105,7 +109,8 @@ pub struct TupleElem {
 /// `this`) should be narrowed at call sites. Store the target positionally to
 /// avoid tying predicate semantics to signature parameter names that are
 /// canonicalized away while interning.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum PredicateParam {
   /// Predicate applies to the receiver (`this is T`).
   This,
@@ -113,7 +118,8 @@ pub enum PredicateParam {
   Param(u32),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TypeKind {
   Any,
   Unknown,

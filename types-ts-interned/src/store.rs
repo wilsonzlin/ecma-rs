@@ -8,6 +8,7 @@ use ahash::RandomState;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -132,7 +133,8 @@ impl NameInterner {
   }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PrimitiveIds {
   pub any: TypeId,
   pub unknown: TypeId,
@@ -173,7 +175,8 @@ pub struct TypeStore {
   primitives: PrimitiveIds,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TypeStoreSnapshot {
   options: TypeOptions,
   primitives: PrimitiveIds,
@@ -1293,6 +1296,7 @@ impl TypeStore {
   /// Export a stable JSON representation of a type. This is intentionally
   /// shallow (referencing nested types by ID) to avoid infinite recursion
   /// while still providing a deterministic shape for comparisons.
+  #[cfg(feature = "serde-json")]
   pub fn debug_json(&self, ty: TypeId) -> serde_json::Value {
     use serde_json::json;
     match self.type_kind(ty) {
@@ -1397,6 +1401,7 @@ impl TypeStore {
   }
 }
 
+#[cfg(feature = "serde")]
 impl Serialize for TypeStore {
   fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
   where
@@ -1406,6 +1411,7 @@ impl Serialize for TypeStore {
   }
 }
 
+#[cfg(feature = "serde")]
 impl<'de> Deserialize<'de> for TypeStore {
   fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
   where

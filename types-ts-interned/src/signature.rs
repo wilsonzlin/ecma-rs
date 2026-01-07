@@ -1,17 +1,17 @@
 use crate::ids::NameId;
 use crate::ids::TypeId;
 use crate::ids::TypeParamId;
-use serde::Deserialize;
-use serde::Serialize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TypeParamVariance {
   In,
   Out,
   InOut,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TypeParamDecl {
   pub id: TypeParamId,
   pub constraint: Option<TypeId>,
@@ -32,7 +32,8 @@ impl TypeParamDecl {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Param {
   pub name: Option<NameId>,
   pub ty: TypeId,
@@ -40,7 +41,8 @@ pub struct Param {
   pub rest: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Signature {
   pub params: Vec<Param>,
   pub ret: TypeId,

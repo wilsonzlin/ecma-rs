@@ -8,6 +8,7 @@ use crate::{
 use hir_js::DefId;
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
+#[cfg(feature = "serde")]
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -434,7 +435,7 @@ impl TypeExpander for GraphExpander {
 
 /// Fuzz entry point that deserializes random `TypeKind` graphs and ensures core
 /// operations terminate without panicking. Use `--features types-ts-interned/fuzzing`
-/// when wiring this up to `cargo fuzz`.
+/// and `--features types-ts-interned/serde-json` when wiring this up to `cargo fuzz`.
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub fn fuzz_type_graph(data: &[u8]) {

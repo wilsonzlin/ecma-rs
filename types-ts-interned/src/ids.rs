@@ -1,9 +1,7 @@
-use serde::Deserialize;
-use serde::Serialize;
-
 macro_rules! id_newtype {
   ($name:ident, $inner:ty) => {
-    #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
+    #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct $name(pub $inner);
 
     impl From<$inner> for $name {

@@ -7,19 +7,22 @@ description = "Interned TypeScript type representation (imported from worker-10)
 [features]
 default = []
 fuzzing = []
+serde = ["dep:serde", "hir-js/serde", "ordered-float/serde", "num-bigint/serde"]
+# Enable JSON helpers such as `TypeStore::debug_json`. Implies `serde`.
+serde-json = ["serde", "dep:serde_json"]
 tracing = ["dep:tracing"]
 strict-determinism = []
 
 [dependencies]
-hir-js = { path = "../hir-js", features = ["serde"] }
+hir-js = { path = "../hir-js" }
 ahash = "0.8"
 dashmap = "5"
 bitflags = "2"
 parking_lot = "0.12"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-ordered-float = { version = "3", features = ["serde"] }
-num-bigint = { version = "0.4", features = ["serde"] }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+ordered-float = { version = "3" }
+num-bigint = { version = "0.4" }
 unicode-ident = "1.0"
 smallvec = "1.15.1"
 tracing = { version = "0.1", optional = true }

@@ -8,8 +8,8 @@ license = "Apache-2.0"
 [features]
 default = ["bundled-libs", "serde"]
 bundled-libs = []
-serde = ["dep:serde", "diagnostics/serde", "hir-js/serde"]
-fuzzing = ["hir-js/fuzzing", "types-ts-interned/fuzzing"]
+serde = ["dep:serde", "diagnostics/serde", "hir-js/serde", "types-ts-interned/serde"]
+fuzzing = ["hir-js/fuzzing", "types-ts-interned/fuzzing", "types-ts-interned/serde-json"]
 resolve = ["dep:serde_json"]
 
 [dependencies]

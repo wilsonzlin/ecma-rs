@@ -41,7 +41,7 @@
 mod cache;
 mod display;
 mod eval;
-#[cfg(feature = "fuzzing")]
+#[cfg(all(feature = "fuzzing", feature = "serde-json"))]
 mod fuzz;
 mod ids;
 mod kind;
@@ -59,7 +59,7 @@ pub use eval::EvaluatorLimits;
 pub use eval::ExpandedType;
 pub use eval::TypeEvaluator;
 pub use eval::TypeExpander;
-#[cfg(feature = "fuzzing")]
+#[cfg(all(feature = "fuzzing", feature = "serde-json"))]
 pub use fuzz::fuzz_type_graph;
 pub use ids::DefId;
 pub use ids::NameId;
