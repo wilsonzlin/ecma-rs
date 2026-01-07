@@ -509,6 +509,7 @@ fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult
     ClassOrObjKey::Direct(name) => {
       match name.stx.tt {
         TT::LiteralString => emit_string_literal(em, &name.stx.key),
+        TT::LiteralBigInt => em.write_bigint_literal(&name.stx.key),
         TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
           em.write_number(&name.stx.key)
         }

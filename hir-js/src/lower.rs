@@ -1517,6 +1517,15 @@ fn lower_class_member_key(
       TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
         ClassMemberKey::Number(direct.stx.key.clone())
       }
+      TT::LiteralBigInt => {
+        if bigint_key_is_safe_number(&direct.stx.key) {
+          ClassMemberKey::Number(direct.stx.key.clone())
+        } else {
+          // HIR does not preserve BigInt literal property names yet; represent
+          // them as string keys to preserve ToPropertyKey semantics.
+          ClassMemberKey::String(direct.stx.key.clone())
+        }
+      }
       TT::PrivateMember => ClassMemberKey::Private(builder.intern_name(&direct.stx.key)),
       _ => ClassMemberKey::Ident(builder.intern_name(&direct.stx.key)),
     },
@@ -2251,6 +2260,23 @@ fn is_valid_identifier_name(name: &str) -> bool {
   chars.all(|c| c == '$' || c == '_' || c.is_ascii_alphanumeric())
 }
 
+fn bigint_key_is_safe_number(value: &str) -> bool {
+  if value.is_empty() {
+    return false;
+  }
+  if !value.as_bytes().iter().all(|b| b.is_ascii_digit()) {
+    return false;
+  }
+  let Ok(parsed) = value.parse::<u64>() else {
+    return false;
+  };
+  if parsed.to_string() != value {
+    return false;
+  }
+  let as_num = parsed as f64;
+  as_num.is_finite() && as_num as u64 == parsed
+}
+
 fn lower_object_key(
   key: &parse_js::ast::class_or_object::ClassOrObjKey,
   builder: &mut BodyBuilder<'_>,
@@ -2268,7 +2294,16 @@ fn lower_object_key(
           ObjectKey::String(direct.stx.key.clone())
         }
       }
-      TT::LiteralNumber | TT::LiteralBigInt => ObjectKey::Number(direct.stx.key.clone()),
+      TT::LiteralNumber => ObjectKey::Number(direct.stx.key.clone()),
+      TT::LiteralBigInt => {
+        if bigint_key_is_safe_number(&direct.stx.key) {
+          ObjectKey::Number(direct.stx.key.clone())
+        } else {
+          // HIR does not preserve BigInt literal property names yet; represent
+          // them as string keys to preserve ToPropertyKey semantics.
+          ObjectKey::String(direct.stx.key.clone())
+        }
+      }
       _ => ObjectKey::Ident(builder.intern_name(&direct.stx.key)),
     },
     ClassOrObjKey::Computed(expr) => {

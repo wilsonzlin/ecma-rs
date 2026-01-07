@@ -99,6 +99,7 @@ fn simplify_computed_member(member: Node<ComputedMemberExpr>, loc: Loc) -> (Expr
 
   let key = match member.stx.member.stx.as_ref() {
     Expr::LitStr(lit) => StaticKey::Borrowed(lit.stx.value.as_str()),
+    Expr::LitBigInt(lit) => StaticKey::Borrowed(lit.stx.value.as_str()),
     Expr::LitTemplate(template) => {
       let Some(key) = template_to_string(&template.stx.parts) else {
         return (Expr::ComputedMember(member), false);
@@ -163,24 +164,32 @@ enum ProtoSemantics {
 
 fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObjKey, bool) {
   match key {
-    ClassOrObjKey::Direct(mut direct) => {
-      if direct.stx.tt != TT::LiteralString {
-        return (ClassOrObjKey::Direct(direct), false);
-      }
+    ClassOrObjKey::Direct(mut direct) => match direct.stx.tt {
+      TT::LiteralString => {
+        if let Some(tt) = identifier_name_token_tt(&direct.stx.key) {
+          direct.stx.tt = tt;
+          return (ClassOrObjKey::Direct(direct), true);
+        }
 
-      if let Some(tt) = identifier_name_token_tt(&direct.stx.key) {
-        direct.stx.tt = tt;
-        return (ClassOrObjKey::Direct(direct), true);
-      }
+        if let Some(idx) = parse_canonical_u64_index(&direct.stx.key) {
+          direct.stx.key = idx.to_string();
+          direct.stx.tt = TT::LiteralNumber;
+          return (ClassOrObjKey::Direct(direct), true);
+        }
 
-      if let Some(idx) = parse_canonical_u64_index(&direct.stx.key) {
-        direct.stx.key = idx.to_string();
-        direct.stx.tt = TT::LiteralNumber;
-        return (ClassOrObjKey::Direct(direct), true);
+        (ClassOrObjKey::Direct(direct), false)
       }
+      TT::LiteralBigInt => {
+        if let Some(idx) = parse_canonical_u64_index(&direct.stx.key) {
+          direct.stx.key = idx.to_string();
+          direct.stx.tt = TT::LiteralNumber;
+          return (ClassOrObjKey::Direct(direct), true);
+        }
 
-      (ClassOrObjKey::Direct(direct), false)
-    }
+        (ClassOrObjKey::Direct(direct), false)
+      }
+      _ => (ClassOrObjKey::Direct(direct), false),
+    },
     ClassOrObjKey::Computed(expr) => match expr.stx.as_ref() {
       Expr::LitStr(lit) => {
         let key = lit.stx.value.as_str();
@@ -222,6 +231,18 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
           (TT::LiteralString, key_buf)
         };
 
+        (
+          ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
+          true,
+        )
+      }
+      Expr::LitBigInt(bigint) => {
+        let key = bigint.stx.value.to_string();
+        let (tt, key) = if let Some(idx) = parse_canonical_u64_index(&key) {
+          (TT::LiteralNumber, idx.to_string())
+        } else {
+          (TT::LiteralBigInt, key)
+        };
         (
           ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
           true,
