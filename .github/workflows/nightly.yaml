@@ -115,9 +115,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: typecheck-ts-harness/package-lock.json
 
-      - name: Install TypeScript
-        run: npm install --prefix typecheck-ts-harness --no-save --no-package-lock typescript
+      - name: Install Node dependencies (pinned TypeScript)
+        working-directory: typecheck-ts-harness
+        run: npm ci
 
       - name: TypeScript conformance shard
         run: |
@@ -138,3 +141,66 @@ jobs:
         with:
           name: ts-conformance-shard-${{ matrix.shard }}
           path: reports/conformance-${{ matrix.shard }}.json
+
+  ts-conformance-triage:
+    runs-on: ubuntu-24.04
+    needs: ts-conformance
+    if: always()
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Install jq (if missing)
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+
+      - name: Download shard reports
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ts-conformance-shard-*
+          path: reports/shards
+          merge-multiple: true
+
+      - name: Merge shard JSON reports
+        run: |
+          set -euo pipefail
+          mkdir -p reports
+
+          shopt -s nullglob
+          files=(reports/shards/*.json)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No shard JSON reports found under reports/shards/ (did ts-conformance upload artifacts?)" >&2
+            exit 1
+          fi
+
+          jq -s '{
+            compare_mode: (.[0].compare_mode),
+            results: ([.[].results[]] | sort_by(.id))
+          }' "${files[@]}" > reports/ts-conformance-merged.json
+
+      - name: Triage merged report (JSON to stdout, human summary to stderr)
+        run: |
+          set -euo pipefail
+          cargo run -p typecheck-ts-harness --release --locked -- \
+            triage \
+            --input reports/ts-conformance-merged.json \
+            --json \
+            > reports/ts-conformance-triage.json
+
+      - name: Upload merged + triage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-conformance-triage
+          path: |
+            reports/ts-conformance-merged.json
+            reports/ts-conformance-triage.json
