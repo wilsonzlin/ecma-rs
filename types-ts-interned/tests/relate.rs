@@ -1556,6 +1556,63 @@ fn conditional_normalization_uses_structural_assignability() {
 }
 
 #[test]
+fn unevaluated_conditional_types_flow_like_union_of_branches() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let t = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let conditional = store.intern_type(TypeKind::Conditional {
+    check: t,
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let num_or_bool = store.union(vec![primitives.number, primitives.boolean]);
+
+  let explain = ctx.explain_assignable(conditional, num_or_bool);
+  assert!(explain.result);
+  let reason = explain.reason.expect("expected reason tree");
+  assert_eq!(reason.note.as_deref(), Some("conditional source"));
+  assert_eq!(reason.children.len(), 2, "expected both branch checks to be recorded");
+  assert_eq!(reason.children[0].src, primitives.number);
+  assert_eq!(reason.children[1].src, primitives.boolean);
+
+  let explain = ctx.explain_assignable(primitives.number, conditional);
+  assert!(!explain.result);
+  let reason = explain.reason.expect("expected reason tree");
+  assert_eq!(reason.note.as_deref(), Some("conditional target"));
+  assert_eq!(reason.children.len(), 2, "expected both branch checks to be recorded");
+  assert_eq!(reason.children[0].dst, primitives.number);
+  assert_eq!(reason.children[1].dst, primitives.boolean);
+
+  assert!(ctx.is_assignable(conditional, num_or_bool));
+  assert!(!ctx.is_assignable(primitives.number, conditional));
+  assert!(!ctx.is_assignable(primitives.boolean, conditional));
+}
+
+#[test]
+fn unevaluated_conditional_types_with_never_branch() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let t = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let conditional = store.intern_type(TypeKind::Conditional {
+    check: t,
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.never,
+    distributive: true,
+  });
+
+  assert!(ctx.is_assignable(conditional, primitives.number));
+  assert!(!ctx.is_assignable(primitives.number, conditional));
+}
+
+#[test]
 fn cyclic_reference_terminates() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

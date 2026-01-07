@@ -1103,6 +1103,112 @@ impl<'a> RelateCtx<'a> {
       }
     }
 
+    // Conditional types (unevaluated)
+    //
+    // After normalization (`TypeEvaluator`), unresolved conditional types remain
+    // as `TypeKind::Conditional` nodes. They behave like the union of their
+    // branch outcomes for assignability checks.
+    //
+    // Mirror TypeScript's behaviour conservatively:
+    // - When the *source* is conditional, ensure both branches flow to `dst`.
+    // - When the *target* is conditional, require `src` to be compatible with
+    //   both branches.
+    if let TypeKind::Conditional {
+      true_ty, false_ty, ..
+    } = &src_kind
+    {
+      let record = record && self.take_reason_slot();
+      let true_related = self.relate_internal(
+        *true_ty,
+        dst,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      if !record && !true_related.result {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(
+            record,
+            key,
+            vec![true_related.reason],
+            false,
+            Some("conditional source".into()),
+            depth,
+          ),
+        };
+      }
+      let false_related = self.relate_internal(
+        *false_ty,
+        dst,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      let res = true_related.result && false_related.result;
+      return RelationResult {
+        result: res,
+        reason: self.join_reasons(
+          record,
+          key,
+          vec![true_related.reason, false_related.reason],
+          res,
+          Some("conditional source".into()),
+          depth,
+        ),
+      };
+    }
+
+    if let TypeKind::Conditional {
+      true_ty, false_ty, ..
+    } = &dst_kind
+    {
+      let record = record && self.take_reason_slot();
+      let true_related = self.relate_internal(
+        src,
+        *true_ty,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      if !record && !true_related.result {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(
+            record,
+            key,
+            vec![true_related.reason],
+            false,
+            Some("conditional target".into()),
+            depth,
+          ),
+        };
+      }
+      let false_related = self.relate_internal(
+        src,
+        *false_ty,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      let res = true_related.result && false_related.result;
+      return RelationResult {
+        result: res,
+        reason: self.join_reasons(
+          record,
+          key,
+          vec![true_related.reason, false_related.reason],
+          res,
+          Some("conditional target".into()),
+          depth,
+        ),
+      };
+    }
+
     // Unions
     if let TypeKind::Union(srcs) = &src_kind {
       let record = record && self.take_reason_slot();
