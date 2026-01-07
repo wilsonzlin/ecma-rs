@@ -315,10 +315,16 @@ status = "flaky"
 tracking_issue = "TICKET-123"
 ```
 
-Use `--fail-on new|all|none` to control exit status (default `all`):
+Use `--fail-on new|all|none` to control exit status (default `new`):
 - `new` (default): only uncovered mismatches fail the run
 - `all`: any mismatch fails
 - `none`: always succeed (useful for generating reports)
+
+`xfail`/`flaky` entries are expected to produce mismatches. If a case marked
+`xfail`/`flaky` starts passing, it is reported as **XPASS** (expected failure
+but passing). XPASS indicates a stale manifest entry and is treated as a failure
+when `--fail-on new` or `--fail-on all` is used, so CI can enforce manifest
+hygiene.
 
 Conformance test ids are the path under the suite root. `difftsc` ids include
 the suite name (e.g. `difftsc/assignability`).

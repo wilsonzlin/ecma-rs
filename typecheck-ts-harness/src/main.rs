@@ -294,8 +294,8 @@ fn main() -> ExitCode {
             );
             if let Some(m) = &report.summary.mismatches {
               println!(
-                "Mismatches — expected: {}, unexpected: {}, flaky: {}",
-                m.expected, m.unexpected, m.flaky
+                "Mismatches — expected: {}, unexpected: {}, flaky: {}, xpass: {}",
+                m.expected, m.unexpected, m.flaky, m.xpass
               );
             }
           }

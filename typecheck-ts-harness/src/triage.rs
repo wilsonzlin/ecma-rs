@@ -1,5 +1,6 @@
 use crate::diagnostic_norm::DiagnosticCode;
 use crate::diagnostic_norm::NormalizedDiagnostic;
+use crate::expectations::ExpectationKind;
 use crate::runner::EngineDiagnostics;
 use crate::runner::MismatchDetail;
 use crate::runner::TestOutcome;
@@ -70,6 +71,8 @@ pub struct TriageReport {
   pub top: usize,
   pub total: usize,
   pub mismatches: usize,
+  #[serde(default)]
+  pub xpass: usize,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub unexpected_mismatches: Option<usize>,
   pub mismatches_without_code: usize,
@@ -96,13 +99,17 @@ struct ConformanceCaseInput {
   rust: EngineDiagnostics,
   tsc: EngineDiagnostics,
   #[serde(default)]
-  expectation: Option<ConformanceExpectationInput>,
+  expectation: Option<ExpectationInput>,
 }
 
 #[derive(Debug, Deserialize)]
-struct ConformanceExpectationInput {
+struct ExpectationInput {
+  #[serde(default)]
+  expectation: ExpectationKind,
   #[serde(default)]
   expected: bool,
+  #[serde(default)]
+  from_manifest: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,6 +123,8 @@ struct DifftscReportInput {
 struct DifftscCaseInput {
   name: String,
   status: DifftscCaseStatus,
+  #[serde(default)]
+  expectation: Option<ExpectationInput>,
   #[serde(default)]
   diff: Option<DifftscMismatchReport>,
   #[serde(default)]
@@ -255,8 +264,8 @@ pub fn analyze_report_paths(
 pub fn print_human_summary(report: &TriageReport, out: &mut impl Write) -> io::Result<()> {
   writeln!(
     out,
-    "triage: kind={:?} total={} mismatches={}",
-    report.kind, report.total, report.mismatches
+    "triage: kind={:?} total={} mismatches={} xpass={}",
+    report.kind, report.total, report.mismatches, report.xpass
   )?;
 
   if let Some(unexpected) = report.unexpected_mismatches {
@@ -577,13 +586,25 @@ fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<Tria
   let mut prefix_counts: BTreeMap<String, usize> = BTreeMap::new();
 
   let mut mismatches = 0usize;
+  let mut xpass = 0usize;
   let mut unexpected_mismatches = 0usize;
   let mut mismatches_without_code = 0usize;
 
   let mut regressions = Vec::new();
+  let mut xpasses = Vec::new();
 
   for case in &input.results {
     if case.outcome == TestOutcome::Match {
+      if case
+        .expectation
+        .as_ref()
+        .is_some_and(|e| {
+          e.from_manifest && matches!(e.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
+        })
+      {
+        xpass += 1;
+        xpasses.push(case.id.clone());
+      }
       continue;
     }
     mismatches += 1;
@@ -619,22 +640,28 @@ fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<Tria
   }
 
   regressions.sort_by(|a, b| a.id.cmp(&b.id));
+  xpasses.sort();
 
   let regressions_top: Vec<_> = regressions.into_iter().take(top).collect();
-  let suggestions = suggest_manifest_entries_for_regressions(&regressions_top, None);
+  let mut suggestions = suggest_manifest_entries_for_regressions(&regressions_top, None);
+  suggestions.extend(suggest_manifest_entries_for_xpasses(
+    &xpasses.into_iter().take(top).collect::<Vec<_>>(),
+    None,
+  ));
 
   Ok(TriageReport {
     kind: ReportKind::Conformance,
     top,
     total: input.results.len(),
     mismatches,
+    xpass,
     unexpected_mismatches: Some(unexpected_mismatches),
     mismatches_without_code,
     top_outcomes: top_groups(outcome_counts, top),
     top_codes: top_groups(code_counts, top),
     top_prefixes: top_groups(prefix_counts, top),
     regressions: regressions_top,
-    suggestions,
+    suggestions: sort_suggestions(suggestions),
     baseline: None,
   })
 }
@@ -645,11 +672,24 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
   let mut prefix_counts: BTreeMap<String, usize> = BTreeMap::new();
 
   let mut mismatches = 0usize;
+  let mut xpass = 0usize;
   let mut mismatches_without_code = 0usize;
 
   let mut regressions = Vec::new();
+  let mut xpasses = Vec::new();
 
   for case in &input.results {
+    if case.status == DifftscCaseStatus::Matched {
+      if case
+        .expectation
+        .as_ref()
+        .is_some_and(|e| matches!(e.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky))
+      {
+        xpass += 1;
+        xpasses.push(case.name.clone());
+      }
+    }
+
     if !case.status.is_mismatch() {
       continue;
     }
@@ -675,7 +715,7 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
       mismatches_without_code += 1;
     }
 
-    // Difftsc JSON does not carry expectation data, so treat any mismatch as a regression.
+    // Difftsc expectation data is optional; treat any mismatch as a regression.
     let regression_outcome = if case.status == DifftscCaseStatus::Mismatch {
       "mismatch".to_string()
     } else {
@@ -691,22 +731,28 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
   }
 
   regressions.sort_by(|a, b| a.id.cmp(&b.id));
+  xpasses.sort();
   let regressions_top: Vec<_> = regressions.into_iter().take(top).collect();
-  let suggestions =
+  let mut suggestions =
     suggest_manifest_entries_for_regressions(&regressions_top, input.suite.as_deref());
+  suggestions.extend(suggest_manifest_entries_for_xpasses(
+    &xpasses.into_iter().take(top).collect::<Vec<_>>(),
+    input.suite.as_deref(),
+  ));
 
   Ok(TriageReport {
     kind: ReportKind::Difftsc,
     top,
     total: input.results.len(),
     mismatches,
+    xpass,
     unexpected_mismatches: None,
     mismatches_without_code,
     top_outcomes: top_groups(outcome_counts, top),
     top_codes: top_groups(code_counts, top),
     top_prefixes: top_groups(prefix_counts, top),
     regressions: regressions_top,
-    suggestions,
+    suggestions: sort_suggestions(suggestions),
     baseline: None,
   })
 }
@@ -795,6 +841,30 @@ fn suggest_manifest_entries_for_regressions(
     });
   }
 
+  sort_suggestions(suggestions)
+}
+
+fn suggest_manifest_entries_for_xpasses(
+  xpasses: &[String],
+  suite: Option<&str>,
+) -> Vec<SuggestedManifestEntry> {
+  let mut suggestions = Vec::new();
+  for id in xpasses {
+    let id = match suite {
+      Some(suite) => format!("{suite}/{id}"),
+      None => id.clone(),
+    };
+    suggestions.push(SuggestedManifestEntry {
+      id: Some(id),
+      glob: None,
+      status: "pass".to_string(),
+      reason: Some("triage: xpass".to_string()),
+    });
+  }
+  sort_suggestions(suggestions)
+}
+
+fn sort_suggestions(mut suggestions: Vec<SuggestedManifestEntry>) -> Vec<SuggestedManifestEntry> {
   // Deterministic ordering (tie-breaker on id, though ids are already sorted).
   suggestions.sort_by(|a, b| match (&a.status, &b.status) {
     (a_status, b_status) => a_status.cmp(b_status).then_with(|| a.id.cmp(&b.id)),

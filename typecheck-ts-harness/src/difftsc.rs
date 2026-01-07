@@ -3,12 +3,12 @@ use crate::diagnostic_norm::{
   normalize_type_string, sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
 };
 use crate::directives::{parse_directive, HarnessOptions};
-use crate::expectations::{ExpectationKind, Expectations};
+use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::{is_normalized_virtual_path, normalize_name_cow, normalize_name_into};
 use crate::read_utf8_file;
 use crate::runner::{
-  build_tsc_request, is_source_root, EngineDiagnostics, EngineStatus, HarnessFileSet, HarnessHost,
-  TimeoutManager, TscPoolError, TscRunnerPool,
+  build_tsc_request, is_source_root, EngineDiagnostics, EngineStatus, ExpectationOutcome,
+  HarnessFileSet, HarnessHost, TimeoutManager, TscPoolError, TscRunnerPool,
 };
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TypeAtFact, TypeFacts, TypeQuery,
@@ -264,6 +264,8 @@ struct CaseReport {
   name: String,
   status: CaseStatus,
   #[serde(skip_serializing_if = "Option::is_none")]
+  expectation: Option<ExpectationOutcome>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   harness_options: Option<HarnessOptions>,
   #[serde(skip_serializing_if = "Option::is_none")]
   tsc_options: Option<Map<String, Value>>,
@@ -285,6 +287,25 @@ struct CaseReport {
   notes: Vec<String>,
 }
 
+fn apply_expectation(mut report: CaseReport, expectation: &AppliedExpectation) -> CaseReport {
+  let mismatched = report.status != CaseStatus::Matched;
+  report.expectation = Some(ExpectationOutcome {
+    expectation: expectation.expectation.kind,
+    expected: expectation.matches(mismatched),
+    from_manifest: expectation.from_manifest,
+    reason: expectation.expectation.reason.clone(),
+    tracking_issue: expectation.expectation.tracking_issue.clone(),
+  });
+  report
+}
+
+fn is_xpass(report: &CaseReport) -> bool {
+  report.status == CaseStatus::Matched
+    && report.expectation.as_ref().is_some_and(|exp| {
+      matches!(exp.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct Summary {
   total: usize,
@@ -296,6 +317,7 @@ struct Summary {
   expected_mismatches: usize,
   unexpected_mismatches: usize,
   flaky_mismatches: usize,
+  xpass: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -404,10 +426,11 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
       .par_iter()
       .map(|test| {
         let expectation = expectations.lookup(&test.id);
-        if expectation.expectation.kind == ExpectationKind::Skip {
-          return CaseReport {
+        let report = if expectation.expectation.kind == ExpectationKind::Skip {
+          CaseReport {
             name: test.case.name.clone(),
             status: CaseStatus::Skipped,
+            expectation: None,
             harness_options: None,
             tsc_options: None,
             expected: None,
@@ -418,20 +441,22 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
             type_diff: None,
             report: None,
             notes: vec!["skipped by manifest".to_string()],
-          };
-        }
+          }
+        } else {
+          let deadline = Instant::now() + timeout;
+          run_single_test(
+            &test.case,
+            &args,
+            tsc_pool,
+            &baselines_root,
+            &normalization,
+            &timeout_manager,
+            deadline,
+            timeout,
+          )
+        };
 
-        let deadline = Instant::now() + timeout;
-        run_single_test(
-          &test.case,
-          &args,
-          tsc_pool,
-          &baselines_root,
-          &normalization,
-          &timeout_manager,
-          deadline,
-          timeout,
-        )
+        apply_expectation(report, &expectation)
       })
       .collect()
   });
@@ -439,14 +464,21 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
   let mut expected_mismatches = 0usize;
   let mut unexpected_mismatches = 0usize;
   let mut flaky_mismatches = 0usize;
+  let mut xpass = 0usize;
   for report in &results {
-    if matches!(report.status, CaseStatus::Mismatch) {
-      let test_id = format!("{suite_name}/{}", report.name);
-      let expectation = expectations.lookup(&test_id);
-      if expectation.expectation.kind == ExpectationKind::Flaky {
-        flaky_mismatches += 1;
-      } else if expectation.covers_mismatch() {
-        expected_mismatches += 1;
+    if is_xpass(report) {
+      xpass += 1;
+    }
+
+    if report.status == CaseStatus::Mismatch {
+      if let Some(exp) = report.expectation.as_ref() {
+        if exp.expectation == ExpectationKind::Flaky {
+          flaky_mismatches += 1;
+        } else if exp.expected {
+          expected_mismatches += 1;
+        } else {
+          unexpected_mismatches += 1;
+        }
       } else {
         unexpected_mismatches += 1;
       }
@@ -459,6 +491,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
     expected_mismatches,
     unexpected_mismatches,
     flaky_mismatches,
+    xpass,
     ..summary
   };
 
@@ -483,18 +516,16 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
     print_human_summary(&suite_name, &summary, &results);
   }
 
-  if !args.allow_mismatches
-    && args
-      .fail_on
-      .should_fail(unexpected_mismatches, mismatch_total)
-  {
+  let should_fail = if args.fail_on != FailOn::None && summary.xpass > 0 {
+    true
+  } else {
+    args.fail_on.should_fail(unexpected_mismatches, mismatch_total)
+  };
+  if !args.allow_mismatches && should_fail {
     return Err(anyhow!(
-      "{} difftsc mismatches ({} unexpected, {} expected, {} flaky, {} error(s))",
-      mismatch_total,
-      unexpected_mismatches,
-      expected_mismatches,
-      flaky_mismatches,
-      summary.errors
+      "difftsc failures: {mismatch_total} mismatch/error(s) (unexpected={unexpected_mismatches}, expected={expected_mismatches}, flaky={flaky_mismatches}, errors={}), xpass={}",
+      summary.errors,
+      summary.xpass
     ));
   }
 
@@ -521,8 +552,14 @@ fn summarize(results: &[CaseReport]) -> Summary {
 
 fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
   println!(
-    "difftsc: suite `{suite}` — total={}, matched={}, mismatched={}, updated={}, errors={}, skipped={}",
-    summary.total, summary.matched, summary.mismatched, summary.updated, summary.errors, summary.skipped
+    "difftsc: suite `{suite}` — total={}, matched={}, mismatched={}, updated={}, errors={}, skipped={}, xpass={}",
+    summary.total,
+    summary.matched,
+    summary.mismatched,
+    summary.updated,
+    summary.errors,
+    summary.skipped,
+    summary.xpass
   );
 
   if summary.mismatched == 0 && summary.errors == 0 {
@@ -631,6 +668,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::Timeout,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: None,
@@ -649,6 +687,7 @@ fn run_single_test(
       return CaseReport {
         name: test.name.clone(),
         status: CaseStatus::TscFailed,
+        expectation: None,
         harness_options: Some(harness_options),
         tsc_options: Some(tsc_options),
         expected: None,
@@ -669,6 +708,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::Timeout,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: None,
@@ -685,6 +725,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::TscFailed,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: None,
@@ -708,6 +749,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::TscFailed,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: None,
@@ -728,6 +770,7 @@ fn run_single_test(
       return CaseReport {
         name: test.name.clone(),
         status: CaseStatus::BaselineUpdated,
+        expectation: None,
         harness_options: Some(harness_options),
         tsc_options: Some(tsc_options),
         expected: None,
@@ -747,6 +790,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::BaselineMissing,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: None,
@@ -790,6 +834,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: Some(expected),
@@ -812,6 +857,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::BaselineMissing,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: None,
@@ -846,6 +892,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::Timeout,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: Some(expected),
@@ -872,6 +919,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::Timeout,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: Some(expected),
@@ -889,6 +937,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::RustFailed,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: Some(expected),
@@ -916,6 +965,7 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::Timeout,
+          expectation: None,
           harness_options: Some(harness_options),
           tsc_options: Some(tsc_options),
           expected: Some(expected),
@@ -937,6 +987,7 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::Timeout,
+      expectation: None,
       harness_options: Some(harness_options),
       tsc_options: Some(tsc_options),
       expected: Some(expected),
@@ -970,6 +1021,7 @@ fn run_single_test(
   CaseReport {
     name: test.name.clone(),
     status,
+    expectation: None,
     harness_options: Some(harness_options),
     tsc_options: Some(tsc_options),
     expected: Some(expected),
@@ -2222,6 +2274,40 @@ mod tests {
   use serde_json::Value;
   use std::time::{Duration, Instant};
   use typecheck_ts::lib_support::CompilerOptions;
+
+  #[test]
+  fn detects_xpass_cases() {
+    let report = CaseReport {
+      name: "a".to_string(),
+      status: CaseStatus::Matched,
+      expectation: Some(ExpectationOutcome {
+        expectation: ExpectationKind::Xfail,
+        expected: false,
+        from_manifest: true,
+        reason: None,
+        tracking_issue: None,
+      }),
+      harness_options: None,
+      tsc_options: None,
+      expected: None,
+      actual: None,
+      diff: None,
+      expected_types: None,
+      actual_types: None,
+      type_diff: None,
+      report: None,
+      notes: Vec::new(),
+    };
+    assert!(is_xpass(&report));
+
+    let mut not_xpass = report.clone();
+    not_xpass.expectation.as_mut().unwrap().expectation = ExpectationKind::Pass;
+    assert!(!is_xpass(&not_xpass));
+
+    let mut mismatch = report;
+    mismatch.status = CaseStatus::Mismatch;
+    assert!(!is_xpass(&mismatch));
+  }
 
   #[test]
   fn determines_test_name_for_d_ts() {

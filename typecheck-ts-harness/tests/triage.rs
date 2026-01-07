@@ -149,6 +149,7 @@ const EXPECTED_CONFORMANCE_TRIAGE: &str = r#"{
   "top": 5,
   "total": 5,
   "mismatches": 4,
+  "xpass": 0,
   "unexpected_mismatches": 3,
   "mismatches_without_code": 0,
   "top_outcomes": [
@@ -234,6 +235,7 @@ const EXPECTED_CONFORMANCE_TRIAGE_WITH_BASELINE: &str = r#"{
   "top": 5,
   "total": 5,
   "mismatches": 4,
+  "xpass": 0,
   "unexpected_mismatches": 3,
   "mismatches_without_code": 0,
   "top_outcomes": [
@@ -375,6 +377,7 @@ const EXPECTED_DIFFTSC_TRIAGE: &str = r#"{
   "top": 10,
   "total": 3,
   "mismatches": 3,
+  "xpass": 0,
   "mismatches_without_code": 1,
   "top_outcomes": [
     {
@@ -500,6 +503,7 @@ const EXPECTED_DIFFTSC_TRIAGE_WITH_BASELINE: &str = r#"{
   "top": 10,
   "total": 3,
   "mismatches": 2,
+  "xpass": 0,
   "mismatches_without_code": 1,
   "top_outcomes": [
     {

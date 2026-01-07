@@ -223,6 +223,14 @@ impl Summary {
   }
 
   pub fn should_fail(&self, fail_on: FailOn, mismatches: usize) -> bool {
+    let xpass = self
+      .mismatches
+      .as_ref()
+      .map(|m| m.xpass)
+      .unwrap_or_default();
+    if xpass > 0 && fail_on != FailOn::None {
+      return true;
+    }
     let unexpected = self
       .mismatches
       .as_ref()
@@ -237,11 +245,13 @@ pub struct MismatchSummary {
   pub expected: usize,
   pub unexpected: usize,
   pub flaky: usize,
+  #[serde(default)]
+  pub xpass: usize,
 }
 
 impl MismatchSummary {
   pub fn total(&self) -> usize {
-    self.expected + self.unexpected + self.flaky
+    self.expected + self.unexpected + self.flaky + self.xpass
   }
 }
 
@@ -644,19 +654,26 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   let mut summary = summarize(&results);
   let mut mismatch_summary = MismatchSummary::default();
   for result in results.iter() {
-    if !result.mismatched {
-      continue;
-    }
-    if let Some(exp) = &result.expectation {
-      if exp.expectation == ExpectationKind::Flaky {
-        mismatch_summary.flaky += 1;
-      } else if exp.expected {
-        mismatch_summary.expected += 1;
+    if result.mismatched {
+      if let Some(exp) = &result.expectation {
+        if exp.expectation == ExpectationKind::Flaky {
+          mismatch_summary.flaky += 1;
+        } else if exp.expected {
+          mismatch_summary.expected += 1;
+        } else {
+          mismatch_summary.unexpected += 1;
+        }
       } else {
         mismatch_summary.unexpected += 1;
       }
-    } else {
-      mismatch_summary.unexpected += 1;
+      continue;
+    }
+
+    if let Some(exp) = &result.expectation {
+      if exp.from_manifest && matches!(exp.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
+      {
+        mismatch_summary.xpass += 1;
+      }
     }
   }
   if mismatch_summary.total() > 0 {
@@ -2570,6 +2587,26 @@ mod tests {
     let from = file_set.resolve("/a.ts").unwrap();
     let resolved = host.resolve(&from, "foo").expect("foo should resolve");
     let expected = file_set.resolve("/node_modules/foo/index.d.ts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_via_node_modules_index_ts() {
+    let files = vec![
+      VirtualFile {
+        name: "main.ts".to_string(),
+        content: "import { value } from \"dep\"; export const from_dep = value;".into(),
+      },
+      VirtualFile {
+        name: "node_modules/dep/index.ts".to_string(),
+        content: "export const value = \"dep\";".into(),
+      },
+    ];
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+    let from = file_set.resolve("/main.ts").unwrap();
+    let resolved = host.resolve(&from, "dep").expect("dep should resolve");
+    let expected = file_set.resolve("/node_modules/dep/index.ts").unwrap();
     assert_eq!(resolved, expected);
   }
 
