@@ -112,6 +112,14 @@ impl<'a> Parser<'a> {
         },
       )
     };
+    if !is_export
+      && self.is_strict_ecmascript()
+      && self.is_strict_mode()
+      && (Parser::is_strict_mode_reserved_word(&alias.stx.name)
+        || Parser::is_strict_mode_restricted_binding_identifier(&alias.stx.name))
+    {
+      return Err(alias.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+    }
     if let Some(target_escape) = target_escape {
       if alias.assoc.get::<LegacyOctalEscapeSequence>().is_none() {
         alias.assoc.set(LegacyOctalEscapeSequence(target_escape));

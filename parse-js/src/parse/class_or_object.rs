@@ -524,26 +524,46 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
+            let simple_params = Parser::is_simple_parameter_list(&parameters);
+            let contains_use_strict = p.peek().typ == TT::BraceOpen
+              && p.is_strict_ecmascript()
+              && p.has_use_strict_directive_in_block_body()?;
+            if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+              return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+                "`use strict` directive not allowed with a non-simple parameter list",
+              )));
+            }
+
+            let prev_strict_mode = p.strict_mode;
+            if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+              p.strict_mode += 1;
+            }
             // TypeScript: method overload signatures and abstract methods have no body
             // Also check if next token could start a new member (for overloads without semicolons)
             let next_could_be_new_member = Self::probable_class_member_start(p.peek().typ);
             // For constructors, if next token is not an opening brace, it's an overload signature
             let constructor_without_body = is_constructor && p.peek().typ != TT::BraceOpen;
 
-            let body = if p.peek().typ == TT::Semicolon
-              || (abstract_ && p.peek().typ != TT::BraceOpen)
-              || (next_could_be_new_member && p.peek().typ != TT::BraceOpen)
-              || constructor_without_body
-            {
-              let _ = p.consume_if(TT::Semicolon);
-              None
-            } else {
-              let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
-              Some(
-                p.parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
-                  .into(),
-              )
-            };
+            let res = (|| {
+              p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+              let body = if p.peek().typ == TT::Semicolon
+                || (abstract_ && p.peek().typ != TT::BraceOpen)
+                || (next_could_be_new_member && p.peek().typ != TT::BraceOpen)
+                || constructor_without_body
+              {
+                let _ = p.consume_if(TT::Semicolon);
+                None
+              } else {
+                let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
+                Some(
+                  p.parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
+                    .into(),
+                )
+              };
+              Ok(body)
+            })();
+            p.strict_mode = prev_strict_mode;
+            let body = res?;
             Ok(Func {
               arrow: false,
               async_: false,
@@ -619,17 +639,37 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
+      let simple_params = Parser::is_simple_parameter_list(&parameters);
+      let contains_use_strict = p.peek().typ == TT::BraceOpen
+        && p.is_strict_ecmascript()
+        && p.has_use_strict_directive_in_block_body()?;
+      if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+          "`use strict` directive not allowed with a non-simple parameter list",
+        )));
+      }
+
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+        p.strict_mode += 1;
+      }
       // TypeScript: method overload signatures and abstract methods have no body
       // Method overloads are indicated by a semicolon instead of a body
-      let body = if p.peek().typ == TT::Semicolon
-        || (abstract_ && p.peek().typ != TT::BraceOpen)
-        || (Self::probable_class_member_start(p.peek().typ) && p.peek().typ != TT::BraceOpen)
-      {
-        let _ = p.consume_if(TT::Semicolon);
-        None
-      } else {
-        Some(p.parse_method_block_body(fn_ctx, false)?.into())
-      };
+      let res = (|| {
+        p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+        let body = if p.peek().typ == TT::Semicolon
+          || (abstract_ && p.peek().typ != TT::BraceOpen)
+          || (Self::probable_class_member_start(p.peek().typ) && p.peek().typ != TT::BraceOpen)
+        {
+          let _ = p.consume_if(TT::Semicolon);
+          None
+        } else {
+          Some(p.parse_method_block_body(fn_ctx, false)?.into())
+        };
+        Ok(body)
+      })();
+      p.strict_mode = prev_strict_mode;
+      let body = res?;
       Ok(Func {
         arrow: false,
         async_: is_async,
@@ -742,26 +782,47 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
+      let simple_params = Parser::is_simple_parameter_list(&parameters);
+      let contains_use_strict = p.peek().typ == TT::BraceOpen
+        && p.is_strict_ecmascript()
+        && p.has_use_strict_directive_in_block_body()?;
+      if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+          "`use strict` directive not allowed with a non-simple parameter list",
+        )));
+      }
+
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+        p.strict_mode += 1;
+      }
       // Getters are not generators or async, so yield/await can be used as identifiers
       // TypeScript: getter overload signatures and abstract getters have no body
-      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
-        let _ = p.consume_if(TT::Semicolon);
-        None
-      } else {
-        let is_module = p.is_module();
-        Some(
-          p.parse_method_block_body(
-            ctx.with_rules(ParsePatternRules {
-              await_allowed: !is_module,
-              yield_allowed: !is_module,
-              await_expr_allowed: false,
-              yield_expr_allowed: false,
-            }),
-            false,
-          )?
-          .into(),
-        )
-      };
+      let res = (|| {
+        p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+        let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen)
+        {
+          let _ = p.consume_if(TT::Semicolon);
+          None
+        } else {
+          let is_module = p.is_module();
+          Some(
+            p.parse_method_block_body(
+              ctx.with_rules(ParsePatternRules {
+                await_allowed: !is_module,
+                yield_allowed: !is_module,
+                await_expr_allowed: false,
+                yield_expr_allowed: false,
+              }),
+              false,
+            )?
+            .into(),
+          )
+        };
+        Ok(body)
+      })();
+      p.strict_mode = prev_strict_mode;
+      let body = res?;
       Ok(Func {
         arrow: false,
         async_: false,
@@ -960,14 +1021,35 @@ impl<'a> Parser<'a> {
       // ES2017+: Allow trailing comma in setter parameter list
       let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
+      let simple_params = Parser::is_simple_parameter_list(&parameters);
+      let contains_use_strict = p.peek().typ == TT::BraceOpen
+        && p.is_strict_ecmascript()
+        && p.has_use_strict_directive_in_block_body()?;
+      if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+          "`use strict` directive not allowed with a non-simple parameter list",
+        )));
+      }
+
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+        p.strict_mode += 1;
+      }
       // Setters don't have return types
       // TypeScript: setter overload signatures and abstract setters have no body
-      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
-        let _ = p.consume_if(TT::Semicolon);
-        None
-      } else {
-        Some(p.parse_method_block_body(setter_ctx, false)?.into())
-      };
+      let res = (|| {
+        p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+        let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen)
+        {
+          let _ = p.consume_if(TT::Semicolon);
+          None
+        } else {
+          Some(p.parse_method_block_body(setter_ctx, false)?.into())
+        };
+        Ok(body)
+      })();
+      p.strict_mode = prev_strict_mode;
+      let body = res?;
       Ok(Func {
         arrow: false,
         async_: false,
@@ -1157,15 +1239,35 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
+            let simple_params = Parser::is_simple_parameter_list(&parameters);
+            let contains_use_strict = p.peek().typ == TT::BraceOpen
+              && p.is_strict_ecmascript()
+              && p.has_use_strict_directive_in_block_body()?;
+            if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+              return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+                "`use strict` directive not allowed with a non-simple parameter list",
+              )));
+            }
+
+            let prev_strict_mode = p.strict_mode;
+            if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+              p.strict_mode += 1;
+            }
             // TypeScript: method overload signatures and abstract methods have no body
             // Method overloads are indicated by a semicolon instead of a body
-            let body =
-              if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
-                let _ = p.consume_if(TT::Semicolon);
-                None
-              } else {
-                Some(p.parse_method_block_body(fn_ctx, false)?.into())
-              };
+            let res = (|| {
+              p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+              let body =
+                if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
+                  let _ = p.consume_if(TT::Semicolon);
+                  None
+                } else {
+                  Some(p.parse_method_block_body(fn_ctx, false)?.into())
+                };
+              Ok(body)
+            })();
+            p.strict_mode = prev_strict_mode;
+            let body = res?;
             Ok(Func {
               arrow: false,
               async_: is_async,

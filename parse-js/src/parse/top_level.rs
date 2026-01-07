@@ -9,6 +9,11 @@ use crate::token::TT;
 impl<'a> Parser<'a> {
   pub fn parse_top_level(&mut self) -> SyntaxResult<Node<TopLevel>> {
     let is_module = self.is_module();
+    if self.is_strict_ecmascript() && !is_module {
+      if self.has_use_strict_directive_in_prologue(TT::EOF)? {
+        self.strict_mode += 1;
+      }
+    }
     let ctx = ParseCtx {
       rules: ParsePatternRules {
         await_allowed: !is_module,

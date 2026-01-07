@@ -96,9 +96,15 @@ impl<'a> Parser<'a> {
       if !is_valid_pattern_identifier(t.typ, ctx.rules) {
         return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
       }
-      Ok(IdPat {
-        name: p.string(t.loc),
-      })
+      let name = p.string(t.loc);
+      if p.is_strict_ecmascript()
+        && p.is_strict_mode()
+        && (Parser::is_strict_mode_reserved_word(&name)
+          || Parser::is_strict_mode_restricted_binding_identifier(&name))
+      {
+        return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      }
+      Ok(IdPat { name })
     })
   }
 
@@ -151,6 +157,13 @@ impl<'a> Parser<'a> {
                     return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                   }
                 } else if !is_valid_pattern_identifier(n.stx.tt, ctx.rules) {
+                  return Err(n.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+                }
+                if p.is_strict_ecmascript()
+                  && p.is_strict_mode()
+                  && (Parser::is_strict_mode_reserved_word(&n.stx.key)
+                    || Parser::is_strict_mode_restricted_binding_identifier(&n.stx.key))
+                {
                   return Err(n.error(SyntaxErrorType::ExpectedSyntax("identifier")));
                 }
                 // We've already ensured that this is a valid identifier, keyword, or string literal.

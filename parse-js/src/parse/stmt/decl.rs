@@ -189,7 +189,25 @@ impl<'a> Parser<'a> {
         };
         // TypeScript: function overload signatures have no body
         let body = if p.peek().typ == TT::BraceOpen {
-          Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
+          let contains_use_strict =
+            p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
+          let simple_params = Parser::is_simple_parameter_list(&parameters);
+          if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+            return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+              "`use strict` directive not allowed with a non-simple parameter list",
+            )));
+          }
+
+          let prev_strict_mode = p.strict_mode;
+          if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+            p.strict_mode += 1;
+          }
+          let res = (|| {
+            p.validate_formal_parameters(name.as_ref(), &parameters, simple_params, false)?;
+            p.parse_non_arrow_func_block_body(fn_ctx)
+          })();
+          p.strict_mode = prev_strict_mode;
+          Some(res?.into())
         } else {
           // Overload signature - consume semicolon or allow ASI
           let _ = p.consume_if(TT::Semicolon);
@@ -228,62 +246,74 @@ impl<'a> Parser<'a> {
       // TypeScript: abstract keyword
       let abstract_ = p.consume_if(TT::KeywordAbstract).is_match();
       let start = p.require(TT::KeywordClass)?.loc;
-      // Names can be omitted only in default exports.
-      let name = p.maybe_class_or_func_name(ctx);
-      if name.is_none() && !export_default {
-        return Err(start.error(SyntaxErrorType::ExpectedSyntax("class name"), None));
-      };
 
-      // TypeScript: generic type parameters
-      let type_parameters = if !p.is_strict_ecmascript()
-        && p.peek().typ == TT::ChevronLeft
-        && p.is_start_of_type_arguments()
-      {
-        Some(p.type_parameters(ctx)?)
-      } else {
-        None
-      };
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() {
+        p.strict_mode += 1;
+      }
+      let res = (|| {
+        // Names can be omitted only in default exports.
+        let name = p.maybe_class_or_func_name(ctx);
+        if name.is_none() && !export_default {
+          return Err(start.error(SyntaxErrorType::ExpectedSyntax("class name"), None));
+        };
+        if let Some(name) = name.as_ref() {
+          p.validate_strict_binding_identifier_name(name.loc, &name.stx.name)?;
+        }
 
-      // Unlike functions, classes are scoped to their block.
-      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
-        // Parse expression, which will handle type arguments via expr_with_ts_type_args
-        Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
-      } else {
-        None
-      };
+        // TypeScript: generic type parameters
+        let type_parameters = if !p.is_strict_ecmascript()
+          && p.peek().typ == TT::ChevronLeft
+          && p.is_start_of_type_arguments()
+        {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
 
-      // TypeScript: implements clause
-      let mut implements = Vec::new();
-      if p.consume_if(TT::KeywordImplements).is_match() {
-        loop {
-          // Parse as expression to allow optional chaining (A?.B) even though it's semantically invalid
-          // TypeScript parser accepts this syntax and lets the type checker reject it
-          implements.push(p.expr_with_ts_type_args(ctx, [TT::Comma, TT::BraceOpen])?);
-          if !p.consume_if(TT::Comma).is_match() {
-            break;
+        // Unlike functions, classes are scoped to their block.
+        let extends = if p.consume_if(TT::KeywordExtends).is_match() {
+          // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
+          // Parse expression, which will handle type arguments via expr_with_ts_type_args
+          Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+        } else {
+          None
+        };
+
+        // TypeScript: implements clause
+        let mut implements = Vec::new();
+        if p.consume_if(TT::KeywordImplements).is_match() {
+          loop {
+            // Parse as expression to allow optional chaining (A?.B) even though it's semantically invalid
+            // TypeScript parser accepts this syntax and lets the type checker reject it
+            implements.push(p.expr_with_ts_type_args(ctx, [TT::Comma, TT::BraceOpen])?);
+            if !p.consume_if(TT::Comma).is_match() {
+              break;
+            }
           }
         }
-      }
 
-      let is_derived_class = extends.is_some();
-      let prev_class_depth = p.class_is_derived.len();
-      p.class_is_derived.push(is_derived_class);
-      let members = p.class_body_with_context(ctx, declare || abstract_);
-      p.class_is_derived.truncate(prev_class_depth);
-      let members = members?;
-      Ok(ClassDecl {
-        decorators,
-        export,
-        export_default,
-        declare,
-        abstract_,
-        name,
-        type_parameters,
-        extends,
-        implements,
-        members,
-      })
+        let is_derived_class = extends.is_some();
+        let prev_class_depth = p.class_is_derived.len();
+        p.class_is_derived.push(is_derived_class);
+        let members = p.class_body_with_context(ctx, declare || abstract_);
+        p.class_is_derived.truncate(prev_class_depth);
+        let members = members?;
+        Ok(ClassDecl {
+          decorators,
+          export,
+          export_default,
+          declare,
+          abstract_,
+          name,
+          type_parameters,
+          extends,
+          implements,
+          members,
+        })
+      })();
+      p.strict_mode = prev_strict_mode;
+      res
     })
   }
 }

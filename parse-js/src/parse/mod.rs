@@ -1,3 +1,6 @@
+use crate::ast::expr::pat::Pat;
+use crate::ast::expr::Expr;
+use crate::ast::node::Node;
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
@@ -5,6 +8,7 @@ use crate::lex::lex_next;
 use crate::lex::LexMode;
 use crate::lex::Lexer;
 use crate::loc::Loc;
+use crate::operator::Arity;
 use crate::token::Token;
 use crate::token::TT;
 use crate::token::UNRESERVED_KEYWORDS;
@@ -12,6 +16,7 @@ use crate::Dialect;
 use crate::ParseOptions;
 use crate::SourceType;
 use expr::pat::ParsePatternRules;
+use operator::MULTARY_OPERATOR_MAPPING;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::sync::Arc;
@@ -153,6 +158,7 @@ pub struct Parser<'a> {
   next_tok_i: usize,
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
+  strict_mode: u32,
   in_function: u32,
   new_target_allowed: u32,
   super_prop_allowed: u32,
@@ -187,6 +193,7 @@ impl<'a> Parser<'a> {
       next_tok_i: 0,
       options,
       allow_bare_ts_type_args: false,
+      strict_mode: 0,
       in_function: 0,
       new_target_allowed: 0,
       super_prop_allowed: 0,
@@ -215,6 +222,10 @@ impl<'a> Parser<'a> {
     matches!(self.source_type(), SourceType::Module)
   }
 
+  pub fn is_strict_mode(&self) -> bool {
+    self.is_module() || self.strict_mode > 0
+  }
+
   pub fn allows_jsx(&self) -> bool {
     self.dialect().allows_jsx()
   }
@@ -233,6 +244,176 @@ impl<'a> Parser<'a> {
 
   pub fn should_recover(&self) -> bool {
     !self.is_strict_ecmascript()
+  }
+
+  pub(crate) fn is_strict_mode_reserved_word(name: &str) -> bool {
+    matches!(
+      name,
+      "implements"
+        | "interface"
+        | "let"
+        | "package"
+        | "private"
+        | "protected"
+        | "public"
+        | "static"
+        | "yield"
+    )
+  }
+
+  pub(crate) fn is_strict_mode_restricted_binding_identifier(name: &str) -> bool {
+    matches!(name, "eval" | "arguments")
+  }
+
+  pub(crate) fn is_strict_mode_restricted_assignment_target(name: &str) -> bool {
+    // ES strict mode: `eval` and `arguments` are not valid assignment targets.
+    Self::is_strict_mode_restricted_binding_identifier(name)
+  }
+
+  pub(crate) fn validate_strict_binding_identifier_name(
+    &self,
+    loc: Loc,
+    name: &str,
+  ) -> SyntaxResult<()> {
+    if self.is_strict_ecmascript() && self.is_strict_mode() {
+      if Self::is_strict_mode_reserved_word(name)
+        || Self::is_strict_mode_restricted_binding_identifier(name)
+      {
+        return Err(loc.error(SyntaxErrorType::ExpectedSyntax("identifier"), None));
+      }
+    }
+    Ok(())
+  }
+
+  fn validate_strict_assignment_target_name(&self, loc: Loc, name: &str) -> SyntaxResult<()> {
+    if self.is_strict_ecmascript()
+      && self.is_strict_mode()
+      && Self::is_strict_mode_restricted_assignment_target(name)
+    {
+      return Err(loc.error(
+        SyntaxErrorType::ExpectedSyntax(
+          "assignment to `eval` or `arguments` is not allowed in strict mode",
+        ),
+        None,
+      ));
+    }
+    Ok(())
+  }
+
+  pub(crate) fn validate_strict_assignment_target_expr(
+    &self,
+    expr: &Node<Expr>,
+  ) -> SyntaxResult<()> {
+    if !self.is_strict_ecmascript() || !self.is_strict_mode() {
+      return Ok(());
+    }
+    match expr.stx.as_ref() {
+      Expr::Id(id) => self.validate_strict_assignment_target_name(expr.loc, &id.stx.name),
+      Expr::IdPat(id) => self.validate_strict_assignment_target_name(id.loc, &id.stx.name),
+      Expr::ArrPat(arr) => {
+        for elem in arr.stx.elements.iter() {
+          if let Some(elem) = elem.as_ref() {
+            self.validate_strict_assignment_target_pat(&elem.target)?;
+          }
+        }
+        if let Some(rest) = arr.stx.rest.as_ref() {
+          self.validate_strict_assignment_target_pat(rest)?;
+        }
+        Ok(())
+      }
+      Expr::ObjPat(obj) => {
+        for prop in obj.stx.properties.iter() {
+          self.validate_strict_assignment_target_pat(&prop.stx.target)?;
+        }
+        if let Some(rest) = obj.stx.rest.as_ref() {
+          self.validate_strict_assignment_target_pat(rest)?;
+        }
+        Ok(())
+      }
+      _ => Ok(()),
+    }
+  }
+
+  pub(crate) fn validate_strict_assignment_target_pat(&self, pat: &Node<Pat>) -> SyntaxResult<()> {
+    if !self.is_strict_ecmascript() || !self.is_strict_mode() {
+      return Ok(());
+    }
+    match pat.stx.as_ref() {
+      Pat::Id(id) => self.validate_strict_assignment_target_name(id.loc, &id.stx.name),
+      Pat::Arr(arr) => {
+        for elem in arr.stx.elements.iter() {
+          if let Some(elem) = elem.as_ref() {
+            self.validate_strict_assignment_target_pat(&elem.target)?;
+          }
+        }
+        if let Some(rest) = arr.stx.rest.as_ref() {
+          self.validate_strict_assignment_target_pat(rest)?;
+        }
+        Ok(())
+      }
+      Pat::Obj(obj) => {
+        for prop in obj.stx.properties.iter() {
+          self.validate_strict_assignment_target_pat(&prop.stx.target)?;
+        }
+        if let Some(rest) = obj.stx.rest.as_ref() {
+          self.validate_strict_assignment_target_pat(rest)?;
+        }
+        Ok(())
+      }
+      Pat::AssignTarget(expr) => self.validate_strict_assignment_target_expr(expr),
+    }
+  }
+
+  fn token_continues_expression_after_directive_string(next: &Token) -> bool {
+    // Tagged templates require no line terminator between the tag expression and the template.
+    if matches!(
+      next.typ,
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
+    ) {
+      return !next.preceded_by_line_terminator;
+    }
+    // Postfix update operators require no line terminator between operand and operator.
+    if matches!(next.typ, TT::PlusPlus | TT::HyphenHyphen) {
+      return !next.preceded_by_line_terminator;
+    }
+    MULTARY_OPERATOR_MAPPING
+      .get(&next.typ)
+      .is_some_and(|op| !matches!(op.arity, Arity::Unary))
+  }
+
+  pub(crate) fn has_use_strict_directive_in_prologue(&mut self, end: TT) -> SyntaxResult<bool> {
+    let checkpoint = self.checkpoint();
+    let mut found = false;
+    loop {
+      let t = self.peek();
+      if t.typ != TT::LiteralString {
+        break;
+      }
+      let value = self.lit_str_val_with_mode(LexMode::Standard)?;
+      let next = self.peek();
+      if Self::token_continues_expression_after_directive_string(&next) {
+        break;
+      }
+      if value == "use strict" {
+        found = true;
+      }
+      if next.typ == TT::Semicolon {
+        self.consume();
+      }
+      if self.peek().typ == end {
+        break;
+      }
+    }
+    self.restore_checkpoint(checkpoint);
+    Ok(found)
+  }
+
+  pub(crate) fn has_use_strict_directive_in_block_body(&mut self) -> SyntaxResult<bool> {
+    let checkpoint = self.checkpoint();
+    self.require(TT::BraceOpen)?;
+    let found = self.has_use_strict_directive_in_prologue(TT::BraceClose)?;
+    self.restore_checkpoint(checkpoint);
+    Ok(found)
   }
 
   pub fn source_range(&self) -> Loc {

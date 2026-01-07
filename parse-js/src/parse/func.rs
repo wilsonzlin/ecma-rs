@@ -1,11 +1,17 @@
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::expr::pat::ClassOrFuncName;
+use crate::ast::expr::pat::Pat;
+use crate::ast::expr::Expr;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::Accessibility;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::Stmt;
+use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
+use crate::loc::Loc;
 use crate::token::TT;
+use std::collections::HashSet;
 
 impl<'a> Parser<'a> {
   // `scope` should be a newly created closure scope for this function.
@@ -192,5 +198,86 @@ impl<'a> Parser<'a> {
     self.super_prop_allowed = prev_super_prop_allowed;
     self.super_call_allowed = prev_super_call_allowed;
     res
+  }
+
+  pub(crate) fn is_simple_parameter_list(params: &[Node<ParamDecl>]) -> bool {
+    params.iter().all(|param| {
+      if param.stx.rest || param.stx.default_value.is_some() {
+        return false;
+      }
+      matches!(param.stx.pattern.stx.pat.stx.as_ref(), Pat::Id(_))
+    })
+  }
+
+  fn collect_bound_names_from_pat(pat: &Node<Pat>, out: &mut Vec<(String, Loc)>) {
+    match pat.stx.as_ref() {
+      Pat::Id(id) => out.push((id.stx.name.clone(), id.loc)),
+      Pat::Arr(arr) => {
+        for elem in arr.stx.elements.iter() {
+          if let Some(elem) = elem.as_ref() {
+            Self::collect_bound_names_from_pat(&elem.target, out);
+          }
+        }
+        if let Some(rest) = arr.stx.rest.as_ref() {
+          Self::collect_bound_names_from_pat(rest, out);
+        }
+      }
+      Pat::Obj(obj) => {
+        for prop in obj.stx.properties.iter() {
+          Self::collect_bound_names_from_pat(&prop.stx.target, out);
+        }
+        if let Some(rest) = obj.stx.rest.as_ref() {
+          Self::collect_bound_names_from_pat(rest, out);
+        }
+      }
+      Pat::AssignTarget(expr) => {
+        // Error recovery: treat identifier assignment targets as bound names.
+        match expr.stx.as_ref() {
+          Expr::Id(id) => out.push((id.stx.name.clone(), expr.loc)),
+          Expr::IdPat(id) => out.push((id.stx.name.clone(), expr.loc)),
+          _ => {}
+        }
+      }
+    }
+  }
+
+  pub(crate) fn validate_formal_parameters(
+    &self,
+    name: Option<&Node<ClassOrFuncName>>,
+    params: &[Node<ParamDecl>],
+    simple: bool,
+    always_disallow_duplicates: bool,
+  ) -> SyntaxResult<()> {
+    if !self.is_strict_ecmascript() {
+      return Ok(());
+    }
+
+    let mut bound_names = Vec::new();
+    for param in params {
+      Self::collect_bound_names_from_pat(&param.stx.pattern.stx.pat, &mut bound_names);
+    }
+
+    if always_disallow_duplicates || self.is_strict_mode() || !simple {
+      let mut seen: HashSet<String> = HashSet::new();
+      for (name, loc) in bound_names.iter() {
+        if !seen.insert(name.clone()) {
+          return Err(loc.error(
+            SyntaxErrorType::ExpectedSyntax("unique parameter names"),
+            None,
+          ));
+        }
+      }
+    }
+
+    if self.is_strict_mode() {
+      if let Some(name) = name {
+        self.validate_strict_binding_identifier_name(name.loc, &name.stx.name)?;
+      }
+      for (name, loc) in bound_names.iter() {
+        self.validate_strict_binding_identifier_name(*loc, name)?;
+      }
+    }
+
+    Ok(())
   }
 }

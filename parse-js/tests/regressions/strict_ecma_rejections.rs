@@ -40,6 +40,14 @@ fn assert_accept_module(src: &str) {
   });
 }
 
+fn assert_reject_with_use_strict(src: &str) {
+  let source = format!("'use strict'; {src}");
+  assert!(
+    parse_with_options(&source, strict_script_opts()).is_err(),
+    "expected strict-mode ECMAScript parsing to reject: {source:?}"
+  );
+}
+
 #[test]
 fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   // TS-only constructs.
@@ -141,6 +149,58 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
 }
 
 #[test]
+fn strict_mode_directives_trigger_ecma_early_errors() {
+  // Strict-mode-only statement restrictions.
+  assert_reject_with_use_strict("with ({}) {}");
+  assert_reject_with_use_strict("delete x;");
+  assert_reject_with_use_strict("delete (x);");
+
+  // Numeric literals and legacy octal escapes.
+  assert_reject_with_use_strict("010;");
+  assert_reject_with_use_strict("08;");
+  assert_reject_with_use_strict(r"'\1';");
+
+  // Strict-mode reserved words are not valid identifier references.
+  assert_reject_with_use_strict("implements;");
+  assert_reject_with_use_strict("interface;");
+  assert_reject_with_use_strict("let;");
+  assert_reject_with_use_strict("static;");
+  assert_reject_with_use_strict("yield;");
+
+  // `eval`/`arguments` are restricted assignment/update targets in strict mode.
+  assert_reject_with_use_strict("eval = 1;");
+  assert_reject_with_use_strict("eval++;");
+  assert_reject_with_use_strict("++arguments;");
+  assert_reject_with_use_strict("for (eval in obj) {}");
+  assert_reject_with_use_strict("for (arguments of xs) {}");
+
+  // Functions can become strict via their own directive prologue.
+  assert_reject("function f(eval) { 'use strict'; }");
+  assert_reject("function yield() { 'use strict'; }");
+  assert_reject("function f(a, a) { 'use strict'; }");
+  assert_reject("function f(a = 1) { 'use strict'; }");
+
+  // Arrow functions and method definitions have stricter parameter rules.
+  assert_reject("((a, a) => a);");
+  assert_reject("({ m(a, a) {} });");
+  assert_reject("((eval) => { 'use strict'; });");
+  assert_reject("({ m(eval) { 'use strict'; } });");
+}
+
+#[test]
+fn classes_are_strict_ecma_regions() {
+  assert_reject("class yield {}");
+  assert_reject("class eval {}");
+  assert_reject("class A extends (eval = 1) {}");
+  assert_reject("class A { m() { with ({}) {} } }");
+  assert_reject("class A { m() { delete x; } }");
+  assert_reject("class A { m() { 010; } }");
+  assert_reject("class A { m() { 08; } }");
+  assert_reject(r"class A { m() { '\1'; } }");
+  assert_reject("class A { m() { eval = 1; } }");
+}
+
+#[test]
 fn strict_ecma_still_accepts_valid_js() {
   assert_accept("({ [x]: y, while: 1, class: 2 });");
   assert_accept("a != b; a !== b;");
@@ -175,6 +235,7 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("08;");
   assert_accept(r"'\1';");
   assert_accept("function f(x) { return x; }");
+  assert_accept("function yield() { return 1; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");
   assert_accept("function* g() { function f() { var yield = 1; return yield; } }");

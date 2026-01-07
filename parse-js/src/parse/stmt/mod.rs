@@ -329,8 +329,8 @@ impl<'a> Parser<'a> {
 
   pub fn label_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LabelStmt>> {
     self.with_loc(|p| {
-      let label_tok = p.consume();
-      let label_name = p.string(label_tok.loc);
+      let label_tok = p.peek();
+      let label_name = p.id_name(ctx)?;
       if p.is_strict_ecmascript() && p.labels.iter().any(|l| l.name == label_name) {
         return Err(label_tok.error(SyntaxErrorType::ExpectedSyntax("unique label")));
       }
@@ -387,7 +387,7 @@ impl<'a> Parser<'a> {
     let t = self.peek();
     let label = if is_valid_pattern_identifier(t.typ, ctx.rules) && !t.preceded_by_line_terminator {
       // Label.
-      Some(self.consume_as_string())
+      Some(self.id_name(ctx)?)
     } else if t.typ == TT::Semicolon {
       self.consume();
       None
@@ -716,6 +716,7 @@ impl<'a> Parser<'a> {
         use super::expr::util::lit_to_pat_with_recover;
         let expr = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf])?;
         let pat = lit_to_pat_with_recover(expr, self.should_recover())?;
+        self.validate_strict_assignment_target_pat(&pat)?;
         ForInOfLhs::Assign(pat)
       }
     })
@@ -1034,9 +1035,9 @@ impl<'a> Parser<'a> {
   pub fn with_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<WithStmt>> {
     self.with_loc(|p| {
       let start = p.require(TT::KeywordWith)?;
-      if p.is_strict_ecmascript() && p.is_module() {
+      if p.is_strict_ecmascript() && p.is_strict_mode() {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax(
-          "with statement not allowed in modules",
+          "with statement not allowed in strict mode",
         )));
       }
       p.require(TT::ParenthesisOpen)?;

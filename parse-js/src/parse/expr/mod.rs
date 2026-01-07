@@ -334,11 +334,33 @@ impl<'a> Parser<'a> {
         await_expr_allowed: is_async,
         yield_expr_allowed: false,
       });
+      let simple_params = Parser::is_simple_parameter_list(&parameters);
       let body = match p.peek().typ {
-        TT::BraceOpen => p.parse_func_block_body(fn_body_ctx)?.into(),
-        _ => p
-          .expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
-          .into(),
+        TT::BraceOpen => {
+          let contains_use_strict =
+            p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
+          if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+            return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+              "`use strict` directive not allowed with a non-simple parameter list",
+            )));
+          }
+
+          let prev_strict_mode = p.strict_mode;
+          if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+            p.strict_mode += 1;
+          }
+          let res = (|| {
+            p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+            p.parse_func_block_body(fn_body_ctx)
+          })();
+          p.strict_mode = prev_strict_mode;
+          res?.into()
+        }
+        _ => {
+          p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+          p.expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
+            .into()
+        }
       };
       if terminators.contains(&TT::Colon) && p.peek().typ != TT::Colon {
         return Err(
@@ -426,7 +448,25 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        let body = p.parse_non_arrow_func_block_body(fn_ctx)?.into();
+        let contains_use_strict =
+          p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
+        let simple_params = Parser::is_simple_parameter_list(&parameters);
+        if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+            "`use strict` directive not allowed with a non-simple parameter list",
+          )));
+        }
+
+        let prev_strict_mode = p.strict_mode;
+        if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+          p.strict_mode += 1;
+        }
+        let res = (|| {
+          p.validate_formal_parameters(name.as_ref(), &parameters, simple_params, false)?;
+          p.parse_non_arrow_func_block_body(fn_ctx)
+        })();
+        p.strict_mode = prev_strict_mode;
+        let body = res?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
@@ -444,47 +484,58 @@ impl<'a> Parser<'a> {
   pub fn class_expr(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassExpr>> {
     self.with_loc(|p| {
       p.require(TT::KeywordClass)?.loc;
-      let name = p.maybe_class_or_func_name(ctx);
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() {
+        p.strict_mode += 1;
+      }
+      let res = (|| {
+        let name = p.maybe_class_or_func_name(ctx);
+        if let Some(name) = name.as_ref() {
+          p.validate_strict_binding_identifier_name(name.loc, &name.stx.name)?;
+        }
 
-      // TypeScript: generic type parameters
-      let type_parameters = if !p.is_strict_ecmascript()
-        && p.peek().typ == TT::ChevronLeft
-        && p.is_start_of_type_arguments()
-      {
-        Some(p.type_parameters(ctx)?)
-      } else {
-        None
-      };
+        // TypeScript: generic type parameters
+        let type_parameters = if !p.is_strict_ecmascript()
+          && p.peek().typ == TT::ChevronLeft
+          && p.is_start_of_type_arguments()
+        {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
 
-      let extends = p
-        .consume_if(TT::KeywordExtends)
-        .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+        let extends = p
+          .consume_if(TT::KeywordExtends)
+          .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
-      // TypeScript: implements clause
-      let mut implements = Vec::new();
-      if p.consume_if(TT::KeywordImplements).is_match() {
-        loop {
-          implements.push(p.type_expr(ctx)?);
-          if !p.consume_if(TT::Comma).is_match() {
-            break;
+        // TypeScript: implements clause
+        let mut implements = Vec::new();
+        if p.consume_if(TT::KeywordImplements).is_match() {
+          loop {
+            implements.push(p.type_expr(ctx)?);
+            if !p.consume_if(TT::Comma).is_match() {
+              break;
+            }
           }
         }
-      }
 
-      let is_derived_class = extends.is_some();
-      let prev_class_depth = p.class_is_derived.len();
-      p.class_is_derived.push(is_derived_class);
-      let members = p.class_body(ctx);
-      p.class_is_derived.truncate(prev_class_depth);
-      let members = members?;
-      Ok(ClassExpr {
-        decorators: Vec::new(),
-        name,
-        type_parameters,
-        extends,
-        implements,
-        members,
-      })
+        let is_derived_class = extends.is_some();
+        let prev_class_depth = p.class_is_derived.len();
+        p.class_is_derived.push(is_derived_class);
+        let members = p.class_body(ctx);
+        p.class_is_derived.truncate(prev_class_depth);
+        let members = members?;
+        Ok(ClassExpr {
+          decorators: Vec::new(),
+          name,
+          type_parameters,
+          extends,
+          implements,
+          members,
+        })
+      })();
+      p.strict_mode = prev_strict_mode;
+      res
     })
   }
 
@@ -492,47 +543,58 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       let decorators = p.decorators(ctx)?;
       p.require(TT::KeywordClass)?.loc;
-      let name = p.maybe_class_or_func_name(ctx);
+      let prev_strict_mode = p.strict_mode;
+      if p.is_strict_ecmascript() {
+        p.strict_mode += 1;
+      }
+      let res = (|| {
+        let name = p.maybe_class_or_func_name(ctx);
+        if let Some(name) = name.as_ref() {
+          p.validate_strict_binding_identifier_name(name.loc, &name.stx.name)?;
+        }
 
-      // TypeScript: generic type parameters
-      let type_parameters = if !p.is_strict_ecmascript()
-        && p.peek().typ == TT::ChevronLeft
-        && p.is_start_of_type_arguments()
-      {
-        Some(p.type_parameters(ctx)?)
-      } else {
-        None
-      };
+        // TypeScript: generic type parameters
+        let type_parameters = if !p.is_strict_ecmascript()
+          && p.peek().typ == TT::ChevronLeft
+          && p.is_start_of_type_arguments()
+        {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
 
-      let extends = p
-        .consume_if(TT::KeywordExtends)
-        .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+        let extends = p
+          .consume_if(TT::KeywordExtends)
+          .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
-      // TypeScript: implements clause
-      let mut implements = Vec::new();
-      if p.consume_if(TT::KeywordImplements).is_match() {
-        loop {
-          implements.push(p.type_expr(ctx)?);
-          if !p.consume_if(TT::Comma).is_match() {
-            break;
+        // TypeScript: implements clause
+        let mut implements = Vec::new();
+        if p.consume_if(TT::KeywordImplements).is_match() {
+          loop {
+            implements.push(p.type_expr(ctx)?);
+            if !p.consume_if(TT::Comma).is_match() {
+              break;
+            }
           }
         }
-      }
 
-      let is_derived_class = extends.is_some();
-      let prev_class_depth = p.class_is_derived.len();
-      p.class_is_derived.push(is_derived_class);
-      let members = p.class_body(ctx);
-      p.class_is_derived.truncate(prev_class_depth);
-      let members = members?;
-      Ok(ClassExpr {
-        decorators,
-        name,
-        type_parameters,
-        extends,
-        implements,
-        members,
-      })
+        let is_derived_class = extends.is_some();
+        let prev_class_depth = p.class_is_derived.len();
+        p.class_is_derived.push(is_derived_class);
+        let members = p.class_body(ctx);
+        p.class_is_derived.truncate(prev_class_depth);
+        let members = members?;
+        Ok(ClassExpr {
+          decorators,
+          name,
+          type_parameters,
+          extends,
+          implements,
+          members,
+        })
+      })();
+      p.strict_mode = prev_strict_mode;
+      res
     })
   }
 
@@ -549,7 +611,14 @@ impl<'a> Parser<'a> {
     if !is_valid_pattern_identifier(t.typ, ctx.rules) {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
     };
-    Ok(self.string(t.loc))
+    let name = self.string(t.loc);
+    if self.is_strict_ecmascript()
+      && self.is_strict_mode()
+      && Parser::is_strict_mode_reserved_word(&name)
+    {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+    }
+    Ok(name)
   }
 
   /// Try to parse angle-bracket type assertion: <Type>expr
@@ -857,11 +926,21 @@ impl<'a> Parser<'a> {
               }
             };
 
+            if matches!(
+              operator.name,
+              OperatorName::PrefixIncrement | OperatorName::PrefixDecrement
+            ) {
+              p.validate_strict_assignment_target_expr(&operand)?;
+            }
+
             // ES strict mode (incl. modules): `delete IdentifierReference` is a syntax error.
-            if operator.name == OperatorName::Delete && p.is_strict_ecmascript() && p.is_module() {
+            if operator.name == OperatorName::Delete
+              && p.is_strict_ecmascript()
+              && p.is_strict_mode()
+            {
               if matches!(operand.stx.as_ref(), Expr::Id(_)) {
                 return Err(op_tok.error(SyntaxErrorType::ExpectedSyntax(
-                  "delete of an unqualified identifier in modules",
+                  "delete of an unqualified identifier in strict mode",
                 )));
               }
             }
@@ -1100,6 +1179,7 @@ impl<'a> Parser<'a> {
             self.restore_checkpoint(cp);
             break;
           };
+          self.validate_strict_assignment_target_expr(&left)?;
           left = Node::new(
             left.loc + t.loc,
             UnaryPostfixExpr {
@@ -1473,6 +1553,7 @@ impl<'a> Parser<'a> {
                   operator.name,
                   self.should_recover(),
                 )?;
+                self.validate_strict_assignment_target_expr(&left)?;
               };
               let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
               Node::new(

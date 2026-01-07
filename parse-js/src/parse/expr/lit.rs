@@ -588,12 +588,12 @@ impl<'a> Parser<'a> {
     let t = self.require(TT::LiteralNumber)?;
     let raw = self.str(t.loc);
     if self.is_strict_ecmascript()
-      && self.is_module()
+      && self.is_strict_mode()
       && (crate::num::is_legacy_octal_literal(raw)
         || crate::num::is_leading_zero_decimal_literal(raw))
     {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax(
-        "numeric literals with leading zeros are not allowed in modules",
+        "numeric literals with leading zeros are not allowed in strict mode",
       )));
     }
     let value = normalise_literal_number(raw)
@@ -851,10 +851,10 @@ impl<'a> Parser<'a> {
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
     let (loc, value, escape_loc) =
       self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
-    if self.is_strict_ecmascript() && self.is_module() {
+    if self.is_strict_ecmascript() && self.is_strict_mode() {
       if let Some(escape_loc) = escape_loc {
         return Err(escape_loc.error(
-          SyntaxErrorType::ExpectedSyntax("octal escape sequences not allowed in modules"),
+          SyntaxErrorType::ExpectedSyntax("octal escape sequences not allowed in strict mode"),
           Some(TT::LiteralString),
         ));
       }
