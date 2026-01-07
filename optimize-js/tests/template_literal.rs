@@ -53,4 +53,3 @@ fn tagged_templates_are_supported() {
     "expected tagged template literal in output: {js}"
   );
 }
-

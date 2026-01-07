@@ -32,9 +32,11 @@ fn parse_minify_options(
     Some("ts") => Some(Dialect::Ts),
     Some("tsx") => Some(Dialect::Tsx),
     Some("dts") => Some(Dialect::Dts),
-    Some(other) => return Err(format!(
+    Some(other) => {
+      return Err(format!(
       "invalid dialect {other:?} (expected \"auto\", \"js\", \"jsx\", \"ts\", \"tsx\", or \"dts\")"
-    )),
+    ))
+    }
   };
 
   let mut ts_erase_options = TsEraseOptions::default();

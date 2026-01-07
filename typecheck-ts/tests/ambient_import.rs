@@ -79,7 +79,10 @@ fn imports_from_ambient_modules_without_host_resolution() {
   let host = AmbientHost::new(options)
     .with_lib(common::core_globals_lib())
     .with_lib(ambient_lib)
-    .with_file(entry.clone(), r#"import { x } from "ambient"; const y = x;"#);
+    .with_file(
+      entry.clone(),
+      r#"import { x } from "ambient"; const y = x;"#,
+    );
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
@@ -117,7 +120,10 @@ fn ambient_module_type_imports_resolve_types() {
   let host = AmbientHost::new(options)
     .with_lib(common::core_globals_lib())
     .with_lib(ambient_lib)
-    .with_file(entry.clone(), r#"import type { Foo } from "ambient"; type Uses = Foo;"#);
+    .with_file(
+      entry.clone(),
+      r#"import type { Foo } from "ambient"; type Uses = Foo;"#,
+    );
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();

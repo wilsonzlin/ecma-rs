@@ -70,7 +70,9 @@ pub fn callable_signatures_with_expander(
   expander: Option<&dyn RelateTypeExpander>,
 ) -> Vec<SignatureId> {
   match store.type_kind(ty) {
-    TypeKind::Union(members) => union_common_signatures(store, OverloadKind::Call, &members, expander),
+    TypeKind::Union(members) => {
+      union_common_signatures(store, OverloadKind::Call, &members, expander)
+    }
     _ => {
       let mut collected = Vec::new();
       collect_signatures(store, ty, &mut collected, &mut HashSet::new(), expander);
@@ -518,7 +520,8 @@ fn resolve_overload_set(
   let mut outcomes = Vec::with_capacity(candidates.len());
   for (order, sig_id) in candidates.into_iter().enumerate() {
     let original_sig = store.signature(sig_id);
-    let allow_const_args = const_args.is_some() && original_sig.type_params.iter().any(|tp| tp.const_);
+    let allow_const_args =
+      const_args.is_some() && original_sig.type_params.iter().any(|tp| tp.const_);
     let mut outcome = CandidateOutcome {
       order,
       sig_id,
@@ -1438,7 +1441,8 @@ fn check_arguments(
       } else {
         const_raw
       };
-      if !relate.is_assignable(actual_ty, expected_ty) && relate.is_assignable(const_actual, expected_ty)
+      if !relate.is_assignable(actual_ty, expected_ty)
+        && relate.is_assignable(const_actual, expected_ty)
       {
         const_actual
       } else {

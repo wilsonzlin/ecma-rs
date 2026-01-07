@@ -58,7 +58,10 @@ fn relation_depth_limit_short_circuits_with_reason_note() {
   assert_eq!(ctx.limits().max_relation_depth, 0);
 
   let result = ctx.explain_assignable(primitives.string, primitives.number);
-  assert!(result.result, "expected depth limit to conservatively assume success");
+  assert!(
+    result.result,
+    "expected depth limit to conservatively assume success"
+  );
   let reason = result.reason.expect("expected reason node");
   assert_eq!(reason.note.as_deref(), Some("depth limit"));
 }
@@ -75,7 +78,10 @@ fn relation_step_limit_short_circuits_with_reason_note() {
   assert_eq!(ctx.limits().step_limit, 0);
 
   let result = ctx.explain_assignable(primitives.string, primitives.number);
-  assert!(result.result, "expected step limit to conservatively assume success");
+  assert!(
+    result.result,
+    "expected step limit to conservatively assume success"
+  );
   let reason = result.reason.expect("expected reason node");
   assert_eq!(reason.note.as_deref(), Some("step limit"));
 }

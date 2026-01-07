@@ -4,7 +4,9 @@ use std::sync::Arc;
 mod common;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{
+  CompilerOptions, FileKind, LibFile, LibManager, LibName, ScriptTarget,
+};
 use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
@@ -85,7 +87,10 @@ fn bundled_lib_manager_loads_official_ts_libs() {
   let names: Vec<_> = loaded.files.iter().map(|lib| lib.name.as_ref()).collect();
   let mut sorted = names.clone();
   sorted.sort_unstable();
-  assert_eq!(names, sorted, "bundled libs should have deterministic ordering");
+  assert_eq!(
+    names, sorted,
+    "bundled libs should have deterministic ordering"
+  );
 
   for lib in loaded.files.iter() {
     assert_eq!(
@@ -96,7 +101,10 @@ fn bundled_lib_manager_loads_official_ts_libs() {
   }
 
   assert!(
-    loaded.files.iter().any(|lib| lib.name.as_ref() == "lib.dom.d.ts"),
+    loaded
+      .files
+      .iter()
+      .any(|lib| lib.name.as_ref() == "lib.dom.d.ts"),
     "default libs should include lib.dom.d.ts"
   );
   assert!(
@@ -465,8 +473,7 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
   let mut options = CompilerOptions::default();
   options.libs = vec![LibName::parse("es2015").expect("es2015 lib")];
   let entry = FileKey::new("libs.ts");
-  let host =
-    TestHost::new(options).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
+  let host = TestHost::new(options).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   assert!(
@@ -554,7 +561,9 @@ fn bundled_libs_esnext_include_disposable_protocol() {
     "expected esnext bundled libs to typecheck disposable fixture, got {diagnostics:?}"
   );
 
-  let file_id = program.file_id(&entry).expect("file id for disposable fixture");
+  let file_id = program
+    .file_id(&entry)
+    .expect("file id for disposable fixture");
   let defs = program.definitions_in_file(file_id);
   let find_def = |name: &str| {
     defs

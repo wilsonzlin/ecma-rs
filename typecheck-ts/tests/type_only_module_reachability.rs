@@ -38,7 +38,10 @@ export const x: T = 1;
     .get("x")
     .and_then(|entry| entry.def)
     .expect("export x should have a definition");
-  assert_eq!(program.type_kind(program.type_of_def_interned(x_def)), TypeKindSummary::Number);
+  assert_eq!(
+    program.type_kind(program.type_of_def_interned(x_def)),
+    TypeKindSummary::Number
+  );
 
   let t_def = program
     .definitions_in_file(main_id)

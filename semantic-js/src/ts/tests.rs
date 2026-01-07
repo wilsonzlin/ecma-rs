@@ -2121,9 +2121,7 @@ fn export_import_equals_entity_name_is_not_treated_as_script() {
 
   let files: HashMap<FileId, Arc<HirFile>> = HashMap::from([(file, Arc::new(hir))]);
   let resolver = StaticResolver::new(HashMap::new());
-  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| {
-    files.get(&f).unwrap().clone()
-  });
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(
     diags.iter().all(|d| d.code != "BIND1003"),
     "unexpected BIND1003 diagnostics: {:?}",

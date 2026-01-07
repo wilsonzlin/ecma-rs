@@ -8,7 +8,11 @@ use optimize_js::TopLevelMode;
 #[test]
 fn let_declarations_without_initializers_assign_undefined() {
   let program = compile_source("let x; console.log(x);", TopLevelMode::Module, true);
-  let dbg = program.top_level.debug.as_ref().expect("debug output enabled");
+  let dbg = program
+    .top_level
+    .debug
+    .as_ref()
+    .expect("debug output enabled");
   let source_step = dbg
     .steps()
     .iter()

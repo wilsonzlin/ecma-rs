@@ -35,4 +35,3 @@ export const inferred = asConst({ a: 1, b: "ok" });
     "{ readonly a: 1; readonly b: \"ok\" }"
   );
 }
-

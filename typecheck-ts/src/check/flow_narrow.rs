@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 
 use hir_js::BinaryOp;
 use num_bigint::BigInt;
-use types_ts_interned::{IntrinsicKind, RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore};
+use types_ts_interned::{
+  IntrinsicKind, RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore,
+};
 
 use super::flow::{FlowKey, PathSegment};
 
@@ -461,22 +463,22 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
   let primitives = store.primitive_ids();
   fn matches_typeof(kind: &TypeKind, target: &str, store: &TypeStore) -> bool {
     match kind {
-    TypeKind::String | TypeKind::StringLiteral(_) => target == "string",
-    TypeKind::Number | TypeKind::NumberLiteral(_) => target == "number",
-    TypeKind::Boolean | TypeKind::BooleanLiteral(_) => target == "boolean",
-    TypeKind::BigInt | TypeKind::BigIntLiteral(_) => target == "bigint",
-    TypeKind::Symbol | TypeKind::UniqueSymbol => target == "symbol",
-    TypeKind::Callable { .. } => target == "function",
-    TypeKind::Undefined => target == "undefined",
-    TypeKind::Null => target == "object",
-    TypeKind::Object(_) | TypeKind::Array { .. } | TypeKind::Ref { .. } => target == "object",
-    TypeKind::Intrinsic { kind, ty } => match kind {
-      IntrinsicKind::NoInfer => matches_typeof(&store.type_kind(*ty), target, store),
-      IntrinsicKind::BuiltinIteratorReturn => false,
-      _ => target == "string",
-    },
-    TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject | TypeKind::TypeParam(_) => false,
-    _ => false,
+      TypeKind::String | TypeKind::StringLiteral(_) => target == "string",
+      TypeKind::Number | TypeKind::NumberLiteral(_) => target == "number",
+      TypeKind::Boolean | TypeKind::BooleanLiteral(_) => target == "boolean",
+      TypeKind::BigInt | TypeKind::BigIntLiteral(_) => target == "bigint",
+      TypeKind::Symbol | TypeKind::UniqueSymbol => target == "symbol",
+      TypeKind::Callable { .. } => target == "function",
+      TypeKind::Undefined => target == "undefined",
+      TypeKind::Null => target == "object",
+      TypeKind::Object(_) | TypeKind::Array { .. } | TypeKind::Ref { .. } => target == "object",
+      TypeKind::Intrinsic { kind, ty } => match kind {
+        IntrinsicKind::NoInfer => matches_typeof(&store.type_kind(*ty), target, store),
+        IntrinsicKind::BuiltinIteratorReturn => false,
+        _ => target == "string",
+      },
+      TypeKind::Any | TypeKind::Unknown | TypeKind::EmptyObject | TypeKind::TypeParam(_) => false,
+      _ => false,
     }
   }
 

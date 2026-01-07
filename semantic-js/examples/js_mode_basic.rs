@@ -36,15 +36,20 @@ impl Collect {
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     let scope = scope_id(&node.assoc).expect("scope attached");
     if let Some(symbol) = declared_symbol(&node.assoc) {
-      self.decls.push((node.loc.0 as u32, node.stx.name.clone(), scope, symbol));
+      self
+        .decls
+        .push((node.loc.0 as u32, node.stx.name.clone(), scope, symbol));
     }
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
     let scope = scope_id(&node.assoc).expect("scope attached");
-    self
-      .uses
-      .push((node.loc.0 as u32, node.stx.name.clone(), scope, resolved_symbol(&node.assoc)));
+    self.uses.push((
+      node.loc.0 as u32,
+      node.stx.name.clone(),
+      scope,
+      resolved_symbol(&node.assoc),
+    ));
   }
 }
 
@@ -59,8 +64,12 @@ fn main() {
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
 
-  collect.decls.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-  collect.uses.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+  collect
+    .decls
+    .sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+  collect
+    .uses
+    .sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
 
   println!("== top scope symbols ==");
   for (name_id, symbol) in sem.scope_symbols(sem.top_scope()) {
@@ -81,7 +90,10 @@ fn main() {
   println!("== identifier uses ==");
   for (offset, name, scope, symbol) in &collect.uses {
     let resolved = symbol.map(|id| id.raw());
-    println!("  use {name}@{offset}: scope={} resolved={resolved:?}", scope.raw());
+    println!(
+      "  use {name}@{offset}: scope={} resolved={resolved:?}",
+      scope.raw()
+    );
   }
 }
 
@@ -92,4 +104,3 @@ fn render_diagnostics(diagnostics: Vec<Diagnostic>) {
     print!("{}", render_diagnostic(&files, &diagnostic));
   }
 }
-

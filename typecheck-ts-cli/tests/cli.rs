@@ -1274,7 +1274,10 @@ fn project_mode_serializes_emit_related_compiler_options() {
     .get("compiler_options")
     .and_then(|o| o.as_object())
     .expect("compiler_options object");
-  assert_eq!(options.get("no_emit").and_then(|v| v.as_bool()), Some(false));
+  assert_eq!(
+    options.get("no_emit").and_then(|v| v.as_bool()),
+    Some(false)
+  );
   assert_eq!(
     options.get("no_emit_on_error").and_then(|v| v.as_bool()),
     Some(true)

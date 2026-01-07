@@ -1,9 +1,9 @@
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use std::hint::black_box;
 use types_ts_interned::{
-  CacheConfig, CacheStats, EvaluatorCacheStats, IntrinsicKind, MappedModifier, MappedType, PropData,
-  PropKey, Property, Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId,
-  TypeKind, TypeOptions, TypeParamId, TypeStore,
+  CacheConfig, CacheStats, EvaluatorCacheStats, IntrinsicKind, MappedModifier, MappedType,
+  PropData, PropKey, Property, Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator,
+  TypeExpander, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
 };
 
 fn hit_rate(stats: CacheStats) -> f64 {
@@ -24,7 +24,10 @@ fn delta_stats(after: CacheStats, before: CacheStats) -> CacheStats {
   }
 }
 
-fn delta_evaluator_stats(after: EvaluatorCacheStats, before: EvaluatorCacheStats) -> EvaluatorCacheStats {
+fn delta_evaluator_stats(
+  after: EvaluatorCacheStats,
+  before: EvaluatorCacheStats,
+) -> EvaluatorCacheStats {
   EvaluatorCacheStats {
     eval: delta_stats(after.eval, before.eval),
     references: delta_stats(after.references, before.references),
@@ -101,10 +104,7 @@ fn build_complex_operator_type(store: &TypeStore, prop_count: usize) -> TypeId {
   let k_param = TypeParamId(0);
   let k_ty = store.intern_type(TypeKind::TypeParam(k_param));
 
-  let obj_k = store.intern_type(TypeKind::IndexedAccess {
-    obj,
-    index: k_ty,
-  });
+  let obj_k = store.intern_type(TypeKind::IndexedAccess { obj, index: k_ty });
 
   let tag_s = store.intern_type(TypeKind::StringLiteral(store.intern_name("S")));
   let tag_n = store.intern_type(TypeKind::StringLiteral(store.intern_name("N")));
@@ -164,7 +164,10 @@ fn build_complex_operator_type(store: &TypeStore, prop_count: usize) -> TypeId {
     as_type: Some(key_remap_tpl),
   }));
 
-  store.intern_type(TypeKind::IndexedAccess { obj: mapped, index: keys })
+  store.intern_type(TypeKind::IndexedAccess {
+    obj: mapped,
+    index: keys,
+  })
 }
 
 fn build_template_cross_product(store: &TypeStore, left: usize, right: usize) -> TypeId {
@@ -231,7 +234,10 @@ fn bench_evaluator(c: &mut Criterion) {
   {
     let mut evaluator = TypeEvaluator::with_cache_config(store.clone(), &expander, cache_config);
     black_box(evaluator.evaluate(complex_ty));
-    print_evaluator_stats("complex_ops/cold cache stats (single eval)", evaluator.cache_stats());
+    print_evaluator_stats(
+      "complex_ops/cold cache stats (single eval)",
+      evaluator.cache_stats(),
+    );
   }
 
   let mut warm_evaluator = TypeEvaluator::with_cache_config(store.clone(), &expander, cache_config);

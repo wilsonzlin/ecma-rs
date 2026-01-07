@@ -24,8 +24,8 @@ use crate::ast::ts_stmt::ImportEqualsRhs;
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
-use crate::lex::KEYWORDS_MAPPING;
 use crate::lex::LexMode;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::parse::stmt::decl::VarDeclParseMode;
 use crate::token::TT;
 

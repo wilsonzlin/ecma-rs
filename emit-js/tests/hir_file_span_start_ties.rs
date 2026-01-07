@@ -30,4 +30,3 @@ fn hir_file_emission_preserves_root_stmt_order_when_span_starts_tie() {
   let emitted = emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit");
   assert_eq!(emitted, source);
 }
-

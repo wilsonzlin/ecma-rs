@@ -179,7 +179,8 @@ mod bundled {
   }
 
   fn bundled_lib_text_or_panic(filename: &str) -> &'static str {
-    bundled_lib_text(filename).unwrap_or_else(|| panic!("missing bundled TypeScript lib '{filename}'"))
+    bundled_lib_text(filename)
+      .unwrap_or_else(|| panic!("missing bundled TypeScript lib '{filename}'"))
   }
 
   fn referenced_libs(text: &str) -> Vec<String> {

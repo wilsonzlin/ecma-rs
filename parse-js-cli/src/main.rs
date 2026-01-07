@@ -137,7 +137,10 @@ fn exit_with_diagnostic(
     exit(1);
   }
 
-  eprintln!("{}", render_diagnostic_with_options(source, &diagnostic, output.render));
+  eprintln!(
+    "{}",
+    render_diagnostic_with_options(source, &diagnostic, output.render)
+  );
   exit(1);
 }
 
@@ -208,10 +211,7 @@ fn main() {
             Some(Span::new(file, TextRange::new(0, 0))),
             format!("failed to read {name}: {err}"),
           );
-          let provider = SingleSource {
-            name,
-            text: None,
-          };
+          let provider = SingleSource { name, text: None };
           exit_with_diagnostic(&provider, diagnostic, output);
         }
       }
@@ -224,10 +224,7 @@ fn main() {
           Some(Span::new(file, TextRange::new(0, 0))),
           format!("failed to read from stdin: {err}"),
         );
-        let provider = SingleSource {
-          name,
-          text: None,
-        };
+        let provider = SingleSource { name, text: None };
         exit_with_diagnostic(&provider, diagnostic, output);
       }
       (name, raw)
@@ -278,7 +275,8 @@ fn main() {
         }))
       };
 
-      let parsed = match parse_with_options_cancellable(source, parse_options, Arc::clone(&cancel)) {
+      let parsed = match parse_with_options_cancellable(source, parse_options, Arc::clone(&cancel))
+      {
         Ok(parsed) => parsed,
         Err(err) => {
           let mut diagnostic = err.to_diagnostic(file);

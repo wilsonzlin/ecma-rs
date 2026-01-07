@@ -2,7 +2,7 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion, Throughpu
 use std::hint::black_box;
 use types_ts_interned::{
   CacheConfig, CacheStats, EvaluatorCacheStats, EvaluatorCaches, Indexer, Param, PropData, PropKey,
-  Property, RelationCache, RelateCtx, RelateHooks, Shape, Signature, TypeId, TypeKind, TypeStore,
+  Property, RelateCtx, RelateHooks, RelationCache, Shape, Signature, TypeId, TypeKind, TypeStore,
 };
 
 fn hit_rate(stats: CacheStats) -> f64 {
@@ -23,7 +23,10 @@ fn delta_stats(after: CacheStats, before: CacheStats) -> CacheStats {
   }
 }
 
-fn delta_evaluator_stats(after: EvaluatorCacheStats, before: EvaluatorCacheStats) -> EvaluatorCacheStats {
+fn delta_evaluator_stats(
+  after: EvaluatorCacheStats,
+  before: EvaluatorCacheStats,
+) -> EvaluatorCacheStats {
   EvaluatorCacheStats {
     eval: delta_stats(after.eval, before.eval),
     references: delta_stats(after.references, before.references),
@@ -101,18 +104,30 @@ fn build_object_pair(store: &TypeStore, base_props: usize, extra_props: usize) -
       vec![
         Param {
           name: None,
-          ty: if idx % 2 == 0 { string_or_number } else { prim.string },
+          ty: if idx % 2 == 0 {
+            string_or_number
+          } else {
+            prim.string
+          },
           optional: idx % 3 == 0,
           rest: false,
         },
         Param {
           name: None,
-          ty: if idx % 2 == 0 { prim.number } else { bool_or_number },
+          ty: if idx % 2 == 0 {
+            prim.number
+          } else {
+            bool_or_number
+          },
           optional: idx % 4 == 0,
           rest: idx % 5 == 0,
         },
       ],
-      if idx % 2 == 0 { prim.boolean } else { prim.number },
+      if idx % 2 == 0 {
+        prim.boolean
+      } else {
+        prim.number
+      },
     ));
     shape.call_signatures.push(sig);
   }
@@ -121,7 +136,11 @@ fn build_object_pair(store: &TypeStore, base_props: usize, extra_props: usize) -
     let sig = store.intern_signature(Signature::new(
       vec![Param {
         name: None,
-        ty: if idx % 2 == 0 { prim.number } else { prim.string },
+        ty: if idx % 2 == 0 {
+          prim.number
+        } else {
+          prim.string
+        },
         optional: false,
         rest: idx % 2 == 0,
       }],
@@ -313,7 +332,10 @@ fn bench_relation(c: &mut Criterion) {
   let after_norm = ctx.normalizer_cache_stats();
   println!("union_heavy/warm cache stats (during benchmark):");
   print_cache_stats("  relation", delta_stats(after_rel, before_rel));
-  print_evaluator_stats("  normalizer", delta_evaluator_stats(after_norm, before_norm));
+  print_evaluator_stats(
+    "  normalizer",
+    delta_evaluator_stats(after_norm, before_norm),
+  );
   union_group.finish();
 
   let mut obj_group = c.benchmark_group("types-ts-interned/relation/object_heavy");
@@ -357,7 +379,10 @@ fn bench_relation(c: &mut Criterion) {
   let after_norm = ctx.normalizer_cache_stats();
   println!("object_heavy/warm cache stats (during benchmark):");
   print_cache_stats("  relation", delta_stats(after_rel, before_rel));
-  print_evaluator_stats("  normalizer", delta_evaluator_stats(after_norm, before_norm));
+  print_evaluator_stats(
+    "  normalizer",
+    delta_evaluator_stats(after_norm, before_norm),
+  );
   obj_group.finish();
 
   let mut deep_group = c.benchmark_group("types-ts-interned/relation/deep_object_chain");

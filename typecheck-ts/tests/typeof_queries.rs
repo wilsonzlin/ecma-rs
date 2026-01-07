@@ -37,6 +37,8 @@ declare const title: typeof window.document.title;
 
   let file_id = program.file_id(&entry).expect("file id for entry");
   let offset = source.rfind("title").expect("title property offset") as u32;
-  let ty = program.type_at(file_id, offset).expect("type of window.document.title");
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type of window.document.title");
   assert_eq!(program.display_type(ty).to_string(), "string");
 }

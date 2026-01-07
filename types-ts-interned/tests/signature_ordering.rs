@@ -44,7 +44,9 @@ fn callable_overload_sets_are_order_independent() {
   });
   let mut reversed = signatures.clone();
   reversed.reverse();
-  let callable_b = store.intern_type(TypeKind::Callable { overloads: reversed });
+  let callable_b = store.intern_type(TypeKind::Callable {
+    overloads: reversed,
+  });
 
   assert_eq!(callable_a, callable_b);
 

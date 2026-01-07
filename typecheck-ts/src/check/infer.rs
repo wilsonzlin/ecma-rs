@@ -4,8 +4,8 @@ use std::sync::Arc;
 use super::instantiate::Substituter;
 use super::overload::{expected_arg_type_at, CallArgType};
 use types_ts_interned::{
-  RelateCtx, Shape, Signature, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamDecl, TypeParamId,
-  TypeStore,
+  RelateCtx, Shape, Signature, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamDecl,
+  TypeParamId, TypeStore,
 };
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
@@ -130,7 +130,10 @@ fn infer_variadic_rest_tuple(
 ) -> TypeId {
   if let [only] = rest_args {
     if only.spread {
-      let only_ty = const_args.and_then(|args| args.first()).copied().unwrap_or(only.ty);
+      let only_ty = const_args
+        .and_then(|args| args.first())
+        .copied()
+        .unwrap_or(only.ty);
       match store.type_kind(only_ty) {
         // For `f<T extends any[]>(...args: T)` and `f(...arr)` where `arr` is a
         // non-tuple array, `tsc` infers `T` as the array type (not `[...T]`).
@@ -315,7 +318,10 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
 
     // Covariant inference distributes unions to gather candidates.
     if variance == Variance::Covariant {
-      match (self.store.type_kind(arg.regular), self.store.type_kind(arg.const_)) {
+      match (
+        self.store.type_kind(arg.regular),
+        self.store.type_kind(arg.const_),
+      ) {
         (TypeKind::Union(regular), TypeKind::Union(const_)) if regular.len() == const_.len() => {
           for (regular, const_) in regular.into_iter().zip(const_) {
             self.constrain(param_ty, ArgPair { regular, const_ }, variance);
@@ -355,7 +361,11 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
     match self.store.type_kind(param_ty) {
       TypeKind::TypeParam(id) => {
         if let Some(decl) = self.decls.get(&id) {
-          self.add_bound(id, variance, if decl.const_ { arg.const_ } else { arg.regular });
+          self.add_bound(
+            id,
+            variance,
+            if decl.const_ { arg.const_ } else { arg.regular },
+          );
         }
       }
       TypeKind::Union(mut options) => {
@@ -437,7 +447,7 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
           }
           _ => {}
         }
-      },
+      }
       TypeKind::Tuple(param_elems) => {
         let prim = self.store.primitive_ids();
         let regular_tuple = match self.store.type_kind(arg.regular) {
@@ -539,21 +549,19 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
         }
 
         let const_args = match self.store.type_kind(arg.const_) {
-          TypeKind::Ref { def: const_def, args } if const_def == def && args.len() == arg_args.len() => {
-            args
-          }
+          TypeKind::Ref {
+            def: const_def,
+            args,
+          } if const_def == def && args.len() == arg_args.len() => args,
           _ => arg_args.clone(),
         };
 
-        for ((param_arg, regular), const_) in args.into_iter().zip(arg_args.into_iter()).zip(const_args.into_iter()) {
-          self.constrain(
-            param_arg,
-            ArgPair {
-              regular,
-              const_,
-            },
-            variance,
-          );
+        for ((param_arg, regular), const_) in args
+          .into_iter()
+          .zip(arg_args.into_iter())
+          .zip(const_args.into_iter())
+        {
+          self.constrain(param_arg, ArgPair { regular, const_ }, variance);
         }
       }
       TypeKind::Object(obj_id) => {
@@ -630,11 +638,7 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
     );
   }
 
-  fn contains_inferable_type_param(
-    &self,
-    ty: TypeId,
-    visited: &mut HashSet<TypeId>,
-  ) -> bool {
+  fn contains_inferable_type_param(&self, ty: TypeId, visited: &mut HashSet<TypeId>) -> bool {
     if !visited.insert(ty) {
       return false;
     }
@@ -729,7 +733,8 @@ impl<'a, 'h> InferenceContext<'a, 'h> {
             .iter()
             .any(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
           if has_specific {
-            lowers.retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
+            lowers
+              .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
           }
         }
         candidate = Some(if lowers.len() == 1 {

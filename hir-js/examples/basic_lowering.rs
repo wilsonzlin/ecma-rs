@@ -30,7 +30,9 @@ fn main() {
 
   let total_offset = SOURCE.find("total").expect("total exists") as u32;
   if let Some(hit) = hir.span_map.def_span_at_offset(total_offset) {
-    println!("def_at_offset({total_offset}): def={:?} span={:?}", hit.id, hit.range);
+    println!(
+      "def_at_offset({total_offset}): def={:?} span={:?}",
+      hit.id, hit.range
+    );
   }
 }
-

@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use diagnostics::{sort_diagnostics, sort_labels, Diagnostic, FileId, Label, Severity, Span, TextRange};
+use diagnostics::{
+  sort_diagnostics, sort_labels, Diagnostic, FileId, Label, Severity, Span, TextRange,
+};
 use serde::Serialize;
 use typecheck_ts::{FileKey, MemoryHost, Program, TypeId};
 
@@ -136,12 +138,21 @@ fn main() {
     .type_at(index_file, call_expr_offset)
     .expect("type_at succeeded");
 
-  let total_offset = (INDEX_TS.find("${total}").expect("template literal has total") + 2) as u32;
-  let symbol_id = program.symbol_at(index_file, total_offset).expect("symbol_at succeeded");
+  let total_offset = (INDEX_TS
+    .find("${total}")
+    .expect("template literal has total")
+    + 2) as u32;
+  let symbol_id = program
+    .symbol_at(index_file, total_offset)
+    .expect("symbol_at succeeded");
   let symbol_info = program.symbol_info(symbol_id);
   let symbol_ty = symbol_info
     .as_ref()
-    .and_then(|info| info.type_id.or(info.def.map(|def| program.type_of_def(def))))
+    .and_then(|info| {
+      info
+        .type_id
+        .or(info.def.map(|def| program.type_of_def(def)))
+    })
     .map(|ty| program.display_type(ty).to_string());
 
   let snapshot = Snapshot {
@@ -162,7 +173,9 @@ fn main() {
         offset: total_offset,
         symbol_id: symbol_id.0,
         name: symbol_info.as_ref().and_then(|info| info.name.clone()),
-        def_id: symbol_info.as_ref().and_then(|info| info.def.map(|def| def.0)),
+        def_id: symbol_info
+          .as_ref()
+          .and_then(|info| info.def.map(|def| def.0)),
         ty: symbol_ty,
       }],
     },
@@ -179,7 +192,9 @@ fn exports_to_snapshot(program: &Program, file: FileId) -> BTreeMap<String, Stri
     .exports_of(file)
     .into_iter()
     .map(|(name, entry)| {
-      let ty: Option<TypeId> = entry.type_id.or(entry.def.map(|def| program.type_of_def(def)));
+      let ty: Option<TypeId> = entry
+        .type_id
+        .or(entry.def.map(|def| program.type_of_def(def)));
       let ty = ty.map(|ty| program.display_type(ty).to_string());
       (name, ty.unwrap_or_else(|| "<unknown>".to_string()))
     })

@@ -106,9 +106,7 @@ fn main() {
   println!("type_of_def(total) = {}", program.display_type(total_ty));
 
   // 3) type_at + display_type
-  let call_start = INDEX_TS
-    .find("add(1, 2)")
-    .expect("add call exists") as u32;
+  let call_start = INDEX_TS.find("add(1, 2)").expect("add call exists") as u32;
   let call_expr_offset = call_start + 3; // points at the `(` in `add(1, 2)`
   let add_ident_ty = program
     .type_at(index_file, call_start)
@@ -127,8 +125,10 @@ fn main() {
   );
 
   // 4) symbol_at
-  let total_ref_offset =
-    (INDEX_TS.find("${total}").expect("template literal has total") + 2) as u32;
+  let total_ref_offset = (INDEX_TS
+    .find("${total}")
+    .expect("template literal has total")
+    + 2) as u32;
   let symbol = program
     .symbol_at(index_file, total_ref_offset)
     .expect("symbol_at should find `total`");
@@ -137,7 +137,10 @@ fn main() {
   println!("symbol_at(index.ts@{total_ref_offset}) = {symbol:?}");
   println!("  name: {:?}", symbol_info.name);
   println!("  def: {:?}", symbol_info.def);
-  if let Some(ty) = symbol_info.type_id.or(symbol_info.def.map(|def| program.type_of_def(def))) {
+  if let Some(ty) = symbol_info
+    .type_id
+    .or(symbol_info.def.map(|def| program.type_of_def(def)))
+  {
     println!("  type: {}", program.display_type(ty));
   }
 }
@@ -145,7 +148,9 @@ fn main() {
 fn print_exports(program: &Program, file_name: &str, file: FileId) {
   println!("exports_of({file_name}):");
   for (name, entry) in program.exports_of(file) {
-    let ty: Option<TypeId> = entry.type_id.or(entry.def.map(|def| program.type_of_def(def)));
+    let ty: Option<TypeId> = entry
+      .type_id
+      .or(entry.def.map(|def| program.type_of_def(def)));
     let ty_display = ty
       .map(|ty| program.display_type(ty).to_string())
       .unwrap_or_else(|| "<unknown>".to_string());

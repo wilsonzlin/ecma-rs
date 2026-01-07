@@ -23,4 +23,3 @@ fn import_calls_are_supported() {
   );
   parse_js::parse(js).expect("emitted JS should parse");
 }
-

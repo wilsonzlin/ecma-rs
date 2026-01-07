@@ -30,4 +30,3 @@ pub fn core_globals_lib() -> LibFile {
     text: Arc::from(CORE_GLOBAL_TYPES),
   }
 }
-

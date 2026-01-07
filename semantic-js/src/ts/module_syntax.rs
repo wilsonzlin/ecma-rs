@@ -104,4 +104,3 @@ pub fn ast_has_module_syntax(top: &Node<TopLevel>) -> bool {
 
   walk(&top.stx.body)
 }
-

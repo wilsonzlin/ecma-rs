@@ -11,16 +11,8 @@ fn conformance_profile_emits_actionable_json() {
   let dir = tempdir().expect("tempdir");
   let suite = dir.path().join("suite");
   fs::create_dir_all(&suite).expect("create suite directory");
-  fs::write(
-    suite.join("b.ts"),
-    "// @noLib: true\nexport const b = 1;\n",
-  )
-  .expect("write fixture");
-  fs::write(
-    suite.join("a.ts"),
-    "// @noLib: true\nexport const a = 1;\n",
-  )
-  .expect("write fixture");
+  fs::write(suite.join("b.ts"), "// @noLib: true\nexport const b = 1;\n").expect("write fixture");
+  fs::write(suite.join("a.ts"), "// @noLib: true\nexport const a = 1;\n").expect("write fixture");
   let profile_out = dir.path().join("profile.json");
 
   let mut options = ConformanceOptions::new(suite);

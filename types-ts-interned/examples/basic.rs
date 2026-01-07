@@ -66,7 +66,11 @@ fn main() {
   println!("B assignable to A: {}", relate.is_assignable(ty_b, ty_a));
   println!("A assignable to B: {}", relate.is_assignable(ty_a, ty_b));
 
-  let union = store.union(vec![primitives.string, primitives.number, primitives.string]);
+  let union = store.union(vec![
+    primitives.string,
+    primitives.number,
+    primitives.string,
+  ]);
   println!("union = {}", TypeDisplay::new(store.as_ref(), union));
 
   let sig = Signature::new(
@@ -101,4 +105,3 @@ fn main() {
     relate.is_assignable(primitives.unknown, primitives.number)
   );
 }
-

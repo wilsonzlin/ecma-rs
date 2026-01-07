@@ -1792,9 +1792,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           span.record("key_count", &0u64);
         }
         let result = self.store.union(vec![
-        self.store.primitive_ids().string,
-        self.store.primitive_ids().number,
-        self.store.primitive_ids().symbol,
+          self.store.primitive_ids().string,
+          self.store.primitive_ids().number,
+          self.store.primitive_ids().symbol,
         ]);
         #[cfg(feature = "tracing")]
         {

@@ -31,9 +31,12 @@ fn main() {
   println!("cargo:rerun-if-changed={}", lib_dir.display());
 
   let mut libs: Vec<String> = Vec::new();
-  for entry in fs::read_dir(&lib_dir)
-    .unwrap_or_else(|err| panic!("failed to read TypeScript lib dir {}: {err}", lib_dir.display()))
-  {
+  for entry in fs::read_dir(&lib_dir).unwrap_or_else(|err| {
+    panic!(
+      "failed to read TypeScript lib dir {}: {err}",
+      lib_dir.display()
+    )
+  }) {
     let entry = entry.expect("read_dir entry");
     let path = entry.path();
     if !path.is_file() {

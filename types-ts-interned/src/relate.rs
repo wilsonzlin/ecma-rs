@@ -497,7 +497,14 @@ impl<'a> RelateCtx<'a> {
     #[cfg(not(feature = "tracing"))]
     {
       self.reset_reason_budget();
-      self.relate_internal(src, dst, RelationKind::Assignable, RelationMode::NONE, true, 0)
+      self.relate_internal(
+        src,
+        dst,
+        RelationKind::Assignable,
+        RelationMode::NONE,
+        true,
+        0,
+      )
     }
   }
 
@@ -667,7 +674,14 @@ impl<'a> RelateCtx<'a> {
       let record = record && self.take_reason_slot();
       return RelationResult {
         result: true,
-        reason: self.join_reasons(record, key, Vec::new(), true, Some("max recursion".into()), depth),
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          true,
+          Some("max recursion".into()),
+          depth,
+        ),
       };
     }
 

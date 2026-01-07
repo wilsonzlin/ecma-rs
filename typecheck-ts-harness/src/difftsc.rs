@@ -5,6 +5,7 @@ use crate::diagnostic_norm::{
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::{is_normalized_virtual_path, normalize_name_cow, normalize_name_into};
+use crate::read_utf8_file;
 use crate::runner::{
   build_tsc_request, is_source_root, EngineDiagnostics, EngineStatus, HarnessFileSet, HarnessHost,
   TimeoutManager, TscPoolError, TscRunnerPool,
@@ -13,8 +14,7 @@ use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TypeAtFact, TypeFacts, TypeQuery,
   TSC_BASELINE_SCHEMA_VERSION,
 };
-use crate::{build_filter, Filter, FailOn, Shard, VirtualFile};
-use crate::{read_utf8_file};
+use crate::{build_filter, FailOn, Filter, Shard, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use num_cpus;
@@ -130,7 +130,9 @@ impl CaseStatus {
   fn is_error(&self) -> bool {
     matches!(
       self,
-      CaseStatus::BaselineMissing | CaseStatus::TscFailed | CaseStatus::RustFailed
+      CaseStatus::BaselineMissing
+        | CaseStatus::TscFailed
+        | CaseStatus::RustFailed
         | CaseStatus::Timeout
     )
   }
@@ -353,8 +355,7 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
       .with_context(|| format!("create baselines directory at {}", baselines_root.display()))?;
   }
 
-  let filter =
-    build_filter(args.filter.as_deref()).map_err(|err| anyhow!(err.to_string()))?;
+  let filter = build_filter(args.filter.as_deref()).map_err(|err| anyhow!(err.to_string()))?;
   let shard = match args.shard.as_deref() {
     Some(raw) => Some(Shard::parse(raw).map_err(|err| anyhow!(err.to_string()))?),
     None => None,
@@ -512,9 +513,7 @@ fn summarize(results: &[CaseReport]) -> Summary {
       CaseStatus::BaselineMissing
       | CaseStatus::TscFailed
       | CaseStatus::RustFailed
-      | CaseStatus::Timeout => {
-        summary.errors += 1
-      }
+      | CaseStatus::Timeout => summary.errors += 1,
     }
   }
   summary
@@ -575,7 +574,11 @@ fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
   }
 }
 
-fn run_rust_check(program: &Program, file_set: &HarnessFileSet, timeout: Duration) -> EngineDiagnostics {
+fn run_rust_check(
+  program: &Program,
+  file_set: &HarnessFileSet,
+  timeout: Duration,
+) -> EngineDiagnostics {
   match std::panic::catch_unwind(AssertUnwindSafe(|| program.check_fallible())) {
     Err(_) => EngineDiagnostics {
       status: EngineStatus::Ice,

@@ -5,7 +5,9 @@ use parse_js::ast::class_or_object::{
   ClassMember, ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::jsx::*;
-use parse_js::ast::expr::lit::{LitArrElem, LitBoolExpr, LitNullExpr, LitObjExpr, LitStrExpr, LitTemplatePart};
+use parse_js::ast::expr::lit::{
+  LitArrElem, LitBoolExpr, LitNullExpr, LitObjExpr, LitStrExpr, LitTemplatePart,
+};
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, Pat};
 use parse_js::ast::expr::*;
 use parse_js::ast::func::{Func, FuncBody};
@@ -416,7 +418,13 @@ pub fn erase_types(
   source: &str,
   top_level: &mut Node<TopLevel>,
 ) -> Result<(), Vec<Diagnostic>> {
-  erase_types_with_options(file, top_level_mode, source, top_level, TsEraseOptions::default())
+  erase_types_with_options(
+    file,
+    top_level_mode,
+    source,
+    top_level,
+    TsEraseOptions::default(),
+  )
 }
 
 pub fn erase_types_with_options(
@@ -2110,9 +2118,8 @@ fn strip_enum_decl(
   let enum_name = decl.stx.name.clone();
   let name_is_binding_identifier = is_valid_binding_identifier(&enum_name, ctx.top_level_mode);
   if parent_namespace.is_none() && !name_is_binding_identifier {
-    let allow_top_level_export = is_top_level
-      && decl.stx.export
-      && matches!(ctx.top_level_mode, TopLevelMode::Module);
+    let allow_top_level_export =
+      is_top_level && decl.stx.export && matches!(ctx.top_level_mode, TopLevelMode::Module);
     if !allow_top_level_export {
       unsupported_ts(
         ctx,
@@ -2184,13 +2191,16 @@ fn strip_enum_decl(
       should_export_var,
       VarDeclMode::Var,
     ));
-    ctx.current_value_bindings_mut().insert(binding_ident.clone());
+    ctx
+      .current_value_bindings_mut()
+      .insert(binding_ident.clone());
   }
 
   let enum_alias = ctx.fresh_internal_name(format!("__minify_ts_enum_{enum_name}"));
   let mut used_enum_alias = false;
   let mut body = Vec::with_capacity(decl.stx.members.len());
-  let rewrite_enum_source_name_refs = !is_valid_identifier_reference(&enum_name, ctx.top_level_mode);
+  let rewrite_enum_source_name_refs =
+    !is_valid_identifier_reference(&enum_name, ctx.top_level_mode);
   let mut next_auto: Option<f64> = Some(0.0);
   let mut last_numeric_member: Option<String> = None;
   let mut known_member_kinds: HashMap<String, EnumValueKind> = HashMap::new();
@@ -2527,9 +2537,8 @@ fn strip_namespace_decl(
   let namespace_name = decl.stx.name.clone();
   let name_is_binding_identifier = is_valid_binding_identifier(&namespace_name, ctx.top_level_mode);
   if parent_namespace.is_none() && !name_is_binding_identifier {
-    let allow_top_level_export = is_top_level
-      && decl.stx.export
-      && matches!(ctx.top_level_mode, TopLevelMode::Module);
+    let allow_top_level_export =
+      is_top_level && decl.stx.export && matches!(ctx.top_level_mode, TopLevelMode::Module);
     if !allow_top_level_export {
       unsupported_ts(
         ctx,
@@ -2956,15 +2965,7 @@ fn void_0_expr(loc: Loc) -> Node<Expr> {
 }
 
 fn boolean_expr(loc: Loc, value: bool) -> Node<Expr> {
-  Node::new(
-    loc,
-    Expr::LitBool(Node::new(
-      loc,
-      LitBoolExpr {
-        value,
-      },
-    )),
-  )
+  Node::new(loc, Expr::LitBool(Node::new(loc, LitBoolExpr { value })))
 }
 
 fn is_super_call(expr: &Node<Expr>) -> bool {
@@ -3097,7 +3098,13 @@ fn define_property_stmt(loc: Loc, key: Node<Expr>, value: Node<Expr>) -> Node<St
               value: Node::new(loc, Expr::This(Node::new(loc, ThisExpr {}))),
             },
           ),
-          Node::new(loc, CallArg { spread: false, value: key }),
+          Node::new(
+            loc,
+            CallArg {
+              spread: false,
+              value: key,
+            },
+          ),
           Node::new(
             loc,
             CallArg {
@@ -3264,7 +3271,10 @@ fn strip_class_members(
         }
       }
     } else {
-      let loc = field_inits.first().map(|stmt| stmt.loc).unwrap_or(Loc(0, 0));
+      let loc = field_inits
+        .first()
+        .map(|stmt| stmt.loc)
+        .unwrap_or(Loc(0, 0));
       let mut body = Vec::new();
       if is_derived {
         body.push(ts_lower::expr_stmt(

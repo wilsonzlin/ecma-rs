@@ -29,11 +29,13 @@ fn minify_ts_module(src: &str) -> (String, Node<TopLevel>) {
 }
 
 fn has_top_level_var_binding(program: &Node<TopLevel>, name: &str) -> bool {
-  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+  program.stx.body.iter().any(|stmt| {
+    match stmt.stx.as_ref() {
     Stmt::VarDecl(decl) => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
     }),
     _ => false,
+  }
   })
 }
 

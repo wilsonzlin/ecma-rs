@@ -21,8 +21,8 @@ use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
 use crate::ast::node::InvalidTemplateEscapeSequence;
-use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
+use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::Node;
 use crate::char::is_line_terminator;
@@ -838,7 +838,8 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
-    let (loc, value, escape_loc) = self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+    let (loc, value, escape_loc) =
+      self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
     let mut node = Node::new(loc, LitStrExpr { value });
     if let Some(escape_loc) = escape_loc {
       node.assoc.set(LegacyOctalEscapeSequence(escape_loc));
@@ -918,7 +919,9 @@ impl<'a> Parser<'a> {
     let loc = self.since_checkpoint(&start);
     let mut node = Node::new(loc, LitTemplateExpr { parts });
     if let Some(invalid_escape) = invalid_escape {
-      node.assoc.set(InvalidTemplateEscapeSequence(invalid_escape));
+      node
+        .assoc
+        .set(InvalidTemplateEscapeSequence(invalid_escape));
     }
     Ok(node)
   }

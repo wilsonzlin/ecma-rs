@@ -27,4 +27,3 @@ fn debugger_statements_are_ignored() {
   let js = std::str::from_utf8(&bytes).expect("UTF-8 output");
   parse_js::parse(js).expect("emitted JS should parse");
 }
-

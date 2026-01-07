@@ -584,7 +584,9 @@ pub fn normalize_type_string(raw: &str) -> String {
       return String::new();
     }
 
-    if (member.starts_with('(') || member.starts_with('<')) && find_top_level_arrow(member).is_some() {
+    if (member.starts_with('(') || member.starts_with('<'))
+      && find_top_level_arrow(member).is_some()
+    {
       return normalize_type_string(member);
     }
 
@@ -848,6 +850,9 @@ mod tests {
   fn normalizes_call_signature_param_names_and_overload_order() {
     let expected = "{ (x: string): 1; (x: number): 2 }";
     let actual = "{ (number): 2; (string): 1 }";
-    assert_eq!(normalize_type_string(expected), normalize_type_string(actual));
+    assert_eq!(
+      normalize_type_string(expected),
+      normalize_type_string(actual)
+    );
   }
 }

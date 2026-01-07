@@ -91,4 +91,3 @@ fn source_type_script_changes_parsing_and_json_errors_emit_diagnostics() {
     "expected message to mention script export restriction, got: {message}"
   );
 }
-

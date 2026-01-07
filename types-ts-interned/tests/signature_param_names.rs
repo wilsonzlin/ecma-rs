@@ -61,4 +61,3 @@ fn callable_types_ignore_signature_parameter_names() {
 
   assert_eq!(callable_a, callable_b);
 }
-

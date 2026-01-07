@@ -16,8 +16,8 @@ use parse_js::loc::Loc;
 use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
-  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  PredicateParam, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind,
+  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PredicateParam, PropData, PropKey,
+  Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind,
   TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
 };
 
@@ -395,7 +395,11 @@ impl TypeLowerer {
       .map(|idx| PredicateParam::Param(idx as u32))
   }
 
-  fn lower_type_predicate_in_signature(&mut self, pred: &Node<TypePredicate>, params: &[Param]) -> TypeId {
+  fn lower_type_predicate_in_signature(
+    &mut self,
+    pred: &Node<TypePredicate>,
+    params: &[Param],
+  ) -> TypeId {
     let parameter = self.resolve_predicate_param(&pred.stx.parameter_name, params);
     self.lower_type_predicate_with_param(pred, parameter)
   }

@@ -27,4 +27,3 @@ fn labeled_blocks_can_be_broken_out_of() {
 
   parse_js::parse(js).expect("emitted JS should parse");
 }
-

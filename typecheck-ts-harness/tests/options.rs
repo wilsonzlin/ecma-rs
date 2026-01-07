@@ -176,7 +176,10 @@ fn exposes_applied_lib_list_with_dotted_names() {
     .find(|r| r.id.ends_with("lib_names_dotted.ts"))
     .expect("lib_names_dotted fixture");
 
-  assert_eq!(result.options.harness.lib, vec!["DOM.Iterable", "es2015.promise"]);
+  assert_eq!(
+    result.options.harness.lib,
+    vec!["DOM.Iterable", "es2015.promise"]
+  );
   assert!(!result.options.rust.no_default_lib);
   assert_eq!(
     result.options.rust.libs,

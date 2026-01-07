@@ -35,4 +35,3 @@ fn render_and_print(file: FileId, diagnostic: Diagnostic) {
   debug_assert_eq!(file, FileId(0));
   print!("{}", render_diagnostic(&files, &diagnostic));
 }
-

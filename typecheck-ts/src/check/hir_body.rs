@@ -28,8 +28,8 @@ use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
-  EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData,
-  PredicateParam, PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator,
+  EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PredicateParam,
+  PropData, PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator,
   TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
 };
 
@@ -2918,7 +2918,9 @@ impl<'a> Checker<'a> {
             if let PredicateParam::Param(param_idx) = parameter.unwrap_or(PredicateParam::Param(0))
             {
               let param_idx = param_idx as usize;
-              if let Some(arg_idx) = param_index_map.iter().position(|idx| *idx == Some(param_idx))
+              if let Some(arg_idx) = param_index_map
+                .iter()
+                .position(|idx| *idx == Some(param_idx))
               {
                 if let Some(arg) = call.stx.arguments.get(arg_idx) {
                   if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {

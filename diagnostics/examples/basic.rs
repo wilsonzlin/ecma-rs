@@ -23,4 +23,3 @@ fn main() {
 
   print!("{}", render_diagnostic(&files, &diagnostic));
 }
-

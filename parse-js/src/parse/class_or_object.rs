@@ -13,16 +13,16 @@ use crate::ast::class_or_object::ClassOrObjVal;
 use crate::ast::expr::pat::IdPat;
 use crate::ast::expr::Expr;
 use crate::ast::func::Func;
-use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
+use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
-use crate::lex::KEYWORDS_MAPPING;
 use crate::lex::LexMode;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {

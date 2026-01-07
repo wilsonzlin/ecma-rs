@@ -16,8 +16,8 @@
 mod binder;
 pub mod from_hir_js;
 pub mod locals;
-pub mod module_syntax;
 mod model;
+pub mod module_syntax;
 
 pub use binder::bind_ts_program;
 pub use binder::bind_ts_program_with_cancellation;

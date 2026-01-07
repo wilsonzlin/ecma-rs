@@ -53,4 +53,3 @@ fn collisions_panic_in_strict_mode() {
   let _ = store.intern_shape(shape_with_prop(&store, "a"));
   let _ = store.intern_shape(shape_with_prop(&store, "b"));
 }
-

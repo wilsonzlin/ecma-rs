@@ -17,6 +17,8 @@ export const value = new C((n) => n + 1);
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 }
-

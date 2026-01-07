@@ -443,8 +443,14 @@ impl<'a> TypeDisplay<'a> {
     // `tsc` prefers string-like constituents before number-like ones in nested
     // unions such as `(string | number)[]`, even though internal canonicalization
     // may order them differently.
-    let a_string_like = matches!(a_kind, TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_));
-    let b_string_like = matches!(b_kind, TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_));
+    let a_string_like = matches!(
+      a_kind,
+      TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_)
+    );
+    let b_string_like = matches!(
+      b_kind,
+      TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_)
+    );
     let a_number_like = matches!(a_kind, TypeKind::Number | TypeKind::NumberLiteral(_));
     let b_number_like = matches!(b_kind, TypeKind::Number | TypeKind::NumberLiteral(_));
     if a_string_like && b_number_like {
@@ -465,8 +471,12 @@ impl<'a> TypeDisplay<'a> {
     }
     self.store.type_cmp(a, b)
   }
-  
-  fn fmt_signature(&self, sig: &crate::signature::Signature, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+
+  fn fmt_signature(
+    &self,
+    sig: &crate::signature::Signature,
+    f: &mut fmt::Formatter<'_>,
+  ) -> fmt::Result {
     if !sig.type_params.is_empty() {
       write!(f, "<")?;
       let mut iter = sig.type_params.iter().peekable();
@@ -583,7 +593,6 @@ impl<'a> TypeDisplay<'a> {
     write!(f, "): ")?;
     self.fmt_type(sig.ret, f)
   }
-
 }
 
 impl<'a> fmt::Debug for TypeDisplay<'a> {

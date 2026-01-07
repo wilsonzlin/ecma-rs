@@ -64,7 +64,10 @@ fn infers_union_from_multiple_arguments() {
     this_param: None,
   };
 
-  let args = [CallArgType::new(primitives.string), CallArgType::new(primitives.number)];
+  let args = [
+    CallArgType::new(primitives.string),
+    CallArgType::new(primitives.number),
+  ];
   let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, None);
   assert!(result.diagnostics.is_empty());
   let expected_union = store.union(vec![primitives.string, primitives.number]);
@@ -435,7 +438,8 @@ fn infers_from_contextual_return_in_call() {
   };
 
   let args = [CallArgType::new(primitives.unknown)];
-  let result = infer_type_arguments_for_call(&store, &relate, &sig, &args, None, Some(primitives.string));
+  let result =
+    infer_type_arguments_for_call(&store, &relate, &sig, &args, None, Some(primitives.string));
 
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));

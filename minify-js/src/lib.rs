@@ -26,8 +26,8 @@ use semantic_js::js::bind_js;
 pub use semantic_js::js::TopLevelMode;
 #[cfg(all(test, feature = "emit-minify"))]
 use std::cell::Cell;
-pub use ts_erase::TsEraseOptions;
 use ts_erase::erase_types_with_options;
+pub use ts_erase::TsEraseOptions;
 
 pub use parse_js::Dialect;
 #[cfg(feature = "fuzzing")]

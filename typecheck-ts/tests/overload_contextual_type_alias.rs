@@ -66,4 +66,3 @@ export const r = new C({ kind: "a" });
   let r_ty = program.type_of_def_interned(r_def);
   assert_eq!(program.display_type(r_ty).to_string(), "1");
 }
-

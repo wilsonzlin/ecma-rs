@@ -28,4 +28,3 @@ fn for_await_of_statements_are_supported() {
   );
   parse_js::parse(js).expect("emitted JS should parse");
 }
-

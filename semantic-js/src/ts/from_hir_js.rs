@@ -1,9 +1,9 @@
+use crate::ts::module_syntax::ast_has_module_syntax;
 use crate::ts::{
   AmbientModule, Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported,
   FileKind, HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed,
   ImportNamespace, ModuleKind, NamedExport, TypeImport as TsTypeImport,
 };
-use crate::ts::module_syntax::ast_has_module_syntax;
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
 use parse_js::ast::expr::pat::Pat;
@@ -249,67 +249,64 @@ fn lower_block(
           is_exported: import_eq.stx.export,
         });
       }
-      Stmt::ExportList(list) => {
-        match &list.stx.names {
-          ExportNames::All(alias) => {
-            if let Some(specifier) = list.stx.from.clone() {
-              result.exports.push(Export::All(ExportAll {
-                specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
-                specifier,
-                is_type_only: list.stx.type_only,
-                alias: alias.as_ref().map(|a| a.stx.name.clone()),
-                alias_span: alias.as_ref().map(|a| to_range(a.loc)),
-              }));
-            }
-          }
-          ExportNames::Specific(names) => {
-            let mut items = Vec::new();
-            for name in names {
-              let local = name.stx.exportable.as_str().to_string();
-              let exported_name = name.stx.alias.stx.name.clone();
-              let exported_span = if exported_name == local {
-                None
-              } else {
-                Some(to_range(name.stx.alias.loc))
-              };
-              items.push(ExportSpecifier {
-                local: local.clone(),
-                exported: if exported_span.is_some() {
-                  Some(exported_name)
-                } else {
-                  None
-                },
-                local_span: to_range(name.loc),
-                exported_span,
-              });
-              if list.stx.from.is_none() {
-                let export_kind = if exported_span.is_some() && name.stx.alias.stx.name == "default"
-                {
-                  Exported::Default
-                } else {
-                  Exported::Named
-                };
-                mark_defs_with_name(
-                  &defs_by_name,
-                  &local,
-                  export_kind.clone(),
-                  &mut result.exported,
-                );
-              }
-            }
-            result.exports.push(Export::Named(NamedExport {
-              specifier: list.stx.from.clone(),
-              specifier_span: list
-                .stx
-                .from
-                .as_ref()
-                .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
-              items,
-              is_type_only: list.stx.type_only || names.iter().all(|n| n.stx.type_only),
+      Stmt::ExportList(list) => match &list.stx.names {
+        ExportNames::All(alias) => {
+          if let Some(specifier) = list.stx.from.clone() {
+            result.exports.push(Export::All(ExportAll {
+              specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
+              specifier,
+              is_type_only: list.stx.type_only,
+              alias: alias.as_ref().map(|a| a.stx.name.clone()),
+              alias_span: alias.as_ref().map(|a| to_range(a.loc)),
             }));
           }
         }
-      }
+        ExportNames::Specific(names) => {
+          let mut items = Vec::new();
+          for name in names {
+            let local = name.stx.exportable.as_str().to_string();
+            let exported_name = name.stx.alias.stx.name.clone();
+            let exported_span = if exported_name == local {
+              None
+            } else {
+              Some(to_range(name.stx.alias.loc))
+            };
+            items.push(ExportSpecifier {
+              local: local.clone(),
+              exported: if exported_span.is_some() {
+                Some(exported_name)
+              } else {
+                None
+              },
+              local_span: to_range(name.loc),
+              exported_span,
+            });
+            if list.stx.from.is_none() {
+              let export_kind = if exported_span.is_some() && name.stx.alias.stx.name == "default" {
+                Exported::Default
+              } else {
+                Exported::Named
+              };
+              mark_defs_with_name(
+                &defs_by_name,
+                &local,
+                export_kind.clone(),
+                &mut result.exported,
+              );
+            }
+          }
+          result.exports.push(Export::Named(NamedExport {
+            specifier: list.stx.from.clone(),
+            specifier_span: list
+              .stx
+              .from
+              .as_ref()
+              .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
+            items,
+            is_type_only: list.stx.type_only || names.iter().all(|n| n.stx.type_only),
+          }));
+        }
+      },
       Stmt::ExportDefaultExpr(_) => {
         mark_defs_in_span(
           &result.local_defs,

@@ -2959,9 +2959,9 @@ fn collect_stmt<'a>(
         // Match TypeScript's `export =` semantics: when a module has an export
         // assignment, it behaves like a CommonJS module and does not implicitly
         // export all declarations as named exports.
-        let members_exported_by_default =
-          (decl_ambient || matches!(module.stx.name, ModuleName::String(_)))
-            && !has_export_assignment;
+        let members_exported_by_default = (decl_ambient
+          || matches!(module.stx.name, ModuleName::String(_)))
+          && !has_export_assignment;
         for desc in descriptors.iter_mut().skip(body_start) {
           // Ambient modules export their declarations without `export` modifiers.
           if desc.parent == Some(module_raw) && members_exported_by_default {

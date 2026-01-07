@@ -258,11 +258,7 @@ fn cli_json_report_is_machine_readable_with_trace_enabled() {
 #[test]
 fn fail_on_new_ignores_manifested_expectations() {
   let (_dir, root) = write_fixtures();
-  fs::write(
-    root.join("err/type_error.ts"),
-    "// @noLib: true\nconst = ;",
-  )
-  .unwrap();
+  fs::write(root.join("err/type_error.ts"), "// @noLib: true\nconst = ;").unwrap();
 
   let manifest =
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/conformance_manifest.toml");

@@ -19,4 +19,3 @@ fn throw_statements_in_functions_are_supported() {
     "expected arrow function body to be compiled"
   );
 }
-
