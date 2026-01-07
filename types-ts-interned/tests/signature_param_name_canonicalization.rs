@@ -94,4 +94,3 @@ fn types_differing_only_by_param_names_intern_to_same_id() {
   let ty_b = store.intern_type(TypeKind::Object(object_b));
   assert_eq!(ty_a, ty_b);
 }
-
