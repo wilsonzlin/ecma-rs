@@ -537,27 +537,31 @@ impl Program {
 
   /// Override the compiler options for subsequent queries.
   pub fn set_compiler_options(&mut self, options: CompilerOptions) {
-    let overrides = {
-      let state = self.lock_state();
-      state.file_overrides.clone()
-    };
-    self.reset_state(overrides, options);
+    {
+      let mut state = self.lock_state();
+      state.typecheck_db.set_compiler_options(options.clone());
+      state.compiler_options = options.clone();
+      state.compiler_options_override = Some(options.clone());
+      state.checker_caches = CheckerCaches::new(options.cache.clone());
+      state.cache_stats = CheckerCacheStats::default();
+      state.interned_store = None;
+    }
+    self.reset_state();
   }
 
   /// Override the text for a specific file and invalidate cached results.
   pub fn set_file_text(&mut self, file: FileId, text: Arc<str>) {
-    let Some(key) = ({
-      let state = self.lock_state();
-      state.file_key_for_id(file)
-    }) else {
-      return;
-    };
-    let (overrides, options) = {
+    {
       let mut state = self.lock_state();
-      state.file_overrides.insert(key.clone(), text);
-      (state.file_overrides.clone(), state.compiler_options.clone())
-    };
-    self.reset_state(overrides, options);
+      let Some(key) = state.file_key_for_id(file) else {
+        return;
+      };
+      state.file_overrides.insert(key.clone(), Arc::clone(&text));
+      if db::Db::file_input(&state.typecheck_db, file).is_some() {
+        state.typecheck_db.set_file_text(file, text);
+      }
+    }
+    self.reset_state();
   }
 
   /// Resolve a file key to its internal [`FileId`], if loaded.
@@ -790,24 +794,12 @@ impl Program {
     }
   }
 
-  fn reset_state(&self, overrides: HashMap<FileKey, Arc<str>>, compiler_options: CompilerOptions) {
-    let lib_manager = {
-      let state = self.lock_state();
-      state.lib_manager.clone()
-    };
-    let mut new_state = ProgramState::new(
-      Arc::clone(&self.host),
-      lib_manager,
-      self.query_stats.clone(),
-      Arc::clone(&self.cancelled),
-    );
-    new_state.file_overrides = overrides;
-    new_state.compiler_options = compiler_options;
-    for key in self.roots.iter().cloned() {
-      new_state.intern_file_key(key, FileOrigin::Source);
-    }
+  fn reset_state(&self) {
     let mut state = self.lock_state();
-    *state = new_state;
+    state.reset_analysis_state();
+    for key in self.roots.iter().cloned() {
+      state.intern_file_key(key, FileOrigin::Source);
+    }
   }
 
   fn fatal_to_diagnostics(&self, fatal: FatalError) -> Vec<Diagnostic> {
@@ -4571,6 +4563,7 @@ struct ProgramState {
   host: Arc<dyn Host>,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
+  compiler_options_override: Option<CompilerOptions>,
   file_overrides: HashMap<FileKey, Arc<str>>,
   interned_revision: Option<salsa::Revision>,
   cached_body_context: Option<CachedBodyCheckContext>,
@@ -4688,6 +4681,7 @@ impl ProgramState {
       host,
       lib_manager,
       compiler_options: default_options.clone(),
+      compiler_options_override: None,
       file_overrides: HashMap::new(),
       interned_revision: None,
       cached_body_context: None,
@@ -4744,6 +4738,69 @@ impl ProgramState {
       next_symbol: 0,
       type_stack: Vec::new(),
     }
+  }
+
+  fn reset_analysis_state(&mut self) {
+    self.analyzed = false;
+    self.snapshot_loaded = false;
+    self.interned_revision = None;
+    self.cached_body_context = None;
+
+    self.typecheck_db.clear_body_results();
+    self.checker_caches.clear_shared();
+    self.cache_stats = CheckerCacheStats::default();
+
+    self.asts.clear();
+    self.ast_indexes.clear();
+    self.files.clear();
+    self.def_data.clear();
+    self.body_map.clear();
+    self.body_owners.clear();
+    self.body_parents.clear();
+    self.hir_lowered.clear();
+    self.local_semantics.clear();
+    self.semantics = None;
+    self.qualified_def_members = Arc::new(HashMap::new());
+    self.def_types.clear();
+    self.body_results.clear();
+    self.checking_bodies.clear();
+    self.symbol_to_def.clear();
+    self.symbol_occurrences.clear();
+    self.local_symbol_info.clear();
+    self.file_registry = FileRegistry::new();
+    self.file_kinds.clear();
+    self.lib_file_ids.clear();
+    self.lib_texts.clear();
+    self.lib_diagnostics.clear();
+    self.root_ids.clear();
+    self.global_bindings = Arc::new(BTreeMap::new());
+    self.namespace_object_types.clear();
+    self.module_namespace_defs.clear();
+    self.module_namespace_types.clear();
+    self.module_namespace_in_progress.clear();
+    self.namespace_member_index = None;
+    self.callable_overloads.clear();
+    self.import_assignment_requires.clear();
+    self.diagnostics.clear();
+    self.implicit_any_reported.clear();
+    self.interned_def_types.clear();
+    self.interned_named_def_types.clear();
+    self.interned_type_params.clear();
+    self.interned_type_param_decls.clear();
+    self.interned_intrinsics.clear();
+    self.interned_class_instances.clear();
+    self.value_defs.clear();
+    self.current_file = None;
+    self.next_def = 0;
+    self.next_body = 0;
+    self.next_symbol = 0;
+    self.type_stack.clear();
+
+    // Match the full-reset behaviour (previously provided by `ProgramState::new`)
+    // by clearing the legacy store and builtin identifiers.
+    let (type_store, builtin) = TypeStore::new();
+    self.type_store = type_store;
+    self.builtin = builtin;
   }
 
   fn check_cancelled(&self) -> Result<(), FatalError> {
@@ -7781,7 +7838,10 @@ impl ProgramState {
     host: &dyn Host,
     roots: &[FileKey],
   ) -> Result<Vec<LibFile>, FatalError> {
-    let mut options = host.compiler_options();
+    let mut options = self
+      .compiler_options_override
+      .clone()
+      .unwrap_or_else(|| host.compiler_options());
     if !options.no_default_lib && options.libs.is_empty() && !roots.is_empty() {
       for key in roots {
         let text = if let Some(text) = self.file_overrides.get(key) {
@@ -8129,6 +8189,19 @@ impl ProgramState {
       .file_registry
       .lookup_origin(file)
       .unwrap_or(FileOrigin::Source);
+    if let Some(existing) = db::Db::file_input(&self.typecheck_db, file) {
+      let existing_key = existing.key(&self.typecheck_db);
+      let existing_kind = existing.kind(&self.typecheck_db);
+      let existing_text = existing.text(&self.typecheck_db);
+      if existing_kind == kind
+        && existing_key == key
+        && existing_text.as_ref() == text.as_ref()
+        && db::Db::file_origin(&self.typecheck_db, file) == Some(origin)
+      {
+        return;
+      }
+    }
+
     self.typecheck_db.set_file(file, key, kind, text, origin);
   }
 
@@ -8368,11 +8441,7 @@ impl ProgramState {
                   .iter()
                   .enumerate()
                   .map(|(index, param)| {
-                    let name = match body
-                      .pats
-                      .get(param.pat.0 as usize)
-                      .map(|pat| &pat.kind)
-                    {
+                    let name = match body.pats.get(param.pat.0 as usize).map(|pat| &pat.kind) {
                       Some(HirPatKind::Ident(name_id)) => lowered
                         .names
                         .resolve(*name_id)
@@ -14655,27 +14724,29 @@ impl ProgramState {
                   false
                 })
                 .unwrap_or(true);
-               let init_ty_from_pat = init
-                 .pat
-                 .and_then(|pat| res.pat_type(pat))
-                 .filter(|ty| !self.is_unknown_type_id(*ty));
-               let init_ty_was_pat = init_ty_from_pat.is_some();
-               let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
-               if let Some(init_ty) = init_ty {
-                 let init_ty = self.resolve_value_ref_type(init_ty)?;
-                 let init_ty = if let Some(store) = self.interned_store.as_ref() {
-                   let init_ty = store.canon(init_ty);
-                   // Prefer preserving the interned binding type we got from
-                   // the body checker. Round-tripping through the legacy
-                   // `TypeStore` loses information like method-ness and often
-                   // erases nominal refs entirely.
-                   if init_ty_was_pat || matches!(store.type_kind(init_ty), tti::TypeKind::Ref { .. }) {
-                     preserved_interned_init = Some(init_ty);
-                   }
-                   self
-                     .interned_def_types
-                     .entry(def)
-                     .and_modify(|existing| {
+              let init_ty_from_pat = init
+                .pat
+                .and_then(|pat| res.pat_type(pat))
+                .filter(|ty| !self.is_unknown_type_id(*ty));
+              let init_ty_was_pat = init_ty_from_pat.is_some();
+              let init_ty = init_ty_from_pat.or_else(|| res.expr_type(init.expr));
+              if let Some(init_ty) = init_ty {
+                let init_ty = self.resolve_value_ref_type(init_ty)?;
+                let init_ty = if let Some(store) = self.interned_store.as_ref() {
+                  let init_ty = store.canon(init_ty);
+                  // Prefer preserving the interned binding type we got from
+                  // the body checker. Round-tripping through the legacy
+                  // `TypeStore` loses information like method-ness and often
+                  // erases nominal refs entirely.
+                  if init_ty_was_pat
+                    || matches!(store.type_kind(init_ty), tti::TypeKind::Ref { .. })
+                  {
+                    preserved_interned_init = Some(init_ty);
+                  }
+                  self
+                    .interned_def_types
+                    .entry(def)
+                    .and_modify(|existing| {
                       *existing =
                         ProgramState::merge_interned_decl_types(store, *existing, init_ty);
                     })
@@ -14756,23 +14827,23 @@ impl ProgramState {
           } else {
             self.widen_literal(inferred)
           };
-            if let Some(store) = self.interned_store.as_ref() {
-              let mut cache = HashMap::new();
-              let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
-              if annotated.is_none() {
-                // The legacy `TypeStore` cannot represent `TypeKind::Ref`, and
-                // converting through it also erases rich property metadata
-                // (like "method" vs "property"). When we inferred a concrete
-                // interned binding type from the body checker, preserve it
-                // instead of round-tripping through the legacy store.
-                if let Some(preserved) = preserved_interned_init.take() {
-                  interned = preserved;
-                }
+          if let Some(store) = self.interned_store.as_ref() {
+            let mut cache = HashMap::new();
+            let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+            if annotated.is_none() {
+              // The legacy `TypeStore` cannot represent `TypeKind::Ref`, and
+              // converting through it also erases rich property metadata
+              // (like "method" vs "property"). When we inferred a concrete
+              // interned binding type from the body checker, preserve it
+              // instead of round-tripping through the legacy store.
+              if let Some(preserved) = preserved_interned_init.take() {
+                interned = preserved;
               }
-              if annotated.is_some() {
-                self
-                  .interned_def_types
-                  .entry(def)
+            }
+            if annotated.is_some() {
+              self
+                .interned_def_types
+                .entry(def)
                 .and_modify(|existing| {
                   *existing = ProgramState::merge_interned_decl_types(store, *existing, interned);
                 })
@@ -15526,13 +15597,13 @@ impl ProgramState {
               if name.is_none() {
                 name = Some(sym_data.name.clone());
               }
-               if type_id.is_none() {
-                 type_id = resolve_def_type(decl.def_id);
-               }
-               break;
-             }
-           }
-         }
+              if type_id.is_none() {
+                type_id = resolve_def_type(decl.def_id);
+              }
+              break;
+            }
+          }
+        }
       }
     }
 

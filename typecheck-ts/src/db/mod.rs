@@ -446,6 +446,17 @@ impl Database {
     }
   }
 
+  /// Drop all cached body results.
+  ///
+  /// `BodyCheckResult`s are seeded into the salsa database by the `Program`
+  /// facade so offset-based queries (e.g. `type_at`) can reuse the results
+  /// without invoking the checker from within salsa. When the program inputs
+  /// change, these cached results can become stale, so callers should clear
+  /// them as part of their reset/invalidation flow.
+  pub fn clear_body_results(&mut self) {
+    self.body_results.clear();
+  }
+
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {
     queries::def_to_file(self)
   }
