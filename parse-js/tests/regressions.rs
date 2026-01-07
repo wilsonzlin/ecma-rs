@@ -36,6 +36,8 @@ mod jsx_text;
 mod jsx_tsx_disambiguation;
 #[path = "regressions/literal_validation.rs"]
 mod literal_validation;
+#[path = "regressions/modifier_line_terminator_comments.rs"]
+mod modifier_line_terminator_comments;
 #[path = "regressions/module_item_positions.rs"]
 mod module_item_positions;
 #[path = "regressions/module_namespace_identifiers.rs"]
