@@ -232,7 +232,7 @@ fn gen_decl(
     gen_decl_kind(cursor)
   };
   ts::Decl {
-    def_id: ts::DefId(cursor.next_u32()),
+    def_id: ts::DefId(cursor.next_u32().into()),
     name: maybe_pick_name(cursor, names, "d"),
     kind,
     is_ambient: cursor.next_bool(),
