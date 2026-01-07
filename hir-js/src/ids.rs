@@ -14,8 +14,13 @@ use serde::{Deserialize, Serialize};
 /// truncation can theoretically collide, lowering keeps a map of allocated
 /// identifiers and will re-hash the `DefPath` with an incrementing salt until
 /// an unused value is found. The list of definition descriptors is sorted
-/// before allocation, so collision handling is deterministic for a given
-/// source file.
+/// before allocation, so collision handling is deterministic for a given source
+/// file.
+///
+/// The resulting 32-bit per-file identifier is stored in the lower 32 bits of
+/// the `u64`, while the upper 32 bits contain the owning [`FileId`]. This
+/// packing makes cross-file collisions impossible while keeping the local part
+/// stable-ish across edits.
 ///
 /// `hir-js` currently assigns `DefId`s to body-local bindings (parameters and
 /// local variables) for short-term compatibility. These defs are always scoped
@@ -23,11 +28,53 @@ use serde::{Deserialize, Serialize};
 /// disambiguators do not interfere with module-level `DefId` stability.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct DefId(pub u32);
+pub struct DefId(pub u64);
 
+impl DefId {
+  #[inline]
+  pub const fn new(file: FileId, local: u32) -> Self {
+    Self(((file.0 as u64) << 32) | local as u64)
+  }
+
+  #[inline]
+  pub const fn file(self) -> FileId {
+    FileId((self.0 >> 32) as u32)
+  }
+
+  #[inline]
+  pub const fn local(self) -> u32 {
+    self.0 as u32
+  }
+}
+
+/// Stable identifier for a lowered body.
+///
+/// The low 32 bits are the per-file stable hash (salted on collision) derived
+/// from a [`BodyPath`]. The high 32 bits store the owning [`FileId`], ensuring
+/// `BodyId` values are globally unique across a program.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct BodyId(pub u32);
+pub struct BodyId(pub u64);
+
+impl BodyId {
+  #[inline]
+  pub const fn new(file: FileId, local: u32) -> Self {
+    Self(((file.0 as u64) << 32) | local as u64)
+  }
+
+  #[inline]
+  pub const fn file(self) -> FileId {
+    FileId((self.0 >> 32) as u32)
+  }
+
+  #[inline]
+  pub const fn local(self) -> u32 {
+    self.0 as u32
+  }
+}
+
+pub const MISSING_DEF: DefId = DefId(u64::MAX);
+pub const MISSING_BODY: BodyId = BodyId(u64::MAX);
 
 /// Content-addressed identifier for a lowered body.
 ///
@@ -73,7 +120,7 @@ impl BodyPath {
 
   fn stable_hash_impl(&self, salt: Option<u64>) -> StableHasher {
     let mut hasher = StableHasher::new();
-    hasher.write_u64(self.owner.0 as u64);
+    hasher.write_u64(self.owner.0);
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
     if let Some(salt) = salt.filter(|s| *s != 0) {
@@ -218,7 +265,10 @@ impl DefPath {
   fn stable_hash_impl(&self, salt: Option<u64>) -> StableHasher {
     let mut hasher = StableHasher::new();
     hasher.write_u64(self.module.0 as u64);
-    hasher.write_u64(self.parent.map_or(0, |id| id.0 as u64 + 1));
+    hasher.write_u64(self.parent.is_some() as u64);
+    if let Some(parent) = self.parent {
+      hasher.write_u64(parent.0);
+    }
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
     hasher.write_u64(self.name.0);

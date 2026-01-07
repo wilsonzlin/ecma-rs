@@ -131,13 +131,13 @@ impl ClassEnv {
   }
 
   fn alloc_def(&mut self) -> DefId {
-    let id = DefId(self.next_def);
+    let id = DefId(self.next_def.into());
     self.next_def += 1;
     id
   }
 
   fn alloc_origin(&mut self) -> DefId {
-    let id = DefId(self.next_origin);
+    let id = DefId(self.next_origin.into());
     self.next_origin += 1;
     id
   }
@@ -204,7 +204,7 @@ impl ClassEnv {
           readonly: field.readonly,
           accessibility: Some(field.visibility),
           is_method: false,
-          origin: member_origin(field.visibility, origin).map(|id| id.0),
+          origin: member_origin(field.visibility, origin).map(|id| id.local()),
           declared_on: member_origin(field.visibility, origin),
         },
       };
@@ -249,7 +249,7 @@ impl ClassEnv {
           readonly: true,
           accessibility: Some(method.visibility),
           is_method: true,
-          origin: member_origin(method.visibility, origin).map(|id| id.0),
+          origin: member_origin(method.visibility, origin).map(|id| id.local()),
           declared_on: member_origin(method.visibility, origin),
         },
       };

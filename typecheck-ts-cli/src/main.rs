@@ -195,7 +195,7 @@ struct SymbolAtResult {
   #[serde(skip_serializing_if = "Option::is_none")]
   name: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
-  def: Option<u32>,
+  def: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   def_file: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -216,7 +216,7 @@ struct ExplainAssignabilityResult {
 struct ExportEntryJson {
   symbol: u64,
   #[serde(skip_serializing_if = "Option::is_none")]
-  def: Option<u32>,
+  def: Option<u64>,
   #[serde(skip_serializing_if = "Option::is_none")]
   #[serde(rename = "type")]
   typ: Option<String>,

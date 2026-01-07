@@ -9,7 +9,7 @@ use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::lib_support::ScriptTarget;
 use typecheck_ts::{
-  parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, MemoryHost, Program,
+  parse_call_count, reset_parse_call_count, ExprId, FileKey, MemoryHost, Program,
   TypeKindSummary,
 };
 use types_ts_interned::{TypeKind, TypeStore};
@@ -44,7 +44,7 @@ fn infers_basic_literals_and_identifiers() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
   let ast = parse_with_options(
     source,
@@ -92,7 +92,7 @@ fn object_literal_methods_have_checkable_bodies() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
 
   let ast = parse_with_options(
@@ -166,7 +166,7 @@ fn local_variable_widening_respects_decl_mode() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
   let ast = parse_with_options(
     source,
@@ -237,7 +237,7 @@ fn expression_spans_match_body_indices() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
   let ast = parse_with_options(
     source,
@@ -284,7 +284,7 @@ fn expr_at_returns_innermost_type() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
   let ast = parse_with_options(
     source,
@@ -384,7 +384,7 @@ fn diagnostics_are_stably_sorted() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("function body");
   let ast = parse_with_options(
     source,
@@ -432,7 +432,7 @@ fn call_with_missing_arguments_types_arguments_once() {
     .iter()
     .enumerate()
     .find(|(_, b)| matches!(b.kind, BodyKind::Initializer | BodyKind::TopLevel))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .map(|(idx, b)| (lowered.hir.bodies[idx], b.as_ref()))
     .expect("initializer body");
   let ast = parse_with_options(
     source,

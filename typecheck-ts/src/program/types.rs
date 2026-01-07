@@ -3,6 +3,7 @@ extern crate semantic_js as semantic_js_crate;
 use crate::api::{DefId, FileId, TextRange};
 use crate::check::type_expr::TypeResolver;
 use crate::files::{FileOrigin, FileRegistry};
+use hir_js::ids::MISSING_BODY;
 use ordered_float::OrderedFloat;
 use semantic_js_crate::ts as sem_ts;
 use std::collections::{HashMap, HashSet};
@@ -412,7 +413,7 @@ impl ProgramTypeResolver {
     ProgramState::def_namespaces(kind).contains(ns)
   }
 
-  fn def_sort_key(&self, def: DefId, ns: sem_ts::Namespace) -> (u8, u8, u32, u32, u32) {
+  fn def_sort_key(&self, def: DefId, ns: sem_ts::Namespace) -> (u8, u8, u32, u32, u64) {
     let file = self
       .def_files
       .get(&def)
@@ -440,7 +441,7 @@ impl ProgramTypeResolver {
     defs: impl IntoIterator<Item = DefId>,
     ns: sem_ts::Namespace,
   ) -> Option<DefId> {
-    let mut best: Option<(u8, u8, u32, u32, u32, DefId)> = None;
+    let mut best: Option<(u8, u8, u32, u32, u64, DefId)> = None;
     for def in defs {
       let Some(kind) = self.def_kinds.get(&def) else {
         continue;
@@ -1008,14 +1009,14 @@ impl ProgramTypeResolver {
     if !Self::matches_namespace(kind, ns) {
       return u8::MAX;
     }
-    if ns.contains(sem_ts::Namespace::VALUE) {
-      return match kind {
-        DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
-        DefKind::Var(var) if var.body.0 != u32::MAX => 1,
-        DefKind::Namespace(_) | DefKind::Module(_) => 2,
-        DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
-        DefKind::Var(_) => 4,
-        DefKind::VarDeclarator(_) => 5,
+      if ns.contains(sem_ts::Namespace::VALUE) {
+        return match kind {
+          DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
+          DefKind::Var(var) if var.body != MISSING_BODY => 1,
+          DefKind::Namespace(_) | DefKind::Module(_) => 2,
+          DefKind::Import(_) | DefKind::ImportAlias(_) => 3,
+          DefKind::Var(_) => 4,
+          DefKind::VarDeclarator(_) => 5,
         DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }

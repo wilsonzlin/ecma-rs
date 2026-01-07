@@ -13,7 +13,7 @@ use crate::hir::{
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
-  ImportSpecifierId, NameId, PatId, StableHasher, StmtId,
+  ImportSpecifierId, NameId, PatId, StableHasher, StmtId, MISSING_BODY, MISSING_DEF,
 };
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
@@ -386,10 +386,10 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
     match allocated.entry(candidate) {
       Entry::Vacant(slot) => {
         slot.insert(def_path);
-        return DefId(candidate);
+        return DefId::new(def_path.module, candidate);
       }
       Entry::Occupied(existing) if *existing.get() == def_path => {
-        return DefId(candidate);
+        return DefId::new(def_path.module, candidate);
       }
       Entry::Occupied(_) => {
         salt += 1;
@@ -409,10 +409,10 @@ fn allocate_body_id(body_path: BodyPath, allocated: &mut BTreeMap<u32, BodyPath>
     match allocated.entry(candidate) {
       Entry::Vacant(slot) => {
         slot.insert(body_path);
-        return BodyId(candidate);
+        return BodyId::new(body_path.owner.file(), candidate);
       }
       Entry::Occupied(existing) if *existing.get() == body_path => {
-        return BodyId(candidate);
+        return BodyId::new(body_path.owner.file(), candidate);
       }
       Entry::Occupied(_) => {
         salt += 1;
@@ -680,7 +680,7 @@ pub fn lower_file_with_diagnostics_with_cancellation(
   }
 
   let root_body_id = allocate_body_id(
-    BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0),
+    BodyPath::new(DefId::new(file, 0), BodyKind::TopLevel, 0),
     &mut allocated_body_ids,
   );
   body_index.insert(root_body_id, bodies.len());
@@ -807,7 +807,7 @@ fn lower_root_body(
 ) -> Body {
   let span = ctx.to_range(ast.loc);
   let mut builder = BodyBuilder::new(
-    DefId(u32::MAX),
+    MISSING_DEF,
     span,
     body_id,
     BodyKind::TopLevel,
@@ -1319,7 +1319,7 @@ fn lower_class_body<'a>(
         let def = builder
           .def_lookup
           .def_for_node(member)
-          .unwrap_or(DefId(u32::MAX));
+          .unwrap_or(MISSING_DEF);
         let initializer = builder.def_lookup.body_for(def);
         let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
         class_members.push(HirClassMember {
@@ -1336,7 +1336,7 @@ fn lower_class_body<'a>(
         let def = builder
           .def_lookup
           .def_for_node(method)
-          .unwrap_or(DefId(u32::MAX));
+          .unwrap_or(MISSING_DEF);
         let body = builder.def_lookup.body_for(def);
         let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
         let is_constructor = matches!(&member.stx.key, ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor")
@@ -1364,7 +1364,7 @@ fn lower_class_body<'a>(
         let def = builder
           .def_lookup
           .def_for_node(getter)
-          .unwrap_or(DefId(u32::MAX));
+          .unwrap_or(MISSING_DEF);
         let body = builder.def_lookup.body_for(def);
         let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
         class_members.push(HirClassMember {
@@ -1382,7 +1382,7 @@ fn lower_class_body<'a>(
         let def = builder
           .def_lookup
           .def_for_node(setter)
-          .unwrap_or(DefId(u32::MAX));
+          .unwrap_or(MISSING_DEF);
         let body = builder.def_lookup.body_for(def);
         let key = lower_class_member_key(&member.stx.key, &mut builder, ctx);
         class_members.push(HirClassMember {
@@ -1897,7 +1897,7 @@ fn lower_expr(
     }
     AstExpr::Func(func) => {
       if let Some(def) = builder.def_lookup.def_for_node(func) {
-        let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+        let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
         let name = func
           .stx
           .name
@@ -1917,7 +1917,7 @@ fn lower_expr(
     }
     AstExpr::ArrowFunc(func) => {
       if let Some(def) = builder.def_lookup.def_for_node(func) {
-        let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+        let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
         ExprKind::FunctionExpr {
           def,
           body,
@@ -1932,7 +1932,7 @@ fn lower_expr(
     }
     AstExpr::Class(class_expr) => {
       if let Some(def) = builder.def_lookup.def_for_node(class_expr) {
-        let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+        let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
         let name = class_expr
           .stx
           .name
@@ -2326,19 +2326,19 @@ fn lower_object_literal(
           }
           ClassOrObjVal::Getter(get) => {
             if let Some(def) = builder.def_lookup.def_for_node(get) {
-              let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+              let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
               properties.push(ObjectProperty::Getter { key, body });
             }
           }
           ClassOrObjVal::Setter(set) => {
             if let Some(def) = builder.def_lookup.def_for_node(set) {
-              let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+              let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
               properties.push(ObjectProperty::Setter { key, body });
             }
           }
           ClassOrObjVal::Method(method) => {
             if let Some(def) = builder.def_lookup.def_for_node(method) {
-              let body = builder.def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+              let body = builder.def_lookup.body_for(def).unwrap_or(MISSING_BODY);
               let expr_id = builder.alloc_expr(
                 ctx.to_range(method.loc),
                 ExprKind::FunctionExpr {
@@ -5289,11 +5289,11 @@ fn lower_module_item_attributes(
 ) -> ModuleAttributes {
   let span = ctx.to_range(attrs.loc);
   let body_id = allocate_body_id(
-    BodyPath::new(DefId(ctx.file.0), BodyKind::Unknown, disambiguator),
+    BodyPath::new(DefId::new(ctx.file, 0), BodyKind::Unknown, disambiguator),
     allocated_body_ids,
   );
   let mut builder = BodyBuilder::new(
-    DefId(u32::MAX),
+    MISSING_DEF,
     span,
     body_id,
     BodyKind::Unknown,
@@ -5664,7 +5664,7 @@ fn lower_module_items(
             .def_for_node(func)
             .or_else(|| find_def(defs, DefKind::Function, func.loc.into()).map(|d| d.id))
           {
-            let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+            let body = def_lookup.body_for(def).unwrap_or(MISSING_BODY);
             if decl.default {
               exports.push(Export {
                 id: ExportId(next_export),
@@ -5705,7 +5705,7 @@ fn lower_module_items(
             .def_for_node(class_decl)
             .or_else(|| find_def(defs, DefKind::Class, decl.span).map(|d| d.id))
           {
-            let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+            let body = def_lookup.body_for(def).unwrap_or(MISSING_BODY);
             if decl.default {
               exports.push(Export {
                 id: ExportId(next_export),
@@ -5930,8 +5930,11 @@ fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&
 #[cfg(test)]
 mod tests {
   use crate::ids::{with_test_body_path_hasher, with_test_def_path_hasher};
+  use crate::lower::lower_file_with_diagnostics;
   use crate::lower_from_source_with_kind;
   use crate::FileKind;
+  use diagnostics::FileId;
+  use parse_js::parse_with_options;
   use std::collections::{BTreeMap, HashSet};
 
   #[test]
@@ -6031,5 +6034,47 @@ mod tests {
       first_ids, second_ids,
       "BodyIds should remain stable across runs when collisions are forced"
     );
+  }
+
+  #[test]
+  fn ids_are_unique_across_files_when_hashes_collide() {
+    let source = "function foo() {}";
+    let parse_opts = parse_js::ParseOptions {
+      dialect: parse_js::Dialect::Ts,
+      source_type: parse_js::SourceType::Module,
+    };
+
+    with_test_def_path_hasher(|_| 1, || {
+      with_test_body_path_hasher(|_| 1, || {
+        let ast0 = parse_with_options(source, parse_opts).expect("parse file 0");
+        let ast1 = parse_with_options(source, parse_opts).expect("parse file 1");
+
+        let (file0, diags0) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast0);
+        let (file1, diags1) = lower_file_with_diagnostics(FileId(1), FileKind::Ts, &ast1);
+
+        assert!(diags0.is_empty(), "unexpected diagnostics for file 0: {diags0:?}");
+        assert!(diags1.is_empty(), "unexpected diagnostics for file 1: {diags1:?}");
+
+        let def_ids0: HashSet<_> = file0.defs.iter().map(|def| def.id).collect();
+        let def_ids1: HashSet<_> = file1.defs.iter().map(|def| def.id).collect();
+        assert!(
+          def_ids0.is_disjoint(&def_ids1),
+          "DefIds should be globally unique across files",
+        );
+
+        let body_ids0: HashSet<_> = file0.hir.bodies.iter().copied().collect();
+        let body_ids1: HashSet<_> = file1.hir.bodies.iter().copied().collect();
+        assert!(
+          body_ids0.is_disjoint(&body_ids1),
+          "BodyIds should be globally unique across files",
+        );
+
+        // Sanity check: file bits should match the lowered file.
+        assert_eq!(file0.root_body().file(), FileId(0));
+        assert_eq!(file1.root_body().file(), FileId(1));
+        assert!(file0.defs.iter().all(|def| def.id.file() == FileId(0)));
+        assert!(file1.defs.iter().all(|def| def.id.file() == FileId(1)));
+      })
+    });
   }
 }

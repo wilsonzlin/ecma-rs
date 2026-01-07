@@ -154,7 +154,7 @@ fn stable_decl_id(
 }
 
 fn synthetic_def_id(file: FileId, name: &str, kind: &DeclKind, order: u32) -> DefId {
-  DefId(stable_hash_u32(&(file, name, kind, order)))
+  DefId::new(file, stable_hash_u32(&(file, name, kind, order)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

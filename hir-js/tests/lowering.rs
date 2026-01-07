@@ -4,7 +4,6 @@ use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source;
 use hir_js::lower_from_source_with_kind;
-use hir_js::BodyId;
 use hir_js::BodyKind;
 use hir_js::DefKind;
 use hir_js::DefTypeInfo;
@@ -23,6 +22,7 @@ use hir_js::StmtKind;
 use hir_js::TypeExprKind;
 use hir_js::TypeName;
 use hir_js::VarDeclKind;
+use hir_js::ids::MISSING_BODY;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -983,7 +983,7 @@ fn lowers_class_expr() {
   let def = result.def(def_id).expect("class def");
   assert_eq!(def.path.kind, DefKind::Class);
   assert_eq!(def.body, Some(body_id));
-  assert_ne!(body_id, BodyId(u32::MAX));
+  assert_ne!(body_id, MISSING_BODY);
   assert!(result.body(body_id).is_some());
   assert_eq!(name.and_then(|n| result.names.resolve(n)), Some("Named"));
 }
@@ -1012,7 +1012,7 @@ fn export_default_class_has_ids() {
   let def_data = result.def(def).expect("class def");
   assert_eq!(def_data.path.kind, DefKind::Class);
   assert_eq!(def_data.body, Some(body));
-  assert_ne!(body, BodyId(u32::MAX));
+  assert_ne!(body, MISSING_BODY);
   let class_body = result.body(body).expect("class body");
   assert_eq!(class_body.kind, BodyKind::Class);
   assert!(name.is_none());
@@ -1485,7 +1485,7 @@ fn expr_at_offset_prefers_inner_expression() {
     .copied()
     .filter_map(|bid| {
       let body = result.body(bid)?;
-      let mut best: Option<((u32, u32, u32, u32, u32), ExprId)> = None;
+      let mut best: Option<((u32, u32, u64, u32, u32), ExprId)> = None;
       for (idx, expr) in body.exprs.iter().enumerate() {
         if expr.span.is_empty() || offset < expr.span.start || offset > expr.span.end {
           continue;

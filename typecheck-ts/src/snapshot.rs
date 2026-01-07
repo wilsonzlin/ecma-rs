@@ -19,7 +19,11 @@ use types_ts_interned::{
 ///
 /// Version 13 captures module resolution edges so restored snapshots can
 /// reconstruct module graphs without re-running host resolution callbacks.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 13;
+///
+/// Version 14 updates stored HIR identifiers (`DefId`, `BodyId`) to their 64-bit
+/// packed representation (file id + local hash), making cross-file collisions
+/// impossible.
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 14;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
@@ -135,6 +139,6 @@ pub struct ProgramSnapshot {
   pub interned_intrinsics: Vec<(DefId, IntrinsicKind)>,
   pub value_def_map: Vec<(DefId, DefId)>,
   pub builtin: BuiltinTypes,
-  pub next_def: u32,
-  pub next_body: u32,
+  pub next_def: u64,
+  pub next_body: u64,
 }

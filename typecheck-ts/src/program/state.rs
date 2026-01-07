@@ -10,6 +10,7 @@ use hir_js::{
   ExprKind as HirExprKind, LowerResult, NameId, PatId as HirPatId, PatKind as HirPatKind,
   VarDeclKind as HirVarDeclKind,
 };
+use hir_js::ids::{MISSING_BODY, MISSING_DEF};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::Expr;
@@ -191,8 +192,8 @@ struct ProgramState {
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
   current_file: Option<FileId>,
-  next_def: u32,
-  next_body: u32,
+  next_def: u64,
+  next_body: u64,
   next_symbol: u32,
   type_stack: Vec<DefId>,
 }
@@ -648,7 +649,7 @@ impl ProgramState {
             false
           };
 
-          if has_initializer || var.body.0 != u32::MAX {
+          if has_initializer || var.body != MISSING_BODY {
             1
           } else {
             4
@@ -1695,7 +1696,7 @@ impl ProgramState {
       let key = self
         .file_key_for_id(file)
         .unwrap_or_else(|| FileKey::new(format!("file{}.ts", file.0)));
-      let def = alloc_synthetic_def_id(&mut taken_ids, &("ts_module_namespace", key.as_str()));
+      let def = alloc_synthetic_def_id(file, &mut taken_ids, &("ts_module_namespace", key.as_str()));
       self.module_namespace_defs.insert(file, def);
     }
   }
@@ -2731,7 +2732,7 @@ impl ProgramState {
     };
     let def_sort_key =
       |def: DefId, data: &DefData| (data.file.0, data.span.start, data.span.end, def.0);
-    let mut entries: Vec<(tti::TypeId, (u32, u32, u32, u32), DefId)> = Vec::new();
+    let mut entries: Vec<(tti::TypeId, (u32, u32, u32, u64), DefId)> = Vec::new();
     for (def, ty) in self.interned_def_types.iter() {
       let Some(data) = self.def_data.get(def) else {
         continue;
@@ -4135,7 +4136,7 @@ impl ProgramState {
           _ => DefKind::Var(VarData {
             typ: None,
             init: None,
-            body: def.body.unwrap_or(BodyId(u32::MAX)),
+            body: def.body.unwrap_or(MISSING_BODY),
             mode: VarDeclMode::Var,
           }),
         };
@@ -4254,7 +4255,7 @@ impl ProgramState {
         _ => continue,
       };
       let value_def =
-        alloc_synthetic_def_id(&mut taken_ids, &("ts_value_def", file.0, type_def.0, tag));
+        alloc_synthetic_def_id(file, &mut taken_ids, &("ts_value_def", file.0, type_def.0, tag));
       self.value_defs.insert(type_def, value_def);
       new_def_data.entry(value_def).or_insert_with(|| DefData {
         name: type_data.name.clone(),
@@ -4265,7 +4266,7 @@ impl ProgramState {
         kind: DefKind::Var(VarData {
           typ: None,
           init: None,
-          body: BodyId(u32::MAX),
+          body: MISSING_BODY,
           mode: VarDeclMode::Let,
         }),
       });
@@ -4408,7 +4409,7 @@ impl ProgramState {
                       };
                       if let Some(init) = declarator.init {
                         let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
-                        if var.body.0 == u32::MAX || prefer {
+                        if var.body == MISSING_BODY || prefer {
                           var.body = *hir_body_id;
                         }
                         if var.init.is_none() || prefer {
@@ -4643,7 +4644,7 @@ impl ProgramState {
           }
         }
         DefKind::Var(var) => {
-          if var.body.0 != u32::MAX {
+          if var.body != MISSING_BODY {
             self.body_owners.insert(var.body, *def_id);
           }
         }
@@ -4693,7 +4694,7 @@ impl ProgramState {
     for data in self.def_data.values() {
       let body = match &data.kind {
         DefKind::Function(func) => func.body,
-        DefKind::Var(var) if var.body.0 != u32::MAX => Some(var.body),
+        DefKind::Var(var) if var.body != MISSING_BODY => Some(var.body),
         DefKind::VarDeclarator(var) => var.body,
         DefKind::Class(class) => class.body,
         DefKind::Enum(en) => en.body,
@@ -5916,7 +5917,7 @@ impl ProgramState {
               kind: DefKind::Var(VarData {
                 typ: None,
                 init: None,
-                body: BodyId(u32::MAX),
+                body: MISSING_BODY,
                 mode: VarDeclMode::Const,
               }),
             },
@@ -6491,7 +6492,7 @@ impl ProgramState {
             kind: DefKind::Var(VarData {
               typ,
               init: None,
-              body: BodyId(u32::MAX),
+              body: MISSING_BODY,
               mode: VarDeclMode::Var,
             }),
           },
@@ -6778,7 +6779,7 @@ impl ProgramState {
             kind: DefKind::Var(VarData {
               typ: type_ann,
               init: None,
-              body: BodyId(u32::MAX),
+              body: MISSING_BODY,
               mode: var.mode,
             }),
           },
@@ -7503,7 +7504,7 @@ impl ProgramState {
       lowered.body(hir_id)
     } else if matches!(meta.kind, HirBodyKind::TopLevel) {
       _synthetic = Some(hir_js::Body {
-        owner: HirDefId(u32::MAX),
+        owner: MISSING_DEF,
         span: TextRange::new(0, 0),
         kind: HirBodyKind::TopLevel,
         exprs: Vec::new(),
@@ -7733,7 +7734,7 @@ impl ProgramState {
             .get(&def)
             .map(|data| (data.span.start, data.span.end, def.0))
         })
-        .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
+        .unwrap_or((u32::MAX, u32::MAX, u64::MAX));
       let def_key_b = binding_b
         .def
         .and_then(|def| {
@@ -7742,7 +7743,7 @@ impl ProgramState {
             .get(&def)
             .map(|data| (data.span.start, data.span.end, def.0))
         })
-        .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
+        .unwrap_or((u32::MAX, u32::MAX, u64::MAX));
       def_key_a.cmp(&def_key_b).then_with(|| name_a.cmp(name_b))
     });
     let file_binding_names: HashSet<_> = file_binding_entries
@@ -9282,7 +9283,7 @@ impl ProgramState {
   fn var_initializer(&self, def: DefId) -> Option<VarInit> {
     if let Some(def_data) = self.def_data.get(&def) {
       if let DefKind::Var(var) = &def_data.kind {
-        if var.body.0 != u32::MAX {
+        if var.body != MISSING_BODY {
           if let Some(expr) = var.init {
             let decl_kind = match var.mode {
               VarDeclMode::Var => HirVarDeclKind::Var,
@@ -10278,7 +10279,7 @@ impl ProgramState {
             VarDeclMode::AwaitUsing => HirVarDeclKind::AwaitUsing,
           };
           let init = self.var_initializer(def).or_else(|| {
-            if var.body.0 == u32::MAX {
+            if var.body == MISSING_BODY {
               return None;
             }
             let expr = var.init?;
@@ -10840,7 +10841,7 @@ impl ProgramState {
   }
 
   fn resolve_promise_def(&self) -> Option<tti::DefId> {
-    let mut best: Option<((u8, u8, u32, u32, u32), DefId)> = None;
+    let mut best: Option<((u8, u8, u32, u32, u64), DefId)> = None;
     for (def, data) in self.def_data.iter() {
       if data.name != "Promise" {
         continue;
@@ -10850,7 +10851,7 @@ impl ProgramState {
         continue;
       }
       let origin = self.file_registry.lookup_origin(data.file);
-      let origin_rank = if self.current_file == Some(data.file) {
+      let origin_rank: u8 = if self.current_file == Some(data.file) {
         0
       } else if matches!(origin, Some(FileOrigin::Source)) {
         1
@@ -11455,7 +11456,7 @@ impl ProgramState {
     self.def_data.get(&def).and_then(|d| match &d.kind {
       DefKind::Function(func) => func.body,
       DefKind::Var(var) => {
-        if var.body.0 != u32::MAX {
+        if var.body != MISSING_BODY {
           Some(var.body)
         } else {
           self.var_initializer(def).map(|init| init.body)

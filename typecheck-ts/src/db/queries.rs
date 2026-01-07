@@ -484,7 +484,7 @@ pub mod body_check {
 
   use diagnostics::{Diagnostic, FileId, Span, TextRange};
   use hir_js::{
-    Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, DefId as HirDefId, NameInterner,
+    Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, NameInterner,
   };
   use hir_js::{PatId as HirPatId, PatKind as HirPatKind};
   use parse_js::ast::node::Node;
@@ -864,7 +864,7 @@ pub mod body_check {
         lowered.body(hir_id)
       } else if matches!(meta.kind, HirBodyKind::TopLevel) {
         _synthetic = Some(HirBody {
-          owner: HirDefId(u32::MAX),
+          owner: hir_js::ids::MISSING_DEF,
           span: TextRange::new(0, 0),
           kind: HirBodyKind::TopLevel,
           exprs: Vec::new(),

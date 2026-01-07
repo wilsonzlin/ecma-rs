@@ -15,6 +15,7 @@ use crate::type_queries::{
 };
 use crate::{FatalError, HostError, Ice, SymbolBinding, SymbolInfo, SymbolOccurrence};
 use hir_js::{BinaryOp as HirBinaryOp, ExprKind as HirExprKind};
+use hir_js::ids::MISSING_BODY;
 use semantic_js_crate::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -2029,7 +2030,7 @@ impl Program {
       Ok(state.def_data.get(&def).and_then(|d| match &d.kind {
         DefKind::Function(func) => func.body,
         DefKind::Var(var) => {
-          if var.body.0 != u32::MAX {
+          if var.body != MISSING_BODY {
             Some(var.body)
           } else {
             state.var_initializer(def).map(|init| init.body)

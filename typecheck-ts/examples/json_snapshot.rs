@@ -99,7 +99,7 @@ struct SymbolAtSnapshot {
   offset: u32,
   symbol_id: u64,
   name: Option<String>,
-  def_id: Option<u32>,
+  def_id: Option<u64>,
   #[serde(rename = "type")]
   ty: Option<String>,
 }

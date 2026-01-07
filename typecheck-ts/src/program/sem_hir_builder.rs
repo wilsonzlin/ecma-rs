@@ -225,14 +225,18 @@ fn stable_hash_u32<T: Hash>(value: &T) -> u32 {
   (hash ^ (hash >> 32)) as u32
 }
 
-pub(super) fn alloc_synthetic_def_id<T: Hash>(taken: &mut HashSet<DefId>, seed: &T) -> DefId {
+pub(super) fn alloc_synthetic_def_id<T: Hash>(
+  file: FileId,
+  taken: &mut HashSet<DefId>,
+  seed: &T,
+) -> DefId {
   for salt in 0u32.. {
     let candidate = if salt == 0 {
       stable_hash_u32(seed)
     } else {
       stable_hash_u32(&(seed, salt))
     };
-    let id = DefId(candidate);
+    let id = DefId::new(file, candidate);
     if taken.insert(id) {
       return id;
     }
