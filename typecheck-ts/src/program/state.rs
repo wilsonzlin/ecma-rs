@@ -113,9 +113,9 @@ use api::body_extent_from_spans;
 pub use api::{BodyCheckResult, Host, Program};
 
 mod analysis;
-mod interned;
 mod bind;
 mod bodies;
+mod interned;
 
 fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
   match kind {
@@ -1320,8 +1320,6 @@ impl ProgramState {
     }
     Ok(())
   }
-
-
 
   fn rebuild_interned_named_def_types(&mut self) {
     self.interned_named_def_types.clear();
@@ -3693,8 +3691,6 @@ impl ProgramState {
       Ok(self.def_types.get(&def).copied())
     }
   }
-
-
 
   fn import_interned_type(&mut self, ty: TypeId) -> TypeId {
     let Some(store) = self.interned_store.as_ref().cloned() else {
