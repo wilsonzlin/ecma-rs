@@ -1,3 +1,14 @@
+//! JavaScript/TypeScript minifier for the ecma-rs toolchain.
+//!
+//! `minify-js` parses source text, applies TypeScript type erasure where needed,
+//! runs scope-aware renaming, and emits minified JavaScript.
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p minify-js --example basic
+//! ```
+
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
 #[cfg(feature = "emit-minify")]
 use emit_js::{emit_hir_file_diagnostic, emit_top_level_diagnostic, EmitOptions};
