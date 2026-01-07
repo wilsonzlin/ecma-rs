@@ -366,11 +366,30 @@ impl<'a> Parser<'a> {
                 | TT::BracketOpen
             ) || KEYWORDS_MAPPING.contains_key(&t1.typ);
 
-            // Detect async methods, generators, and accessors.
+            let is_get_or_set = matches!(t0.typ, TT::KeywordGet | TT::KeywordSet);
+            // In strict ECMAScript mode, `get`/`set` always introduce an accessor when a
+            // property-name starts next; missing `()` is therefore a syntax error (it must
+            // not be parsed as two adjacent class fields).
             //
-            // `get`/`set` accessors allow LineTerminators between the keyword and
-            // the property name (including computed names), so we treat them as
-            // "special" whenever a valid property name starts next.
+            // In TypeScript/JS recovery modes, a LineTerminator can also end a class field
+            // named `get`/`set` before the next member begins (e.g. `get\nfoo: number`), so
+            // we only treat it as an accessor when it looks like one (`get foo()` / `get
+            // [expr]()` / etc).
+            let looks_like_accessor = if is_get_or_set
+              && accessor_name_start
+              && !p.is_strict_ecmascript()
+            {
+              let checkpoint = p.checkpoint();
+              p.consume(); // get/set
+              let res = p.class_or_obj_key(ctx);
+              let next = p.peek().typ;
+              p.restore_checkpoint(checkpoint);
+              res.is_ok() && matches!(next, TT::ParenthesisOpen | TT::ChevronLeft)
+            } else {
+              false
+            };
+
+            // Detect async methods, generators, and accessors.
             let needs_special_handling = matches!(
               (t0.typ, t1.typ, t2.typ),
               (TT::KeywordAsync, TT::Asterisk, _)
@@ -378,8 +397,9 @@ impl<'a> Parser<'a> {
                 | (TT::KeywordAsync, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, TT::BracketOpen, _)
-            ) || (matches!(t0.typ, TT::KeywordGet | TT::KeywordSet)
-              && accessor_name_start);
+            ) || (is_get_or_set
+              && accessor_name_start
+              && (p.is_strict_ecmascript() || looks_like_accessor));
 
             if needs_special_handling {
               // Use the original class_or_obj_member for these special cases
