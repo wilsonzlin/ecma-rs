@@ -2726,7 +2726,8 @@ fn member_access_on_intersection_intersects_property_types() {
     &initial,
   );
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
-  assert_eq!(ty, "number & string");
+  // Intersecting incompatible primitive property types collapses to `never`.
+  assert_eq!(ty, "never");
 }
 
 #[test]
