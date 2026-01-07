@@ -64,6 +64,33 @@ fn await_allows_operand_after_line_terminator_in_comment() {
 }
 
 #[test]
+fn await_allows_operand_after_line_terminator_in_single_line_comment() {
+  let source = "async function f(){ await//\nfoo(); }";
+  let parsed = parse_with_options(source, js_module_opts()).unwrap();
+  assert_eq!(parsed.stx.body.len(), 1);
+
+  let Stmt::FunctionDecl(func_decl) = parsed.stx.body[0].stx.as_ref() else {
+    panic!("expected function declaration");
+  };
+  let Some(FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
+    panic!("expected function body");
+  };
+  assert_eq!(
+    body.len(),
+    1,
+    "await must not be split by ASI across a newline in a single-line comment"
+  );
+
+  let Stmt::Expr(stmt) = body[0].stx.as_ref() else {
+    panic!("expected expression statement");
+  };
+  let Expr::Unary(unary) = stmt.stx.expr.stx.as_ref() else {
+    panic!("expected await unary expression");
+  };
+  assert_eq!(unary.stx.operator, OperatorName::Await);
+}
+
+#[test]
 fn top_level_await_allows_operand_after_line_terminator() {
   let source = "await\nfoo()";
   let parsed = parse_with_options(source, js_module_opts()).unwrap();
@@ -114,4 +141,40 @@ fn yield_delegated_disallows_line_terminator_in_comment_before_asterisk() {
   let err = parse_with_options(source, js_module_opts()).unwrap_err();
   assert_eq!(err.typ, SyntaxErrorType::LineTerminatorAfterYield);
   assert_eq!(err.actual_token, Some(TT::Asterisk));
+}
+
+#[test]
+fn yield_delegated_disallows_line_terminator_in_single_line_comment_before_asterisk() {
+  let source = "function* g(){ yield//\n* foo; }";
+  let err = parse_with_options(source, js_module_opts()).unwrap_err();
+  assert_eq!(err.typ, SyntaxErrorType::LineTerminatorAfterYield);
+  assert_eq!(err.actual_token, Some(TT::Asterisk));
+}
+
+#[test]
+fn yield_delegated_allows_line_terminator_after_asterisk() {
+  let source = "function* g(){ yield*\nfoo; }";
+  let parsed = parse_with_options(source, js_module_opts()).unwrap();
+  assert_eq!(parsed.stx.body.len(), 1);
+
+  let Stmt::FunctionDecl(func_decl) = parsed.stx.body[0].stx.as_ref() else {
+    panic!("expected function declaration");
+  };
+  let Some(FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
+    panic!("expected function body");
+  };
+  assert_eq!(body.len(), 1);
+
+  let Stmt::Expr(stmt) = body[0].stx.as_ref() else {
+    panic!("expected expression statement");
+  };
+  let Expr::Unary(unary) = stmt.stx.expr.stx.as_ref() else {
+    panic!("expected yield* unary expression");
+  };
+  assert_eq!(unary.stx.operator, OperatorName::YieldDelegated);
+
+  let Expr::Id(id) = unary.stx.argument.stx.as_ref() else {
+    panic!("expected yield* operand to be identifier");
+  };
+  assert_eq!(id.stx.name, "foo");
 }
