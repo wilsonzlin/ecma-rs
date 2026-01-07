@@ -830,6 +830,7 @@ impl<'a> Parser<'a> {
         if p.peek().typ == TT::BraceClose {
           break;
         }
+        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("`,`")));
       }
       p.require(TT::BraceClose)?;
       Ok(LitObjExpr { members })

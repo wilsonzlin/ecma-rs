@@ -536,7 +536,7 @@ impl<'a> Parser<'a> {
         "export declarations must be at top level",
       )));
     }
-    let [t0, t1, t2] = self.peek_n();
+    let [t0, t1, t2, t3] = self.peek_n::<4>();
     // The first token should always be `export`, but it will be parsed in the subroutines and not here.
     assert_eq!(t0.typ, TT::KeywordExport);
 
@@ -591,7 +591,14 @@ impl<'a> Parser<'a> {
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match (t1.typ, t2.typ) {
       // `class` and `function` are treated as statements that are hoisted, not expressions; however, they can be unnamed, which gives them the name `default`.
-      (TT::KeywordDefault, TT::KeywordAsync | TT::KeywordFunction) | (TT::KeywordAsync | TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped(),
+      (TT::KeywordDefault, TT::KeywordFunction) => self.func_decl(ctx)?.into_wrapped(),
+      // `async` is contextual here: `export default async ...` is only a function
+      // declaration when followed by `function` with no LineTerminator in between.
+      (TT::KeywordDefault, TT::KeywordAsync) if t3.typ == TT::KeywordFunction && !t3.preceded_by_line_terminator => self.func_decl(ctx)?.into_wrapped(),
+      (TT::KeywordDefault, TT::KeywordAsync) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
+      (TT::KeywordAsync, TT::KeywordFunction) if !t2.preceded_by_line_terminator => self.func_decl(ctx)?.into_wrapped(),
+      (TT::KeywordAsync, TT::KeywordFunction) => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
+      (TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass | TT::KeywordAbstract, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       // TypeScript: export const enum

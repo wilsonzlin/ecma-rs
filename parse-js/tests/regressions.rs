@@ -1,5 +1,13 @@
 #[path = "regressions/asi_and_keywords.rs"]
 mod asi_and_keywords;
+#[path = "regressions/async_arrow_line_terminator.rs"]
+mod async_arrow_line_terminator;
+#[path = "regressions/async_function_decl_line_terminator.rs"]
+mod async_function_decl_line_terminator;
+#[path = "regressions/class_async_method_line_terminator.rs"]
+mod class_async_method_line_terminator;
+#[path = "regressions/class_get_set_line_terminator.rs"]
+mod class_get_set_line_terminator;
 #[path = "regressions/class_heritage.rs"]
 mod class_heritage;
 #[path = "regressions/class_method_overload.rs"]
@@ -30,6 +38,8 @@ mod module_namespace_identifiers;
 mod numeric_literal_overflow;
 #[path = "regressions/numeric_separators.rs"]
 mod numeric_separators;
+#[path = "regressions/object_literal_modifier_line_terminator.rs"]
+mod object_literal_modifier_line_terminator;
 #[path = "regressions/private_index_signature.rs"]
 mod private_index_signature;
 #[path = "regressions/strict_ecma_rejections.rs"]

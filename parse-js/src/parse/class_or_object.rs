@@ -1190,8 +1190,10 @@ impl<'a> Parser<'a> {
     // Handle: [...], *[...], get [...], set [...]
     if a.typ == TT::BracketOpen
       || (a.typ == TT::Asterisk && b.typ == TT::BracketOpen)
-      || (a.typ == TT::KeywordGet && b.typ == TT::BracketOpen)
-      || (a.typ == TT::KeywordSet && b.typ == TT::BracketOpen)
+      // `get`/`set` are contextual: they only introduce accessors when there is no
+      // LineTerminator between the modifier and the property name.
+      || (a.typ == TT::KeywordGet && b.typ == TT::BracketOpen && !b.preceded_by_line_terminator)
+      || (a.typ == TT::KeywordSet && b.typ == TT::BracketOpen && !b.preceded_by_line_terminator)
     {
       // Check if this is a getter or setter with computed key
       let is_getter = a.typ == TT::KeywordGet;
@@ -1328,13 +1330,25 @@ impl<'a> Parser<'a> {
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
-      | (TT::KeywordAsync, TT::BracketOpen, _, _)  // Async method with computed property: async [key]()
-      | (TT::KeywordAsync, _, TT::ParenthesisOpen, _)
-      | (TT::Asterisk, TT::ParenthesisOpen, _, _)  // Anonymous generator method: *()
+        if !b.preceded_by_line_terminator =>
+      {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      (TT::KeywordAsync, TT::BracketOpen, _, _) // Async method with computed property: async [key]()
+        if !b.preceded_by_line_terminator =>
+      {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      (TT::KeywordAsync, _, TT::ParenthesisOpen, _) if !b.preceded_by_line_terminator => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      (TT::Asterisk, TT::ParenthesisOpen, _, _)  // Anonymous generator method: *()
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (TT::Asterisk, TT::BracketOpen, _, _)  // Generator with computed property: *[key]()
-      | (_, TT::ParenthesisOpen, _, _)
-      => {
+      | (_, TT::ParenthesisOpen, _, _) => {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
@@ -1345,7 +1359,9 @@ impl<'a> Parser<'a> {
       }
       // Getter (may have invalid type parameters like get foo<T>())
       // Error recovery: also handle getters without parentheses like "get e"
-      (TT::KeywordGet, _, TT::ParenthesisOpen, _) | (TT::KeywordGet, _, TT::ChevronLeft, _) => {
+      (TT::KeywordGet, _, TT::ParenthesisOpen, _) | (TT::KeywordGet, _, TT::ChevronLeft, _)
+        if !b.preceded_by_line_terminator =>
+      {
         let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
@@ -1355,19 +1371,21 @@ impl<'a> Parser<'a> {
       | (TT::KeywordGet, TT::LiteralNumber, _, _)
       | (TT::KeywordGet, TT::LiteralBigInt, _, _)
       | (TT::KeywordGet, TT::PrivateMember, _, _)
-        if c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
+        if !b.preceded_by_line_terminator && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
       => {
         let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
       // Error recovery: getter with keyword as name but no parentheses
-      (TT::KeywordGet, _, _, _) if KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
+      (TT::KeywordGet, _, _, _) if !b.preceded_by_line_terminator && KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
         let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
       // Setter (may have invalid type parameters like set foo<T>(x))
       // Error recovery: also handle setters without parentheses like "set f"
-      (TT::KeywordSet, _, TT::ParenthesisOpen, _) | (TT::KeywordSet, _, TT::ChevronLeft, _) => {
+      (TT::KeywordSet, _, TT::ParenthesisOpen, _) | (TT::KeywordSet, _, TT::ChevronLeft, _)
+        if !b.preceded_by_line_terminator =>
+      {
         let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }
@@ -1377,13 +1395,13 @@ impl<'a> Parser<'a> {
       | (TT::KeywordSet, TT::LiteralNumber, _, _)
       | (TT::KeywordSet, TT::LiteralBigInt, _, _)
       | (TT::KeywordSet, TT::PrivateMember, _, _)
-        if c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
+        if !b.preceded_by_line_terminator && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
       => {
         let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }
       // Error recovery: setter with keyword as name but no parentheses
-      (TT::KeywordSet, _, _, _) if KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
+      (TT::KeywordSet, _, _, _) if !b.preceded_by_line_terminator && KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
         let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }

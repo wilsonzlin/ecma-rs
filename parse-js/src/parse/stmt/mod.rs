@@ -105,12 +105,12 @@ impl<'a> Parser<'a> {
         self.export_stmt(ctx)?
       }
       TT::KeywordFor => self.for_stmt(ctx)?,
-      // Only treat `async` as an async function declaration modifier when it
-      // is followed by `function` on the same line. Otherwise `async` is an
-      // identifier and ASI may split the statements (e.g. `async\nfunction f(){}`).
+      // `async` is contextual here: it only starts an async function declaration when
+      // there is no LineTerminator between `async` and `function`.
+      // Otherwise, `async` is an identifier and ASI will split the statements.
       TT::KeywordAsync if t1.typ == TT::KeywordFunction && !t1.preceded_by_line_terminator => {
         self.func_decl(ctx)?.into_wrapped()
-      }
+      },
       TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped(),
       // `import` can start either an import declaration or an import expression (`import()`/`import.meta`)
