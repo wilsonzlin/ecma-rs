@@ -23,6 +23,18 @@ just ci
 This runs the `fmt`/`clippy`/`check`/`test` suite and regenerates [`docs/deps.md`](./deps.md).
 CI runs the underlying `cargo` commands with `--locked` after generating `Cargo.lock`.
 
+## 2) Run the in-repo examples (no filesystem I/O)
+
+The repository includes compiled examples that demonstrate the public APIs of the
+core crates. See [`docs/examples.md`](./examples.md) for the full list.
+
+TypeScript checker examples:
+
+```bash
+cargo run -p typecheck-ts --example memory_host_basic
+cargo run -p typecheck-ts --example json_snapshot
+```
+
 ## 2) Optional submodules (TypeScript + test262)
 
 Two test corpora live in submodules (see [`.gitmodules`](../.gitmodules)):
