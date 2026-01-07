@@ -1,0 +1,7 @@
+[env]
+# `cargo-fuzz` uses `-Zsanitizer=...` for sanitizer runtimes, which requires a
+# nightly compiler. This repo pins a stable toolchain for normal development,
+# so we opt into `RUSTC_BOOTSTRAP=1` to allow `cargo fuzz` to build targets
+# without switching toolchains.
+RUSTC_BOOTSTRAP = "1"
+

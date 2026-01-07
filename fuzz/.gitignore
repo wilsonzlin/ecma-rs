@@ -1,0 +1,8 @@
+# `cargo fuzz` output
+artifacts/
+corpus/
+
+# Most fuzz builds place outputs under the workspace `target/`, but `cargo fuzz`
+# can also be configured to use a local target directory.
+target/
+

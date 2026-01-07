@@ -20,6 +20,7 @@ members = [
   "semantic-js",
   "typecheck-ts-cli",
 ]
+exclude = ["fuzz"]
 
 [profile.release]
 codegen-units = 1

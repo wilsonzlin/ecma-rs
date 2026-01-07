@@ -11,11 +11,11 @@ use ordered_float::OrderedFloat;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct SerializedTypeGraph {
+struct SerializedTypeGraph {
   #[serde(default)]
-  pub roots: Vec<usize>,
+  roots: Vec<usize>,
   #[serde(default)]
-  pub nodes: Vec<SerializedType>,
+  nodes: Vec<SerializedType>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
