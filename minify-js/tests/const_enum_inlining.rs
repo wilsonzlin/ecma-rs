@@ -141,6 +141,23 @@ fn const_enum_string_members_are_evaluated() {
 }
 
 #[test]
+fn const_enum_unwraps_ts_only_wrappers_in_initializers() {
+  let src = r#"
+    const enum E {
+      A = (1 as const)!,
+      B = (A satisfies number),
+    }
+    export const x = E.B;
+  "#;
+  let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitNum(num) => assert_eq!(num.stx.value.0, 1.0),
+    other => panic!("expected numeric literal initializer, got {other:?}"),
+  }
+}
+
+#[test]
 fn const_enum_bracket_access_is_inlined() {
   let src = r#"const enum E { A = 1 } export const x = E["A"];"#;
   let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
