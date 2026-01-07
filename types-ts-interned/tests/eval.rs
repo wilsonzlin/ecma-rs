@@ -2446,6 +2446,32 @@ fn tuple_length_indexed_access_variadic_is_number() {
 }
 
 #[test]
+fn tuple_indexed_access_fractional_number_literal_is_union_of_elements() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  let index = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.5)));
+  let indexed = store.intern_type(TypeKind::IndexedAccess { obj: tuple, index });
+
+  let result = store.evaluate(indexed);
+  assert_eq!(result, store.union(vec![primitives.string, primitives.number]));
+}
+
+#[test]
 fn keyof_respects_union_and_intersection_semantics() {
   let store = TypeStore::new();
 
@@ -2587,6 +2613,47 @@ fn keyof_empty_object_is_never() {
   let empty_object = store.intern_type(TypeKind::EmptyObject);
   let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(empty_object)));
   assert_eq!(evaluated, primitives.never);
+}
+
+#[test]
+fn keyof_fractional_number_literal_in_mapped_source_widens_to_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let source = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.5)));
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source,
+    value: primitives.boolean,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: None,
+  }));
+
+  let keys = store.evaluate(store.intern_type(TypeKind::KeyOf(mapped)));
+  assert_eq!(keys, primitives.number);
+}
+
+#[test]
+fn keyof_fractional_number_literal_in_mapped_remap_widens_to_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let source = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let remap = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.5)));
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source,
+    value: primitives.boolean,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Preserve,
+    name_type: None,
+    as_type: Some(remap),
+  }));
+
+  let keys = store.evaluate(store.intern_type(TypeKind::KeyOf(mapped)));
+  assert_eq!(keys, primitives.number);
 }
 
 #[test]

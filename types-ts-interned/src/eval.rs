@@ -1571,6 +1571,26 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     }
   }
 
+  fn tuple_index_union(
+    &mut self,
+    elems: &[crate::kind::TupleElem],
+    subst: &Substitution,
+    depth: usize,
+    options: crate::TypeOptions,
+  ) -> TypeId {
+    let mut members = Vec::new();
+    for elem in elems.iter() {
+      let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
+      if elem.optional && !options.exact_optional_property_types {
+        ty = self
+          .store
+          .union(vec![ty, self.store.primitive_ids().undefined]);
+      }
+      members.push(ty);
+    }
+    self.store.union(members)
+  }
+
   fn evaluate_indexed_access(
     &mut self,
     obj: TypeId,
@@ -1649,94 +1669,74 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         _ => self.store.primitive_ids().unknown,
       },
-      TypeKind::Tuple(elems) => match self.store.type_kind(index_eval) {
-        TypeKind::StringLiteral(id) if self.store.name(id) == "length" => {
-          if elems.iter().any(|elem| elem.rest) {
-            self.store.primitive_ids().number
-          } else {
-            let len = elems.len();
-            let mut required_len = len;
-            while required_len > 0 && elems[required_len - 1].optional {
-              required_len -= 1;
-            }
-
-            if required_len == len {
-              self
-                .store
-                .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(len as f64)))
+      TypeKind::Tuple(elems) => {
+        match self.store.type_kind(index_eval) {
+          TypeKind::StringLiteral(id) if self.store.name(id) == "length" => {
+            if elems.iter().any(|elem| elem.rest) {
+              self.store.primitive_ids().number
             } else {
-              let mut members = Vec::new();
-              for l in required_len..=len {
-                members.push(
-                  self
-                    .store
-                    .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(l as f64))),
-                );
+              let len = elems.len();
+              let mut required_len = len;
+              while required_len > 0 && elems[required_len - 1].optional {
+                required_len -= 1;
               }
-              self.store.union(members)
-            }
-          }
-        }
-        TypeKind::NumberLiteral(num) => {
-          let idx = num.0 as usize;
-          if let Some(elem) = elems.get(idx) {
-            let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
-            if elem.optional && !options.exact_optional_property_types {
-              ty = self
-                .store
-                .union(vec![ty, self.store.primitive_ids().undefined]);
-            }
-            ty
-          } else {
-            self.store.primitive_ids().undefined
-          }
-        }
-        TypeKind::StringLiteral(id) => {
-          let key = PropKey::String(id);
-          match parse_canonical_index_string(self.store.as_ref(), &key) {
-            Some(idx) => match usize::try_from(idx) {
-              Ok(idx) => {
-                if let Some(elem) = elems.get(idx) {
-                  let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
-                  if elem.optional && !options.exact_optional_property_types {
-                    ty = self
+
+              if required_len == len {
+                self
+                  .store
+                  .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(len as f64)))
+              } else {
+                let mut members = Vec::new();
+                for l in required_len..=len {
+                  members.push(
+                    self
                       .store
-                      .union(vec![ty, self.store.primitive_ids().undefined]);
-                  }
-                  ty
-                } else {
-                  self.store.primitive_ids().undefined
+                      .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(l as f64))),
+                  );
                 }
+                self.store.union(members)
               }
-              Err(_) => self.store.primitive_ids().undefined,
-            },
-            None => {
-              let mut members = Vec::new();
-              for elem in elems {
+            }
+          }
+          TypeKind::NumberLiteral(num) => match number_literal_as_usize_index(num) {
+            Some(idx) => {
+              if let Some(elem) = elems.get(idx) {
                 let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
                 if elem.optional && !options.exact_optional_property_types {
                   ty = self
                     .store
                     .union(vec![ty, self.store.primitive_ids().undefined]);
                 }
-                members.push(ty);
+                ty
+              } else {
+                self.store.primitive_ids().undefined
               }
-              self.store.union(members)
+            }
+            None => self.tuple_index_union(&elems, subst, depth, options),
+          },
+          TypeKind::StringLiteral(id) => {
+            let key = PropKey::String(id);
+            match parse_canonical_index_string(self.store.as_ref(), &key) {
+              Some(idx) => match usize::try_from(idx) {
+                Ok(idx) => {
+                  if let Some(elem) = elems.get(idx) {
+                    let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
+                    if elem.optional && !options.exact_optional_property_types {
+                      ty = self
+                        .store
+                        .union(vec![ty, self.store.primitive_ids().undefined]);
+                    }
+                    ty
+                  } else {
+                    self.store.primitive_ids().undefined
+                  }
+                }
+                Err(_) => self.store.primitive_ids().undefined,
+              },
+              None => self.tuple_index_union(&elems, subst, depth, options),
             }
           }
-        }
-        _ => {
-          let mut members = Vec::new();
-          for elem in elems {
-            let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
-            if elem.optional && !options.exact_optional_property_types {
-              ty = self
-                .store
-                .union(vec![ty, self.store.primitive_ids().undefined]);
-            }
-            members.push(ty);
-          }
-          self.store.union(members)
+          _ => self.tuple_index_union(&elems, subst, depth, options),
         }
       },
       _ => self.store.primitive_ids().unknown,
@@ -1834,10 +1834,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::StringLiteral(id) => {
         KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store)
       }
-      TypeKind::NumberLiteral(num) => KeySet::known(
-        vec![Key::Literal(PropKey::Number(num.0 as i64))],
-        &self.store,
-      ),
+      TypeKind::NumberLiteral(num) => match number_literal_as_i64(num) {
+        Some(num) => KeySet::known(vec![Key::Literal(PropKey::Number(num))], &self.store),
+        None => KeySet::known(vec![Key::Number], &self.store),
+      },
       TypeKind::Symbol | TypeKind::UniqueSymbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::TemplateLiteral(tpl) => {
         match self.compute_template_strings(&tpl, &Substitution::empty(), 0) {
@@ -2020,10 +2020,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::StringLiteral(id) => {
         KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store)
       }
-      TypeKind::NumberLiteral(num) => KeySet::known(
-        vec![Key::Literal(PropKey::Number(num.0 as i64))],
-        &self.store,
-      ),
+      TypeKind::NumberLiteral(num) => match number_literal_as_i64(num) {
+        Some(num) => KeySet::known(vec![Key::Literal(PropKey::Number(num))], &self.store),
+        None => KeySet::known(vec![Key::Number], &self.store),
+      },
       TypeKind::UniqueSymbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::Symbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::String => KeySet::known(vec![Key::String], &self.store),
@@ -2274,6 +2274,24 @@ fn parse_canonical_index_string(store: &TypeStore, key: &PropKey) -> Option<i64>
     return None;
   };
   parse_canonical_index_str(&store.name(*id))
+}
+
+fn number_literal_as_i64(num: OrderedFloat<f64>) -> Option<i64> {
+  let value = num.0;
+  if !value.is_finite() {
+    return None;
+  }
+  if value.fract() != 0.0 {
+    return None;
+  }
+  if value < i64::MIN as f64 || value >= i64::MAX as f64 {
+    return None;
+  }
+  Some(value as i64)
+}
+
+fn number_literal_as_usize_index(num: OrderedFloat<f64>) -> Option<usize> {
+  usize::try_from(number_literal_as_i64(num)?).ok()
 }
 
 fn parse_canonical_index_str(s: &str) -> Option<i64> {
