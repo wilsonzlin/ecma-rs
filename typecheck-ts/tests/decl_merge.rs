@@ -372,7 +372,7 @@ fn value_namespace_merge_keeps_callability_and_members_interned() {
 }
 
 #[test]
-fn namespace_then_value_prefers_callable_def_and_merges_members() {
+fn value_then_namespace_prefers_callable_def_and_merges_members() {
   let mut host = MemoryHost::default();
   let key = fk(6);
   host.insert(

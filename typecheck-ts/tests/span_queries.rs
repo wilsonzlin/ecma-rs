@@ -47,7 +47,6 @@ fn nested_expression_prefers_smallest_covering_span() {
   let offset = source.find("3 + 4").expect("inner literal") as u32;
 
   let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
-
   let span = program.span_of_expr(body, expr).expect("span of expr");
   assert_eq!(
     &source[span.range.start as usize..span.range.end as usize],
@@ -179,7 +178,6 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
     "value",
     "innermost captured identifier should be selected"
   );
-
   let param_offset = source.find("value: number").unwrap() as u32;
   let param_ty = program
     .type_at(file_id, param_offset)
