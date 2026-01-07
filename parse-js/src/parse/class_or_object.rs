@@ -466,6 +466,14 @@ impl<'a> Parser<'a> {
 
       if self.is_strict_ecmascript() {
         if let ClassOrObjKey::Direct(key) = &member.stx.key {
+          if member.stx.static_ && key.stx.key == "prototype" {
+            return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+              "classes may not have a static property named `prototype`",
+            )));
+          }
+        }
+
+        if let ClassOrObjKey::Direct(key) = &member.stx.key {
           if key.stx.tt == TT::PrivateMember {
             use crate::ast::class_or_object::ClassOrObjVal;
             let kind = match &member.stx.val {

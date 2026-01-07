@@ -119,6 +119,10 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("class C { constructor(){} 'constructor'(){} }");
   assert_reject("class C { #constructor(){} }");
   assert_reject("class C { static #constructor(){} }");
+  assert_reject("class C { static prototype = 1 }");
+  assert_reject("class C { static prototype(){} }");
+  assert_reject("class C { static get prototype(){} }");
+  assert_reject("class C { static set prototype(v){} }");
 
   // Private names must be unique (except for get/set pairs).
   assert_reject("class C { #x; #x; }");
@@ -263,6 +267,7 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("class B {} class A extends B { constructor() { (() => super())(); } }");
   assert_accept("class C { constructor(){} ['constructor'](){} }");
   assert_accept("class C { constructor(){} static get constructor(){ return 1 } }");
+  assert_accept("class C { static ['prototype'](){} }");
   assert_accept("class C { get #x(){ return 1 } set #x(v){} }");
   assert_accept("class C { static get #x(){ return 1 } static set #x(v){} }");
   assert_accept("class B {} class A extends B { x = super.foo; }");
