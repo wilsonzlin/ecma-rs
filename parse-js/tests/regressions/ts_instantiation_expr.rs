@@ -79,11 +79,7 @@ fn class_extends_preserves_type_arguments() {
     Stmt::ClassDecl(class) => class,
     other => panic!("expected class declaration, got {other:?}"),
   };
-  let extends = class
-    .stx
-    .extends
-    .as_ref()
-    .expect("expected extends clause");
+  let extends = class.stx.extends.as_ref().expect("expected extends clause");
   match extends.stx.as_ref() {
     Expr::Instantiation(inst) => assert_eq!(inst.stx.type_arguments.len(), 1),
     other => panic!("expected instantiation in extends, got {other:?}"),
@@ -105,7 +101,10 @@ fn standalone_instantiation_expression_is_allowed() {
     Expr::Instantiation(inst) => inst,
     other => panic!("expected instantiation initializer, got {other:?}"),
   };
-  assert!(matches!(inst.stx.type_arguments[0].stx.as_ref(), TypeExpr::String(_)));
+  assert!(matches!(
+    inst.stx.type_arguments[0].stx.as_ref(),
+    TypeExpr::String(_)
+  ));
 }
 
 #[test]
@@ -126,4 +125,3 @@ fn tagged_template_preserves_type_arguments() {
     other => panic!("expected instantiation tag, got {other:?}"),
   }
 }
-

@@ -1247,6 +1247,7 @@ enum ConstEnumLookupResult {
 fn unwrap_ts_const_expr<'a>(mut expr: &'a Node<Expr>) -> &'a Node<Expr> {
   loop {
     match expr.stx.as_ref() {
+      Expr::Instantiation(instantiation) => expr = instantiation.stx.expression.as_ref(),
       Expr::TypeAssertion(assert) => expr = assert.stx.expression.as_ref(),
       Expr::NonNullAssertion(assert) => expr = assert.stx.expression.as_ref(),
       Expr::SatisfiesExpr(assert) => expr = assert.stx.expression.as_ref(),
@@ -2241,6 +2242,9 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
         Expr::JsxElem(elem) => self.rewrite_jsx_elem(elem),
         Expr::JsxExprContainer(expr) => self.rewrite_expr(&mut expr.stx.value),
         Expr::JsxSpreadAttr(spread) => self.rewrite_expr(&mut spread.stx.value),
+        Expr::Instantiation(instantiation) => {
+          self.rewrite_expr(instantiation.stx.expression.as_mut());
+        }
         Expr::TypeAssertion(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),
         Expr::NonNullAssertion(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),
         Expr::SatisfiesExpr(assert) => self.rewrite_expr(assert.stx.expression.as_mut()),

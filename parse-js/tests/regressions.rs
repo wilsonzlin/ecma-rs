@@ -34,9 +34,9 @@ mod numeric_separators;
 mod private_index_signature;
 #[path = "regressions/strict_ecma_rejections.rs"]
 mod strict_ecma_rejections;
+#[path = "regressions/ts_instantiation_expr.rs"]
+mod ts_instantiation_expr;
 #[path = "regressions/ts_module_blocks.rs"]
 mod ts_module_blocks;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;
-#[path = "regressions/ts_instantiation_expr.rs"]
-mod ts_instantiation_expr;

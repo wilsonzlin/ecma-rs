@@ -1069,9 +1069,9 @@ impl<'a> Parser<'a> {
           if self.is_typescript()
             && matches!(
               *left.stx,
-               Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
-             )
-           {
+              Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
+            )
+          {
             if let Some((type_arguments, close_loc)) = self.rewindable(|p| {
               let (type_arguments, close_loc) = match p.ts_type_arguments_after_chevron_left(ctx) {
                 Ok(res) => res,

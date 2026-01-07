@@ -295,7 +295,12 @@ fn emit_instantiation_expr(
   instantiation: &Node<InstantiationExpr>,
   ctx: ExprCtx,
 ) -> EmitResult {
-  emit_expr_with_min_prec(em, &instantiation.stx.expression, CALL_MEMBER_PRECEDENCE, ctx)?;
+  emit_expr_with_min_prec(
+    em,
+    &instantiation.stx.expression,
+    CALL_MEMBER_PRECEDENCE,
+    ctx,
+  )?;
   em.write_punct("<");
   for (idx, arg) in instantiation.stx.type_arguments.iter().enumerate() {
     if idx > 0 {
