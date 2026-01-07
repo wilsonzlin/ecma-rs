@@ -123,6 +123,29 @@ impl TypeContext {
       None
     }
   }
+
+  /// Returns `true` when the expression is known to evaluate to a primitive boolean.
+  ///
+  /// This is conservative; if the type information is unavailable or the type
+  /// cannot be proven to be `boolean` (including boolean literals), returns
+  /// `false`.
+  pub fn expr_is_boolean(&self, body: BodyId, expr: ExprId) -> bool {
+    #[cfg(feature = "typed")]
+    {
+      let Some(program) = self.program.as_ref() else {
+        return false;
+      };
+      let Some(ty) = self.expr_type(body, expr) else {
+        return false;
+      };
+      type_is_boolean(program, ty, 0)
+    }
+    #[cfg(not(feature = "typed"))]
+    {
+      let _ = (body, expr);
+      false
+    }
+  }
 }
 
 #[cfg(feature = "typed")]
@@ -392,5 +415,38 @@ fn type_truthiness(
       depth + 1,
     ),
     _ => None,
+  }
+}
+
+#[cfg(feature = "typed")]
+fn type_is_boolean(program: &typecheck_ts::Program, ty: typecheck_ts::TypeId, depth: u8) -> bool {
+  if depth >= 8 {
+    return false;
+  }
+
+  use types_ts_interned::IntrinsicKind;
+  use types_ts_interned::TypeKind as K;
+
+  match program.interned_type_kind(ty) {
+    K::Boolean | K::BooleanLiteral(_) => true,
+    // `never` contains no runtime values, so it is vacuously a boolean.
+    K::Never => true,
+    K::Union(members) => members
+      .into_iter()
+      .all(|member| type_is_boolean(program, member, depth + 1)),
+    // Intersection types narrow; if any constituent is boolean the result is a subset of boolean.
+    K::Intersection(members) => members
+      .into_iter()
+      .any(|member| type_is_boolean(program, member, depth + 1)),
+    K::Ref { def, .. } => type_is_boolean(
+      program,
+      program.declared_type_of_def_interned(def),
+      depth + 1,
+    ),
+    K::Intrinsic { kind, ty } => match kind {
+      IntrinsicKind::NoInfer => type_is_boolean(program, ty, depth + 1),
+      _ => false,
+    },
+    _ => false,
   }
 }

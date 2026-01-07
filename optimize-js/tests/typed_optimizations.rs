@@ -271,6 +271,53 @@ fn typed_typeof_check_strict_inequality_is_folded_when_operand_type_is_known() {
 }
 
 #[test]
+fn typed_double_not_is_elided_for_boolean_operand() {
+  let src = r#"
+    declare function getBool(): boolean;
+    let b: boolean = getBool();
+    console.log(!!b);
+  "#;
+  let expected_src = r#"
+    declare function getBool(): boolean;
+    let b: boolean = getBool();
+    console.log(b);
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_double_not_is_not_elided_for_non_boolean_operand() {
+  let src = r#"
+    declare function getString(): string;
+    let s: string = getString();
+    console.log(!!s);
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_double_not_is_not_elided_for_optional_boolean_union() {
+  let src = r#"
+    declare function getOptionalBool(): boolean | undefined;
+    let x: boolean | undefined = getOptionalBool();
+    console.log(!!x);
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_mode_is_noop_when_type_info_is_unavailable() {
   let src = "let x = 1; console?.log(x);";
 

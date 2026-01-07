@@ -789,6 +789,15 @@ impl<'p> HirSourceToInst<'p> {
   ) -> OptimizeResult<Arg> {
     match operator {
       UnaryOp::Not => {
+        if let ExprKind::Unary {
+          op: UnaryOp::Not,
+          expr: inner,
+        } = &self.body.exprs[argument.0 as usize].kind
+        {
+          if self.expr_is_boolean(*inner) {
+            return self.compile_expr(*inner);
+          }
+        }
         let arg = self.compile_expr(argument)?;
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, UnOp::Not, arg));

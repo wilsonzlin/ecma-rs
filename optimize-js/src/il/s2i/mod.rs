@@ -129,4 +129,8 @@ impl<'p> HirSourceToInst<'p> {
   pub fn typeof_string_expr(&self, expr: ExprId) -> Option<&'static str> {
     self.program.types.expr_typeof_string(self.body_id, expr)
   }
+
+  pub fn expr_is_boolean(&self, expr: ExprId) -> bool {
+    self.program.types.expr_is_boolean(self.body_id, expr)
+  }
 }
