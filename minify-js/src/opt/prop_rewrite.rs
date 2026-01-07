@@ -96,7 +96,7 @@ fn simplify_computed_member(member: Node<ComputedMemberExpr>, loc: Loc) -> (Expr
     );
   }
 
-  if let Some(idx) = parse_canonical_u32_index(key) {
+  if let Some(idx) = parse_canonical_u64_index(key) {
     member.stx.member = Node::new(
       member.stx.member.loc,
       Expr::LitNum(Node::new(
@@ -147,7 +147,7 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
         return (ClassOrObjKey::Direct(direct), true);
       }
 
-      if let Some(idx) = parse_canonical_u32_index(&direct.stx.key) {
+      if let Some(idx) = parse_canonical_u64_index(&direct.stx.key) {
         direct.stx.key = idx.to_string();
         direct.stx.tt = TT::LiteralNumber;
         return (ClassOrObjKey::Direct(direct), true);
@@ -166,7 +166,7 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
 
         let (tt, key) = if let Some(tt) = identifier_name_token_tt(key) {
           (tt, key.to_string())
-        } else if let Some(idx) = parse_canonical_u32_index(key) {
+        } else if let Some(idx) = parse_canonical_u64_index(key) {
           (TT::LiteralNumber, idx.to_string())
         } else {
           (TT::LiteralString, key.to_string())
@@ -308,7 +308,7 @@ fn identifier_name_token_tt(name: &str) -> Option<TT> {
   None
 }
 
-fn parse_canonical_u32_index(value: &str) -> Option<u32> {
+fn parse_canonical_u64_index(value: &str) -> Option<u64> {
   if value.is_empty() {
     return None;
   }
@@ -321,10 +321,18 @@ fn parse_canonical_u32_index(value: &str) -> Option<u32> {
     return None;
   }
 
-  let parsed: u32 = value.parse().ok()?;
+  let parsed: u64 = value.parse().ok()?;
   if parsed.to_string() != value {
     return None;
   }
+
+  // Ensure the numeric literal can round-trip through an IEEE754 double so the
+  // resulting property key string matches the original digits.
+  let as_num = parsed as f64;
+  if !as_num.is_finite() || as_num as u64 != parsed {
+    return None;
+  }
+
   Some(parsed)
 }
 

@@ -540,6 +540,12 @@ fn rewrites_computed_member_numeric_string_keys_to_number_access() {
 }
 
 #[test]
+fn rewrites_computed_member_large_numeric_string_keys_to_number_access() {
+  let result = minified(TopLevelMode::Global, r#"let obj={};obj["4294967296"];"#);
+  assert_eq!(result, "let obj={};obj[4294967296];");
+}
+
+#[test]
 fn does_not_rewrite_non_identifier_computed_member_string_keys() {
   let result = minified(TopLevelMode::Global, r#"let obj={};obj["a-b"];"#);
   assert_eq!(result, r#"let obj={};obj["a-b"];"#);
@@ -555,6 +561,15 @@ fn rewrites_object_literal_string_keys_to_identifier_keys() {
 fn rewrites_object_literal_numeric_string_keys_to_number_keys() {
   let result = minified(TopLevelMode::Global, r#"let obj={"0":1};obj["0"];"#);
   assert_eq!(result, "let obj={0:1};obj[0];");
+}
+
+#[test]
+fn rewrites_object_literal_large_numeric_string_keys_to_number_keys() {
+  let result = minified(
+    TopLevelMode::Global,
+    r#"let obj={"4294967296":1};obj["4294967296"];"#,
+  );
+  assert_eq!(result, "let obj={4294967296:1};obj[4294967296];");
 }
 
 #[test]
