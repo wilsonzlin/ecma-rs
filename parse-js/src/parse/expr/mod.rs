@@ -1319,14 +1319,17 @@ impl<'a> Parser<'a> {
             }
           }
         }
-        // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
-        // e.g., Base<T> in extends clause or getBase()<T> in class extends
-        // Only treat < as type arguments if left is an identifier, member expression, or call expression.
+        // TypeScript: Instantiation expressions (`expr<T>`) for explicit type arguments in
+        // expression position.
         TT::ChevronLeft => {
           if self.is_typescript()
             && matches!(
               *left.stx,
-              Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
+              Expr::Id(_)
+                | Expr::Member(_)
+                | Expr::ComputedMember(_)
+                | Expr::Call(_)
+                | Expr::Instantiation(_)
             )
           {
             if let Some((type_arguments, close_loc)) = self.rewindable(|p| {

@@ -963,6 +963,12 @@ impl DeclarePass {
           self.walk_expr(&mut arg.stx.value);
         }
       }
+      AstExpr::Instantiation(inst) => {
+        self.walk_expr(&mut inst.stx.expression);
+        for arg in inst.stx.type_arguments.iter_mut() {
+          self.walk_type_expr(arg);
+        }
+      }
       AstExpr::Member(mem) => self.walk_expr(&mut mem.stx.left),
       AstExpr::Cond(cond) => {
         self.walk_expr(&mut cond.stx.test);

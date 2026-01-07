@@ -220,8 +220,10 @@ pub struct UnaryPostfixExpr {
 
 // TypeScript expressions
 
-/// Instantiation expression: expr<TypeArgs>
-/// TypeScript 4.7+ allows this without an immediate call suffix (e.g. `foo<string>`).
+/// Instantiation expression: `expr<Args>`
+///
+/// This is the AST representation for explicit type arguments in expression
+/// position (e.g. `f<string>(1)`, `new C<number>()`, `const g = f<string>`).
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[derive(Debug, Drive, DriveMut)]
 pub struct InstantiationExpr {

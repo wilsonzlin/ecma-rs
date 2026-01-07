@@ -1239,6 +1239,172 @@ impl<'a> Checker<'a> {
     current
   }
 
+  fn apply_explicit_type_args(&mut self, base: TypeId, type_args: &[TypeId], span: Span) -> TypeId {
+    if type_args.is_empty() {
+      return base;
+    }
+    let mut reported_arity = false;
+    let mut reported_constraint = false;
+
+    fn instantiate_signature(
+      checker: &mut Checker<'_>,
+      sig_id: SignatureId,
+      type_args: &[TypeId],
+      span: Span,
+      reported_arity: &mut bool,
+      reported_constraint: &mut bool,
+    ) -> SignatureId {
+      let sig = checker.store.signature(sig_id);
+
+      let declared = sig.type_params.len();
+      if type_args.len() > declared && !*reported_arity {
+        checker.diagnostics.push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
+          format!("Expected {declared} type arguments, but got {}.", type_args.len()),
+          span,
+        ));
+        *reported_arity = true;
+      }
+
+      let mut subst = HashMap::new();
+      let mut prefix_subst: HashMap<TypeParamId, TypeId> = HashMap::new();
+      for (idx, decl) in sig.type_params.iter().enumerate() {
+        let Some(arg) = type_args.get(idx).copied() else {
+          break;
+        };
+
+        if let Some(constraint) = decl.constraint {
+          let instantiated_constraint = if prefix_subst.is_empty() {
+            constraint
+          } else {
+            let mut substituter = Substituter::new(Arc::clone(&checker.store), prefix_subst.clone());
+            substituter.substitute_type(constraint)
+          };
+
+          if !checker.relate.is_assignable(arg, instantiated_constraint) && !*reported_constraint {
+            checker.diagnostics.push(codes::TYPE_ARGUMENT_CONSTRAINT_VIOLATION.error(
+              format!(
+                "Type '{}' does not satisfy the constraint '{}'.",
+                TypeDisplay::new(checker.store.as_ref(), arg),
+                TypeDisplay::new(checker.store.as_ref(), instantiated_constraint)
+              ),
+              span,
+            ));
+            *reported_constraint = true;
+          }
+        }
+
+        subst.insert(decl.id, arg);
+        prefix_subst.insert(decl.id, arg);
+      }
+
+      checker.instantiation_cache.instantiate_signature(&checker.store, sig_id, &sig, &subst)
+    }
+
+    fn inner(
+      checker: &mut Checker<'_>,
+      ty: TypeId,
+      type_args: &[TypeId],
+      span: Span,
+      reported_arity: &mut bool,
+      reported_constraint: &mut bool,
+    ) -> TypeId {
+      let ty = checker.expand_callable_type(ty);
+      match checker.store.type_kind(ty) {
+        TypeKind::Any | TypeKind::Unknown | TypeKind::Never => ty,
+        TypeKind::Callable { overloads } => {
+          let mut instantiated: Vec<_> = overloads
+            .iter()
+            .copied()
+            .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+            .collect();
+          instantiated.sort();
+          instantiated.dedup();
+          checker
+            .store
+            .intern_type(TypeKind::Callable { overloads: instantiated })
+        }
+        TypeKind::Object(obj_id) => {
+          let obj = checker.store.object(obj_id);
+          let mut shape = checker.store.shape(obj.shape);
+          let mut changed = false;
+
+          if !shape.call_signatures.is_empty() {
+            let mut call_sigs: Vec<_> = shape
+              .call_signatures
+              .iter()
+              .copied()
+              .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+              .collect();
+            call_sigs.sort();
+            call_sigs.dedup();
+            if call_sigs != shape.call_signatures {
+              shape.call_signatures = call_sigs;
+              changed = true;
+            }
+          }
+
+          if !shape.construct_signatures.is_empty() {
+            let mut construct_sigs: Vec<_> = shape
+              .construct_signatures
+              .iter()
+              .copied()
+              .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+              .collect();
+            construct_sigs.sort();
+            construct_sigs.dedup();
+            if construct_sigs != shape.construct_signatures {
+              shape.construct_signatures = construct_sigs;
+              changed = true;
+            }
+          }
+
+          if !changed {
+            return ty;
+          }
+
+          let shape_id = checker.store.intern_shape(shape);
+          let obj_id = checker.store.intern_object(ObjectType { shape: shape_id });
+          checker.store.intern_type(TypeKind::Object(obj_id))
+        }
+        TypeKind::Union(members) => {
+          let mapped: Vec<_> = members
+            .iter()
+            .copied()
+            .map(|member| inner(checker, member, type_args, span, reported_arity, reported_constraint))
+            .collect();
+          checker.store.union(mapped)
+        }
+        TypeKind::Intersection(members) => {
+          let mapped: Vec<_> = members
+            .iter()
+            .copied()
+            .map(|member| inner(checker, member, type_args, span, reported_arity, reported_constraint))
+            .collect();
+          checker.store.intersection(mapped)
+        }
+        _ => {
+          if !*reported_arity {
+            checker.diagnostics.push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
+              format!("Expected 0 type arguments, but got {}.", type_args.len()),
+              span,
+            ));
+            *reported_arity = true;
+          }
+          checker.store.primitive_ids().unknown
+        }
+      }
+    }
+
+    inner(
+      self,
+      base,
+      type_args,
+      span,
+      &mut reported_arity,
+      &mut reported_constraint,
+    )
+  }
+
   fn binding_name_range(&self, pat: &Node<AstPat>) -> TextRange {
     match pat.stx.as_ref() {
       AstPat::Id(id) => {
@@ -2425,6 +2591,17 @@ impl<'a> Checker<'a> {
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
+      AstExpr::Instantiation(inst) => {
+        let base_ty = self.check_expr(&inst.stx.expression);
+        let args: Vec<_> = inst
+          .stx
+          .type_arguments
+          .iter()
+          .map(|arg| self.lowerer.lower_type_expr(arg))
+          .collect();
+        let span = Span::new(self.file, loc_to_range(self.file, expr.loc));
+        self.apply_explicit_type_args(base_ty, &args, span)
+      }
       AstExpr::TypeAssertion(assert) => {
         if assert.stx.const_assertion {
           self.const_assertion_type(&assert.stx.expression)
@@ -2486,6 +2663,7 @@ impl<'a> Checker<'a> {
       AstExpr::Call(call) => {
         call.stx.optional_chaining || self.is_optional_chain_expr(&call.stx.callee)
       }
+      AstExpr::Instantiation(inst) => self.is_optional_chain_expr(&inst.stx.expression),
       AstExpr::TypeAssertion(assert) => self.is_optional_chain_expr(&assert.stx.expression),
       AstExpr::NonNullAssertion(assert) => self.is_optional_chain_expr(&assert.stx.expression),
       AstExpr::SatisfiesExpr(expr) => self.is_optional_chain_expr(&expr.stx.expression),

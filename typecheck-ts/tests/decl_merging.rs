@@ -139,14 +139,15 @@ export const name = Lib.version;
     .get("Lib")
     .and_then(|e| e.type_id)
     .expect("exported Lib type");
-  let version_ty = program
-    .property_type(lib_ty, PropertyKey::String("version".into()))
-    .expect("merged Lib should expose namespace members");
+  let call_sigs = program.call_signatures(lib_ty);
   assert!(
-    !program.call_signatures(lib_ty).is_empty(),
+    !call_sigs.is_empty(),
     "merged Lib should remain callable, got {}",
     program.display_type(lib_ty)
   );
+  let version_ty = program
+    .property_type(lib_ty, PropertyKey::String("version".into()))
+    .expect("merged Lib should expose namespace members");
 
   let result_ty = exports
     .get("result")

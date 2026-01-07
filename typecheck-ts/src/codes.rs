@@ -223,6 +223,32 @@ pub const ARGUMENT_TYPE_MISMATCH: Code = Code::new(
   &[],
 );
 
+/// TS2558: Expected N type arguments, but got M.
+///
+/// - Primary span: the instantiation expression carrying explicit type arguments.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const WRONG_TYPE_ARGUMENT_COUNT: Code = Code::new(
+  "TS2558",
+  "wrong number of type arguments",
+  "instantiation expression type argument list",
+  &["primary: instantiation expression"],
+  &[],
+);
+
+/// TS2344: Type argument does not satisfy constraint.
+///
+/// - Primary span: the instantiation expression carrying explicit type arguments.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const TYPE_ARGUMENT_CONSTRAINT_VIOLATION: Code = Code::new(
+  "TS2344",
+  "type argument does not satisfy constraint",
+  "instantiation expression type argument list",
+  &["primary: instantiation expression"],
+  &[],
+);
+
 /// TC0008: Property access on a global that does not declare the property.
 ///
 /// - Primary span: zero-length placeholder at the start of the file flagged by

@@ -1819,6 +1819,13 @@ fn lower_expr(
 ) -> ExprId {
   use parse_js::operator::OperatorName;
 
+  // TypeScript instantiation expressions (`expr<T>`) are erased at runtime. For
+  // now, lower them as their inner expression so downstream consumers (e.g.
+  // flow checking) still see the actual callee/member structure.
+  if let AstExpr::Instantiation(inst) = expr.stx.as_ref() {
+    return lower_expr(&inst.stx.expression, builder, ctx);
+  }
+
   let span = ctx.to_range(expr.loc);
   #[allow(unreachable_patterns)]
   let kind = match &*expr.stx {
