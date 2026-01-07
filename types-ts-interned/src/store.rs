@@ -448,6 +448,9 @@ impl TypeStore {
   pub fn intern_signature(&self, signature: Signature) -> SignatureId {
     let mut signature = signature;
     for param in signature.params.iter_mut() {
+      // Parameter names do not affect TypeScript function type identity, so
+      // canonicalize them away while interning to avoid needless duplication.
+      param.name = None;
       param.ty = self.canon(param.ty);
     }
     signature.ret = self.canon(signature.ret);

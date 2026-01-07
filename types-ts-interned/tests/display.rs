@@ -95,7 +95,7 @@ fn formats_complex_object_shape() {
   let formatted = format!("{}", store.display(object_ty));
   assert_eq!(
     formatted,
-    "{ public readonly a: string; b?: number; [string]: number; (arg: boolean): symbol }",
+    "{ public readonly a: string; b?: number; [string]: number; (boolean): symbol }",
   );
 }
 
@@ -415,6 +415,6 @@ fn formats_signature_with_this_param() {
 
   assert_eq!(
     format!("{}", store.display(callable)),
-    "(this: boolean, value: number) => string"
+    "(this: boolean, number) => string"
   );
 }
