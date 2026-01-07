@@ -26,6 +26,7 @@ pub mod hir;
 pub mod ids;
 pub mod intern;
 pub mod lower;
+pub(crate) mod fingerprint;
 mod lower_types;
 pub mod span_map;
 

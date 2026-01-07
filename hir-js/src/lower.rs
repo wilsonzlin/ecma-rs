@@ -13,7 +13,7 @@ use crate::hir::{
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
-  ImportSpecifierId, NameId, PatId, StableHasher, StmtId, MISSING_BODY, MISSING_DEF,
+  ImportSpecifierId, NameId, PatId, StmtId, MISSING_BODY, MISSING_DEF,
 };
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
@@ -4946,13 +4946,7 @@ fn obj_key_name(
 }
 
 fn stable_expr_fingerprint(expr: &Node<AstExpr>) -> u64 {
-  // Use the debug representation of the syntax (which intentionally omits
-  // locations) so fingerprints are stable across unrelated edits that shift
-  // spans.
-  let mut hasher = StableHasher::new();
-  let debug_repr = format!("{:?}", expr.stx);
-  hasher.write_str(&debug_repr);
-  hasher.finish()
+  crate::fingerprint::stable_expr_fingerprint(expr)
 }
 
 fn collect_exprs_from_pat<'a>(

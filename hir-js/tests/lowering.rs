@@ -23,7 +23,10 @@ use hir_js::StmtKind;
 use hir_js::TypeExprKind;
 use hir_js::TypeName;
 use hir_js::VarDeclKind;
+use parse_js::ast::expr::Expr as AstExpr;
+use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt as AstStmt;
+use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::parse;
 use proptest::prelude::*;
@@ -1814,6 +1817,87 @@ fn computed_member_names_are_distinct_and_stable() {
       base.names.resolve(def.path.name)
     );
   }
+}
+
+fn first_computed_key_expr(ast: &mut Node<TopLevel>) -> &mut Node<AstExpr> {
+  use parse_js::ast::class_or_object::{ClassOrObjKey, ObjMemberType};
+
+  let stmt = ast.stx.body.first_mut().expect("expected statement");
+  let decl = match &mut *stmt.stx {
+    AstStmt::VarDecl(decl) => decl,
+    other => panic!("expected var decl, got {other:?}"),
+  };
+  let declarator = decl
+    .stx
+    .declarators
+    .first_mut()
+    .expect("expected declarator");
+  let init = declarator
+    .initializer
+    .as_mut()
+    .expect("expected initializer");
+  let obj = match &mut *init.stx {
+    AstExpr::LitObj(obj) => obj,
+    other => panic!("expected object literal initializer, got {other:?}"),
+  };
+  let member = obj.stx.members.first_mut().expect("expected member");
+  match &mut member.stx.typ {
+    ObjMemberType::Valued { key, .. } => match key {
+      ClassOrObjKey::Computed(expr) => expr,
+      other => panic!("expected computed key, got {other:?}"),
+    },
+    other => panic!("expected valued member, got {other:?}"),
+  }
+}
+
+#[test]
+fn computed_member_fingerprint_ignores_spans() {
+  let source = "const obj = { [foo]() {} };";
+  let ast = parse(source).expect("parse");
+
+  let mut ast_with_mutated_loc = parse(source).expect("parse again");
+  let key = first_computed_key_expr(&mut ast_with_mutated_loc);
+  key.loc = Loc(999, 1000);
+
+  let base = lower_file(FileId(0), FileKind::Ts, &ast);
+  let mutated = lower_file(FileId(0), FileKind::Ts, &ast_with_mutated_loc);
+
+  let base_methods = computed_methods(&base);
+  let mutated_methods = computed_methods(&mutated);
+  assert_eq!(base_methods.len(), 1);
+  assert_eq!(mutated_methods.len(), 1);
+
+  let base_name = base
+    .names
+    .resolve(base_methods[0].path.name)
+    .expect("base computed name");
+  let mutated_name = mutated
+    .names
+    .resolve(mutated_methods[0].path.name)
+    .expect("mutated computed name");
+
+  assert_eq!(base_name, mutated_name);
+  assert_eq!(base_methods[0].path, mutated_methods[0].path);
+}
+
+#[test]
+fn computed_member_names_are_deterministic() {
+  let source = "const obj = { [foo]() {}, [bar()]() {}, [foo]() {} };";
+  let first = lower_from_source_with_kind(FileKind::Ts, source).expect("lower first");
+  let second = lower_from_source_with_kind(FileKind::Ts, source).expect("lower second");
+
+  let mut first_names: Vec<_> = computed_methods(&first)
+    .iter()
+    .map(|def| first.names.resolve(def.path.name).unwrap().to_string())
+    .collect();
+  let mut second_names: Vec<_> = computed_methods(&second)
+    .iter()
+    .map(|def| second.names.resolve(def.path.name).unwrap().to_string())
+    .collect();
+  first_names.sort();
+  second_names.sort();
+
+  assert_eq!(first_names, second_names);
 }
 
 #[test]
