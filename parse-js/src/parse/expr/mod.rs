@@ -777,9 +777,9 @@ impl<'a> Parser<'a> {
                     | TT::LiteralTemplatePartStringEnd
                     | TT::Invalid
                 )
-                // Unary operators.
-                || matches!(
-                  typ,
+              // Unary operators.
+              || matches!(
+                typ,
                   TT::Plus
                     | TT::Hyphen
                     | TT::PlusPlus
@@ -790,6 +790,9 @@ impl<'a> Parser<'a> {
                     | TT::KeywordTypeof
                     | TT::KeywordVoid
                 )
+                // In expression-operand context, `/` and `/=` begin a regular
+                // expression literal (the lexer decides based on mode).
+                || matches!(typ, TT::Slash | TT::SlashEquals)
                 || (p.should_recover() && typ == TT::At)
             };
             let has_operand = match operator.name {

@@ -132,3 +132,17 @@ fn await_requires_parentheses_before_exponentiation_operand() {
   )
   .unwrap();
 }
+
+#[test]
+fn yield_accepts_regex_operand() {
+  parse_with_options("function* g(){ yield /x/; }", ecma_script_opts()).unwrap();
+}
+
+#[test]
+fn await_accepts_regex_operand() {
+  parse_with_options(
+    "async function f(){ return await /x/.test('x'); }",
+    ecma_script_opts(),
+  )
+  .unwrap();
+}
