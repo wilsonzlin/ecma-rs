@@ -728,6 +728,10 @@ pub fn fuzz_ts_binder(data: &[u8]) {
   assert_eq!(sem1.def_to_symbol, sem2.def_to_symbol);
 
   if roots.len() > 1 {
+    // Root order should not affect observable exports, diagnostics, or def → symbol
+    // mapping. Internal symbol allocation can still vary due to intermediate
+    // (now-orphaned) content-addressed symbols created before later declaration
+    // merging (e.g. VALUE-only symbol allocated before a VALUE|NAMESPACE merge).
     let (sem3, diags3) = bind(&reversed_roots);
     assert_eq!(diags1, diags3);
     assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem3));
