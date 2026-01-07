@@ -1089,7 +1089,8 @@ fn dce_removes_unused_top_level_function_decls_in_modules() {
 
 #[test]
 fn dce_removes_unused_top_level_class_decls_in_modules() {
-  let (output, parsed) = minified_program(TopLevelMode::Module, Dialect::Js, Dialect::Js, "class C{}");
+  let (output, parsed) =
+    minified_program(TopLevelMode::Module, Dialect::Js, Dialect::Js, "class C{}");
   assert!(parsed.stx.body.is_empty(), "unexpected output: {output}");
 }
 

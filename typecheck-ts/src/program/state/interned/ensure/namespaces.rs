@@ -91,7 +91,11 @@ pub(super) fn populate_namespace_object_types(
         .copied()
         .or_else(|| def_map.and_then(|map| map.get(&ns_def.id).copied()))
         .or_else(|| state.def_data.contains_key(&ns_def.id).then_some(ns_def.id))
-        .or_else(|| value_defs_by_name.get(&(*file, ns_name.to_string())).copied());
+        .or_else(|| {
+          value_defs_by_name
+            .get(&(*file, ns_name.to_string()))
+            .copied()
+        });
       let Some(def_id) = mapped else {
         continue;
       };
@@ -160,12 +164,21 @@ pub(super) fn populate_namespace_object_types(
         ))
         .copied()
         .or_else(|| def_map.and_then(|map| map.get(&member_hir).copied()))
-        .or_else(|| state.def_data.contains_key(&member_hir).then_some(member_hir))
+        .or_else(|| {
+          state
+            .def_data
+            .contains_key(&member_hir)
+            .then_some(member_hir)
+        })
         .or_else(|| {
           target_ns
             .contains(sem_ts::Namespace::VALUE)
             .then_some(())
-            .and_then(|_| value_defs_by_name.get(&(info.file, member_name.to_string())).copied())
+            .and_then(|_| {
+              value_defs_by_name
+                .get(&(info.file, member_name.to_string()))
+                .copied()
+            })
         });
       let Some(member_def) = member_def else {
         continue;
@@ -320,7 +333,8 @@ pub(super) fn populate_namespace_object_types(
     namespace_types
       .entry((info.file, info.name.clone()))
       .and_modify(|(existing_interned, existing_store)| {
-        *existing_interned = ProgramState::merge_interned_object_types(store, *existing_interned, interned);
+        *existing_interned =
+          ProgramState::merge_interned_object_types(store, *existing_interned, interned);
         *existing_store = state.merge_namespace_store_types(*existing_store, store_ty);
       })
       .or_insert((interned, store_ty));
@@ -351,7 +365,12 @@ pub(super) fn populate_namespace_object_types(
           let replace_store = state
             .def_types
             .get(def_id)
-            .map(|existing| matches!(state.type_store.kind(*existing), TypeKind::Unknown | TypeKind::Any))
+            .map(|existing| {
+              matches!(
+                state.type_store.kind(*existing),
+                TypeKind::Unknown | TypeKind::Any
+              )
+            })
             .unwrap_or(true);
           if replace_store {
             state.def_types.insert(*def_id, store_ty);

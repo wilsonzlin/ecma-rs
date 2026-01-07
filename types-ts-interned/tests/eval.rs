@@ -2468,7 +2468,10 @@ fn tuple_indexed_access_fractional_number_literal_is_union_of_elements() {
   let indexed = store.intern_type(TypeKind::IndexedAccess { obj: tuple, index });
 
   let result = store.evaluate(indexed);
-  assert_eq!(result, store.union(vec![primitives.string, primitives.number]));
+  assert_eq!(
+    result,
+    store.union(vec![primitives.string, primitives.number])
+  );
 }
 
 #[test]

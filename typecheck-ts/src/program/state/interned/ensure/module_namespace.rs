@@ -49,7 +49,8 @@ pub(super) fn populate_module_namespace_types(
 
         let ty = if let Some((_, def)) = best_def {
           def_types.get(&def).copied().unwrap_or(unknown)
-        } else if let sem_ts::SymbolOrigin::Import { from, imported } = &symbols.symbol(symbol).origin
+        } else if let sem_ts::SymbolOrigin::Import { from, imported } =
+          &symbols.symbol(symbol).origin
         {
           if imported == "*" {
             match from {
@@ -112,7 +113,12 @@ pub(super) fn populate_module_namespace_types(
               if store.contains_type_id(ty) {
                 Some(store.canon(ty))
               } else {
-                Some(store.canon(convert_type_for_display(ty, state, store, &mut convert_cache)))
+                Some(store.canon(convert_type_for_display(
+                  ty,
+                  state,
+                  store,
+                  &mut convert_cache,
+                )))
               }
             })
           })
@@ -138,4 +144,3 @@ pub(super) fn populate_module_namespace_types(
     def_types.insert(namespace_def, ty);
   }
 }
-

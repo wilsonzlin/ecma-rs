@@ -20,7 +20,8 @@ impl Pass for StmtRewritePass {
   }
 
   fn run(&mut self, cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    let strict = cx.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&top.stx.body);
+    let strict =
+      cx.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&top.stx.body);
     let mut visitor = StmtRewriteVisitor {
       top_level_mode: cx.top_level_mode,
       strict_stack: vec![strict],
@@ -36,7 +37,11 @@ type FuncNode = Node<Func>;
 type StaticBlockNode = Node<ClassStaticBlock>;
 
 #[derive(VisitorMut)]
-#[visitor(TopLevelNode(enter), FuncNode(enter, exit), StaticBlockNode(enter, exit))]
+#[visitor(
+  TopLevelNode(enter),
+  FuncNode(enter, exit),
+  StaticBlockNode(enter, exit)
+)]
 struct StmtRewriteVisitor {
   top_level_mode: TopLevelMode,
   strict_stack: Vec<bool>,
@@ -49,7 +54,8 @@ impl StmtRewriteVisitor {
   }
 
   fn enter_top_level_node(&mut self, node: &mut TopLevelNode) {
-    let strict = self.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&node.stx.body);
+    let strict =
+      self.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&node.stx.body);
     if let Some(slot) = self.strict_stack.last_mut() {
       *slot = strict;
     } else {
@@ -63,11 +69,9 @@ impl StmtRewriteVisitor {
   fn enter_func_node(&mut self, node: &mut FuncNode) {
     let parent_strict = self.is_strict();
     let func_strict = parent_strict
-      || node
-        .stx
-        .body
-        .as_ref()
-        .is_some_and(|body| matches!(body, FuncBody::Block(stmts) if has_use_strict_directive(stmts)));
+      || node.stx.body.as_ref().is_some_and(
+        |body| matches!(body, FuncBody::Block(stmts) if has_use_strict_directive(stmts)),
+      );
     self.strict_stack.push(func_strict);
 
     let Some(body) = node.stx.body.as_mut() else {
@@ -115,7 +119,12 @@ fn rewrite_stmts(stmts: Vec<Node<Stmt>>, changed: &mut bool, strict: bool) -> Ve
   out
 }
 
-fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool, strict: bool) -> Vec<Node<Stmt>> {
+fn rewrite_stmt(
+  stmt: Node<Stmt>,
+  changed: &mut bool,
+  in_list: bool,
+  strict: bool,
+) -> Vec<Node<Stmt>> {
   let Node { loc, assoc, stx } = stmt;
   match *stx {
     Stmt::Block(mut block) => {

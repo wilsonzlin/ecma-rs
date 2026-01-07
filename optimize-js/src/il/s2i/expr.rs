@@ -568,31 +568,32 @@ impl<'p> HirSourceToInst<'p> {
     };
     let left_nullish = is_nullish(left, left_expr);
     let right_nullish = is_nullish(right, right_expr);
-    let typed_non_nullish_loose_eq_op = if matches!(operator, BinaryOp::Equality | BinaryOp::Inequality)
-      && !left_nullish
-      && !right_nullish
-    {
-      let left_tag = self.typeof_string_expr(left);
-      let right_tag = self.typeof_string_expr(right);
-      match (left_tag, right_tag) {
-        (Some(tag), Some(other_tag)) if tag == other_tag => {
-          if tag == "object"
-            && !(self.expr_excludes_nullish(left) && self.expr_excludes_nullish(right))
-          {
-            None
-          } else {
-            Some(if operator == BinaryOp::Equality {
-              BinOp::StrictEq
+    let typed_non_nullish_loose_eq_op =
+      if matches!(operator, BinaryOp::Equality | BinaryOp::Inequality)
+        && !left_nullish
+        && !right_nullish
+      {
+        let left_tag = self.typeof_string_expr(left);
+        let right_tag = self.typeof_string_expr(right);
+        match (left_tag, right_tag) {
+          (Some(tag), Some(other_tag)) if tag == other_tag => {
+            if tag == "object"
+              && !(self.expr_excludes_nullish(left) && self.expr_excludes_nullish(right))
+            {
+              None
             } else {
-              BinOp::NotStrictEq
-            })
+              Some(if operator == BinaryOp::Equality {
+                BinOp::StrictEq
+              } else {
+                BinOp::NotStrictEq
+              })
+            }
           }
+          _ => None,
         }
-        _ => None,
-      }
-    } else {
-      None
-    };
+      } else {
+        None
+      };
 
     if matches!(
       operator,
