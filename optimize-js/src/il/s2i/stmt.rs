@@ -532,13 +532,18 @@ impl<'p> HirSourceToInst<'p> {
     consequent: StmtId,
     alternate: Option<StmtId>,
   ) -> OptimizeResult<()> {
-    let known = self.bool_literal_expr(test);
+    let known = self.expr_truthiness(test);
     let test_arg = self.compile_expr(test)?;
-    if let Some(value) = known {
-      if value {
-        self.compile_stmt(consequent)?;
-      } else if let Some(alternate) = alternate {
-        self.compile_stmt(alternate)?;
+    if let Some(truthiness) = known {
+      match truthiness {
+        crate::types::Truthiness::AlwaysTruthy => {
+          self.compile_stmt(consequent)?;
+        }
+        crate::types::Truthiness::AlwaysFalsy => {
+          if let Some(alternate) = alternate {
+            self.compile_stmt(alternate)?;
+          }
+        }
       }
       return Ok(());
     }

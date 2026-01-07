@@ -118,6 +118,10 @@ impl<'p> HirSourceToInst<'p> {
     self.program.types.bool_literal_expr(self.body_id, expr)
   }
 
+  pub fn expr_truthiness(&self, expr: ExprId) -> Option<crate::types::Truthiness> {
+    self.program.types.expr_truthiness(self.body_id, expr)
+  }
+
   pub fn expr_excludes_nullish(&self, expr: ExprId) -> bool {
     self.program.types.expr_excludes_nullish(self.body_id, expr)
   }

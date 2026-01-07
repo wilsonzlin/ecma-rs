@@ -439,6 +439,25 @@ impl<'p> HirSourceToInst<'p> {
     left: ExprId,
     right: ExprId,
   ) -> OptimizeResult<Arg> {
+    let left_truthiness = self.expr_truthiness(left);
+    match (operator, left_truthiness) {
+      (BinaryOp::LogicalAnd, Some(crate::types::Truthiness::AlwaysTruthy)) => {
+        let _ = self.compile_expr(left)?;
+        return self.compile_expr(right);
+      }
+      (BinaryOp::LogicalAnd, Some(crate::types::Truthiness::AlwaysFalsy)) => {
+        return self.compile_expr(left);
+      }
+      (BinaryOp::LogicalOr, Some(crate::types::Truthiness::AlwaysTruthy)) => {
+        return self.compile_expr(left);
+      }
+      (BinaryOp::LogicalOr, Some(crate::types::Truthiness::AlwaysFalsy)) => {
+        let _ = self.compile_expr(left)?;
+        return self.compile_expr(right);
+      }
+      _ => {}
+    }
+
     let converge_label_id = self.c_label.bump();
     let res_tmp_var = self.c_temp.bump();
     let left = self.compile_expr(left)?;
@@ -664,16 +683,15 @@ impl<'p> HirSourceToInst<'p> {
     consequent: ExprId,
     alternate: ExprId,
   ) -> OptimizeResult<Arg> {
-    let known = self.bool_literal_expr(test);
-    let _test_arg = self.compile_expr(test)?;
-    if let Some(value) = known {
-      if value {
-        return self.compile_expr(consequent);
-      }
-      return self.compile_expr(alternate);
+    let known = self.expr_truthiness(test);
+    let test_arg = self.compile_expr(test)?;
+    if let Some(truthiness) = known {
+      return match truthiness {
+        crate::types::Truthiness::AlwaysTruthy => self.compile_expr(consequent),
+        crate::types::Truthiness::AlwaysFalsy => self.compile_expr(alternate),
+      };
     }
     let res_tmp_var = self.c_temp.bump();
-    let test_arg = _test_arg;
     let cons_label_id = self.c_label.bump();
     let after_label_id = self.c_label.bump();
     self

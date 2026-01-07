@@ -1,6 +1,12 @@
 use hir_js::{BodyId, ExprId};
 use std::fmt;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Truthiness {
+  AlwaysTruthy,
+  AlwaysFalsy,
+}
+
 /// Optional TypeScript type information for the optimizer.
 ///
 /// The optimizer is designed to compile without a dependency on `typecheck-ts`.
@@ -54,6 +60,24 @@ impl TypeContext {
         typecheck_ts::TypeKindSummary::BooleanLiteral(value) => Some(value),
         _ => None,
       }
+    }
+    #[cfg(not(feature = "typed"))]
+    {
+      let _ = (body, expr);
+      None
+    }
+  }
+
+  /// If `expr` is statically typed as always truthy or always falsy, return that truthiness.
+  pub fn expr_truthiness(&self, body: BodyId, expr: ExprId) -> Option<Truthiness> {
+    #[cfg(feature = "typed")]
+    {
+      let program = self.program.as_ref()?;
+      if !program.compiler_options().strict_null_checks {
+        return None;
+      }
+      let ty = self.expr_type(body, expr)?;
+      type_truthiness(program, ty, 0)
     }
     #[cfg(not(feature = "typed"))]
     {
@@ -282,6 +306,91 @@ fn type_to_typeof_string(
       }
       tag
     }
+    _ => None,
+  }
+}
+
+#[cfg(feature = "typed")]
+fn type_truthiness(
+  program: &typecheck_ts::Program,
+  ty: typecheck_ts::TypeId,
+  depth: u8,
+) -> Option<Truthiness> {
+  if depth >= 8 {
+    return None;
+  }
+
+  use types_ts_interned::TypeKind as K;
+  match program.interned_type_kind(ty) {
+    K::Null | K::Undefined | K::Void => Some(Truthiness::AlwaysFalsy),
+    K::BooleanLiteral(value) => Some(if value {
+      Truthiness::AlwaysTruthy
+    } else {
+      Truthiness::AlwaysFalsy
+    }),
+    K::StringLiteral(_) => match program.type_kind(ty) {
+      typecheck_ts::TypeKindSummary::StringLiteral(value) => Some(if value.is_empty() {
+        Truthiness::AlwaysFalsy
+      } else {
+        Truthiness::AlwaysTruthy
+      }),
+      _ => None,
+    },
+    K::NumberLiteral(value) => {
+      let value = value.0;
+      Some(if value == 0.0 || value.is_nan() {
+        Truthiness::AlwaysFalsy
+      } else {
+        Truthiness::AlwaysTruthy
+      })
+    }
+    K::BigIntLiteral(value) => Some(if value == num_bigint::BigInt::from(0) {
+      Truthiness::AlwaysFalsy
+    } else {
+      Truthiness::AlwaysTruthy
+    }),
+    K::Tuple(_) | K::Array { .. } | K::Callable { .. } | K::Object(_) | K::EmptyObject => {
+      Some(Truthiness::AlwaysTruthy)
+    }
+    K::Symbol | K::UniqueSymbol => Some(Truthiness::AlwaysTruthy),
+    K::Union(members) => {
+      let mut acc: Option<Truthiness> = None;
+      for member in members {
+        if matches!(program.interned_type_kind(member), K::Never) {
+          continue;
+        }
+        let member_truthiness = type_truthiness(program, member, depth + 1)?;
+        match acc {
+          None => acc = Some(member_truthiness),
+          Some(existing) if existing == member_truthiness => {}
+          _ => return None,
+        }
+      }
+      acc
+    }
+    K::Intersection(members) => {
+      let mut has_truthy = false;
+      let mut has_falsy = false;
+      for member in members {
+        let Some(member_truthiness) = type_truthiness(program, member, depth + 1) else {
+          continue;
+        };
+        match member_truthiness {
+          Truthiness::AlwaysTruthy => has_truthy = true,
+          Truthiness::AlwaysFalsy => has_falsy = true,
+        }
+      }
+      match (has_truthy, has_falsy) {
+        (true, false) => Some(Truthiness::AlwaysTruthy),
+        (false, true) => Some(Truthiness::AlwaysFalsy),
+        _ => None,
+      }
+    }
+    K::Ref { def, .. } => type_truthiness(
+      program,
+      program.declared_type_of_def_interned(def),
+      depth + 1,
+    ),
     _ => None,
   }
 }

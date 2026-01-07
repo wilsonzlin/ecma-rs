@@ -356,3 +356,127 @@ fn typed_info_is_disabled_when_source_text_mismatches_type_program_file() {
 
   assert_eq!(emit(&typed_program), untyped_out);
 }
+
+#[test]
+fn typed_truthiness_folds_if_conditions() {
+  let src = r#"
+    declare function getObj(): {};
+    declare function empty(): "";
+    declare function nonEmpty(): "x";
+    declare function zero(): 0;
+    declare function one(): 1;
+    declare function a(): void;
+    declare function b(): void;
+
+    if (getObj()) {
+      a();
+    } else {
+      b();
+    }
+    if (empty()) {
+      a();
+    } else {
+      b();
+    }
+    if (nonEmpty()) {
+      a();
+    } else {
+      b();
+    }
+    if (zero()) {
+      a();
+    } else {
+      b();
+    }
+    if (one()) {
+      a();
+    } else {
+      b();
+    }
+  "#;
+  let expected_src = r#"
+    declare function getObj(): {};
+    declare function empty(): "";
+    declare function nonEmpty(): "x";
+    declare function zero(): 0;
+    declare function one(): 1;
+    declare function a(): void;
+    declare function b(): void;
+
+    getObj();
+    a();
+    empty();
+    b();
+    nonEmpty();
+    a();
+    zero();
+    b();
+    one();
+    a();
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_truthiness_folds_conditional_expressions() {
+  let src = r#"
+    declare function empty(): "";
+    declare function nonEmpty(): "x";
+    declare function a(): void;
+    declare function b(): void;
+
+    empty() ? a() : b();
+    nonEmpty() ? a() : b();
+  "#;
+  let expected_src = r#"
+    declare function empty(): "";
+    declare function nonEmpty(): "x";
+    declare function a(): void;
+    declare function b(): void;
+
+    empty();
+    b();
+    nonEmpty();
+    a();
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_truthiness_folds_logical_expressions() {
+  let src = r#"
+    declare function alwaysTrue(): true;
+    declare function alwaysFalse(): false;
+    declare function sideEffect(): void;
+
+    alwaysTrue() && sideEffect();
+    alwaysFalse() && sideEffect();
+    alwaysTrue() || sideEffect();
+    alwaysFalse() || sideEffect();
+  "#;
+  let expected_src = r#"
+    declare function alwaysTrue(): true;
+    declare function alwaysFalse(): false;
+    declare function sideEffect(): void;
+
+    alwaysTrue();
+    sideEffect();
+    alwaysFalse();
+    alwaysTrue();
+    alwaysFalse();
+    sideEffect();
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
