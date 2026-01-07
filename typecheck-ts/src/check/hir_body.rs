@@ -1258,10 +1258,15 @@ impl<'a> Checker<'a> {
 
       let declared = sig.type_params.len();
       if type_args.len() > declared && !*reported_arity {
-        checker.diagnostics.push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
-          format!("Expected {declared} type arguments, but got {}.", type_args.len()),
-          span,
-        ));
+        checker
+          .diagnostics
+          .push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
+            format!(
+              "Expected {declared} type arguments, but got {}.",
+              type_args.len()
+            ),
+            span,
+          ));
         *reported_arity = true;
       }
 
@@ -1276,19 +1281,22 @@ impl<'a> Checker<'a> {
           let instantiated_constraint = if prefix_subst.is_empty() {
             constraint
           } else {
-            let mut substituter = Substituter::new(Arc::clone(&checker.store), prefix_subst.clone());
+            let mut substituter =
+              Substituter::new(Arc::clone(&checker.store), prefix_subst.clone());
             substituter.substitute_type(constraint)
           };
 
           if !checker.relate.is_assignable(arg, instantiated_constraint) && !*reported_constraint {
-            checker.diagnostics.push(codes::TYPE_ARGUMENT_CONSTRAINT_VIOLATION.error(
-              format!(
-                "Type '{}' does not satisfy the constraint '{}'.",
-                TypeDisplay::new(checker.store.as_ref(), arg),
-                TypeDisplay::new(checker.store.as_ref(), instantiated_constraint)
-              ),
-              span,
-            ));
+            checker
+              .diagnostics
+              .push(codes::TYPE_ARGUMENT_CONSTRAINT_VIOLATION.error(
+                format!(
+                  "Type '{}' does not satisfy the constraint '{}'.",
+                  TypeDisplay::new(checker.store.as_ref(), arg),
+                  TypeDisplay::new(checker.store.as_ref(), instantiated_constraint)
+                ),
+                span,
+              ));
             *reported_constraint = true;
           }
         }
@@ -1297,7 +1305,9 @@ impl<'a> Checker<'a> {
         prefix_subst.insert(decl.id, arg);
       }
 
-      checker.instantiation_cache.instantiate_signature(&checker.store, sig_id, &sig, &subst)
+      checker
+        .instantiation_cache
+        .instantiate_signature(&checker.store, sig_id, &sig, &subst)
     }
 
     fn inner(
@@ -1315,13 +1325,22 @@ impl<'a> Checker<'a> {
           let mut instantiated: Vec<_> = overloads
             .iter()
             .copied()
-            .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+            .map(|sig_id| {
+              instantiate_signature(
+                checker,
+                sig_id,
+                type_args,
+                span,
+                reported_arity,
+                reported_constraint,
+              )
+            })
             .collect();
           instantiated.sort();
           instantiated.dedup();
-          checker
-            .store
-            .intern_type(TypeKind::Callable { overloads: instantiated })
+          checker.store.intern_type(TypeKind::Callable {
+            overloads: instantiated,
+          })
         }
         TypeKind::Object(obj_id) => {
           let obj = checker.store.object(obj_id);
@@ -1333,7 +1352,16 @@ impl<'a> Checker<'a> {
               .call_signatures
               .iter()
               .copied()
-              .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+              .map(|sig_id| {
+                instantiate_signature(
+                  checker,
+                  sig_id,
+                  type_args,
+                  span,
+                  reported_arity,
+                  reported_constraint,
+                )
+              })
               .collect();
             call_sigs.sort();
             call_sigs.dedup();
@@ -1348,7 +1376,16 @@ impl<'a> Checker<'a> {
               .construct_signatures
               .iter()
               .copied()
-              .map(|sig_id| instantiate_signature(checker, sig_id, type_args, span, reported_arity, reported_constraint))
+              .map(|sig_id| {
+                instantiate_signature(
+                  checker,
+                  sig_id,
+                  type_args,
+                  span,
+                  reported_arity,
+                  reported_constraint,
+                )
+              })
               .collect();
             construct_sigs.sort();
             construct_sigs.dedup();
@@ -1370,7 +1407,16 @@ impl<'a> Checker<'a> {
           let mapped: Vec<_> = members
             .iter()
             .copied()
-            .map(|member| inner(checker, member, type_args, span, reported_arity, reported_constraint))
+            .map(|member| {
+              inner(
+                checker,
+                member,
+                type_args,
+                span,
+                reported_arity,
+                reported_constraint,
+              )
+            })
             .collect();
           checker.store.union(mapped)
         }
@@ -1378,16 +1424,27 @@ impl<'a> Checker<'a> {
           let mapped: Vec<_> = members
             .iter()
             .copied()
-            .map(|member| inner(checker, member, type_args, span, reported_arity, reported_constraint))
+            .map(|member| {
+              inner(
+                checker,
+                member,
+                type_args,
+                span,
+                reported_arity,
+                reported_constraint,
+              )
+            })
             .collect();
           checker.store.intersection(mapped)
         }
         _ => {
           if !*reported_arity {
-            checker.diagnostics.push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
-              format!("Expected 0 type arguments, but got {}.", type_args.len()),
-              span,
-            ));
+            checker
+              .diagnostics
+              .push(codes::WRONG_TYPE_ARGUMENT_COUNT.error(
+                format!("Expected 0 type arguments, but got {}.", type_args.len()),
+                span,
+              ));
             *reported_arity = true;
           }
           checker.store.primitive_ids().unknown

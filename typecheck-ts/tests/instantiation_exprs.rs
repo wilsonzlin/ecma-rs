@@ -67,7 +67,10 @@ fn reports_too_many_type_arguments() {
     "expected a single diagnostic, got {diagnostics:?}"
   );
   let diag = &diagnostics[0];
-  assert_eq!(diag.code.as_str(), codes::WRONG_TYPE_ARGUMENT_COUNT.as_str());
+  assert_eq!(
+    diag.code.as_str(),
+    codes::WRONG_TYPE_ARGUMENT_COUNT.as_str()
+  );
 
   let needle = "f<string, number>";
   let start = source.find(needle).expect("type arguments present") as u32;
@@ -80,8 +83,7 @@ fn reports_too_many_type_arguments() {
 fn reports_constraint_violation_for_explicit_type_arguments() {
   let mut host = MemoryHost::new();
   let file = FileKey::new("main.ts");
-  let source =
-    "function c<T extends string>(x: T): T { return x; }\nc<number>(\"x\");\n";
+  let source = "function c<T extends string>(x: T): T { return x; }\nc<number>(\"x\");\n";
   host.insert(file.clone(), Arc::from(source));
 
   let program = Program::new(host, vec![file.clone()]);
@@ -94,4 +96,3 @@ fn reports_constraint_violation_for_explicit_type_arguments() {
     "expected a TS2344 constraint diagnostic, got {diagnostics:?}"
   );
 }
-
