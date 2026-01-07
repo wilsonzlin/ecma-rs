@@ -819,6 +819,12 @@ impl TypeStore {
     if flat.len() == 1 {
       return flat[0];
     }
+    if flat.len() == 2
+      && matches!(self.type_kind(flat[0]), TypeKind::BooleanLiteral(_))
+      && matches!(self.type_kind(flat[1]), TypeKind::BooleanLiteral(_))
+    {
+      return self.primitives.boolean;
+    }
 
     self.insert_type_direct(TypeKind::Union(flat))
   }
@@ -886,6 +892,73 @@ impl TypeStore {
     self.sort_and_dedup(&mut flat);
     if flat.len() == 1 {
       return flat[0];
+    }
+
+    const FAMILY_STRING: u8 = 1 << 0;
+    const FAMILY_NUMBER: u8 = 1 << 1;
+    const FAMILY_BOOLEAN: u8 = 1 << 2;
+    const FAMILY_BIGINT: u8 = 1 << 3;
+    const FAMILY_SYMBOL: u8 = 1 << 4;
+
+    let mut families: u8 = 0;
+    let mut bool_literal: Option<TypeId> = None;
+    let mut number_literal: Option<TypeId> = None;
+    let mut string_literal: Option<TypeId> = None;
+    let mut bigint_literal: Option<TypeId> = None;
+    for member in &flat {
+      match self.type_kind(*member) {
+        TypeKind::String => families |= FAMILY_STRING,
+        TypeKind::StringLiteral(_) => {
+          families |= FAMILY_STRING;
+          if let Some(prev) = string_literal {
+            if prev != *member {
+              return self.primitives.never;
+            }
+          } else {
+            string_literal = Some(*member);
+          }
+        }
+        TypeKind::TemplateLiteral(_) => families |= FAMILY_STRING,
+        TypeKind::Number => families |= FAMILY_NUMBER,
+        TypeKind::NumberLiteral(_) => {
+          families |= FAMILY_NUMBER;
+          if let Some(prev) = number_literal {
+            if prev != *member {
+              return self.primitives.never;
+            }
+          } else {
+            number_literal = Some(*member);
+          }
+        }
+        TypeKind::Boolean => families |= FAMILY_BOOLEAN,
+        TypeKind::BooleanLiteral(_) => {
+          families |= FAMILY_BOOLEAN;
+          if let Some(prev) = bool_literal {
+            if prev != *member {
+              return self.primitives.never;
+            }
+          } else {
+            bool_literal = Some(*member);
+          }
+        }
+        TypeKind::BigInt => families |= FAMILY_BIGINT,
+        TypeKind::BigIntLiteral(_) => {
+          families |= FAMILY_BIGINT;
+          if let Some(prev) = bigint_literal {
+            if prev != *member {
+              return self.primitives.never;
+            }
+          } else {
+            bigint_literal = Some(*member);
+          }
+        }
+        TypeKind::Symbol | TypeKind::UniqueSymbol => families |= FAMILY_SYMBOL,
+        _ => {}
+      }
+
+      if families & families.wrapping_sub(1) != 0 {
+        return self.primitives.never;
+      }
     }
 
     self.insert_type_direct(TypeKind::Intersection(flat))

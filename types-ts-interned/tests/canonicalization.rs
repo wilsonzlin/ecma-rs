@@ -177,6 +177,39 @@ fn empty_intersection_is_unknown() {
 }
 
 #[test]
+fn intersection_contradictions_reduce_to_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  assert_eq!(
+    store.intersection(vec![primitives.string, primitives.number]),
+    primitives.never
+  );
+
+  let true_lit = store.intern_type(TypeKind::BooleanLiteral(true));
+  let false_lit = store.intern_type(TypeKind::BooleanLiteral(false));
+  assert_eq!(store.intersection(vec![true_lit, false_lit]), primitives.never);
+
+  let str_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let str_b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
+  assert_eq!(store.intersection(vec![str_a, str_b]), primitives.never);
+
+  let one = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.0)));
+  let two = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(2.0)));
+  assert_eq!(store.intersection(vec![one, two]), primitives.never);
+}
+
+#[test]
+fn union_of_boolean_literals_collapses_to_boolean() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let true_lit = store.intern_type(TypeKind::BooleanLiteral(true));
+  let false_lit = store.intern_type(TypeKind::BooleanLiteral(false));
+  assert_eq!(store.union(vec![true_lit, false_lit]), primitives.boolean);
+}
+
+#[test]
 fn shape_canonicalization_merges_duplicate_properties() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
