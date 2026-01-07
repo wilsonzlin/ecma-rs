@@ -113,6 +113,9 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject_module("with ({}) {}");
   assert_reject_module("delete x;");
   assert_reject_module("delete (x);");
+  assert_reject_module("010;");
+  assert_reject_module("08;");
+  assert_reject_module(r"'\1';");
   assert_reject_module("import.meta = 1;");
 
   // `new.target` is only valid when a `new.target` binding exists (functions and class
@@ -165,6 +168,9 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("class A { static { super.foo; } }");
   assert_accept("with ({}) {}");
   assert_accept("delete x;");
+  assert_accept("010;");
+  assert_accept("08;");
+  assert_accept(r"'\1';");
   assert_accept("function f(x) { return x; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");

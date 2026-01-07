@@ -587,6 +587,15 @@ impl<'a> Parser<'a> {
   pub fn lit_num(&mut self) -> SyntaxResult<Node<LitNumExpr>> {
     let t = self.require(TT::LiteralNumber)?;
     let raw = self.str(t.loc);
+    if self.is_strict_ecmascript()
+      && self.is_module()
+      && (crate::num::is_legacy_octal_literal(raw)
+        || crate::num::is_leading_zero_decimal_literal(raw))
+    {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax(
+        "numeric literals with leading zeros are not allowed in modules",
+      )));
+    }
     let value = normalise_literal_number(raw)
       .ok_or_else(|| t.loc.error(SyntaxErrorType::MalformedLiteralNumber, None))?;
 
@@ -842,6 +851,14 @@ impl<'a> Parser<'a> {
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
     let (loc, value, escape_loc) =
       self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+    if self.is_strict_ecmascript() && self.is_module() {
+      if let Some(escape_loc) = escape_loc {
+        return Err(escape_loc.error(
+          SyntaxErrorType::ExpectedSyntax("octal escape sequences not allowed in modules"),
+          Some(TT::LiteralString),
+        ));
+      }
+    }
     let mut node = Node::new(loc, LitStrExpr { value });
     if let Some(escape_loc) = escape_loc {
       node.assoc.set(LegacyOctalEscapeSequence(escape_loc));
