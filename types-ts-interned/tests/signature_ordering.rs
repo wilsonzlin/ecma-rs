@@ -9,90 +9,77 @@ use types_ts_interned::TypeParamDecl;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
 
-fn signature_param_kinds(store: &TypeStore, signatures: &[SignatureId]) -> Vec<TypeKind> {
-  signatures
-    .iter()
-    .map(|id| {
-      let sig = store.signature(*id);
-      let param = sig
-        .params
-        .first()
-        .expect("signature should have at least one param");
-      store.type_kind(param.ty)
-    })
-    .collect()
-}
-
-fn collect_overload_orders(
-  intern_number_first: bool,
-) -> (Vec<TypeKind>, Vec<TypeKind>, Vec<TypeKind>) {
-  let store = TypeStore::new();
+fn build_signature_set(store: &TypeStore) -> Vec<SignatureId> {
   let primitives = store.primitive_ids();
-
-  let sig_number = Signature::new(
-    vec![Param {
-      name: None,
-      ty: primitives.number,
-      optional: false,
-      rest: false,
-    }],
-    primitives.void,
-  );
-  let sig_string = Signature::new(
-    vec![Param {
-      name: None,
-      ty: primitives.string,
-      optional: false,
-      rest: false,
-    }],
-    primitives.void,
-  );
-
-  let (id_number, id_string) = if intern_number_first {
-    let id_number = store.intern_signature(sig_number.clone());
-    let id_string = store.intern_signature(sig_string.clone());
-    (id_number, id_string)
-  } else {
-    let id_string = store.intern_signature(sig_string.clone());
-    let id_number = store.intern_signature(sig_number.clone());
-    (id_number, id_string)
+  let base_param = Param {
+    name: None,
+    ty: primitives.number,
+    optional: false,
+    rest: false,
   };
 
-  let callable = store.intern_type(TypeKind::Callable {
-    overloads: vec![id_number, id_string],
-  });
+  let plain = store.intern_signature(Signature::new(vec![base_param.clone()], primitives.void));
 
-  let mut shape = Shape::new();
-  shape.call_signatures = vec![id_number, id_string];
-  shape.construct_signatures = vec![id_number, id_string];
-  let shape_id = store.intern_shape(shape);
+  let mut with_this_sig = Signature::new(vec![base_param.clone()], primitives.void);
+  with_this_sig.this_param = Some(primitives.string);
+  let with_this = store.intern_signature(with_this_sig);
 
-  let callable_order = match store.type_kind(callable) {
-    TypeKind::Callable { overloads } => signature_param_kinds(&store, &overloads),
-    other => panic!("expected callable, got {:?}", other),
-  };
+  let mut with_type_params_sig = Signature::new(vec![base_param], primitives.void);
+  with_type_params_sig.type_params = vec![TypeParamDecl::new(TypeParamId(0))];
+  let with_type_params = store.intern_signature(with_type_params_sig);
 
-  let shape = store.shape(shape_id);
-  let call_order = signature_param_kinds(&store, &shape.call_signatures);
-  let construct_order = signature_param_kinds(&store, &shape.construct_signatures);
-
-  (callable_order, call_order, construct_order)
+  vec![plain, with_this, with_type_params]
 }
 
 #[test]
-fn overloads_are_structurally_sorted() {
-  let (callable_first, call_first, construct_first) = collect_overload_orders(true);
-  let (callable_second, call_second, construct_second) = collect_overload_orders(false);
+fn callable_overload_sets_are_order_independent() {
+  let store = TypeStore::new();
+  let signatures = build_signature_set(&store);
 
-  let expected = vec![TypeKind::Number, TypeKind::String];
+  let mut expected = signatures.clone();
+  expected.sort_by(|a, b| store.compare_signatures(*a, *b));
 
-  assert_eq!(callable_first, expected);
-  assert_eq!(call_first, expected);
-  assert_eq!(construct_first, expected);
+  let callable_a = store.intern_type(TypeKind::Callable {
+    overloads: signatures.clone(),
+  });
+  let mut reversed = signatures.clone();
+  reversed.reverse();
+  let callable_b = store.intern_type(TypeKind::Callable { overloads: reversed });
 
-  assert_eq!(callable_first, callable_second);
-  assert_eq!(call_first, call_second);
-  assert_eq!(construct_first, construct_second);
+  assert_eq!(callable_a, callable_b);
+
+  let overloads = match store.type_kind(callable_a) {
+    TypeKind::Callable { overloads } => overloads,
+    other => panic!("expected callable, got {:?}", other),
+  };
+  assert_eq!(overloads, expected);
+}
+
+#[test]
+fn shape_signature_lists_are_order_independent() {
+  let store = TypeStore::new();
+  let signatures = build_signature_set(&store);
+
+  let mut expected = signatures.clone();
+  expected.sort_by(|a, b| store.compare_signatures(*a, *b));
+
+  let mut shape_a = Shape::new();
+  shape_a.call_signatures = signatures.clone();
+  shape_a.construct_signatures = signatures.clone();
+  let id_a = store.intern_shape(shape_a);
+
+  let mut reversed = signatures.clone();
+  reversed.reverse();
+  let mut shape_b = Shape::new();
+  shape_b.call_signatures = reversed.clone();
+  shape_b.construct_signatures = reversed;
+  let id_b = store.intern_shape(shape_b);
+
+  assert_eq!(id_a, id_b);
+
+  let shape = store.shape(id_a);
+  assert_eq!(shape.call_signatures, expected);
+  assert_eq!(shape.construct_signatures, expected);
 }
 
 #[test]

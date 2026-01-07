@@ -557,7 +557,13 @@ impl TypeStore {
     }
     shape.properties = merged_properties;
     Self::stable_dedup_signatures(&mut shape.call_signatures);
+    shape
+      .call_signatures
+      .sort_by(|a, b| self.signature_cmp(*a, *b));
     Self::stable_dedup_signatures(&mut shape.construct_signatures);
+    shape
+      .construct_signatures
+      .sort_by(|a, b| self.signature_cmp(*a, *b));
     shape.indexers.sort_by(|a, b| {
       self
         .type_cmp(a.key_type, b.key_type)
@@ -684,6 +690,7 @@ impl TypeStore {
       TypeKind::KeyOf(inner) => TypeKind::KeyOf(self.canon(inner)),
       TypeKind::Callable { mut overloads } => {
         Self::stable_dedup_signatures(&mut overloads);
+        overloads.sort_by(|a, b| self.signature_cmp(*a, *b));
         TypeKind::Callable { overloads }
       }
       other => other,
