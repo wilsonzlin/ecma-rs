@@ -16,5 +16,4 @@ parse-js = { version = "0.24.1", path = "../parse-js" }
 
 [dev-dependencies]
 maplit = "1"
-serde_json = "1"
 rand = "0.8"
