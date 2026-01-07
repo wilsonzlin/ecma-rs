@@ -1,5 +1,6 @@
 use parse_js::ast::stmt::Stmt;
 use parse_js::error::SyntaxErrorType;
+use parse_js::operator::OperatorName;
 use parse_js::parse_with_options;
 use parse_js::{Dialect, ParseOptions, SourceType};
 
@@ -42,4 +43,37 @@ fn await_requires_operand() {
 fn yield_star_disallows_line_terminator_between_yield_and_star() {
   let err = parse_with_options("function* g(){ yield\n* other; }", ecma_script_opts()).unwrap_err();
   assert_eq!(err.typ, SyntaxErrorType::LineTerminatorAfterYield);
+}
+
+#[test]
+fn yield_is_restricted_production_across_line_terminators() {
+  let parsed = parse_with_options(
+    "function* g(){ const x = yield\n+1; return x; }",
+    ecma_script_opts(),
+  )
+  .unwrap();
+
+  let Stmt::FunctionDecl(func_decl) = parsed.stx.body[0].stx.as_ref() else {
+    panic!("expected function declaration");
+  };
+  let Some(parse_js::ast::func::FuncBody::Block(body)) = &func_decl.stx.function.stx.body else {
+    panic!("expected function body");
+  };
+
+  assert_eq!(body.len(), 3);
+  assert!(matches!(body[0].stx.as_ref(), Stmt::VarDecl(_)));
+  assert!(matches!(body[1].stx.as_ref(), Stmt::Expr(_)));
+  assert!(matches!(body[2].stx.as_ref(), Stmt::Return(_)));
+
+  let Stmt::VarDecl(var_decl) = body[0].stx.as_ref() else {
+    unreachable!();
+  };
+  let init = var_decl.stx.declarators[0]
+    .initializer
+    .as_ref()
+    .expect("initializer missing");
+  match init.stx.as_ref() {
+    parse_js::ast::expr::Expr::Unary(unary) => assert_eq!(unary.stx.operator, OperatorName::Yield),
+    other => panic!("expected yield initializer, got {other:?}"),
+  }
 }

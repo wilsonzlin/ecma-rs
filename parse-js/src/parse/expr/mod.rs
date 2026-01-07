@@ -1073,6 +1073,24 @@ impl<'a> Parser<'a> {
             break;
           };
 
+          // In ECMAScript, `yield` expressions are "restricted productions":
+          // when used without parentheses, they can't be the left operand of
+          // higher-precedence operators (e.g. `yield\n+1`, `yield.foo`,
+          // `yield\n(1)`, `yield\n[0]`). In those cases we either insert an
+          // automatic semicolon at a LineTerminator boundary (if allowed) or
+          // report a syntax error requiring parentheses.
+          if matches!(left.stx.as_ref(), Expr::Unary(unary) if matches!(unary.stx.operator, OperatorName::Yield | OperatorName::YieldDelegated))
+            && left.assoc.get::<ParenthesizedExpr>().is_none()
+            && operator.precedence > OPERATORS[&OperatorName::Yield].precedence
+          {
+            if asi_allowed && t.preceded_by_line_terminator {
+              self.restore_checkpoint(cp);
+              asi.did_end_with_asi = true;
+              break;
+            }
+            return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
+          }
+
           let next_min_prec =
             operator.precedence + (operator.associativity == Associativity::Left) as u8;
 
