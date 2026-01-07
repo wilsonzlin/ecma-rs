@@ -4,6 +4,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 const FALLBACK_START: u32 = 1 << 31;
+const RESERVED_FILE_ID: u32 = u32::MAX;
 
 /// Distinguish between user-provided source files and library inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -27,7 +28,11 @@ fn preferred_file_id(key: &FileKey) -> Option<u32> {
   let stripped = remainder
     .strip_suffix(".ts")
     .or_else(|| remainder.strip_suffix(".tsx"))?;
-  stripped.parse::<u32>().ok()
+  let preferred = stripped.parse::<u32>().ok()?;
+  if preferred == RESERVED_FILE_ID {
+    return None;
+  }
+  Some(preferred)
 }
 
 fn stable_hash(key: &FileKey, origin: FileOrigin, salt: u64) -> u64 {
@@ -42,9 +47,12 @@ fn stable_hash(key: &FileKey, origin: FileOrigin, salt: u64) -> u64 {
 ///
 /// IDs are stable for the lifetime of the registry and derived purely from the
 /// key to avoid order-dependent allocation. Keys matching the `file{N}.ts` or
-/// `file{N}.tsx` pattern reserve `FileId(N)` when available; all other keys use a
-/// stable hash-based fallback in a high numeric range to avoid colliding with
-/// small test IDs.
+/// `file{N}.tsx` pattern reserve `FileId(N)` when available. `FileId(u32::MAX)` is
+/// reserved for synthetic namespaces (for example, packed HIR IDs) and will
+/// always be remapped into the fallback range.
+///
+/// All other keys use a stable hash-based fallback in a high numeric range to
+/// avoid colliding with small test IDs.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileRegistry {
   keys: AHashMap<FileKey, FileRegistryEntry>,
@@ -118,6 +126,7 @@ impl FileRegistry {
       }
       FileOrigin::Lib => self.allocate_fallback(key, origin),
     };
+    debug_assert_ne!(id, FileId(RESERVED_FILE_ID));
 
     let entry = self.keys.entry(key.clone()).or_default();
     match origin {
@@ -186,5 +195,25 @@ mod tests {
     assert_ne!(source, lib);
     assert_eq!(registry.lookup_id(&key), Some(source));
     assert_eq!(registry.ids_for_key(&key), vec![source, lib]);
+  }
+
+  #[test]
+  fn reserved_file_id_is_never_allocated() {
+    let reserved = FileKey::new("file4294967295.ts");
+    let other = FileKey::new("x.ts");
+
+    let mut registry_a = FileRegistry::new();
+    registry_a.intern(&reserved, FileOrigin::Source);
+    registry_a.intern(&other, FileOrigin::Source);
+
+    let mut registry_b = FileRegistry::new();
+    registry_b.intern(&other, FileOrigin::Source);
+    registry_b.intern(&reserved, FileOrigin::Source);
+
+    let reserved_id_a = registry_a.lookup_id(&reserved).expect("reserved file id");
+    let reserved_id_b = registry_b.lookup_id(&reserved).expect("reserved file id");
+    assert_ne!(reserved_id_a, FileId(RESERVED_FILE_ID));
+    assert_ne!(reserved_id_b, FileId(RESERVED_FILE_ID));
+    assert_eq!(reserved_id_a, reserved_id_b);
   }
 }
