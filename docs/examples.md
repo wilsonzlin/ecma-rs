@@ -4,6 +4,15 @@ The workspace ships a small set of compiled examples intended for copy/paste
 setups in downstream tools. They avoid filesystem I/O by using in-memory hosts
 and produce deterministic output (stable ordering of diagnostics and queries).
 
+## `parse-js`
+
+```bash
+cargo run -p parse-js --example basic
+```
+
+This example parses a small TypeScript module with explicit `ParseOptions` and
+prints a couple of basic stats.
+
 ## `typecheck-ts`
 
 ```bash
