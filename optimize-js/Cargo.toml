@@ -35,7 +35,7 @@ types-ts-interned = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
-criterion = { workspace = true, features = ["html_reports"] }
+criterion = { workspace = true }
 
 [[bench]]
 name = "analysis"

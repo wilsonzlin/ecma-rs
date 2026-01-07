@@ -29,7 +29,7 @@ unicode-ident = { workspace = true }
 diagnostics = { workspace = true, features = ["parse-js"], optional = true }
 
 [dev-dependencies]
-criterion = { workspace = true, features = ["html_reports"] }
+criterion = { workspace = true }
 serde_json = { workspace = true }
 similar = { workspace = true }
 
