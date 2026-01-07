@@ -26,6 +26,15 @@ cargo run -p hir-js --example basic_lowering
 This example parses+lowers a small TypeScript snippet and shows how to use
 `SpanMap` for byte-offset lookups.
 
+## `emit-js`
+
+```bash
+cargo run -p emit-js --example basic
+```
+
+This example parses a small TypeScript snippet with `parse-js` and prints the
+minified emitted output.
+
 ## `minify-js`
 
 ```bash
