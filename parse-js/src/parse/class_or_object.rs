@@ -375,19 +375,17 @@ impl<'a> Parser<'a> {
             // named `get`/`set` before the next member begins (e.g. `get\nfoo: number`), so
             // we only treat it as an accessor when it looks like one (`get foo()` / `get
             // [expr]()` / etc).
-            let looks_like_accessor = if is_get_or_set
-              && accessor_name_start
-              && !p.is_strict_ecmascript()
-            {
-              let checkpoint = p.checkpoint();
-              p.consume(); // get/set
-              let res = p.class_or_obj_key(ctx);
-              let next = p.peek().typ;
-              p.restore_checkpoint(checkpoint);
-              res.is_ok() && matches!(next, TT::ParenthesisOpen | TT::ChevronLeft)
-            } else {
-              false
-            };
+            let looks_like_accessor =
+              if is_get_or_set && accessor_name_start && !p.is_strict_ecmascript() {
+                let checkpoint = p.checkpoint();
+                p.consume(); // get/set
+                let res = p.class_or_obj_key(ctx);
+                let next = p.peek().typ;
+                p.restore_checkpoint(checkpoint);
+                res.is_ok() && matches!(next, TT::ParenthesisOpen | TT::ChevronLeft)
+              } else {
+                false
+              };
 
             // Detect async methods, generators, and accessors.
             let needs_special_handling = matches!(
