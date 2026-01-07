@@ -45,6 +45,8 @@ graph TD
     optimize_js --> hir_js
     optimize_js --> parse_js
     optimize_js --> semantic_js
+    optimize_js --> typecheck_ts
+    optimize_js --> types_ts_interned
     optimize_js_debugger --> diagnostics
     optimize_js_debugger --> optimize_js
     parse_js --> diagnostics

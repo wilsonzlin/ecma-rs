@@ -1,5 +1,9 @@
 # Contributing
 
+For an overview of the workspace and the intended architecture, start with
+[`README.md`](./README.md), [`docs/architecture.md`](./docs/architecture.md), and
+[`AGENTS.md`](./AGENTS.md).
+
 This repository pins the Rust toolchain (including `rustfmt`) via `rust-toolchain.toml` so formatting output is reproducible across CI and developer machines. If `cargo fmt --all --check` fails unexpectedly, ensure you're using the pinned toolchain.
 
 This workspace is kept warning-free and treats `Cargo.lock` as a generated artifact (the repository is a library workspace). CI regenerates the lockfile and runs with `--locked`; generate one locally before running the same checks:

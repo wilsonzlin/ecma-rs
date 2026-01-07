@@ -4,6 +4,12 @@ This repository is converging on a single, deterministic toolchain for parsing,
 binding, checking, and rewriting JavaScript/TypeScript. The key crates below
 represent the stable boundaries contributors should target during the rewrite.
 
+Start here:
+
+- [`README.md`](../README.md) — repo overview + common commands
+- [`docs/quickstart.md`](./quickstart.md) — local setup for conformance/difftsc
+- [`AGENTS.md`](../AGENTS.md) — north-star architecture and design principles
+
 ## Data flow at a glance
 
 ```mermaid
@@ -137,6 +143,9 @@ other crates use this for structured errors and spans.
 - Pipeline: parse → `hir-js` lowering + semantic analysis (`JsSymbols`/`VarAnalysis`) → IL →
   CFG/SSA → opt passes (value numbering, DCE, CFG prune) → optional
   decompilation (`program_to_ast` / `program_to_js` via `emit-js`).
+- Optional typed mode (feature `optimize-js/typed`) can consume `typecheck-ts` /
+  `types-ts-interned` for type-aware experiments without making type checking a
+  hard dependency of the optimizer.
 - Legacy AST lowering has been removed in favor of the single HIR pipeline.
 - Diagnostics use shared `Span`/`TextRange`; deterministic tests enforce stable
   symbol/CFG ordering.
