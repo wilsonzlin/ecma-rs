@@ -3,7 +3,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 
 fn js_module_opts() -> ParseOptions {
   ParseOptions {
-    dialect: Dialect::Ecma,
+    dialect: Dialect::Js,
     source_type: SourceType::Module,
   }
 }

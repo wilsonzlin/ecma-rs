@@ -763,17 +763,7 @@ impl<'a> Parser<'a> {
         //   generator function.
         match operator.name {
           OperatorName::Await => {
-            // `await` always requires an operand. If one cannot appear here (e.g. `await]`),
-            // prefer treating `await` as an identifier for recovery so we don't fabricate a
-            // synthetic operand.
             ctx.rules.await_expr_allowed
-              && t1.typ != TT::EOF
-              && t1.typ != TT::Semicolon
-              && t1.typ != TT::Comma
-              && t1.typ != TT::ParenthesisClose
-              && t1.typ != TT::BracketClose
-              && t1.typ != TT::BraceClose
-              && !terminators.contains(&t1.typ)
           }
           OperatorName::Yield => ctx.rules.yield_expr_allowed,
           _ => true,
@@ -916,10 +906,8 @@ impl<'a> Parser<'a> {
               p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
             } else {
               match operator.name {
-                OperatorName::Await | OperatorName::YieldDelegated if p.is_strict_ecmascript() => {
-                  return Err(
-                    next_token.error(SyntaxErrorType::ExpectedSyntax("expression operand")),
-                  );
+                OperatorName::Await | OperatorName::YieldDelegated => {
+                  return Err(next_token.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
                 }
                 _ => {
                   // For unary operators without operand, use `undefined` identifier for error recovery
