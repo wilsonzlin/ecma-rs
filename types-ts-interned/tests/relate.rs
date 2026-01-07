@@ -1675,12 +1675,20 @@ fn explain_assignable_reason_tree_truncates_large_unions_deterministically() {
     .reason
     .expect("expected reason tree");
 
-  let json1 = serde_json::to_string(&tree1).expect("serialize reason tree");
-  let json2 = serde_json::to_string(&tree2).expect("serialize reason tree");
   assert_eq!(
-    json1, json2,
+    tree1, tree2,
     "reason trees should be identical across contexts"
   );
+
+  #[cfg(feature = "serde-json")]
+  {
+    let json1 = serde_json::to_string(&tree1).expect("serialize reason tree");
+    let json2 = serde_json::to_string(&tree2).expect("serialize reason tree");
+    assert_eq!(
+      json1, json2,
+      "serialized reason trees should also be identical across contexts"
+    );
+  }
 
   let recorded: Vec<_> = tree1.children.iter().map(|child| child.dst).collect();
   assert!(

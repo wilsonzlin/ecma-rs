@@ -1,3 +1,5 @@
+#![cfg(feature = "serde-json")]
+
 use serde_json;
 use types_ts_interned::{
   Accessibility, ObjectType, Param, PropData, PropKey, Property, Shape, Signature, TypeKind,
