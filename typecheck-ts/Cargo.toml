@@ -23,7 +23,7 @@ thiserror = "1.0"
 tracing = "0.1"
 types-ts-interned = { path = "../types-ts-interned" }
 ahash = "0.8"
-dashmap = "5.5"
+dashmap = "6"
 ordered-float = "3"
 num-bigint = "0.4"
 bumpalo = { version = "3.14", features = ["collections"] }

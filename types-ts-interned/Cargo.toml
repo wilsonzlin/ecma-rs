@@ -16,7 +16,7 @@ strict-determinism = []
 [dependencies]
 hir-js = { path = "../hir-js" }
 ahash = "0.8"
-dashmap = "5"
+dashmap = "6"
 bitflags = "2"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"], optional = true }
