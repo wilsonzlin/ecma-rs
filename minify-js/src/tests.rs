@@ -802,6 +802,15 @@ fn folds_nullish_coalescing_with_void_zero() {
 }
 
 #[test]
+fn removes_unreachable_if_branches_with_function_decl_in_modules() {
+  let result = minified(
+    TopLevelMode::Module,
+    "if(false){function dead(){}}console.log(1);",
+  );
+  assert_eq!(result, "console.log(1);");
+}
+
+#[test]
 fn removes_unreachable_if_branches_in_arrow_expr_bodies() {
   let result = minified(
     TopLevelMode::Global,

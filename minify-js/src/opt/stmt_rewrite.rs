@@ -1,8 +1,10 @@
-use super::traverse::apply_to_function_like_bodies;
-use super::{OptCtx, Pass};
+use super::{OptCtx, Pass, TopLevelMode};
+use derive_visitor::{DriveMut, VisitorMut};
+use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::{BinaryExpr, CondExpr, Expr};
-use parse_js::ast::node::{Node, NodeAssocData};
+use parse_js::ast::func::{Func, FuncBody};
+use parse_js::ast::node::{Node, NodeAssocData, ParenthesizedExpr};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{ForBody, ForInOfLhs, ForTripleStmtInit, SwitchBranch};
 use parse_js::ast::stmt::{Stmt, TryStmt};
@@ -17,8 +19,80 @@ impl Pass for StmtRewritePass {
     "stmt-rewrite"
   }
 
-  fn run(&mut self, _cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    apply_to_function_like_bodies(top, rewrite_stmts)
+  fn run(&mut self, cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
+    let strict = cx.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&top.stx.body);
+    let mut visitor = StmtRewriteVisitor {
+      top_level_mode: cx.top_level_mode,
+      strict_stack: vec![strict],
+      changed: false,
+    };
+    top.drive_mut(&mut visitor);
+    visitor.changed
+  }
+}
+
+type TopLevelNode = Node<TopLevel>;
+type FuncNode = Node<Func>;
+type StaticBlockNode = Node<ClassStaticBlock>;
+
+#[derive(VisitorMut)]
+#[visitor(TopLevelNode(enter), FuncNode(enter, exit), StaticBlockNode(enter, exit))]
+struct StmtRewriteVisitor {
+  top_level_mode: TopLevelMode,
+  strict_stack: Vec<bool>,
+  changed: bool,
+}
+
+impl StmtRewriteVisitor {
+  fn is_strict(&self) -> bool {
+    *self.strict_stack.last().unwrap_or(&false)
+  }
+
+  fn enter_top_level_node(&mut self, node: &mut TopLevelNode) {
+    let strict = self.top_level_mode == TopLevelMode::Module || has_use_strict_directive(&node.stx.body);
+    if let Some(slot) = self.strict_stack.last_mut() {
+      *slot = strict;
+    } else {
+      self.strict_stack.push(strict);
+    }
+
+    let body = std::mem::take(&mut node.stx.body);
+    node.stx.body = rewrite_stmts(body, &mut self.changed, strict);
+  }
+
+  fn enter_func_node(&mut self, node: &mut FuncNode) {
+    let parent_strict = self.is_strict();
+    let func_strict = parent_strict
+      || node
+        .stx
+        .body
+        .as_ref()
+        .is_some_and(|body| matches!(body, FuncBody::Block(stmts) if has_use_strict_directive(stmts)));
+    self.strict_stack.push(func_strict);
+
+    let Some(body) = node.stx.body.as_mut() else {
+      return;
+    };
+    let FuncBody::Block(stmts) = body else {
+      return;
+    };
+    let owned = std::mem::take(stmts);
+    *stmts = rewrite_stmts(owned, &mut self.changed, func_strict);
+  }
+
+  fn exit_func_node(&mut self, _node: &mut FuncNode) {
+    self.strict_stack.pop();
+  }
+
+  fn enter_static_block_node(&mut self, node: &mut StaticBlockNode) {
+    // Class static blocks are always strict mode code.
+    self.strict_stack.push(true);
+    let body = std::mem::take(&mut node.stx.body);
+    node.stx.body = rewrite_stmts(body, &mut self.changed, true);
+  }
+
+  fn exit_static_block_node(&mut self, _node: &mut StaticBlockNode) {
+    self.strict_stack.pop();
   }
 }
 
@@ -33,26 +107,26 @@ where
   }
 }
 
-fn rewrite_stmts(stmts: Vec<Node<Stmt>>, changed: &mut bool) -> Vec<Node<Stmt>> {
+fn rewrite_stmts(stmts: Vec<Node<Stmt>>, changed: &mut bool, strict: bool) -> Vec<Node<Stmt>> {
   let mut out = Vec::with_capacity(stmts.len());
   for stmt in stmts {
-    out.extend(rewrite_stmt(stmt, changed, true));
+    out.extend(rewrite_stmt(stmt, changed, true, strict));
   }
   out
 }
 
-fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node<Stmt>> {
+fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool, strict: bool) -> Vec<Node<Stmt>> {
   let Node { loc, assoc, stx } = stmt;
   match *stx {
     Stmt::Block(mut block) => {
       let body = std::mem::take(&mut block.stx.body);
-      block.stx.body = rewrite_stmts(body, changed);
+      block.stx.body = rewrite_stmts(body, changed, strict);
       vec![new_node(loc, assoc, Stmt::Block(block))]
     }
     Stmt::If(mut if_stmt) => {
-      if_stmt.stx.consequent = rewrite_single_stmt(if_stmt.stx.consequent, changed);
+      if_stmt.stx.consequent = rewrite_single_stmt(if_stmt.stx.consequent, changed, strict);
       if let Some(alt) = if_stmt.stx.alternate.take() {
-        if_stmt.stx.alternate = Some(rewrite_single_stmt(alt, changed));
+        if_stmt.stx.alternate = Some(rewrite_single_stmt(alt, changed, strict));
       }
 
       if let Some(cond) = const_truthiness(&if_stmt.stx.test) {
@@ -62,9 +136,9 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
           Some(&if_stmt.stx.consequent)
         };
 
-        if dead_stmt.map_or(false, contains_function_decl) {
+        if !strict && dead_stmt.map_or(false, contains_function_decl) {
           // Conservatively keep the statement if we might be dropping hoisted
-          // function declarations (Annex B semantics are subtle).
+          // function declarations in non-strict mode (Annex B semantics are subtle).
           return vec![new_node(loc, assoc, Stmt::If(if_stmt))];
         }
 
@@ -174,43 +248,43 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
       }
     }
     Stmt::While(mut while_stmt) => {
-      while_stmt.stx.body = rewrite_single_stmt(while_stmt.stx.body, changed);
+      while_stmt.stx.body = rewrite_single_stmt(while_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::While(while_stmt))]
     }
     Stmt::DoWhile(mut do_stmt) => {
-      do_stmt.stx.body = rewrite_single_stmt(do_stmt.stx.body, changed);
+      do_stmt.stx.body = rewrite_single_stmt(do_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::DoWhile(do_stmt))]
     }
     Stmt::ForTriple(mut for_stmt) => {
-      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed);
+      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::ForTriple(for_stmt))]
     }
     Stmt::ForIn(mut for_stmt) => {
-      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed);
+      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::ForIn(for_stmt))]
     }
     Stmt::ForOf(mut for_stmt) => {
-      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed);
+      for_stmt.stx.body = rewrite_for_body(for_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::ForOf(for_stmt))]
     }
     Stmt::Switch(mut switch_stmt) => {
       let branches = std::mem::take(&mut switch_stmt.stx.branches);
       switch_stmt.stx.branches = branches
         .into_iter()
-        .map(|branch| rewrite_switch_branch(branch, changed))
+        .map(|branch| rewrite_switch_branch(branch, changed, strict))
         .collect();
       vec![new_node(loc, assoc, Stmt::Switch(switch_stmt))]
     }
     Stmt::Try(mut try_stmt) => {
-      rewrite_try_stmt(&mut try_stmt, changed);
+      rewrite_try_stmt(&mut try_stmt, changed, strict);
       vec![new_node(loc, assoc, Stmt::Try(try_stmt))]
     }
     Stmt::With(mut with_stmt) => {
-      with_stmt.stx.body = rewrite_single_stmt(with_stmt.stx.body, changed);
+      with_stmt.stx.body = rewrite_single_stmt(with_stmt.stx.body, changed, strict);
       vec![new_node(loc, assoc, Stmt::With(with_stmt))]
     }
     Stmt::Label(mut label_stmt) => {
-      label_stmt.stx.statement = rewrite_single_stmt(label_stmt.stx.statement, changed);
+      label_stmt.stx.statement = rewrite_single_stmt(label_stmt.stx.statement, changed, strict);
       vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
     }
     Stmt::FunctionDecl(decl) => vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))],
@@ -223,8 +297,8 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
   }
 }
 
-fn rewrite_single_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
-  let mut rewritten = rewrite_stmt(stmt, changed, false);
+fn rewrite_single_stmt(stmt: Node<Stmt>, changed: &mut bool, strict: bool) -> Node<Stmt> {
+  let mut rewritten = rewrite_stmt(stmt, changed, false, strict);
   match rewritten.len() {
     0 => empty_stmt(),
     1 => rewritten.pop().unwrap(),
@@ -245,28 +319,32 @@ fn rewrite_single_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
   }
 }
 
-fn rewrite_for_body(mut body: Node<ForBody>, changed: &mut bool) -> Node<ForBody> {
+fn rewrite_for_body(mut body: Node<ForBody>, changed: &mut bool, strict: bool) -> Node<ForBody> {
   let stmts = std::mem::take(&mut body.stx.body);
-  body.stx.body = rewrite_stmts(stmts, changed);
+  body.stx.body = rewrite_stmts(stmts, changed, strict);
   body
 }
 
-fn rewrite_switch_branch(mut branch: Node<SwitchBranch>, changed: &mut bool) -> Node<SwitchBranch> {
+fn rewrite_switch_branch(
+  mut branch: Node<SwitchBranch>,
+  changed: &mut bool,
+  strict: bool,
+) -> Node<SwitchBranch> {
   let body = std::mem::take(&mut branch.stx.body);
-  branch.stx.body = rewrite_stmts(body, changed);
+  branch.stx.body = rewrite_stmts(body, changed, strict);
   branch
 }
 
-fn rewrite_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool) {
+fn rewrite_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool, strict: bool) {
   let wrapped = std::mem::take(&mut try_stmt.stx.wrapped.stx.body);
-  try_stmt.stx.wrapped.stx.body = rewrite_stmts(wrapped, changed);
+  try_stmt.stx.wrapped.stx.body = rewrite_stmts(wrapped, changed, strict);
   if let Some(catch) = try_stmt.stx.catch.as_mut() {
     let body = std::mem::take(&mut catch.stx.body);
-    catch.stx.body = rewrite_stmts(body, changed);
+    catch.stx.body = rewrite_stmts(body, changed, strict);
   }
   if let Some(finally) = try_stmt.stx.finally.as_mut() {
     let body = std::mem::take(&mut finally.stx.body);
-    finally.stx.body = rewrite_stmts(body, changed);
+    finally.stx.body = rewrite_stmts(body, changed, strict);
   }
 }
 
@@ -319,6 +397,30 @@ fn empty_stmt() -> Node<Stmt> {
     Loc(0, 0),
     Stmt::Empty(Node::new(Loc(0, 0), parse_js::ast::stmt::EmptyStmt {})),
   )
+}
+
+fn has_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
+  for stmt in stmts.iter() {
+    let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+      break;
+    };
+    if expr_stmt
+      .stx
+      .expr
+      .assoc
+      .get::<ParenthesizedExpr>()
+      .is_some()
+    {
+      break;
+    }
+    let Expr::LitStr(lit) = expr_stmt.stx.expr.stx.as_ref() else {
+      break;
+    };
+    if lit.stx.value == "use strict" {
+      return true;
+    }
+  }
+  false
 }
 
 fn contains_function_decl(stmt: &Node<Stmt>) -> bool {
