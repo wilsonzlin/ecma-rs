@@ -144,6 +144,22 @@ fn await_allows_parenthesized_arrow_function_operand() {
 }
 
 #[test]
+fn binary_operator_disallows_unparenthesized_arrow_function_operand() {
+  let source = "1 + x => x";
+  let err = parse_with_options(source, js_module_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+}
+
+#[test]
+fn binary_operator_allows_parenthesized_arrow_function_operand() {
+  let source = "1 + (x => x)";
+  parse_with_options(source, js_module_opts()).unwrap();
+}
+
+#[test]
 fn top_level_await_allows_operand_after_line_terminator() {
   let source = "await\nfoo()";
   let parsed = parse_with_options(source, js_module_opts()).unwrap();
