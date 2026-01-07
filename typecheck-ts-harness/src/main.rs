@@ -1,7 +1,6 @@
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
-use num_cpus;
 use std::io::Read;
 use std::io::Write;
 use std::process::ExitCode;
@@ -26,7 +25,10 @@ fn default_jobs() -> usize {
   // Keep defaults conservative to avoid excessive memory usage when many
   // independent programs are checked in parallel. Callers can override via
   // `--jobs`.
-  num_cpus::get().min(4)
+  std::thread::available_parallelism()
+    .map(|count| count.get())
+    .unwrap_or(1)
+    .min(4)
 }
 
 #[derive(Parser)]

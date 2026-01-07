@@ -17,7 +17,6 @@ use crate::tsc::{
 use crate::{build_filter, FailOn, Filter, Shard, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use num_cpus;
 use rayon::{prelude::*, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -39,7 +38,10 @@ fn default_jobs() -> usize {
   // `Program` + lib types) and lead to thrashing or timeouts in harness
   // integration tests. Keep the default conservative; callers can still opt
   // into a larger pool via `--jobs`.
-  num_cpus::get().min(4)
+  std::thread::available_parallelism()
+    .map(|count| count.get())
+    .unwrap_or(1)
+    .min(4)
 }
 
 const DEFAULT_TIMEOUT_SECS: u64 = 20;

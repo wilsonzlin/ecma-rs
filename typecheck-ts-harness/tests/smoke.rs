@@ -338,7 +338,12 @@ fn json_results_are_stably_ordered_with_parallel_execution() {
   let (_dir, root) = write_fixtures();
   let _guard = EnvGuard::set(HARNESS_SLEEP_ENV, "parse_error=50,multi=25");
 
-  let jobs = std::cmp::max(2, num_cpus::get());
+  let jobs = std::cmp::max(
+    2,
+    std::thread::available_parallelism()
+      .map(|count| count.get())
+      .unwrap_or(1),
+  );
   let mut options = conformance_options(root);
   options.json = true;
   options.timeout = Duration::from_secs(5);
