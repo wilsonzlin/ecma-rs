@@ -52,6 +52,11 @@ flowchart TD
 
 ## Crate responsibilities and key APIs
 
+## Runnable examples
+
+See [`docs/examples.md`](./examples.md) for compiled `cargo run` examples that
+demonstrate the public APIs of the core crates (especially `typecheck-ts`).
+
 ### diagnostics
 Shared diagnostic model: `FileId`, `TextRange`, `Span`, and `Diagnostic`. All
 other crates use this for structured errors and spans.
