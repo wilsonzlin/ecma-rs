@@ -14,31 +14,7 @@ impl ProgramState {
     queue: &mut VecDeque<FileId>,
   ) -> sem_ts::HirFile {
     let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
-    let has_module_syntax = ast.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
-      Stmt::Import(_)
-      | Stmt::ExportList(_)
-      | Stmt::ExportDefaultExpr(_)
-      | Stmt::ExportAssignmentDecl(_)
-      | Stmt::ExportAsNamespaceDecl(_)
-      | Stmt::ImportTypeDecl(_)
-      | Stmt::ExportTypeDecl(_) => true,
-      Stmt::ImportEqualsDecl(import_equals) => match &import_equals.stx.rhs {
-        ImportEqualsRhs::Require { .. } => true,
-        ImportEqualsRhs::EntityName { .. } => import_equals.stx.export,
-      },
-      Stmt::VarDecl(var) => var.stx.export,
-      Stmt::FunctionDecl(func) => func.stx.export,
-      Stmt::ClassDecl(class) => class.stx.export,
-      Stmt::InterfaceDecl(interface) => interface.stx.export,
-      Stmt::TypeAliasDecl(alias) => alias.stx.export,
-      Stmt::EnumDecl(en) => en.stx.export,
-      Stmt::NamespaceDecl(ns) => ns.stx.export,
-      Stmt::ModuleDecl(module) => module.stx.export,
-      Stmt::AmbientVarDecl(av) => av.stx.export,
-      Stmt::AmbientFunctionDecl(af) => af.stx.export,
-      Stmt::AmbientClassDecl(ac) => ac.stx.export,
-      _ => false,
-    });
+    let has_module_syntax = sem_ts::module_syntax::ast_has_module_syntax(ast);
     let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
