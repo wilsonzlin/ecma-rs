@@ -3744,7 +3744,13 @@ impl ProgramState {
   }
 
   fn check_required_global_types(&mut self) {
-    if !self.compiler_options.no_default_lib {
+    // TypeScript emits TS2318 ("Cannot find global type") whenever the default
+    // lib set is disabled and the compilation does not provide the core global
+    // type declarations required by the checker.
+    //
+    // This can happen either when `--noLib` / `no-default-lib` is set, or when
+    // an explicit `--lib` list omits foundational libs like `es5`.
+    if !self.compiler_options.no_default_lib && self.compiler_options.libs.is_empty() {
       return;
     }
     let Some(semantics) = self.semantics.as_ref().map(Arc::clone) else {

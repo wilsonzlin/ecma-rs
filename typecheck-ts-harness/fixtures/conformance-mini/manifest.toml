@@ -2,8 +2,3 @@
 id = "match/options_passthrough.ts"
 status = "xfail"
 reason = "CompilerOptions.types not implemented yet"
-
-[[expectations]]
-id = "match/lib_names_dotted.ts"
-status = "xfail"
-reason = "Checker does not yet emit missing global type diagnostics when lib set is incomplete (tsc TS2318)"
