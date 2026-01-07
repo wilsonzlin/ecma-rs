@@ -634,26 +634,40 @@ fn snapshot_export_map(map: &ts::ExportMap, symbols: &ts::SymbolTable) -> Vec<Ex
     .collect()
 }
 
-fn snapshot_exports(
-  sem: &ts::TsProgramSemantics,
-  root: FileId,
-) -> Vec<(String, Vec<ExportEntrySnapshot>)> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TsProgramSnapshot {
+  module_symbols: Vec<(FileId, Vec<ExportEntrySnapshot>)>,
+  module_exports: Vec<(FileId, Vec<ExportEntrySnapshot>)>,
+  global_symbols: Vec<ExportEntrySnapshot>,
+  ambient_module_symbols: Vec<(String, Vec<ExportEntrySnapshot>)>,
+  ambient_module_exports: Vec<(String, Vec<ExportEntrySnapshot>)>,
+}
+
+fn snapshot_ts_program(sem: &ts::TsProgramSemantics) -> TsProgramSnapshot {
   let symbols = sem.symbols();
-  let mut out = Vec::new();
-
-  let root_map = sem
-    .exports_of_opt(root)
-    .map(|m| snapshot_export_map(m, symbols));
-  out.push(("module".to_string(), root_map.unwrap_or_default()));
-
-  for (name, exports) in sem.ambient_module_exports().iter() {
-    out.push((
-      format!("ambient:{name}"),
-      snapshot_export_map(exports, symbols),
-    ));
+  TsProgramSnapshot {
+    module_symbols: sem
+      .module_symbols
+      .iter()
+      .map(|(file, groups)| (*file, snapshot_export_map(groups, symbols)))
+      .collect(),
+    module_exports: sem
+      .module_exports
+      .iter()
+      .map(|(file, exports)| (*file, snapshot_export_map(exports, symbols)))
+      .collect(),
+    global_symbols: snapshot_export_map(&sem.global_symbols, symbols),
+    ambient_module_symbols: sem
+      .ambient_module_symbols
+      .iter()
+      .map(|(name, groups)| (name.clone(), snapshot_export_map(groups, symbols)))
+      .collect(),
+    ambient_module_exports: sem
+      .ambient_module_exports
+      .iter()
+      .map(|(name, exports)| (name.clone(), snapshot_export_map(exports, symbols)))
+      .collect(),
   }
-
-  out
 }
 
 /// Fuzz entry point that generates synthetic `ts::HirFile` inputs heavy on
@@ -688,10 +702,7 @@ pub fn fuzz_ts_binder(data: &[u8]) {
   let sem1 = bind(hir.clone());
   let sem2 = bind(hir);
 
-  assert_eq!(
-    snapshot_exports(&sem1, file_id),
-    snapshot_exports(&sem2, file_id)
-  );
+  assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem2));
   assert_eq!(sem1.symbols.symbols, sem2.symbols.symbols);
   assert_eq!(sem1.symbols.decls, sem2.symbols.decls);
   assert_eq!(sem1.def_to_symbol, sem2.def_to_symbol);
