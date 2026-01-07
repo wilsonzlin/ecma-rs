@@ -955,8 +955,14 @@ impl<'a> Parser<'a> {
     };
 
     // Check for async keyword first, before checking if it's a valid identifier.
-    // Exception: `async => ...` should be treated as a parameter name, not async keyword
-    if t0.typ == TT::KeywordAsync && t1.typ != TT::EqualsChevronRight {
+    // Exception: `async => ...` should be treated as a parameter name, not async keyword.
+    //
+    // Per ECMAScript grammar, `async` only forms `async function` / async arrow
+    // forms when there is no LineTerminator between `async` and the following token.
+    if t0.typ == TT::KeywordAsync
+      && t1.typ != TT::EqualsChevronRight
+      && !t1.preceded_by_line_terminator
+    {
       return Ok(match t1.typ {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),

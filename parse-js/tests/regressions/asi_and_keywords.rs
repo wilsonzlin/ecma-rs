@@ -50,6 +50,27 @@ fn asi_does_not_split_before_tagged_template() {
 }
 
 #[test]
+fn async_keyword_requires_no_line_terminator_before_function() {
+  // `async\nfunction` does not form an async function; `async` is an identifier
+  // and ASI splits the statements.
+  let parsed =
+    parse_with_options("async\nfunction f(){}", ecma_script_opts()).expect("expected parse");
+  assert_eq!(parsed.stx.body.len(), 2);
+  assert!(matches!(parsed.stx.body[0].stx.as_ref(), Stmt::Expr(_)));
+  assert!(matches!(
+    parsed.stx.body[1].stx.as_ref(),
+    Stmt::FunctionDecl(_)
+  ));
+}
+
+#[test]
+fn async_keyword_requires_no_line_terminator_before_arrow_parameters() {
+  // `async\nx => x` is not an async arrow; `async` is an identifier statement.
+  let parsed = parse_with_options("var f = async\nx => x;", ecma_script_opts()).expect("parse ok");
+  assert_eq!(parsed.stx.body.len(), 2);
+}
+
+#[test]
 fn yield_does_not_form_tagged_template_across_line_terminator() {
   let parsed =
     parse_with_options("function* g(){ yield\n`x`; }", ecma_script_opts()).expect("expected parse");
