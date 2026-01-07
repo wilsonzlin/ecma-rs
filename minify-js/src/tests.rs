@@ -782,7 +782,10 @@ fn dce_removes_unused_locals_in_arrow_expr_bodies() {
 
 #[test]
 fn dce_keeps_throwing_bigint_division_initializers() {
-  let result = minified(TopLevelMode::Global, "function f(){let x=1n/0n;return 1;}f();");
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let x=1n/0n;return 1;}f();",
+  );
   assert!(
     result.contains("/0n"),
     "expected throwing BigInt division to be preserved, got: {result}"
@@ -791,7 +794,10 @@ fn dce_keeps_throwing_bigint_division_initializers() {
 
 #[test]
 fn dce_keeps_throwing_bigint_exponentiation_initializers() {
-  let result = minified(TopLevelMode::Global, "function f(){let x=0n**-1n;return 1;}f();");
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let x=0n**-1n;return 1;}f();",
+  );
   assert!(
     result.contains("**-1n") || result.contains("**(-1n)"),
     "expected throwing BigInt exponentiation to be preserved, got: {result}"
@@ -800,7 +806,10 @@ fn dce_keeps_throwing_bigint_exponentiation_initializers() {
 
 #[test]
 fn dce_removes_unused_pure_binary_initializers() {
-  let result = minified(TopLevelMode::Global, "function f(){let x=1+2;return 1;}f();");
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let x=1+2;return 1;}f();",
+  );
   assert_eq!(result, "function f(){return 1;}f();");
 }
 
