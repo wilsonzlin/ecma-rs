@@ -234,6 +234,30 @@ fn exported_const_enum_in_module_is_inlined() {
 }
 
 #[test]
+fn namespace_qualified_bracket_access_is_inlined() {
+  let src = r#"
+    export namespace N { export const enum E { A = 1 } }
+    export const x = N["E"]["A"];
+    export const y = N.E["A"];
+    export const z = N["E"].A;
+  "#;
+  let (code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+
+  for name in ["x", "y", "z"] {
+    let init = find_exported_const_init(&parsed, name);
+    match init.stx.as_ref() {
+      Expr::LitNum(num) => assert_eq!(num.stx.value.0, 1.0),
+      other => panic!("expected numeric literal initializer, got {other:?}"),
+    }
+  }
+
+  assert!(
+    !code.contains(".E") && !code.contains("\"E\""),
+    "expected `E` to be erased from the emitted namespace: {code}"
+  );
+}
+
+#[test]
 fn export_list_entries_for_erased_const_enums_are_dropped() {
   let src = r#"
     export const enum E { A = 1 }
