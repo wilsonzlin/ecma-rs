@@ -309,6 +309,10 @@ impl AstIndex {
             .as_ref()
             .and_then(|expr| match expr.stx.as_ref() {
               AstExpr::Id(id) => Some(id.stx.name.clone()),
+              AstExpr::Instantiation(inst) => match inst.stx.expression.stx.as_ref() {
+                AstExpr::Id(id) => Some(id.stx.name.clone()),
+                _ => None,
+              },
               _ => None,
             });
         let class_index = self.register_class(class_name, extends_name);
@@ -519,6 +523,9 @@ impl AstIndex {
           }
         }
       }
+      AstExpr::Instantiation(inst) => {
+        self.index_expr(&inst.stx.expression, file, cancelled);
+      }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter() {
           match elem {
@@ -580,6 +587,10 @@ impl AstIndex {
             .as_ref()
             .and_then(|expr| match expr.stx.as_ref() {
               AstExpr::Id(id) => Some(id.stx.name.clone()),
+              AstExpr::Instantiation(inst) => match inst.stx.expression.stx.as_ref() {
+                AstExpr::Id(id) => Some(id.stx.name.clone()),
+                _ => None,
+              },
               _ => None,
             });
         let class_index = self.register_class(class_name, extends_name);

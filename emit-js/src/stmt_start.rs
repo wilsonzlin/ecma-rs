@@ -150,6 +150,7 @@ fn expr_tokens(expr: &Node<Expr>) -> TokenPrefix {
         TokenKind::BracketOpen
       },
     ),
+    Expr::Instantiation(instantiation) => expr_tokens(&instantiation.stx.expression),
     Expr::Call(call) => prefix_with_fallback(
       &call.stx.callee,
       if call.stx.optional_chaining {
@@ -311,6 +312,10 @@ fn contextual_keyword_start_from_expr(expr: &Expr) -> Option<ContextualKeywordSt
     Expr::Call(call) => {
       propagate_keyword_start(call.stx.callee.stx.as_ref(), NextTokenAfterKeyword::Other)
     }
+    Expr::Instantiation(instantiation) => propagate_keyword_start(
+      instantiation.stx.expression.stx.as_ref(),
+      NextTokenAfterKeyword::Other,
+    ),
     Expr::Binary(binary) => propagate_keyword_start(
       binary.stx.left.stx.as_ref(),
       if binary.stx.operator == OperatorName::In {

@@ -72,7 +72,9 @@ pub fn expr_prec(expr: &Node<Expr>) -> Prec {
     Expr::Cond(_) => Prec::new(OPERATORS[&OperatorName::Conditional].precedence),
     Expr::Unary(unary) => Prec::new(OPERATORS[&unary.stx.operator].precedence),
     Expr::UnaryPostfix(unary) => Prec::new(OPERATORS[&unary.stx.operator].precedence),
-    Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) => CALL_MEMBER_PRECEDENCE,
+    Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Instantiation(_) => {
+      CALL_MEMBER_PRECEDENCE
+    }
     Expr::TaggedTemplate(_) => CALL_MEMBER_PRECEDENCE,
     Expr::NonNullAssertion(_) => NON_NULL_ASSERTION_PRECEDENCE,
     Expr::TypeAssertion(_) => TYPE_ASSERTION_PRECEDENCE,
@@ -118,6 +120,7 @@ pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
     Expr::Call(call) => {
       call.stx.optional_chaining || starts_with_optional_chaining(&call.stx.callee)
     }
+    Expr::Instantiation(inst) => starts_with_optional_chaining(&inst.stx.expression),
     _ => false,
   }
 }

@@ -8,7 +8,8 @@ use parse_js::ast::expr::{
     LitStrExpr, LitTemplatePart,
   },
   ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ClassExpr, ComputedMemberExpr, CondExpr, Expr,
-  FuncExpr, IdExpr, ImportExpr, MemberExpr, TaggedTemplateExpr, UnaryExpr, UnaryPostfixExpr,
+  FuncExpr, IdExpr, ImportExpr, InstantiationExpr, MemberExpr, TaggedTemplateExpr, UnaryExpr,
+  UnaryPostfixExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -112,6 +113,7 @@ where
       Expr::Call(call) => self.emit_call(call),
       Expr::Member(member) => self.emit_member(member),
       Expr::ComputedMember(member) => self.emit_computed_member(member),
+      Expr::Instantiation(instantiation) => self.emit_instantiation_expr(instantiation),
       Expr::TaggedTemplate(tagged) => self.emit_tagged_template(tagged),
       Expr::NonNullAssertion(non_null) => self.emit_non_null_assertion(non_null),
       Expr::TypeAssertion(assertion) => self.emit_type_assertion(assertion),
@@ -717,6 +719,22 @@ where
     })
   }
 
+  fn emit_instantiation_expr(&mut self, instantiation: &Node<InstantiationExpr>) -> EmitResult {
+    with_node_context(instantiation.loc, || {
+      self.emit_memberish_receiver(&instantiation.stx.expression)?;
+      write!(self.out, "<")?;
+      for (i, arg) in instantiation.stx.type_arguments.iter().enumerate() {
+        if i > 0 {
+          write!(self.out, ",")?;
+          self.out.write_str(self.sep())?;
+        }
+        self.emit_type(arg)?;
+      }
+      write!(self.out, ">")?;
+      Ok(())
+    })
+  }
+
   fn emit_template_literal(&mut self, parts: &[LitTemplatePart]) -> EmitResult {
     let mut raw = String::new();
     raw.push('`');
@@ -909,6 +927,7 @@ fn expr_starts_with_brace(expr: &Node<Expr>) -> bool {
     Expr::LitObj(_) | Expr::ObjPat(_) => true,
     Expr::Binary(binary) => expr_starts_with_brace(&binary.stx.left),
     Expr::Call(call) => expr_starts_with_brace(&call.stx.callee),
+    Expr::Instantiation(instantiation) => expr_starts_with_brace(&instantiation.stx.expression),
     Expr::Member(member) => expr_starts_with_brace(&member.stx.left),
     Expr::ComputedMember(member) => expr_starts_with_brace(&member.stx.object),
     Expr::TaggedTemplate(tagged) => expr_starts_with_brace(&tagged.stx.function),

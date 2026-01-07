@@ -80,6 +80,7 @@ pub enum Expr {
   ObjPat(Node<ObjPat>),
 
   // TypeScript expressions
+  Instantiation(Node<InstantiationExpr>),
   TypeAssertion(Node<TypeAssertionExpr>),
   NonNullAssertion(Node<NonNullAssertionExpr>),
   SatisfiesExpr(Node<SatisfiesExpr>),
@@ -218,6 +219,14 @@ pub struct UnaryPostfixExpr {
 }
 
 // TypeScript expressions
+
+/// Instantiation expression: expr<TypeArgs>
+/// TypeScript 4.7+ allows this without an immediate call suffix (e.g. `foo<string>`).
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct InstantiationExpr {
+  pub expression: Box<Node<Expr>>,
+  pub type_arguments: Vec<Node<TypeExpr>>,
+}
 
 /// Type assertion: value as Type or value as const
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]

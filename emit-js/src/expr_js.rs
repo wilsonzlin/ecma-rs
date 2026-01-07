@@ -78,7 +78,9 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     | Expr::LitTemplate(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::ArrPat(_) | Expr::IdPat(_) | Expr::ObjPat(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) => Ok(CALL_MEMBER_PRECEDENCE),
+    Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Instantiation(_) => {
+      Ok(CALL_MEMBER_PRECEDENCE)
+    }
     Expr::Binary(binary) => Ok(
       OPERATORS
         .get(&binary.stx.operator)
@@ -143,6 +145,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::Call(call) => emit_call(em, call, ctx)?,
     Expr::Member(member) => emit_member(em, member, ctx)?,
     Expr::ComputedMember(member) => emit_computed_member(em, member, ctx)?,
+    Expr::Instantiation(instantiation) => emit_instantiation_expr(em, instantiation, ctx)?,
     Expr::Unary(unary) => emit_unary(em, unary, ctx)?,
     Expr::UnaryPostfix(postfix) => emit_postfix(em, postfix, ctx)?,
     Expr::NonNullAssertion(non_null) => {
@@ -284,6 +287,26 @@ fn emit_computed_member(
   }
   emit_expr_with_min_prec(em, &member.stx.member, 1, ctx)?;
   em.write_punct("]");
+  Ok(())
+}
+
+fn emit_instantiation_expr(
+  em: &mut Emitter,
+  instantiation: &Node<InstantiationExpr>,
+  ctx: ExprCtx,
+) -> EmitResult {
+  emit_expr_with_min_prec(em, &instantiation.stx.expression, CALL_MEMBER_PRECEDENCE, ctx)?;
+  em.write_punct("<");
+  for (idx, arg) in instantiation.stx.type_arguments.iter().enumerate() {
+    if idx > 0 {
+      em.write_punct(",");
+      if !em.minify() {
+        em.write_space();
+      }
+    }
+    emit_ts_type(em, arg)?;
+  }
+  em.write_punct(">");
   Ok(())
 }
 
@@ -927,6 +950,7 @@ fn expr_starts_with_brace(expr: &Node<Expr>) -> bool {
     Expr::LitObj(_) | Expr::ObjPat(_) => true,
     Expr::Binary(binary) => expr_starts_with_brace(&binary.stx.left),
     Expr::Call(call) => expr_starts_with_brace(&call.stx.callee),
+    Expr::Instantiation(instantiation) => expr_starts_with_brace(&instantiation.stx.expression),
     Expr::Member(member) => expr_starts_with_brace(&member.stx.left),
     Expr::ComputedMember(member) => expr_starts_with_brace(&member.stx.object),
     Expr::TaggedTemplate(tagged) => expr_starts_with_brace(&tagged.stx.function),

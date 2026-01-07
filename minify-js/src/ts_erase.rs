@@ -3068,6 +3068,11 @@ fn rewrite_enum_member_refs(
             self.rewrite_pat(rest);
           }
         }
+        Expr::Instantiation(inst) => {
+          // Instantiation expressions are erased later; we only need to traverse
+          // the underlying expression for enum/member reference rewriting.
+          self.rewrite_expr(inst.stx.expression.as_mut());
+        }
         Expr::Id(_)
         | Expr::ImportMeta(_)
         | Expr::NewTarget(_)
@@ -4007,6 +4012,7 @@ fn strip_expr(ctx: &mut StripContext, expr: Node<Expr>) -> Node<Expr> {
     }
     Expr::ArrPat(pat) => new_node(loc, assoc, Expr::ArrPat(strip_arr_pat(ctx, pat))),
     Expr::ObjPat(pat) => new_node(loc, assoc, Expr::ObjPat(strip_obj_pat(ctx, pat))),
+    Expr::Instantiation(inst) => strip_expr(ctx, *inst.stx.expression),
     Expr::TypeAssertion(assert) => strip_expr(ctx, *assert.stx.expression),
     Expr::NonNullAssertion(assert) => strip_expr(ctx, *assert.stx.expression),
     Expr::SatisfiesExpr(assert) => strip_expr(ctx, *assert.stx.expression),

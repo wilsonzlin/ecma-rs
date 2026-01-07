@@ -172,6 +172,7 @@ fn expr_start_token(expr: &Node<Expr>) -> StmtStartToken {
     Expr::UnaryPostfix(expr) => expr_start_token(&expr.stx.argument),
     Expr::Binary(expr) => expr_start_token(&expr.stx.left),
     Expr::Call(expr) => expr_start_token(&expr.stx.callee),
+    Expr::Instantiation(expr) => expr_start_token(&expr.stx.expression),
     Expr::Member(expr) => expr_start_token(&expr.stx.left),
     Expr::ComputedMember(expr) => expr_start_token(&expr.stx.object),
     Expr::Cond(expr) => expr_start_token(&expr.stx.test),

@@ -16,6 +16,7 @@ use crate::ast::expr::CondExpr;
 use crate::ast::expr::Expr;
 use crate::ast::expr::FuncExpr;
 use crate::ast::expr::IdExpr;
+use crate::ast::expr::InstantiationExpr;
 use crate::ast::expr::MemberExpr;
 use crate::ast::expr::NewTarget;
 use crate::ast::expr::SuperExpr;
@@ -28,6 +29,7 @@ use crate::ast::node::Node;
 use crate::ast::node::ParenthesizedExpr;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
+use crate::ast::type_expr::TypeExpr;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
@@ -124,8 +126,12 @@ impl<'a> Parser<'a> {
     out
   }
 
-  fn ts_type_arguments_after_chevron_left(&mut self, ctx: ParseCtx) -> SyntaxResult<()> {
-    loop {
+  fn ts_type_arguments_after_chevron_left(
+    &mut self,
+    ctx: ParseCtx,
+  ) -> SyntaxResult<(Vec<Node<TypeExpr>>, crate::loc::Loc)> {
+    let mut type_arguments = Vec::new();
+    let close_loc = loop {
       if matches!(
         self.peek().typ,
         TT::ChevronRight
@@ -135,18 +141,74 @@ impl<'a> Parser<'a> {
           | TT::ChevronRightChevronRightChevronRight
           | TT::ChevronRightChevronRightChevronRightEquals
       ) {
-        self.require_chevron_right()?;
-        break;
+        break self.require_chevron_right()?.loc;
       }
 
-      let _ = self.type_expr(ctx)?;
+      type_arguments.push(self.type_expr(ctx)?);
       if self.consume_if(TT::Comma).is_match() {
         continue;
       }
-      self.require_chevron_right()?;
-      break;
-    }
-    Ok(())
+      break self.require_chevron_right()?.loc;
+    };
+    Ok((type_arguments, close_loc))
+  }
+
+  fn can_start_expression(typ: TT) -> bool {
+    use TT::*;
+    matches!(
+      typ,
+      // Identifiers.
+      Identifier | PrivateMember
+        // Literals.
+        | LiteralBigInt
+        | LiteralFalse
+        | LiteralNull
+        | LiteralNumber
+        | LiteralRegex
+        | LiteralString
+        | LiteralTemplatePartString
+        | LiteralTemplatePartStringEnd
+        | LiteralTrue
+        // Groupings/literals.
+        | ParenthesisOpen
+        | BracketOpen
+        | BraceOpen
+        // TS/JSX: could start JSX or type assertion.
+        | ChevronLeft
+        // Keywords that begin primary expressions.
+        | KeywordThis
+        | KeywordSuper
+        | KeywordNew
+        | KeywordImport
+        | KeywordFunction
+        | KeywordClass
+        // Unary operators.
+        | Plus
+        | Hyphen
+        | Exclamation
+        | Tilde
+        | PlusPlus
+        | HyphenHyphen
+        | KeywordAwait
+        | KeywordDelete
+        | KeywordTypeof
+        | KeywordVoid
+        | KeywordYield
+        // Decorated class expression.
+        | At
+        // Error recovery.
+        | Invalid
+    )
+  }
+
+  fn can_follow_type_arguments_in_expression(next: TT) -> bool {
+    matches!(
+      next,
+      TT::ParenthesisOpen
+        | TT::QuestionDotParenthesisOpen
+        | TT::BracketOpen
+        | TT::QuestionDotBracketOpen
+    ) || !Self::can_start_expression(next)
   }
 
   /// Parses a parenthesised expression like `(a + b)`.
@@ -978,43 +1040,41 @@ impl<'a> Parser<'a> {
           if self.is_typescript()
             && matches!(
               *left.stx,
-              Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
-            )
-          {
-            let after_lt = self.checkpoint();
-            if self.ts_type_arguments_after_chevron_left(ctx).is_ok() {
-              let next = self.peek();
+               Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
+             )
+           {
+            if let Some((type_arguments, close_loc)) = self.rewindable(|p| {
+              let (type_arguments, close_loc) = match p.ts_type_arguments_after_chevron_left(ctx) {
+                Ok(res) => res,
+                Err(_) => return Ok(None),
+              };
+
+              let next = p.peek();
               let tagged_template = !next.preceded_by_line_terminator
                 && matches!(
                   next.typ,
                   TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
                 );
 
-              if next.typ == TT::ParenthesisOpen {
-                self.consume(); // (
-                let arguments = self.call_args(ctx).unwrap_or_default();
-                if let Ok(end) = self.require(TT::ParenthesisClose) {
-                  left = Node::new(
-                    left.loc + end.loc,
-                    CallExpr {
-                      optional_chaining: false,
-                      arguments,
-                      callee: left,
-                    },
-                  )
-                  .into_wrapped();
-                }
-                continue;
+              if p.allow_bare_ts_type_args
+                || tagged_template
+                || Self::can_follow_type_arguments_in_expression(next.typ)
+              {
+                return Ok(Some((type_arguments, close_loc)));
               }
 
-              if tagged_template || self.allow_bare_ts_type_args {
-                continue;
-              }
+              Ok(None)
+            })? {
+              left = Node::new(
+                left.loc + close_loc,
+                InstantiationExpr {
+                  expression: Box::new(left),
+                  type_arguments,
+                },
+              )
+              .into_wrapped();
+              continue;
             }
-
-            // Not actually type arguments in this context; discard any speculative
-            // lexing/splitting and treat `<` as a binary operator.
-            self.reset_to(after_lt.next_tok_i);
           }
           // Not type arguments, continue to binary operator handling
         }
