@@ -53,3 +53,12 @@ with code 0.
 - `host_error(primary: Option<Span>, message: impl Into<String>) -> Diagnostic`:
   Shortcut for host/environment failures with code `HOST0001`. Provide a span
   when available; otherwise a zero-length placeholder span is used.
+
+## Runnable example
+
+```bash
+cargo run -p diagnostics --example basic
+```
+
+This prints a rendered diagnostic using [`SimpleFiles`](./src/files.rs) as the
+[`render::SourceProvider`](./src/render.rs) implementation.

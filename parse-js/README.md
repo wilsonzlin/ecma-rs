@@ -4,6 +4,12 @@
 TypeScript conformance runners depend on the official TypeScript repository as a
 git submodule.
 
+For a small, copy/paste-friendly parsing example (no filesystem I/O):
+
+```bash
+cargo run -p parse-js --example basic
+```
+
 To run the conformance suite locally you must first initialize the submodule:
 
 ```bash
