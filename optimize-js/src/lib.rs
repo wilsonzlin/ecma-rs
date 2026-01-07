@@ -20,6 +20,12 @@
 //! .unwrap();
 //! println!("{}", String::from_utf8_lossy(&bytes));
 //! ```
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p optimize-js --example basic
+//! ```
 
 pub mod analysis;
 pub mod cfg;

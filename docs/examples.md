@@ -53,6 +53,15 @@ cargo run -p emit-js --example basic
 This example parses a small TypeScript snippet with `parse-js` and prints the
 minified emitted output.
 
+## `optimize-js`
+
+```bash
+cargo run -p optimize-js --example basic
+```
+
+This example compiles a small JS snippet to SSA, runs the optimizer, and
+decompiles the result back to emitted JavaScript.
+
 ## `minify-js`
 
 ```bash
