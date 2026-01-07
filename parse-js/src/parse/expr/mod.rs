@@ -762,9 +762,7 @@ impl<'a> Parser<'a> {
         // - In modules, top-level `await` is allowed but `yield` is never allowed outside a
         //   generator function.
         match operator.name {
-          OperatorName::Await => {
-            ctx.rules.await_expr_allowed
-          }
+          OperatorName::Await => ctx.rules.await_expr_allowed,
           OperatorName::Yield => ctx.rules.yield_expr_allowed,
           _ => true,
         }
@@ -907,7 +905,9 @@ impl<'a> Parser<'a> {
             } else {
               match operator.name {
                 OperatorName::Await | OperatorName::YieldDelegated => {
-                  return Err(next_token.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
+                  return Err(
+                    next_token.error(SyntaxErrorType::ExpectedSyntax("expression operand")),
+                  );
                 }
                 _ => {
                   // For unary operators without operand, use `undefined` identifier for error recovery
