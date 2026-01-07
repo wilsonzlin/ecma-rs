@@ -1336,73 +1336,77 @@ fn diff_diagnostics(
   tsc_diags: &[NormalizedDiagnostic],
   span_tolerance: u32,
 ) -> (TestOutcome, Option<MismatchDetail>) {
-  // Greedily match expected (tsc) diagnostics to actual (rust) diagnostics.
+  // Greedily match expected (tsc) diagnostics to actual (rust) diagnostics in
+  // staged passes.
   //
-  // This avoids cascaded mismatches when one side has an extra diagnostic near the
-  // top of the sorted list (the previous implementation zipped by index).
+  // Stage 1: Exact matches (file + span within tolerance + code + severity).
+  // Stage 2: Code/severity mismatches at the same span, so they don't cascade
+  //          into missing/extra results.
+  // Stage 3: Span mismatches for matching file + code.
+  // Stage 4: Remaining expected => missing; remaining actual => extra.
   //
   // Note: `EngineDiagnostics::ok` sorts diagnostics up-front for deterministic
   // output, so avoid cloning/sorting the full diagnostic arrays here.
   let mut used = vec![false; rust_diags.len()];
-  let mut missing_count: usize = 0;
-  let mut first_missing: Option<NormalizedDiagnostic> = None;
-  let mut first_extra: Option<NormalizedDiagnostic> = None;
-  let mut extra_count: usize = 0;
-  let mut first_span_mismatch: Option<(NormalizedDiagnostic, NormalizedDiagnostic)> = None;
-  let mut first_code_mismatch: Option<(NormalizedDiagnostic, NormalizedDiagnostic)> = None;
+  let mut unmatched: Vec<&NormalizedDiagnostic> = Vec::new();
 
   for tsc in tsc_diags {
     if let Some(idx) = find_diag(rust_diags, &used, |rust| {
       rust.file == tsc.file
-        && within_tolerance(rust.start, tsc.start, span_tolerance)
-        && within_tolerance(rust.end, tsc.end, span_tolerance)
+        && spans_match(rust, tsc, span_tolerance)
         && rust.codes_match(tsc)
+        && rust.severity_matches(tsc)
     }) {
       used[idx] = true;
-      continue;
+    } else {
+      unmatched.push(tsc);
     }
+  }
 
-    if let Some(idx) = find_best_diag(rust_diags, &used, tsc, |rust| {
-      rust.file == tsc.file
-        && within_tolerance(rust.start, tsc.start, span_tolerance)
-        && within_tolerance(rust.end, tsc.end, span_tolerance)
-        && !rust.codes_match(tsc)
-    }) {
+  let mut code_mismatch_count: usize = 0;
+  let mut first_code_mismatch: Option<(
+    NormalizedDiagnostic,
+    NormalizedDiagnostic,
+    CodeMismatchReason,
+  )> = None;
+  let mut unmatched_after_code: Vec<&NormalizedDiagnostic> = Vec::new();
+
+  for tsc in unmatched {
+    if let Some((idx, reason)) =
+      find_code_or_severity_mismatch(rust_diags, &used, tsc, span_tolerance)
+    {
       used[idx] = true;
+      code_mismatch_count += 1;
       if first_code_mismatch.is_none() {
-        first_code_mismatch = Some((rust_diags[idx].clone(), tsc.clone()));
+        first_code_mismatch = Some((rust_diags[idx].clone(), tsc.clone(), reason));
       }
-      continue;
+    } else {
+      unmatched_after_code.push(tsc);
     }
+  }
 
-    if let Some(idx) = find_best_diag(rust_diags, &used, tsc, |rust| {
-      rust.file == tsc.file && rust.codes_match(tsc)
-    }) {
+  let mut span_mismatch_count: usize = 0;
+  let mut first_span_mismatch: Option<(NormalizedDiagnostic, NormalizedDiagnostic)> = None;
+  let mut missing_count: usize = 0;
+  let mut first_missing: Option<NormalizedDiagnostic> = None;
+
+  for tsc in unmatched_after_code {
+    if let Some(idx) = find_span_mismatch(rust_diags, &used, tsc) {
       used[idx] = true;
+      span_mismatch_count += 1;
       if first_span_mismatch.is_none() {
         first_span_mismatch = Some((rust_diags[idx].clone(), tsc.clone()));
       }
-      continue;
-    }
-
-    missing_count += 1;
-    if first_missing.is_none() {
-      first_missing = Some(tsc.clone());
+    } else {
+      missing_count += 1;
+      if first_missing.is_none() {
+        first_missing = Some(tsc.clone());
+      }
     }
   }
 
-  if missing_count > 0 {
-    let tsc = first_missing.expect("missing_count implies at least one missing diagnostic");
-    return (
-      TestOutcome::RustMissingDiagnostics,
-      Some(MismatchDetail {
-        message: format!("rust missed {} diagnostic(s)", missing_count),
-        rust: None,
-        tsc: Some(tsc),
-      }),
-    );
-  }
-
+  let mut extra_count: usize = 0;
+  let mut first_extra: Option<NormalizedDiagnostic> = None;
   for (idx, rust) in rust_diags.iter().enumerate() {
     if !used[idx] {
       extra_count += 1;
@@ -1412,12 +1416,32 @@ fn diff_diagnostics(
     }
   }
 
+  if missing_count > 0 {
+    let tsc = first_missing.expect("missing_count implies at least one missing diagnostic");
+    return (
+      TestOutcome::RustMissingDiagnostics,
+      Some(MismatchDetail {
+        message: format!(
+          "rust missing {} diagnostic(s); first missing: {}",
+          missing_count,
+          describe(&tsc)
+        ),
+        rust: None,
+        tsc: Some(tsc),
+      }),
+    );
+  }
+
   if extra_count > 0 {
     let rust = first_extra.expect("extra_count implies at least one extra diagnostic");
     return (
       TestOutcome::RustExtraDiagnostics,
       Some(MismatchDetail {
-        message: format!("rust produced {} extra diagnostic(s)", extra_count),
+        message: format!(
+          "rust produced {} extra diagnostic(s); first extra: {}",
+          extra_count,
+          describe(&rust)
+        ),
         rust: Some(rust),
         tsc: None,
       }),
@@ -1425,13 +1449,14 @@ fn diff_diagnostics(
   }
 
   if let Some((rust, tsc)) = first_span_mismatch {
+    let distance = span_distance(&rust, &tsc);
     return (
       TestOutcome::SpanMismatch,
       Some(MismatchDetail {
         message: format!(
-          "span mismatch between {} and {}",
+          "span mismatch ({span_mismatch_count} mismatch(es); distance {distance}) between expected {} and actual {}",
+          describe(&tsc),
           describe(&rust),
-          describe(&tsc)
         ),
         rust: Some(rust),
         tsc: Some(tsc),
@@ -1439,15 +1464,31 @@ fn diff_diagnostics(
     );
   }
 
-  if let Some((rust, tsc)) = first_code_mismatch {
+  if let Some((rust, tsc, reason)) = first_code_mismatch {
+    let expected_sev = tsc.severity.as_deref().unwrap_or("<none>");
+    let actual_sev = rust.severity.as_deref().unwrap_or("<none>");
+    let message = match reason {
+      CodeMismatchReason::Code => format!(
+        "code mismatch ({code_mismatch_count} mismatch(es)) between expected {} and actual {}",
+        describe(&tsc),
+        describe(&rust)
+      ),
+      CodeMismatchReason::Severity => format!(
+        "severity mismatch ({code_mismatch_count} mismatch(es); expected {expected_sev}, got {actual_sev}) between expected {} and actual {}",
+        describe(&tsc),
+        describe(&rust)
+      ),
+      CodeMismatchReason::CodeAndSeverity => format!(
+        "code and severity mismatch ({code_mismatch_count} mismatch(es); expected {expected_sev}, got {actual_sev}) between expected {} and actual {}",
+        describe(&tsc),
+        describe(&rust)
+      ),
+    };
+
     return (
       TestOutcome::CodeMismatch,
       Some(MismatchDetail {
-        message: format!(
-          "code mismatch between {} and {}",
-          describe(&rust),
-          describe(&tsc)
-        ),
+        message,
         rust: Some(rust),
         tsc: Some(tsc),
       }),
@@ -1468,21 +1509,65 @@ where
     .map(|(idx, _)| idx)
 }
 
-fn find_best_diag<F>(
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodeMismatchReason {
+  Code,
+  Severity,
+  CodeAndSeverity,
+}
+
+fn find_code_or_severity_mismatch(
   actual: &[NormalizedDiagnostic],
   used: &[bool],
   expected: &NormalizedDiagnostic,
-  mut predicate: F,
-) -> Option<usize>
-where
-  F: FnMut(&NormalizedDiagnostic) -> bool,
-{
-  let mut best: Option<(usize, u32)> = None;
-  for (idx, diag) in actual.iter().enumerate() {
-    if used[idx] || !predicate(diag) {
+  span_tolerance: u32,
+) -> Option<(usize, CodeMismatchReason)> {
+  let mut best: Option<(usize, u32, CodeMismatchReason)> = None;
+  for (idx, act) in actual.iter().enumerate() {
+    if used[idx] || act.file != expected.file {
       continue;
     }
-    let distance = expected.start.abs_diff(diag.start) + expected.end.abs_diff(diag.end);
+    if !spans_match(expected, act, span_tolerance) {
+      continue;
+    }
+
+    let codes_match = expected.codes_match(act);
+    let severity_match = expected.severity_matches(act);
+    if codes_match && severity_match {
+      continue;
+    }
+
+    let reason = match (codes_match, severity_match) {
+      (true, false) => CodeMismatchReason::Severity,
+      (false, true) => CodeMismatchReason::Code,
+      (false, false) => CodeMismatchReason::CodeAndSeverity,
+      (true, true) => unreachable!("exact matches handled in stage one"),
+    };
+
+    let distance = span_distance(expected, act);
+    if best
+      .as_ref()
+      .map(|(_, best_distance, _)| distance < *best_distance)
+      .unwrap_or(true)
+    {
+      best = Some((idx, distance, reason));
+    }
+  }
+
+  best.map(|(idx, _, reason)| (idx, reason))
+}
+
+fn find_span_mismatch(
+  actual: &[NormalizedDiagnostic],
+  used: &[bool],
+  expected: &NormalizedDiagnostic,
+) -> Option<usize> {
+  let mut best: Option<(usize, u32)> = None;
+  for (idx, act) in actual.iter().enumerate() {
+    if used[idx] || act.file != expected.file || !expected.codes_match(act) {
+      continue;
+    }
+    let distance = span_distance(expected, act);
     if best
       .as_ref()
       .map(|(_, best_distance)| distance < *best_distance)
@@ -1492,6 +1577,17 @@ where
     }
   }
   best.map(|(idx, _)| idx)
+}
+
+fn spans_match(a: &NormalizedDiagnostic, b: &NormalizedDiagnostic, span_tolerance: u32) -> bool {
+  within_tolerance(a.start, b.start, span_tolerance)
+    && within_tolerance(a.end, b.end, span_tolerance)
+}
+
+fn span_distance(a: &NormalizedDiagnostic, b: &NormalizedDiagnostic) -> u32 {
+  a.start
+    .abs_diff(b.start)
+    .saturating_add(a.end.abs_diff(b.end))
 }
 
 fn summarize(results: &[TestResult]) -> Summary {
@@ -2103,6 +2199,134 @@ mod tests {
     let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
     assert_eq!(outcome, TestOutcome::CodeMismatch);
     assert!(detail.is_some());
+  }
+
+  #[test]
+  fn diff_respects_span_tolerance() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+        "TS2345".into(),
+      )),
+      file: Some("a.ts".into()),
+      start: 1,
+      end: 5,
+      severity: Some("error".into()),
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 4,
+      severity: Some("error".into()),
+      message: None,
+    }];
+
+    let (outcome, _) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::SpanMismatch);
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 1);
+    assert_eq!(outcome, TestOutcome::Match);
+    assert!(detail.is_none());
+  }
+
+  #[test]
+  fn diff_reports_severity_mismatch_as_code_mismatch() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+        "TS2345".into(),
+      )),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: Some("warning".into()),
+      message: None,
+    }];
+    let tsc = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2345)),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: Some("error".into()),
+      message: None,
+    }];
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::CodeMismatch);
+    let detail = detail.expect("expected mismatch detail");
+    assert!(
+      detail.message.contains("severity mismatch"),
+      "{}",
+      detail.message
+    );
+  }
+
+  #[test]
+  fn diff_does_not_mispair_when_multiple_expected_diagnostics_share_span() {
+    let rust = vec![
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+          "TS2222".into(),
+        )),
+        file: Some("a.ts".into()),
+        start: 0,
+        end: 1,
+        severity: Some("error".into()),
+        message: None,
+      },
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Rust(
+          "TS1111".into(),
+        )),
+        file: Some("a.ts".into()),
+        start: 10,
+        end: 11,
+        severity: Some("error".into()),
+        message: None,
+      },
+    ];
+    let tsc = vec![
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(1111)),
+        file: Some("a.ts".into()),
+        start: 0,
+        end: 1,
+        severity: Some("error".into()),
+        message: None,
+      },
+      NormalizedDiagnostic {
+        engine: crate::diagnostic_norm::DiagnosticEngine::Tsc,
+        code: Some(crate::diagnostic_norm::DiagnosticCode::Tsc(2222)),
+        file: Some("a.ts".into()),
+        start: 0,
+        end: 1,
+        severity: Some("error".into()),
+        message: None,
+      },
+    ];
+
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::SpanMismatch);
+    let detail = detail.expect("expected mismatch detail");
+    assert!(
+      detail.message.contains("span mismatch"),
+      "{}",
+      detail.message
+    );
+    assert!(
+      matches!(
+        detail.tsc.as_ref().and_then(|d| d.code.as_ref()),
+        Some(crate::diagnostic_norm::DiagnosticCode::Tsc(1111))
+      ),
+      "expected the unmatched diagnostic to be TS1111"
+    );
   }
 
   #[test]
@@ -3054,8 +3278,16 @@ echo '{"diagnostics":[]}'
     let dir = tempdir().expect("tempdir");
     // Use a minimal lib set so the "fast" case is actually fast (default libs
     // include DOM, which is intentionally large).
-    fs::write(dir.path().join("fast.ts"), "// @lib: es5\nconst fast = 1;\n").unwrap();
-    fs::write(dir.path().join("slow.ts"), "// @lib: es5\nconst slow = 1;\n").unwrap();
+    fs::write(
+      dir.path().join("fast.ts"),
+      "// @lib: es5\nconst fast = 1;\n",
+    )
+    .unwrap();
+    fs::write(
+      dir.path().join("slow.ts"),
+      "// @lib: es5\nconst slow = 1;\n",
+    )
+    .unwrap();
     // Allow enough time for a small "fast" case to complete while still
     // ensuring a deliberately slowed case times out quickly.
     let _env = EnvGuard::set(HARNESS_SLEEP_ENV, "slow=5000");
