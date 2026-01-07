@@ -231,6 +231,120 @@ fn gen_decl_kind(cursor: &mut ByteCursor<'_>) -> ts::DeclKind {
   }
 }
 
+fn gen_cluster_decl_kind(cursor: &mut ByteCursor<'_>, prev: &ts::DeclKind) -> ts::DeclKind {
+  let prefers_compatible = (cursor.next_u8() % 4) != 0;
+  match prev {
+    ts::DeclKind::Function => {
+      let pool = if prefers_compatible {
+        [
+          ts::DeclKind::Function,
+          ts::DeclKind::Namespace,
+          ts::DeclKind::Var,
+        ]
+        .as_slice()
+      } else {
+        [
+          ts::DeclKind::Class,
+          ts::DeclKind::Enum,
+          ts::DeclKind::Interface,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::Namespace => {
+      let pool = if prefers_compatible {
+        [
+          ts::DeclKind::Namespace,
+          ts::DeclKind::Function,
+          ts::DeclKind::Class,
+          ts::DeclKind::Enum,
+        ]
+        .as_slice()
+      } else {
+        [
+          ts::DeclKind::Var,
+          ts::DeclKind::Interface,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::Class => {
+      let pool = if prefers_compatible {
+        [ts::DeclKind::Namespace, ts::DeclKind::Interface].as_slice()
+      } else {
+        [
+          ts::DeclKind::Class,
+          ts::DeclKind::Function,
+          ts::DeclKind::Var,
+          ts::DeclKind::Enum,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::Enum => {
+      let pool = if prefers_compatible {
+        [ts::DeclKind::Enum, ts::DeclKind::Namespace].as_slice()
+      } else {
+        [
+          ts::DeclKind::Class,
+          ts::DeclKind::Function,
+          ts::DeclKind::Var,
+          ts::DeclKind::Interface,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::Var => {
+      let pool = if prefers_compatible {
+        [ts::DeclKind::Var, ts::DeclKind::Function].as_slice()
+      } else {
+        [
+          ts::DeclKind::Namespace,
+          ts::DeclKind::Class,
+          ts::DeclKind::Enum,
+          ts::DeclKind::Interface,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::Interface => {
+      let pool = if prefers_compatible {
+        [ts::DeclKind::Interface, ts::DeclKind::Class].as_slice()
+      } else {
+        [
+          ts::DeclKind::Namespace,
+          ts::DeclKind::Function,
+          ts::DeclKind::Var,
+          ts::DeclKind::Enum,
+          ts::DeclKind::TypeAlias,
+        ]
+        .as_slice()
+      };
+      pool[cursor.next_usize(pool.len())].clone()
+    }
+    ts::DeclKind::TypeAlias => {
+      // Type aliases never participate in merging, so keep generating more to
+      // exercise duplicate identifier diagnostics.
+      ts::DeclKind::TypeAlias
+    }
+    ts::DeclKind::ImportBinding => {
+      // Import bindings are only compatible with other import bindings; keep the
+      // same kind to hit duplicate binding paths.
+      ts::DeclKind::ImportBinding
+    }
+  }
+}
+
 fn gen_exported(cursor: &mut ByteCursor<'_>) -> ts::Exported {
   match cursor.next_usize(3) {
     0 => ts::Exported::No,
@@ -244,21 +358,25 @@ fn gen_decl(
   spans: &mut SpanCursor,
   names: &[String],
   name_override: Option<String>,
+  kind_override: Option<ts::DeclKind>,
+  exported_override: Option<ts::Exported>,
   allow_import_binding: bool,
   file_id: FileId,
 ) -> ts::Decl {
-  let kind = if allow_import_binding && cursor.next_usize(12) == 0 {
-    ts::DeclKind::ImportBinding
-  } else {
-    gen_decl_kind(cursor)
-  };
+  let kind = kind_override.unwrap_or_else(|| {
+    if allow_import_binding && cursor.next_usize(12) == 0 {
+      ts::DeclKind::ImportBinding
+    } else {
+      gen_decl_kind(cursor)
+    }
+  });
   ts::Decl {
     def_id: ts::DefId::new(file_id, cursor.next_u32()),
     name: name_override.unwrap_or_else(|| maybe_pick_name(cursor, names, "d")),
     kind,
     is_ambient: cursor.next_bool(),
     is_global: cursor.next_bool(),
-    exported: gen_exported(cursor),
+    exported: exported_override.unwrap_or_else(|| gen_exported(cursor)),
     span: spans.next_range(cursor),
   }
 }
@@ -472,10 +590,30 @@ fn gen_ambient_module(
   let decl_count = cursor.next_usize(MAX_TS_DECLS.min(8) + 1);
   let mut decls = Vec::new();
   let mut prev_name: Option<String> = None;
+  let mut prev_kind: Option<ts::DeclKind> = None;
   for _ in 0..decl_count {
-    let name = maybe_reuse_name(cursor, prev_name.as_deref(), names, "d");
-    prev_name = Some(name.clone());
-    let mut decl = gen_decl(cursor, spans, names, Some(name), true, file_id);
+    let prev_name_ref = prev_name.as_deref();
+    let name = maybe_reuse_name(cursor, prev_name_ref, names, "d");
+    let reused = prev_name_ref.is_some_and(|prev| prev == name);
+    let kind_override = if reused && cursor.next_bool() {
+      prev_kind
+        .as_ref()
+        .map(|prev| gen_cluster_decl_kind(cursor, prev))
+    } else {
+      None
+    };
+    let mut decl = gen_decl(
+      cursor,
+      spans,
+      names,
+      Some(name.clone()),
+      kind_override,
+      None,
+      true,
+      file_id,
+    );
+    prev_name = Some(name);
+    prev_kind = Some(decl.kind.clone());
     // Ambient module declarations default to `declare`, but still allow callers to
     // toggle flags via the generator.
     decl.is_ambient = true;
@@ -573,17 +711,46 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
   let decl_count = cursor.next_usize(MAX_TS_DECLS + 1);
   let mut decls = Vec::new();
   let mut prev_name: Option<String> = None;
+  let mut prev_kind: Option<ts::DeclKind> = None;
+  let mut prev_exported: Option<bool> = None;
   for _ in 0..decl_count {
-    let name = maybe_reuse_name(cursor, prev_name.as_deref(), &names, "d");
-    prev_name = Some(name.clone());
-    decls.push(gen_decl(
+    let prev_name_ref = prev_name.as_deref();
+    let name = maybe_reuse_name(cursor, prev_name_ref, &names, "d");
+    let reused = prev_name_ref.is_some_and(|prev| prev == name);
+    let kind_override = if reused && cursor.next_bool() {
+      prev_kind
+        .as_ref()
+        .map(|prev| gen_cluster_decl_kind(cursor, prev))
+    } else {
+      None
+    };
+    let exported_override = if reused && cursor.next_bool() {
+      prev_exported.map(|was_exported| {
+        if was_exported {
+          ts::Exported::No
+        } else if cursor.next_bool() {
+          ts::Exported::Named
+        } else {
+          ts::Exported::Default
+        }
+      })
+    } else {
+      None
+    };
+    let decl = gen_decl(
       cursor,
       &mut spans,
       &names,
-      Some(name),
+      Some(name.clone()),
+      kind_override,
+      exported_override,
       true,
       file_id,
-    ));
+    );
+    prev_name = Some(name);
+    prev_kind = Some(decl.kind.clone());
+    prev_exported = Some(!matches!(decl.exported, ts::Exported::No));
+    decls.push(decl);
   }
 
   let type_import_count = cursor.next_usize(3);
