@@ -1835,6 +1835,52 @@ fn global_symbol_groups_are_deterministic() {
 }
 
 #[test]
+fn global_symbol_table_is_deterministic_across_root_orders() {
+  let file_a = FileId(4200);
+  let file_b = FileId(4201);
+
+  let mut a = HirFile::script(file_a);
+  a.decls.push(Decl {
+    def_id: DefId::new(file_a, 0),
+    name: "Foo".to_string(),
+    kind: DeclKind::Function,
+    is_ambient: false,
+    is_global: false,
+    exported: Exported::No,
+    span: span(0),
+  });
+
+  let mut b = HirFile::script(file_b);
+  b.decls.push(Decl {
+    def_id: DefId::new(file_b, 0),
+    name: "Foo".to_string(),
+    kind: DeclKind::Namespace,
+    is_ambient: false,
+    is_global: false,
+    exported: Exported::No,
+    span: span(1),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (baseline, diags) =
+    bind_ts_program(&[file_a, file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+  let baseline_symbols = symbol_table_snapshot(baseline.symbols());
+
+  let (swapped, diags) =
+    bind_ts_program(&[file_b, file_a], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+  let swapped_symbols = symbol_table_snapshot(swapped.symbols());
+
+  assert_eq!(baseline_symbols, swapped_symbols);
+}
+
+#[test]
 fn duplicate_export_has_two_labels() {
   let file_a = FileId(60);
   let mut a = HirFile::module(file_a);

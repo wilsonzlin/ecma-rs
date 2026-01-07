@@ -2599,6 +2599,11 @@ fn merge_decl_into_group(
     return (group, SymbolId(0));
   }
 
+  if namespaces.is_single() {
+    let sym = symbols.alloc_symbol(owner, name, namespaces, origin.clone());
+    symbols.add_decl_to_symbol(sym, decl, namespaces);
+  }
+
   if let SymbolGroupKind::Merged(sym) = group.kind.clone() {
     let existing = symbols.symbol(sym).clone();
     if existing.namespaces.contains(namespaces) {

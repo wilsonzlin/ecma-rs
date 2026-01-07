@@ -930,77 +930,6 @@ fn snapshot_ts_program(sem: &ts::TsProgramSemantics) -> TsProgramSnapshot {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct ReachableTablesSnapshot {
-  symbols: Vec<ts::SymbolData>,
-  decls: Vec<ts::DeclData>,
-}
-
-fn snapshot_reachable_tables(sem: &ts::TsProgramSemantics) -> ReachableTablesSnapshot {
-  let symbols = sem.symbols();
-  let mut symbol_ids: BTreeSet<ts::SymbolId> = BTreeSet::new();
-
-  let mut record_group = |group: &ts::SymbolGroup| {
-    for ns in [
-      ts::Namespace::VALUE,
-      ts::Namespace::TYPE,
-      ts::Namespace::NAMESPACE,
-    ] {
-      if let Some(sym) = group.symbol_for(ns, symbols) {
-        symbol_ids.insert(sym);
-      }
-    }
-  };
-
-  for groups in sem.module_symbols.values() {
-    for group in groups.values() {
-      record_group(group);
-    }
-  }
-  for exports in sem.module_exports.values() {
-    for group in exports.values() {
-      record_group(group);
-    }
-  }
-  for group in sem.global_symbols.values() {
-    record_group(group);
-  }
-  for groups in sem.ambient_module_symbols.values() {
-    for group in groups.values() {
-      record_group(group);
-    }
-  }
-  for exports in sem.ambient_module_exports.values() {
-    for group in exports.values() {
-      record_group(group);
-    }
-  }
-
-  let mut snapshot_symbols: Vec<ts::SymbolData> = symbol_ids
-    .iter()
-    .map(|id| symbols.symbol(*id).clone())
-    .collect();
-  snapshot_symbols.sort_by_key(|s| s.id);
-
-  let mut decl_ids: BTreeSet<ts::DeclId> = BTreeSet::new();
-  for sym in &snapshot_symbols {
-    for ns in sym.namespaces.iter_bits() {
-      decl_ids.extend(sym.decls_for(ns).iter().copied());
-    }
-  }
-
-  let mut snapshot_decls: Vec<ts::DeclData> = decl_ids
-    .iter()
-    .map(|id| symbols.decl(*id).clone())
-    .collect();
-  snapshot_decls.sort_by_key(|d| d.id);
-
-  ReachableTablesSnapshot {
-    symbols: snapshot_symbols,
-    decls: snapshot_decls,
-  }
-}
-
 /// Fuzz entry point that generates synthetic `ts::HirFile` inputs heavy on
 /// declaration merging and export computation. Runs the TS program binder twice
 /// to assert deterministic exports and symbol table allocation.
@@ -1054,19 +983,13 @@ pub fn fuzz_ts_binder(data: &[u8]) {
   assert_eq!(sem1.def_to_symbol, sem2.def_to_symbol);
 
   if roots.len() > 1 {
-    // Root order should not affect observable exports, diagnostics, or def → symbol
-    // mapping. We also expect all symbols/decls reachable from the final symbol
-    // groups/export maps to be stable. Internal symbol allocation can still vary
-    // due to intermediate (now-orphaned) content-addressed symbols created
-    // before later declaration merging (e.g. VALUE-only symbol allocated before
-    // a VALUE|NAMESPACE merge).
+    // Root order should not affect exports, diagnostics, def → symbol mapping, or
+    // symbol table allocation.
     let (sem3, diags3) = bind(&reversed_roots);
     assert_eq!(diags1, diags3);
     assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem3));
-    assert_eq!(
-      snapshot_reachable_tables(&sem1),
-      snapshot_reachable_tables(&sem3)
-    );
+    assert_eq!(sem1.symbols.symbols, sem3.symbols.symbols);
+    assert_eq!(sem1.symbols.decls, sem3.symbols.decls);
     assert_eq!(sem1.def_to_symbol, sem3.def_to_symbol);
   }
 }
