@@ -10,6 +10,7 @@ use crate::rename::UsageData;
 
 mod cleanup;
 mod const_fold;
+mod cf_rewrite;
 mod dce;
 mod prop_rewrite;
 mod sem_rewrite;
@@ -37,6 +38,7 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
   // subsequent passes always operate on up-to-date scope/symbol associations.
   let mut post = PassPipeline::new(vec![
     Box::new(dce::DcePass),
+    Box::new(cf_rewrite::ControlFlowRewritePass),
     Box::new(sem_rewrite::SemanticRewritePass),
     Box::new(const_fold::ConstFoldPass),
     Box::new(cleanup::CleanupPass),

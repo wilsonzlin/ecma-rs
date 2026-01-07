@@ -1158,6 +1158,226 @@ fn direct_eval_disables_dce_in_ancestor_scopes() {
 }
 
 #[test]
+fn hoisted_function_decl_after_return_is_preserved() {
+  let (_output, mut parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){foo();return 1;function foo(){}}outer();",
+  );
+  let (sem, diagnostics) = bind_js(&mut parsed, TopLevelMode::Module, FileId(0));
+  assert!(
+    diagnostics.is_empty(),
+    "expected minified output to bind cleanly: {diagnostics:?}"
+  );
+
+  let outer_decl = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .expect("expected outer function declaration");
+  let body = match outer_decl.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected outer function body block, got {other:?}"),
+  };
+
+  let callee = body
+    .iter()
+    .find_map(|stmt| {
+      let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+        return None;
+      };
+      let Expr::Call(call) = expr_stmt.stx.expr.stx.as_ref() else {
+        return None;
+      };
+      let Expr::Id(id) = call.stx.callee.stx.as_ref() else {
+        return None;
+      };
+      Some(id)
+    })
+    .expect("expected call expression in outer body");
+
+  assert!(
+    resolved_symbol(&callee.assoc).is_some(),
+    "expected hoisted function name to resolve"
+  );
+  // Smoke test: ensure symbol exists in the semantics table too.
+  let sym = resolved_symbol(&callee.assoc).unwrap();
+  assert!(sem.symbols.contains_key(&sym));
+}
+
+#[test]
+fn hoisted_var_decl_after_return_is_preserved() {
+  let (_output, mut parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){x;return 1;var x=2;}outer();",
+  );
+  let (_sem, diagnostics) = bind_js(&mut parsed, TopLevelMode::Module, FileId(0));
+  assert!(
+    diagnostics.is_empty(),
+    "expected minified output to bind cleanly: {diagnostics:?}"
+  );
+
+  let outer_decl = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .expect("expected outer function declaration");
+  let body = match outer_decl.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected outer function body block, got {other:?}"),
+  };
+
+  let expr_id = body
+    .iter()
+    .find_map(|stmt| {
+      let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() else {
+        return None;
+      };
+      let Expr::Id(id) = expr_stmt.stx.expr.stx.as_ref() else {
+        return None;
+      };
+      Some(id)
+    })
+    .expect("expected identifier expression in outer body");
+
+  assert!(
+    resolved_symbol(&expr_id.assoc).is_some(),
+    "expected hoisted var name to resolve"
+  );
+}
+
+#[test]
+fn tdz_declaration_after_return_is_not_dropped_or_moved() {
+  let (_output, mut parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){const f=()=>x;return f;let x=1;}const g=outer();g();",
+  );
+  let (sem, diagnostics) = bind_js(&mut parsed, TopLevelMode::Module, FileId(0));
+  assert!(
+    diagnostics.is_empty(),
+    "expected minified output to bind cleanly: {diagnostics:?}"
+  );
+
+  let outer_decl = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .expect("expected outer function declaration");
+  let body = match outer_decl.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected outer function body block, got {other:?}"),
+  };
+
+  let mut return_idx = None;
+  let mut let_idx = None;
+  for (idx, stmt) in body.iter().enumerate() {
+    match stmt.stx.as_ref() {
+      Stmt::Return(_) => return_idx = Some(idx),
+      Stmt::VarDecl(decl) if decl.stx.mode == VarDeclMode::Let => let_idx = Some(idx),
+      _ => {}
+    }
+  }
+  let return_idx = return_idx.expect("expected return statement in outer body");
+  let let_idx = let_idx.expect("expected let declaration in outer body");
+  assert!(
+    let_idx > return_idx,
+    "expected let declaration to remain after the return"
+  );
+
+  let captured_id = body
+    .iter()
+    .find_map(|stmt| {
+      let Stmt::VarDecl(decl) = stmt.stx.as_ref() else {
+        return None;
+      };
+      if decl.stx.mode != VarDeclMode::Const {
+        return None;
+      };
+      let declarator = decl
+        .stx
+        .declarators
+        .first()
+        .expect("expected const declarator");
+      let init = declarator.initializer.as_ref()?;
+      let Expr::ArrowFunc(arrow) = init.stx.as_ref() else {
+        return None;
+      };
+      let parse_js::ast::func::FuncBody::Expression(expr) = arrow.stx.func.stx.body.as_ref()? else {
+        return None;
+      };
+      let Expr::Id(id) = expr.stx.as_ref() else {
+        return None;
+      };
+      Some(id)
+    })
+    .expect("expected arrow function capturing a lexical binding");
+
+  let sym = resolved_symbol(&captured_id.assoc).expect("expected captured name to resolve");
+  assert!(
+    sem.symbol_flags(sym).tdz,
+    "expected captured binding to be in TDZ"
+  );
+}
+
+#[test]
+fn skip_drop_else_after_return_when_else_is_bare_function_decl() {
+  let (_output, parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(a){if(a)return;else function foo(){};foo;}outer(false);",
+  );
+
+  let outer_decl = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .expect("expected outer function declaration");
+  let body = match outer_decl.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected outer function body block, got {other:?}"),
+  };
+
+  let if_stmt = body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::If(if_stmt) => Some(if_stmt),
+      _ => None,
+    })
+    .expect("expected if statement in function body");
+  let alt = if_stmt
+    .stx
+    .alternate
+    .as_ref()
+    .expect("expected else branch to remain");
+  assert!(
+    matches!(alt.stx.as_ref(), Stmt::FunctionDecl(_)),
+    "expected else branch to remain a bare function declaration"
+  );
+}
+
+#[test]
 fn semantic_rewrite_does_not_break_dce_symbol_tracking() {
   let result = minified(
     TopLevelMode::Module,
