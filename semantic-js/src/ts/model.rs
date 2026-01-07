@@ -74,7 +74,7 @@ use crate::hash::{stable_hash, stable_hash_u32};
 use bitflags::bitflags;
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 pub use hir_js::DefId;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 bitflags! {
   /// TypeScript has three namespaces: value, type, and namespace.
@@ -111,7 +111,7 @@ impl SymbolId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeclId(pub u64);
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DeclKind {
   Function,
   Class,
@@ -151,10 +151,6 @@ fn stable_decl_id(
 ) -> DeclId {
   let hash = stable_hash(&(file, name, kind, namespaces.bits(), def_id.0, order));
   DeclId(hash)
-}
-
-fn synthetic_def_id(file: FileId, name: &str, kind: &DeclKind, order: u32) -> DefId {
-  DefId::new(file, stable_hash_u32(&(file, name, kind, order)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -533,6 +529,8 @@ pub trait Resolver {
 pub struct SymbolTable {
   pub(crate) symbols: BTreeMap<SymbolId, SymbolData>,
   pub(crate) decls: BTreeMap<DeclId, DeclData>,
+  synthetic_def_ids: BTreeMap<(FileId, String, DeclKind, u32), DefId>,
+  used_def_ids: BTreeSet<DefId>,
 }
 
 impl SymbolTable {
@@ -563,6 +561,29 @@ impl SymbolTable {
 
   pub fn decl_alias(&self, decl: DeclId) -> Option<&AliasTarget> {
     self.decl(decl).alias.as_ref()
+  }
+
+  fn synthetic_def_id(&mut self, file: FileId, name: &str, kind: &DeclKind, order: u32) -> DefId {
+    let key = (file, name.to_string(), kind.clone(), order);
+    if let Some(existing) = self.synthetic_def_ids.get(&key) {
+      return *existing;
+    }
+
+    let mut salt = 0u64;
+    loop {
+      let local = if salt == 0 {
+        stable_hash_u32(&(file, name, kind, order))
+      } else {
+        stable_hash_u32(&(file, name, kind, order, salt))
+      };
+      let def = DefId::new(file, local);
+      if !self.used_def_ids.contains(&def) {
+        self.used_def_ids.insert(def);
+        self.synthetic_def_ids.insert(key, def);
+        return def;
+      }
+      salt += 1;
+    }
   }
 
   /// Find the symbol that owns a declaration for the given [`DefId`] in the
@@ -597,7 +618,12 @@ impl SymbolTable {
     def_id: Option<DefId>,
     alias: Option<AliasTarget>,
   ) -> DeclId {
-    let def = def_id.unwrap_or_else(|| synthetic_def_id(file, &name, &kind, order));
+    let def = if let Some(def) = def_id {
+      self.used_def_ids.insert(def);
+      def
+    } else {
+      self.synthetic_def_id(file, &name, &kind, order)
+    };
     let id = stable_decl_id(file, &name, &kind, namespaces, def, order);
     if let Some(existing) = self.decls.get(&id) {
       debug_assert_eq!(

@@ -35,7 +35,7 @@ impl Resolver for StaticResolver {
 
 fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
   Decl {
-    def_id: DefId(def.into()),
+    def_id: DefId::new(FileId(0), def),
     name: name.to_string(),
     kind,
     is_ambient: false,
@@ -1072,7 +1072,7 @@ fn symbol_for_def_prefers_merged_symbol_for_function_namespace_merge() {
     other => panic!("expected merged symbol group, got {:?}", other),
   };
   assert_eq!(
-    semantics.symbol_for_def(DefId(0), Namespace::VALUE),
+    semantics.symbol_for_def(DefId::new(FileId(0), 0), Namespace::VALUE),
     Some(merged_sym)
   );
 
@@ -1105,7 +1105,7 @@ fn symbol_for_def_prefers_merged_symbol_for_class_namespace_merge() {
 
   let merged_sym = assert_merged_value_type_namespace(&semantics, file, name);
   assert_eq!(
-    semantics.symbol_for_def(DefId(0), Namespace::VALUE),
+    semantics.symbol_for_def(DefId::new(FileId(0), 0), Namespace::VALUE),
     Some(merged_sym)
   );
 }
