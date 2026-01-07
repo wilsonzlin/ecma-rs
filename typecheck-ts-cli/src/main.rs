@@ -1255,18 +1255,16 @@ fn query_symbol_at(
   let info = program.symbol_info(symbol);
   let (def, def_file, typ, name) = match info {
     Some(info) => {
-      let def_file = info
-        .file
-        .and_then(|id| program.file_key(id))
-        .and_then(|key| host.path_for_key(&key))
-        .map(|p| p.display().to_string())
-        .map(|p| {
-          if normalize_paths {
-            normalize_json_path(&p)
-          } else {
-            p
-          }
-        });
+      let def_file = info.file.and_then(|id| program.file_key(id)).map(|key| {
+        if normalize_paths {
+          normalize_json_path(key.as_str())
+        } else {
+          host
+            .path_for_key(&key)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| key.to_string())
+        }
+      });
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
       (info.def.map(|d| d.0), def_file, typ, info.name)
     }
