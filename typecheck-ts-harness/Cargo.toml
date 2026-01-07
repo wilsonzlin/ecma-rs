@@ -22,7 +22,7 @@ diagnostics = { path = "../diagnostics" }
 typecheck-ts = { path = "../typecheck-ts", features = ["resolve"] }
 walkdir = "2.5"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "json"] }
 num_cpus = "1.16"
 rayon = "1.10"
 

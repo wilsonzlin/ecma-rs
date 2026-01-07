@@ -1031,8 +1031,25 @@ fn project_mode_accepts_full_ts_lib_names() {
     .filter_map(|v| v.as_str())
     .collect();
   assert!(
+    files.contains(&"/lib:lib.es2015.d.ts"),
+    "expected program to include lib.es2015.d.ts, got {files:?}"
+  );
+  assert!(
+    files.contains(&"/lib:lib.webworker.d.ts"),
+    "expected program to include lib.webworker.d.ts, got {files:?}"
+  );
+  assert!(
     files.contains(&normalized(&main).as_str()),
     "expected program to include main.ts, got {files:?}"
+  );
+
+  let diagnostics = json
+    .get("diagnostics")
+    .and_then(|d| d.as_array())
+    .expect("diagnostics array");
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics with explicit lib list, got {diagnostics:?}"
   );
 }
 
