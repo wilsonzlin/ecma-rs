@@ -1791,7 +1791,8 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
                 .last()
                 .expect("const enum stack should never be empty");
               let key = vec![decl.stx.name.clone()];
-              let should_erase = matches!(current_scope.get(&key), Some(ConstEnumBinding::Values(_)));
+              let should_erase =
+                matches!(current_scope.get(&key), Some(ConstEnumBinding::Values(_)));
               if should_erase && !decl.stx.declare {
                 let mut qualified_path =
                   Vec::with_capacity(self.namespace_path.len().saturating_add(1));

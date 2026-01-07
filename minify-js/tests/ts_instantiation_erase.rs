@@ -40,4 +40,3 @@ fn erases_instantiation_type_arguments_in_tagged_templates_and_optional_calls() 
   assert_instantiation_type_args_erased("tag<string>`tmpl`;");
   assert_instantiation_type_args_erased("fn?.<string>(x);");
 }
-

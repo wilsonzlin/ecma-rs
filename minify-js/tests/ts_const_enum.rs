@@ -1,6 +1,8 @@
-use minify_js::{minify_with_options, ConstEnumMode, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
-use parse_js::ast::expr::Expr;
+use minify_js::{
+  minify_with_options, ConstEnumMode, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions,
+};
 use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
@@ -29,7 +31,10 @@ fn minify_ts_module(src: &str, ts_erase_options: TsEraseOptions) -> (String, Nod
   (code, parsed)
 }
 
-fn find_exported_const_initializer<'a>(program: &'a Node<TopLevel>, name: &str) -> Option<&'a Node<Expr>> {
+fn find_exported_const_initializer<'a>(
+  program: &'a Node<TopLevel>,
+  name: &str,
+) -> Option<&'a Node<Expr>> {
   for stmt in &program.stx.body {
     let Stmt::VarDecl(decl) = stmt.stx.as_ref() else {
       continue;
@@ -53,11 +58,13 @@ fn find_exported_const_initializer<'a>(program: &'a Node<TopLevel>, name: &str) 
 }
 
 fn program_declares_var(program: &Node<TopLevel>, name: &str) -> bool {
-  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+  program.stx.body.iter().any(|stmt| {
+    match stmt.stx.as_ref() {
     Stmt::VarDecl(decl) => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
     }),
     _ => false,
+  }
   })
 }
 
@@ -156,4 +163,3 @@ fn preserves_runtime_lowering_for_const_enums_in_runtime_mode() {
     "runtime mode should preserve enum lowering: {code}"
   );
 }
-

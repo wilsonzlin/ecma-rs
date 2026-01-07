@@ -252,8 +252,12 @@ mod tests {
     let lib_manager = Arc::new(LibManager::new());
     let query_stats = QueryStatsCollector::default();
 
-    let mut state =
-      ProgramState::new(Arc::clone(&host), lib_manager, query_stats, Arc::clone(&cancelled));
+    let mut state = ProgramState::new(
+      Arc::clone(&host),
+      lib_manager,
+      query_stats,
+      Arc::clone(&cancelled),
+    );
     let file_id = state.intern_file_key(file_key.clone(), FileOrigin::Source);
     state
       .ensure_analyzed_result(&host, std::slice::from_ref(&file_key))
@@ -263,10 +267,8 @@ mod tests {
       .def_data
       .iter()
       .find_map(|(def, data)| {
-        (data.file == file_id
-          && data.name == "Foo"
-          && matches!(data.kind, DefKind::TypeAlias(_)))
-        .then_some(*def)
+        (data.file == file_id && data.name == "Foo" && matches!(data.kind, DefKind::TypeAlias(_)))
+          .then_some(*def)
       })
       .expect("Foo def should be recorded");
 

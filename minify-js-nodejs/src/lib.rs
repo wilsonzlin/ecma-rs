@@ -286,7 +286,10 @@ mod tests {
     assert_eq!(parsed.dialect, None);
     assert!(!parsed.ts_erase_options.lower_class_fields);
     assert!(parsed.ts_erase_options.use_define_for_class_fields);
-    assert_eq!(parsed.ts_erase_options.const_enum_mode, ConstEnumMode::Inline);
+    assert_eq!(
+      parsed.ts_erase_options.const_enum_mode,
+      ConstEnumMode::Inline
+    );
   }
 
   #[test]
@@ -306,7 +309,10 @@ mod tests {
     let parsed = parse_minify_options(None, Some(true), Some(false), Some(true)).unwrap();
     assert!(parsed.ts_erase_options.lower_class_fields);
     assert!(!parsed.ts_erase_options.use_define_for_class_fields);
-    assert_eq!(parsed.ts_erase_options.const_enum_mode, ConstEnumMode::Runtime);
+    assert_eq!(
+      parsed.ts_erase_options.const_enum_mode,
+      ConstEnumMode::Runtime
+    );
   }
 
   #[test]
