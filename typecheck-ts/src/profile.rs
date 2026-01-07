@@ -1,5 +1,6 @@
 use dashmap::DashMap;
 use salsa::{DatabaseKeyIndex, Event, EventKind};
+#[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -10,8 +11,9 @@ use std::time::{Duration, Instant};
 use types_ts_interned::CacheStats as StoreCacheStats;
 
 /// Named query boundaries used for tracing and profiling.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum QueryKind {
   Parse,
   LowerHir,
@@ -50,8 +52,9 @@ impl QueryKind {
 }
 
 /// Buckets for cache statistics exposed by the checker.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum CacheKind {
   Relation,
   Eval,
@@ -87,7 +90,8 @@ impl CacheKind {
 }
 
 /// Aggregate statistics for a single query kind.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
 pub struct QueryStat {
   pub total: u64,
   pub cache_hits: u64,
@@ -97,7 +101,8 @@ pub struct QueryStat {
 }
 
 /// Aggregate statistics for a cache.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
 pub struct CacheStat {
   pub hits: u64,
   pub misses: u64,
@@ -107,10 +112,11 @@ pub struct CacheStat {
 }
 
 /// Summary of query statistics across all recorded kinds.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Debug, Clone, Default)]
 pub struct QueryStats {
   pub queries: BTreeMap<QueryKind, QueryStat>,
-  #[serde(default)]
+  #[cfg_attr(feature = "serde", serde(default))]
   pub caches: BTreeMap<CacheKind, CacheStat>,
 }
 
