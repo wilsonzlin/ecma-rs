@@ -232,6 +232,16 @@ impl StripContext {
     if let Some(ident) = self.runtime_namespace_param_idents.get(namespace_name) {
       return ident.clone();
     }
+    // Runtime namespaces and enums can merge, including for names that are not valid JavaScript
+    // binding identifiers (where we must synthesize a safe internal identifier). Ensure both
+    // lowerings agree on the same synthesized identifier so the merged runtime value is shared and
+    // exported consistently.
+    if let Some(ident) = self.runtime_enum_object_idents.get(namespace_name) {
+      self
+        .runtime_namespace_param_idents
+        .insert(namespace_name.to_string(), ident.clone());
+      return ident.clone();
+    }
     let ident = self.fresh_internal_name(format!("__minify_ts_namespace_{namespace_name}"));
     self
       .runtime_namespace_param_idents
@@ -241,6 +251,14 @@ impl StripContext {
 
   fn runtime_enum_object_ident(&mut self, enum_name: &str) -> String {
     if let Some(ident) = self.runtime_enum_object_idents.get(enum_name) {
+      return ident.clone();
+    }
+    // Keep the enum object identifier in sync with any previously synthesized identifier for a
+    // runtime namespace of the same name (see `runtime_namespace_param_ident`).
+    if let Some(ident) = self.runtime_namespace_param_idents.get(enum_name) {
+      self
+        .runtime_enum_object_idents
+        .insert(enum_name.to_string(), ident.clone());
       return ident.clone();
     }
     let ident = self.fresh_internal_name(format!("__minify_ts_enum_obj_{enum_name}"));
