@@ -19,7 +19,9 @@ impl Pass for ControlFlowRewritePass {
   }
 
   fn run(&mut self, cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    apply_to_function_like_bodies(top, |stmts, changed| rewrite_stmts(stmts, cx, changed, true))
+    apply_to_function_like_bodies(top, |stmts, changed| {
+      rewrite_stmts(stmts, cx, changed, true)
+    })
   }
 }
 
@@ -37,7 +39,10 @@ where
 fn is_var_scope_kind(kind: ScopeKind) -> bool {
   matches!(
     kind,
-    ScopeKind::Module | ScopeKind::NonArrowFunction | ScopeKind::ArrowFunction | ScopeKind::StaticBlock
+    ScopeKind::Module
+      | ScopeKind::NonArrowFunction
+      | ScopeKind::ArrowFunction
+      | ScopeKind::StaticBlock
   )
 }
 
@@ -211,7 +216,11 @@ fn analyze_unreachable_stmt(
   UnreachableAction::StubVar(stub_symbols)
 }
 
-fn build_var_stub(loc: Loc, sem: &semantic_js::js::JsSemantics, symbols: &[SymbolId]) -> Node<Stmt> {
+fn build_var_stub(
+  loc: Loc,
+  sem: &semantic_js::js::JsSemantics,
+  symbols: &[SymbolId],
+) -> Node<Stmt> {
   let mut names: Vec<String> = symbols
     .iter()
     .map(|sym| sem.name(sem.symbol(*sym).name).to_string())
@@ -433,4 +442,3 @@ fn rewrite_catch_block(catch: &mut Node<CatchBlock>, cx: &OptCtx, changed: &mut 
   let body = std::mem::take(&mut catch.stx.body);
   catch.stx.body = rewrite_stmts(body, cx, changed, true);
 }
-

@@ -1355,7 +1355,8 @@ fn tdz_declaration_after_return_is_not_dropped_or_moved() {
       let Expr::ArrowFunc(arrow) = init.stx.as_ref() else {
         return None;
       };
-      let parse_js::ast::func::FuncBody::Expression(expr) = arrow.stx.func.stx.body.as_ref()? else {
+      let parse_js::ast::func::FuncBody::Expression(expr) = arrow.stx.func.stx.body.as_ref()?
+      else {
         return None;
       };
       let Expr::Id(id) = expr.stx.as_ref() else {

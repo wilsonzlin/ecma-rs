@@ -726,12 +726,10 @@ impl Host for DiskHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    let base = self
-      .path_for_key(from)
-      .or_else(|| {
-        let candidate = PathBuf::from(from.as_str());
-        candidate.is_file().then_some(candidate)
-      });
+    let base = self.path_for_key(from).or_else(|| {
+      let candidate = PathBuf::from(from.as_str());
+      candidate.is_file().then_some(candidate)
+    });
     if let Some(base) = base {
       if let Some(resolved) = self.resolver.resolve(&base, specifier) {
         let resolved = canonicalize_path(&resolved).unwrap_or(resolved);

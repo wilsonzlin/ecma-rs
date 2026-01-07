@@ -8,9 +8,9 @@ use std::fmt;
 use crate::rename::collect_usages;
 use crate::rename::UsageData;
 
+mod cf_rewrite;
 mod cleanup;
 mod const_fold;
-mod cf_rewrite;
 mod dce;
 mod prop_rewrite;
 mod sem_rewrite;
