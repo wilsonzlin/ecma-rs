@@ -18,8 +18,10 @@ fn parse_expr(source: &str, dialect: Dialect) -> SyntaxResult<parse_js::ast::nod
   );
   let ctx = ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: true,
-      yield_allowed: true,
+      await_allowed: false,
+      yield_allowed: false,
+      await_expr_allowed: true,
+      yield_expr_allowed: false,
     },
     top_level: true,
     in_namespace: false,

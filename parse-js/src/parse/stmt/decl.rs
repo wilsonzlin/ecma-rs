@@ -151,9 +151,12 @@ impl<'a> Parser<'a> {
       let generator = p.consume_if(TT::Asterisk).is_match();
       // Function name is always parsed with yield/await allowed as identifiers,
       // even for generator/async functions (the function can be named "yield" or "await")
+      let is_module = p.is_module();
       let name_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: true,
-        yield_allowed: true,
+        await_allowed: !is_module,
+        yield_allowed: !is_module,
+        await_expr_allowed: false,
+        yield_expr_allowed: false,
       });
       let name = p.maybe_class_or_func_name(name_ctx);
       // The name can only be omitted in default exports.
@@ -172,8 +175,10 @@ impl<'a> Parser<'a> {
         };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
+          await_allowed: if is_module { false } else { !is_async },
+          yield_allowed: if is_module { false } else { !generator },
+          await_expr_allowed: is_async,
+          yield_expr_allowed: generator,
         });
         let parameters = p.func_params(fn_ctx)?;
         // TypeScript: return type annotation (may be type predicate)

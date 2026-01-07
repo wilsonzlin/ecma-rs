@@ -21,6 +21,10 @@ pub struct ParsePatternRules {
   pub await_allowed: bool,
   // `yield` is not allowed as a parameter/variable inside a generator function.
   pub yield_allowed: bool,
+  // Whether `await` can start an `AwaitExpression` in the current context.
+  pub await_expr_allowed: bool,
+  // Whether `yield` can start a `YieldExpression` in the current context.
+  pub yield_expr_allowed: bool,
 }
 
 impl ParsePatternRules {

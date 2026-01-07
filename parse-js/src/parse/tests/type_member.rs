@@ -14,8 +14,10 @@ fn parse_interface(input: &str) -> crate::ast::node::Node<InterfaceDecl> {
   let mut parser = Parser::new(Lexer::new(input), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: true,
-      yield_allowed: true,
+      await_allowed: false,
+      yield_allowed: false,
+      await_expr_allowed: true,
+      yield_expr_allowed: false,
     },
     top_level: true,
     in_namespace: false,

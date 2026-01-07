@@ -488,7 +488,14 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
-            let parameters = p.func_params(ctx)?;
+            let is_module = p.is_module();
+            let fn_ctx = ctx.with_rules(ParsePatternRules {
+              await_allowed: !is_module,
+              yield_allowed: !is_module,
+              await_expr_allowed: false,
+              yield_expr_allowed: false,
+            });
+            let parameters = p.func_params(fn_ctx)?;
             // TypeScript: return type annotation
             let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
@@ -509,7 +516,7 @@ impl<'a> Parser<'a> {
               let _ = p.consume_if(TT::Semicolon);
               None
             } else {
-              Some(p.parse_func_block_body(ctx)?.into())
+              Some(p.parse_func_block_body(fn_ctx)?.into())
             };
             Ok(Func {
               arrow: false,
@@ -563,7 +570,14 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
-      let parameters = p.func_params(ctx)?;
+      let is_module = p.is_module();
+      let fn_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: if is_module { false } else { !is_async },
+        yield_allowed: if is_module { false } else { !is_generator },
+        await_expr_allowed: is_async,
+        yield_expr_allowed: is_generator,
+      });
+      let parameters = p.func_params(fn_ctx)?;
       // TypeScript: return type annotation - may be type predicate
       let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
         Some(p.type_expr_or_predicate(ctx)?)
@@ -580,11 +594,7 @@ impl<'a> Parser<'a> {
         None
       } else {
         Some(
-          p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-            await_allowed: !is_async && ctx.rules.await_allowed,
-            yield_allowed: !is_generator && ctx.rules.yield_allowed,
-          }))?
-          .into(),
+          p.parse_func_block_body(fn_ctx)?.into(),
         )
       };
       Ok(Func {
@@ -705,10 +715,13 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
+        let is_module = p.is_module();
         Some(
           p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-            await_allowed: true,
-            yield_allowed: true,
+            await_allowed: !is_module,
+            yield_allowed: !is_module,
+            await_expr_allowed: false,
+            yield_expr_allowed: false,
           }))?
           .into(),
         )
@@ -798,9 +811,12 @@ impl<'a> Parser<'a> {
       }
       p.require(TT::ParenthesisOpen)?;
       // Setters are not generators or async, so yield/await can be used as identifiers
+      let is_module = p.is_module();
       let setter_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: true,
-        yield_allowed: true,
+        await_allowed: !is_module,
+        yield_allowed: !is_module,
+        await_expr_allowed: false,
+        yield_expr_allowed: false,
       });
 
       // TypeScript: Check for optional `this` parameter in setter
@@ -1073,7 +1089,14 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
-            let parameters = p.func_params(ctx)?;
+            let is_module = p.is_module();
+            let fn_ctx = ctx.with_rules(ParsePatternRules {
+              await_allowed: if is_module { false } else { !is_async },
+              yield_allowed: if is_module { false } else { !is_generator },
+              await_expr_allowed: is_async,
+              yield_expr_allowed: is_generator,
+            });
+            let parameters = p.func_params(fn_ctx)?;
             // TypeScript: return type annotation
             let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
               Some(p.type_expr_or_predicate(ctx)?)
@@ -1087,13 +1110,7 @@ impl<'a> Parser<'a> {
                 let _ = p.consume_if(TT::Semicolon);
                 None
               } else {
-                Some(
-                  p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-                    await_allowed: !is_async && ctx.rules.await_allowed,
-                    yield_allowed: !is_generator && ctx.rules.yield_allowed,
-                  }))?
-                  .into(),
-                )
+                Some(p.parse_func_block_body(fn_ctx)?.into())
               };
             Ok(Func {
               arrow: false,

@@ -17,10 +17,13 @@ use serde_json::Value;
 
 fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
   let mut parser = Parser::new(Lexer::new(input), opts);
+  let is_module = matches!(opts.source_type, SourceType::Module);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: !matches!(opts.source_type, SourceType::Module),
-      yield_allowed: true,
+      await_allowed: !is_module,
+      yield_allowed: !is_module,
+      await_expr_allowed: is_module,
+      yield_expr_allowed: false,
     },
     top_level: true,
     in_namespace: false,

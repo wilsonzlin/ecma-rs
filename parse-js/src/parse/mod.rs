@@ -33,7 +33,7 @@ pub mod type_expr;
 // All fields except `session` can (although not often) change between calls, so we don't simply put them in Parser, as otherwise we'd have to "unwind" (i.e. reset) those values after each call returns.
 #[derive(Clone, Copy)]
 pub struct ParseCtx {
-  pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is only two booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
+  pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is a small set of booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
   pub top_level: bool,
   pub in_namespace: bool,
   pub asi: AsiContext,

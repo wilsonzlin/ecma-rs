@@ -64,6 +64,14 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("@dec class C {}");
   assert_reject("class C { @dec m() {} }");
 
+  // `await`/`yield` are context-sensitive in ECMAScript; strict parsing should not accept
+  // them as expressions where they are not allowed.
+  assert_reject("await 1;");
+  assert_reject("yield 1;");
+  assert_reject_module("function f() { await 1; }");
+  assert_reject_module("var yield = 1;");
+  assert_reject_module("yield;");
+
   // Recovery-only constructs that should be syntax errors in strict ECMAScript.
   assert_reject("();");
   assert_reject("({ [x] })");
@@ -93,9 +101,13 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("for (var x of y) {}");
   assert_accept("for (var x in y) {}");
   assert_accept("function f(x) { return x; }");
+  assert_accept("var f = await => await + 1;");
+  assert_accept("async function g() { function f() { var await = 1; return await; } }");
+  assert_accept("function* g() { function f() { var yield = 1; return yield; } }");
 
   // `type` remains a valid binding/import/export name in ECMAScript.
   assert_accept_module("import { type } from \"mod\";");
   assert_accept_module("export { type } from \"mod\";");
   assert_accept_module("import.meta;");
+  assert_accept_module("await 1;");
 }

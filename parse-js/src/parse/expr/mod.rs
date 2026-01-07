@@ -196,10 +196,7 @@ impl<'a> Parser<'a> {
       let next_token = p.peek().typ;
       let is_unparenthesised_single_param = is_valid_pattern_identifier(
         next_token,
-        ParsePatternRules {
-          await_allowed: false,
-          yield_allowed: ctx.rules.yield_allowed,
-        },
+        ctx.rules,
       ) && {
         // Need to peek further to see if there's => coming up
         let peek2 = p.peek_n::<2>()[1].typ;
@@ -271,9 +268,12 @@ impl<'a> Parser<'a> {
         // Illegal under Automatic Semicolon Insertion rules.
         return Err(arrow.error(SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters));
       }
+      let is_module = p.is_module();
       let fn_body_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: !is_async && ctx.rules.await_allowed,
-        ..ctx.rules
+        await_allowed: if is_module { false } else { !is_async },
+        yield_allowed: !is_module,
+        await_expr_allowed: is_async,
+        yield_expr_allowed: false,
       });
       let body = match p.peek().typ {
         TT::BraceOpen => p.parse_func_block_body(fn_body_ctx)?.into(),
@@ -335,9 +335,12 @@ impl<'a> Parser<'a> {
       let generator = p.consume_if(TT::Asterisk).is_match();
       // Function name is always parsed with yield/await allowed as identifiers,
       // even for generator/async functions (the function can be named "yield" or "await")
+      let is_module = p.is_module();
       let name_ctx = ctx.with_rules(ParsePatternRules {
-        await_allowed: true,
-        yield_allowed: true,
+        await_allowed: !is_module,
+        yield_allowed: !is_module,
+        await_expr_allowed: false,
+        yield_expr_allowed: false,
       });
       let name = p.maybe_class_or_func_name(name_ctx);
       let func = p.with_loc(|p| {
@@ -352,8 +355,10 @@ impl<'a> Parser<'a> {
         };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
+          await_allowed: if is_module { false } else { !is_async },
+          yield_allowed: if is_module { false } else { !generator },
+          await_expr_allowed: is_async,
+          yield_expr_allowed: generator,
         });
         let parameters = p.func_params(fn_ctx)?;
         // TypeScript: return type annotation - may be type predicate
@@ -612,10 +617,17 @@ impl<'a> Parser<'a> {
     if let Some(operator) = UNARY_OPERATOR_MAPPING
       .get(&t0.typ)
       .filter(|operator| {
-        // Treat await/yield as operators only when they're keywords (not allowed as identifiers)
-        (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
-          || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
-          || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
+        // Treat await/yield as operators only when they're allowed in the current context.
+        //
+        // - In scripts, `await`/`yield` are typically identifiers; parsing them as operators
+        //   would accept invalid programs like `await 1` and `yield 1`.
+        // - In modules, top-level `await` is allowed but `yield` is never allowed outside a
+        //   generator function.
+        match operator.name {
+          OperatorName::Await => ctx.rules.await_expr_allowed,
+          OperatorName::Yield => ctx.rules.yield_expr_allowed,
+          _ => true,
+        }
       })
       .filter(|operator| {
         // Don't treat `new` as operator if followed by `.` (for new.target)

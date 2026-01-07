@@ -8,10 +8,13 @@ use crate::token::TT;
 
 impl<'a> Parser<'a> {
   pub fn parse_top_level(&mut self) -> SyntaxResult<Node<TopLevel>> {
+    let is_module = self.is_module();
     let ctx = ParseCtx {
       rules: ParsePatternRules {
-        await_allowed: !self.is_module(),
-        yield_allowed: true,
+        await_allowed: !is_module,
+        yield_allowed: !is_module,
+        await_expr_allowed: is_module,
+        yield_expr_allowed: false,
       },
       top_level: true,
       in_namespace: false,
