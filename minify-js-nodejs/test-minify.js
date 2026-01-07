@@ -1,28 +1,51 @@
-// Minimal manual test for the Node.js bindings. Run after building the native addon.
-
 const assert = require("assert");
 const { minify } = require("./index.js");
 
-const result = minify("global", Buffer.from("let x = 1;", "utf8"));
+const utf8 = (buf) => buf.toString("utf8");
 
-assert(Buffer.isBuffer(result), "minify should return a Buffer");
-assert.strictEqual(result.toString("utf8"), "let x=1;");
+const expectMinify = (mode, src, expected) => {
+  const srcBuffer = Buffer.from(src, "utf8");
+  const resultFromBuffer = minify(mode, srcBuffer);
+  const resultFromString = minify(mode, src);
 
-console.log("minify returned UTF-8 Buffer output:", result.toString("utf8"));
+  assert(Buffer.isBuffer(resultFromBuffer), "minify should return a Buffer");
+  assert(Buffer.isBuffer(resultFromString), "minify should return a Buffer");
+  assert.strictEqual(utf8(resultFromBuffer), expected);
+  assert.strictEqual(utf8(resultFromString), expected);
+};
 
+assert.strictEqual(typeof minify, "function", "minify export should be a function");
+
+expectMinify("global", "let x = 1;", "let x=1;");
+expectMinify("module", "export default 1;", "export default 1;");
+
+// Invalid JavaScript should surface deterministic diagnostics.
 try {
-  minify("global", "bad");
-  assert.fail("minify should throw on invalid input");
+  minify("global", "let x = ;");
+  assert.fail("minify should throw on invalid JS input");
 } catch (err) {
   assert(err instanceof Error, "error should be an Error");
-  assert(
-    Array.isArray(err.diagnostics),
-    "error should include a diagnostics array",
+  assert(Array.isArray(err.diagnostics), "error should include a diagnostics array");
+  assert(err.diagnostics.length > 0, "error should include at least one diagnostic");
+  assert.strictEqual(
+    err.diagnostics[0].code,
+    "PS0002",
+    "first diagnostic code should match the parse error code for this fixture",
   );
   assert(
-    err.message.includes("PARSE"),
-    "error message should include a PARSE code",
+    err.message.includes(err.diagnostics[0].code),
+    "error message should include the diagnostic code",
   );
 }
 
-console.log("minify threw with diagnostics for invalid input");
+// Argument validation should be surfaced as TypeError.
+assert.throws(
+  () => minify("invalid", "let x = 1;"),
+  (err) => err instanceof TypeError && err.message.includes("top-level mode"),
+);
+assert.throws(
+  () => minify("global", 123),
+  (err) => err instanceof TypeError && err.message.includes("src must be"),
+);
+
+console.log("minify-js-nodejs: all tests passed");

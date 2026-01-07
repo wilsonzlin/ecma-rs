@@ -17,7 +17,8 @@
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
     "clean": "shx rm -rf target index.node",
-    "postinstall": "node postinstall.js"
+    "postinstall": "node postinstall.js",
+    "test": "npm run build-debug && node test-minify.js"
   },
   "repository": {
     "type": "git",

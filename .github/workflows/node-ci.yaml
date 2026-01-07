@@ -1,0 +1,61 @@
+name: Node tooling CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  minify-js-nodejs:
+    name: minify-js-nodejs
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: minify-js-nodejs/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@1.92.0
+
+      - name: Install dependencies
+        working-directory: ./minify-js-nodejs
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./minify-js-nodejs
+        run: npm test
+
+  optimize-js-debugger-ui:
+    name: optimize-js-debugger UI
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+          cache-dependency-path: optimize-js-debugger/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ./optimize-js-debugger
+        run: npm ci
+
+      - name: Run tests
+        working-directory: ./optimize-js-debugger
+        run: npm test
+
+      - name: Build
+        working-directory: ./optimize-js-debugger
+        run: npm run build
+

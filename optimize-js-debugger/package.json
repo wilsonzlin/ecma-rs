@@ -1,7 +1,7 @@
 {
   "private": true,
   "scripts": {
-    "build": "npm run esbuild -- --minify && cp -iv src/index.html dist/.",
+    "build": "npm run esbuild -- --minify && cp -v src/index.html dist/index.html",
     "esbuild": "esbuild --bundle --legal-comments=none --outdir=dist --sourcemap src/index.tsx",
     "format": "prettier --write 'src/**/*.{css,html,ts,tsx}'",
     "start": "npm run esbuild -- --servedir=dist --serve-fallback=src/index.html --watch",
@@ -14,7 +14,6 @@
     "@wzlin/valid": "^0.4.3",
     "@xtjs/lib": "^0.57.1",
     "@xyflow/react": "^12.3.6",
-    "optimize-js-debugger": "file:pkg",
     "react": "^18",
     "react-dom": "^18"
   },
