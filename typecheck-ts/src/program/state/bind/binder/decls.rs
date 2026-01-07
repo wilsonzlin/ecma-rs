@@ -47,13 +47,7 @@ impl ProgramState {
     let mut defs = Vec::new();
     for declarator in var.declarators.iter() {
       let pat = &declarator.pattern;
-      let type_ann = match pat.stx.pat.stx.as_ref() {
-        Pat::Id(_) => declarator
-          .type_annotation
-          .as_ref()
-          .map(|t| self.type_from_type_expr(t)),
-        _ => None,
-      };
+      let type_ann = None;
       let mut names = Vec::new();
       collect_bound_names(self, file, &pat.stx.pat, &mut names);
       for (name, def_span) in names {

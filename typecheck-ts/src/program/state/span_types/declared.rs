@@ -1,4 +1,5 @@
 use super::*;
+use parse_js::ast::type_expr::TypeParameter;
 
 impl ProgramState {
   pub(in super::super) fn declared_type_for_span(
@@ -30,7 +31,7 @@ impl ProgramState {
             let span = loc_to_span(file, stmt.loc).range;
             if span == target {
               if let Some(ann) = var.stx.type_annotation.as_ref() {
-                return Some(state.lower_interned_type_expr(file, ann));
+                return Some(state.lower_interned_type_expr(file, None, ann));
               }
             }
           }
@@ -44,7 +45,7 @@ impl ProgramState {
               let pat_span = loc_to_span(file, decl.pattern.stx.pat.loc).range;
               if pat_span == target {
                 if let Some(ann) = decl.type_annotation.as_ref() {
-                  return Some(state.lower_interned_type_expr(file, ann));
+                  return Some(state.lower_interned_type_expr(file, None, ann));
                 }
               }
             }
@@ -83,7 +84,7 @@ impl ProgramState {
 
             if let Some(decl) = matching_decl {
               if let Some(ann) = decl.type_annotation.as_ref() {
-                return Some(state.lower_interned_type_expr(file, ann));
+                return Some(state.lower_interned_type_expr(file, None, ann));
               }
             }
           }
@@ -122,7 +123,12 @@ impl ProgramState {
     walk(self, file, &ast.stx.body, target)
   }
 
-  fn lower_interned_type_expr(&mut self, file: FileId, expr: &Node<TypeExpr>) -> TypeId {
+  fn lower_interned_type_expr(
+    &mut self,
+    file: FileId,
+    type_params: Option<&[Node<TypeParameter>]>,
+    expr: &Node<TypeExpr>,
+  ) -> TypeId {
     let Some(store) = self.interned_store.clone() else {
       return self.type_from_type_expr(expr);
     };
@@ -142,6 +148,9 @@ impl ProgramState {
     let mut lowerer = TypeLowerer::new(Arc::clone(&store));
     lowerer.set_file(file);
     lowerer.set_resolver(resolver);
+    if let Some(params) = type_params {
+      lowerer.register_type_params(params);
+    }
     let ty = store.canon(lowerer.lower_type_expr(expr));
     self.diagnostics.extend(lowerer.take_diagnostics());
 
@@ -182,7 +191,11 @@ impl ProgramState {
           Stmt::TypeAliasDecl(alias) => {
             let span = loc_to_span(file, stmt.loc).range;
             if span == target || alias.stx.name == name {
-              let ty = state.lower_interned_type_expr(file, &alias.stx.type_expr);
+              let ty = state.lower_interned_type_expr(
+                file,
+                alias.stx.type_parameters.as_deref(),
+                &alias.stx.type_expr,
+              );
               return Some(ty);
             }
           }
@@ -212,5 +225,68 @@ impl ProgramState {
       None => return None,
     };
     walk(self, file, &ast.stx.body, target, name)
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::lib_support::{CompilerOptions, LibManager};
+  use crate::profile::QueryStatsCollector;
+  use crate::MemoryHost;
+  use std::sync::atomic::AtomicBool;
+  use std::sync::Arc;
+
+  #[test]
+  fn type_alias_span_lowering_registers_type_params() {
+    let opts = CompilerOptions {
+      no_default_lib: true,
+      ..Default::default()
+    };
+    let mut host = MemoryHost::with_options(opts);
+    let file_key = FileKey::new("entry.ts");
+    host.insert(file_key.clone(), Arc::<str>::from("type Foo<T> = T;"));
+
+    let host: Arc<dyn Host> = Arc::new(host);
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let lib_manager = Arc::new(LibManager::new());
+    let query_stats = QueryStatsCollector::default();
+
+    let mut state =
+      ProgramState::new(Arc::clone(&host), lib_manager, query_stats, Arc::clone(&cancelled));
+    let file_id = state.intern_file_key(file_key.clone(), FileOrigin::Source);
+    state
+      .ensure_analyzed_result(&host, std::slice::from_ref(&file_key))
+      .expect("analysis should succeed");
+
+    let foo_def = state
+      .def_data
+      .iter()
+      .find_map(|(def, data)| {
+        (data.file == file_id
+          && data.name == "Foo"
+          && matches!(data.kind, DefKind::TypeAlias(_)))
+        .then_some(*def)
+      })
+      .expect("Foo def should be recorded");
+
+    // Create an interned store without running the full decl-type lowering pass
+    // so `type_of_def` hits the span-based fallback.
+    let store = tti::TypeStore::with_options((&state.compiler_options).into());
+    state.interned_store = Some(Arc::clone(&store));
+    state.interned_def_types.clear();
+    state.def_types.remove(&foo_def);
+
+    let ty = ProgramState::type_of_def(&mut state, foo_def).expect("type_of_def should succeed");
+    assert!(
+      store.contains_type_id(ty),
+      "expected type alias to lower into interned store"
+    );
+    match store.type_kind(store.canon(ty)) {
+      tti::TypeKind::TypeParam(param) => {
+        assert_eq!(param, tti::TypeParamId(0));
+      }
+      other => panic!("expected Foo<T> to lower to its type parameter, got {other:?}"),
+    }
   }
 }
