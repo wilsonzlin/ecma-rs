@@ -75,6 +75,14 @@ fn has_runtime_iife(program: &Node<TopLevel>) -> bool {
   })
 }
 
+fn program_has_export_list(program: &Node<TopLevel>) -> bool {
+  program
+    .stx
+    .body
+    .iter()
+    .any(|stmt| matches!(stmt.stx.as_ref(), Stmt::ExportList(_)))
+}
+
 #[test]
 fn const_enum_numeric_member_reference_is_inlined() {
   let src = r#"const enum E { A = 1, B = A } export const x = E.B;"#;
@@ -222,6 +230,29 @@ fn exported_const_enum_in_module_is_inlined() {
   assert!(
     !code.contains(".E") && !code.contains("\"E\""),
     "expected `E` to be erased from the emitted module/namespace: {code}"
+  );
+}
+
+#[test]
+fn export_list_entries_for_erased_const_enums_are_dropped() {
+  let src = r#"
+    export const enum E { A = 1 }
+    export { E as E2 };
+    export const x = E.A;
+  "#;
+  let (code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+
+  assert!(
+    code.contains("export const x=1"),
+    "expected const enum member access to be inlined, got: {code}"
+  );
+  assert!(
+    !code.contains("E2"),
+    "expected export-list entry referencing erased const enum to be dropped, got: {code}"
+  );
+  assert!(
+    !program_has_export_list(&parsed),
+    "expected export list statement to be removed, got: {code}"
   );
 }
 
