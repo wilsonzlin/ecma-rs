@@ -99,7 +99,9 @@ fn simplify_computed_member(member: Node<ComputedMemberExpr>, loc: Loc) -> (Expr
 
   let key = match member.stx.member.stx.as_ref() {
     Expr::LitStr(lit) => StaticKey::Borrowed(lit.stx.value.as_str()),
+    Expr::LitBool(lit) => StaticKey::Borrowed(if lit.stx.value { "true" } else { "false" }),
     Expr::LitBigInt(lit) => StaticKey::Borrowed(lit.stx.value.as_str()),
+    Expr::LitNull(_) => StaticKey::Borrowed("null"),
     Expr::LitTemplate(template) => {
       let Some(key) = template_to_string(&template.stx.parts) else {
         return (Expr::ComputedMember(member), false);
@@ -212,6 +214,27 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
           true,
         )
       }
+      Expr::LitBool(lit) => {
+        let (tt, key) = if lit.stx.value {
+          (TT::LiteralTrue, "true".to_string())
+        } else {
+          (TT::LiteralFalse, "false".to_string())
+        };
+        (
+          ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
+          true,
+        )
+      }
+      Expr::LitNull(_) => (
+        ClassOrObjKey::Direct(Node::new(
+          expr.loc,
+          ClassOrObjMemberDirectKey {
+            key: "null".to_string(),
+            tt: TT::LiteralNull,
+          },
+        )),
+        true,
+      ),
       Expr::LitTemplate(template) => {
         let Some(key_buf) = template_to_string(&template.stx.parts) else {
           return (ClassOrObjKey::Computed(expr), false);

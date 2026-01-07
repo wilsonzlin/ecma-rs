@@ -549,6 +549,21 @@ fn rewrites_computed_member_numeric_string_keys_to_number_access() {
 }
 
 #[test]
+fn rewrites_computed_member_boolean_keys_to_dot_access() {
+  let result = minified(
+    TopLevelMode::Global,
+    "let obj={true:1,false:2};obj[true];obj[false];",
+  );
+  assert_eq!(result, "let obj={true:1,false:2};obj.true;obj.false;");
+}
+
+#[test]
+fn rewrites_computed_member_null_keys_to_dot_access() {
+  let result = minified(TopLevelMode::Global, "let obj={null:1};obj[null];");
+  assert_eq!(result, "let obj={null:1};obj.null;");
+}
+
+#[test]
 fn rewrites_computed_member_small_bigint_keys_to_number_access() {
   let result = minified(TopLevelMode::Global, r#"let obj={1:1};obj[1n];"#);
   assert_eq!(result, "let obj={1:1};obj[1];");
@@ -600,6 +615,15 @@ fn rewrites_object_literal_computed_template_string_keys_to_direct_keys() {
 }
 
 #[test]
+fn rewrites_object_literal_computed_boolean_and_null_keys_to_direct_keys() {
+  let result = minified(
+    TopLevelMode::Global,
+    "let obj={[true]:1,[false]:2,[null]:3};",
+  );
+  assert_eq!(result, "let obj={true:1,false:2,null:3};");
+}
+
+#[test]
 fn rewrites_object_literal_computed_bigint_keys_to_direct_keys() {
   let result = minified(
     TopLevelMode::Global,
@@ -641,6 +665,18 @@ fn rewrites_object_pattern_computed_string_keys_to_direct_keys() {
   assert_eq!(
     result,
     r#"const a={"a-b":1};const{"a-b":b}=a;console.log(b);"#
+  );
+}
+
+#[test]
+fn rewrites_object_pattern_computed_boolean_and_null_keys_to_direct_keys() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const obj={true:1,false:2,null:3};const {[true]:x,[false]:y,[null]:z}=obj;console.log(x+y+z);",
+  );
+  assert_eq!(
+    result,
+    "const a={true:1,false:2,null:3};const{true:c,false:b,null:d}=a;console.log(c+b+d);"
   );
 }
 
