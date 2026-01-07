@@ -1022,6 +1022,72 @@ fn dce_keeps_side_effectful_class_decls() {
 }
 
 #[test]
+fn dce_removes_unused_top_level_function_decls_in_modules() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function unused(){}",
+  );
+  assert!(parsed.stx.body.is_empty(), "unexpected output: {output}");
+}
+
+#[test]
+fn dce_removes_unused_top_level_class_decls_in_modules() {
+  let (output, parsed) = minified_program(TopLevelMode::Module, Dialect::Js, Dialect::Js, "class C{}");
+  assert!(parsed.stx.body.is_empty(), "unexpected output: {output}");
+}
+
+#[test]
+fn dce_keeps_unused_top_level_class_decls_with_static_block_side_effects() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "class C{static{sideEffect()}}",
+  );
+  assert_eq!(parsed.stx.body.len(), 1, "unexpected output: {output}");
+  let class_decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::ClassDecl(decl) => decl,
+    other => panic!("expected class decl, got {other:?}"),
+  };
+  assert!(
+    class_decl
+      .stx
+      .members
+      .iter()
+      .any(|member| matches!(member.stx.val, ClassOrObjVal::StaticBlock(_))),
+    "expected preserved static block in output: {output}"
+  );
+}
+
+#[test]
+fn dce_does_not_remove_unused_function_decls_in_global_mode() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){function dead(){}return 1;}outer();",
+  );
+
+  type FuncDeclNode = Node<FuncDecl>;
+  #[derive(Default, Visitor)]
+  #[visitor(FuncDeclNode(enter))]
+  struct Counter {
+    count: usize,
+  }
+  impl Counter {
+    fn enter_func_decl_node(&mut self, _node: &FuncDeclNode) {
+      self.count += 1;
+    }
+  }
+
+  let mut counter = Counter::default();
+  parsed.drive(&mut counter);
+  assert_eq!(counter.count, 2, "unexpected output: {output}");
+}
+
+#[test]
 fn dce_keeps_class_expr_static_blocks_with_side_effects() {
   let result = minified(
     TopLevelMode::Global,
@@ -1875,7 +1941,7 @@ fn erases_type_annotations_and_aliases() {
   let src = r#"
     type Alias = { foo: string };
     interface Foo { bar: number }
-    const value: number = (foo as any) satisfies Alias ? 1 : 2;
+    const value: number = wrap(((foo as any) satisfies Alias) ? 1 : 2);
     function wrap<T>(item: T): T { return item; }
   "#;
   let mut parsed = parse_with_options(

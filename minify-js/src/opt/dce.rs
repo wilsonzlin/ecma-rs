@@ -20,7 +20,7 @@ use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol};
-use semantic_js::js::{ScopeKind, SymbolId};
+use semantic_js::js::{ScopeKind, SymbolId, TopLevelMode};
 
 pub(super) struct DcePass;
 
@@ -344,6 +344,9 @@ fn dce_func_decl_stmt(
   used: &HashSet<SymbolId>,
   changed: &mut bool,
 ) -> Vec<Node<Stmt>> {
+  if cx.top_level_mode != TopLevelMode::Module {
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  }
   if decl.stx.export {
     return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
   }
@@ -392,6 +395,9 @@ fn dce_class_decl_stmt(
   used: &HashSet<SymbolId>,
   changed: &mut bool,
 ) -> Vec<Node<Stmt>> {
+  if cx.top_level_mode != TopLevelMode::Module {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  }
   if decl.stx.export || decl.stx.export_default {
     return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
   }
