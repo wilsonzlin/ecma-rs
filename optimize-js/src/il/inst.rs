@@ -210,7 +210,10 @@ pub struct Inst {
   // Garbage values if not applicable.
   #[cfg_attr(
     feature = "serde",
-    serde(default = "BinOp::_Unreachable", skip_serializing_if = "is_dummy_binop")
+    serde(
+      default = "BinOp::_Unreachable",
+      skip_serializing_if = "is_dummy_binop"
+    )
   )]
   pub bin_op: BinOp,
   #[cfg_attr(
@@ -223,7 +226,10 @@ pub struct Inst {
     serde(default = "dummy_symbol", skip_serializing_if = "is_dummy_symbol")
   )]
   pub foreign: SymbolId,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "String::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "String::is_empty")
+  )]
   pub unknown: String,
 }
 

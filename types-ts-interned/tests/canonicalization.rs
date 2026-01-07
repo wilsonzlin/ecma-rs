@@ -188,7 +188,10 @@ fn intersection_contradictions_reduce_to_never() {
 
   let true_lit = store.intern_type(TypeKind::BooleanLiteral(true));
   let false_lit = store.intern_type(TypeKind::BooleanLiteral(false));
-  assert_eq!(store.intersection(vec![true_lit, false_lit]), primitives.never);
+  assert_eq!(
+    store.intersection(vec![true_lit, false_lit]),
+    primitives.never
+  );
 
   let str_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   let str_b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));

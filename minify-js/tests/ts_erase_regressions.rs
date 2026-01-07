@@ -40,11 +40,13 @@ fn minify_ts_module_deterministic(src: &str) -> (String, Node<TopLevel>) {
 }
 
 fn has_exported_var_decl(program: &Node<TopLevel>, name: &str) -> bool {
-  program.stx.body.iter().any(|stmt| match stmt.stx.as_ref() {
+  program.stx.body.iter().any(|stmt| {
+    match stmt.stx.as_ref() {
     Stmt::VarDecl(decl) if decl.stx.export => decl.stx.declarators.iter().any(|declarator| {
       matches!(declarator.pattern.stx.pat.stx.as_ref(), Pat::Id(id) if id.stx.name == name)
     }),
     _ => false,
+  }
   })
 }
 

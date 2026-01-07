@@ -41,11 +41,13 @@ fn parses_optional_call_with_type_arguments() {
 
   assert_eq!(call.stx.arguments.len(), 1);
   match call.stx.arguments[0].stx.as_ref() {
-    CallArg { spread: false, value } => match value.stx.as_ref() {
+    CallArg {
+      spread: false,
+      value,
+    } => match value.stx.as_ref() {
       Expr::Id(id) => assert_eq!(id.stx.name, "x"),
       other => panic!("expected id argument, got {other:?}"),
     },
     other => panic!("expected single non-spread argument, got {other:?}"),
   }
 }
-

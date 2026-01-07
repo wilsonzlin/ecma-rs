@@ -218,11 +218,20 @@ pub struct ProgramScope {
   #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
   pub parent: Option<ScopeId>,
   pub kind: ProgramScopeKind,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "Vec::is_empty")
+  )]
   pub symbols: Vec<SymbolId>,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "Vec::is_empty")
+  )]
   pub children: Vec<ScopeId>,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "Vec::is_empty")
+  )]
   pub tdz_bindings: Vec<SymbolId>,
   pub is_dynamic: bool,
   pub has_direct_eval: bool,
@@ -234,9 +243,15 @@ pub struct ProgramSymbols {
   pub symbols: Vec<ProgramSymbol>,
   #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
   pub free_symbols: Option<ProgramFreeSymbols>,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "Vec::is_empty")
+  )]
   pub names: Vec<String>,
-  #[cfg_attr(feature = "serde", serde(default, skip_serializing_if = "Vec::is_empty"))]
+  #[cfg_attr(
+    feature = "serde",
+    serde(default, skip_serializing_if = "Vec::is_empty")
+  )]
   pub scopes: Vec<ProgramScope>,
 }
 
