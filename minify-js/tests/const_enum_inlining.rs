@@ -1,4 +1,6 @@
-use minify_js::{minify_with_options, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
+use minify_js::{
+  minify_with_options, ConstEnumMode, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions,
+};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -334,7 +336,7 @@ fn shadowed_const_enum_base_is_not_inlined() {
 fn preserve_const_enums_option_keeps_runtime_lowering() {
   let src = r#"eval("x");const enum E{A=1,B=A}export const x=E.B;"#;
   let ts_erase_options = TsEraseOptions {
-    preserve_const_enums: true,
+    const_enum_mode: ConstEnumMode::Runtime,
     ..TsEraseOptions::default()
   };
   let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, ts_erase_options);

@@ -176,13 +176,27 @@ impl RewriteIdExprName<'_> {
   }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConstEnumMode {
+  /// Emit `const enum` declarations as runtime enums (an enum object + IIFE),
+  /// matching the lowering used for non-`const` enums.
+  Runtime,
+  /// Inline `const enum` member accesses and erase the declaration, matching the
+  /// default `tsc` emit semantics.
+  Inline,
+}
+
+impl Default for ConstEnumMode {
+  fn default() -> Self {
+    Self::Inline
+  }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct TsEraseOptions {
   pub lower_class_fields: bool,
   pub use_define_for_class_fields: bool,
-  /// When enabled, `const enum` declarations are lowered to runtime enums instead of
-  /// being erased/inlined like `tsc` does by default.
-  pub preserve_const_enums: bool,
+  pub const_enum_mode: ConstEnumMode,
 }
 
 impl Default for TsEraseOptions {
@@ -190,7 +204,7 @@ impl Default for TsEraseOptions {
     Self {
       lower_class_fields: false,
       use_define_for_class_fields: true,
-      preserve_const_enums: false,
+      const_enum_mode: ConstEnumMode::default(),
     }
   }
 }
@@ -457,10 +471,9 @@ pub fn erase_types_with_options(
   top_level: &mut Node<TopLevel>,
   ts_erase_options: TsEraseOptions,
 ) -> Result<(), Vec<Diagnostic>> {
-  let erased_const_enum_bindings = if ts_erase_options.preserve_const_enums {
-    HashSet::new()
-  } else {
-    inline_const_enums(top_level)
+  let erased_const_enum_bindings = match ts_erase_options.const_enum_mode {
+    ConstEnumMode::Runtime => HashSet::new(),
+    ConstEnumMode::Inline => inline_const_enums(top_level),
   };
   let all_identifier_strings = collect_all_identifier_strings(top_level);
   let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
@@ -1409,11 +1422,47 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
     shadowed: Vec<HashSet<String>>,
     namespace_path: Vec<String>,
     erased_top_level: HashSet<String>,
+    value_used_const_enums: HashSet<Vec<String>>,
+    erase_const_enums: bool,
   }
 
   impl Inliner {
     fn is_shadowed(&self, name: &str) -> bool {
       self.shadowed.iter().any(|scope| scope.contains(name))
+    }
+
+    fn has_const_enum_binding(&self, enum_path: &[String]) -> bool {
+      self
+        .const_enums
+        .iter()
+        .rev()
+        .any(|scope| scope.contains_key(enum_path))
+    }
+
+    fn record_const_enum_value_use(&mut self, expr: &Node<Expr>) {
+      let Some((base, parts)) = extract_static_member_chain(expr) else {
+        return;
+      };
+      if self.is_shadowed(&base) {
+        return;
+      }
+      let mut enum_path = Vec::with_capacity(1 + parts.len());
+      enum_path.push(base);
+      enum_path.extend(parts);
+      if self.has_const_enum_binding(&enum_path) {
+        self.value_used_const_enums.insert(enum_path);
+        return;
+      }
+      if self.namespace_path.is_empty() {
+        return;
+      }
+      let mut qualified_path =
+        Vec::with_capacity(self.namespace_path.len().saturating_add(enum_path.len()));
+      qualified_path.extend(self.namespace_path.iter().cloned());
+      qualified_path.extend(enum_path);
+      if self.has_const_enum_binding(&qualified_path) {
+        self.value_used_const_enums.insert(qualified_path);
+      }
     }
 
     fn lookup_const_enum_member(
@@ -1690,7 +1739,6 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
     fn collect_const_enums_in_scope(
       &mut self,
       stmts: &mut [Node<Stmt>],
-      is_top_level: bool,
     ) -> HashMap<Vec<String>, ConstEnumBinding> {
       let mut out = HashMap::new();
       for stmt in stmts.iter_mut() {
@@ -1702,12 +1750,7 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
               decl.stx.declare = false;
             }
             let binding = match values {
-              Some(values) => {
-                if is_top_level {
-                  self.erased_top_level.insert(name.clone());
-                }
-                ConstEnumBinding::Values(values)
-              }
+              Some(values) => ConstEnumBinding::Values(values),
               None => ConstEnumBinding::Blocked,
             };
             out.insert(vec![name], binding);
@@ -1734,22 +1777,41 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
 
     fn rewrite_stmts_in_block(&mut self, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
       let scope = self.collect_block_declared_names(stmts);
-      let enums = self.collect_const_enums_in_scope(stmts, is_top_level);
+      let enums = self.collect_const_enums_in_scope(stmts);
       self.shadowed.push(scope);
       self.const_enums.push(enums);
 
       let mut rewritten = Vec::with_capacity(stmts.len());
       for mut stmt in stmts.drain(..) {
-        if let Stmt::EnumDecl(decl) = stmt.stx.as_ref() {
-          if decl.stx.const_ {
-            let current_scope = self
-              .const_enums
-              .last()
-              .expect("const enum stack should never be empty");
-            let key = vec![decl.stx.name.clone()];
-            let should_erase = matches!(current_scope.get(&key), Some(ConstEnumBinding::Values(_)));
-            if should_erase {
-              continue;
+        if self.erase_const_enums {
+          if let Stmt::EnumDecl(decl) = stmt.stx.as_ref() {
+            if decl.stx.const_ {
+              let current_scope = self
+                .const_enums
+                .last()
+                .expect("const enum stack should never be empty");
+              let key = vec![decl.stx.name.clone()];
+              let should_erase = matches!(current_scope.get(&key), Some(ConstEnumBinding::Values(_)));
+              if should_erase && !decl.stx.declare {
+                let mut qualified_path =
+                  Vec::with_capacity(self.namespace_path.len().saturating_add(1));
+                qualified_path.extend(self.namespace_path.iter().cloned());
+                qualified_path.push(decl.stx.name.clone());
+                let used_as_value = self.value_used_const_enums.contains(&key)
+                  || self.value_used_const_enums.contains(&qualified_path);
+                if !used_as_value {
+                  if is_top_level {
+                    self.erased_top_level.insert(decl.stx.name.clone());
+                  }
+                  continue;
+                }
+              }
+              if should_erase && decl.stx.declare {
+                if is_top_level {
+                  self.erased_top_level.insert(decl.stx.name.clone());
+                }
+                continue;
+              }
             }
           }
         }
@@ -2144,6 +2206,7 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       if self.try_inline_member_access(expr) {
         return;
       }
+      self.record_const_enum_value_use(expr);
 
       match expr.stx.as_mut() {
         Expr::ArrowFunc(arrow) => self.rewrite_func(&mut arrow.stx.func.stx, None),
@@ -2288,6 +2351,11 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
   let mut inliner = Inliner::default();
   inliner.shadowed.push(HashSet::new());
   inliner.const_enums.push(HashMap::new());
+  inliner.rewrite_stmts_in_block(&mut top_level.stx.body, true);
+  // Now that we've seen all const-enum uses, rerun with erasure enabled so we
+  // can keep any const enums that are referenced as values.
+  inliner.erase_const_enums = true;
+  inliner.erased_top_level.clear();
   inliner.rewrite_stmts_in_block(&mut top_level.stx.body, true);
   inliner.erased_top_level
 }

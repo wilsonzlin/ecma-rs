@@ -1,7 +1,7 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::Diagnostic;
 use diagnostics::FileId;
-use minify_js::{Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
+use minify_js::{ConstEnumMode, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
 use serde_json::Value;
@@ -48,7 +48,11 @@ fn parse_minify_options(
     ts_erase_options.use_define_for_class_fields = value;
   }
   if let Some(value) = ts_preserve_const_enums {
-    ts_erase_options.preserve_const_enums = value;
+    ts_erase_options.const_enum_mode = if value {
+      ConstEnumMode::Runtime
+    } else {
+      ConstEnumMode::Inline
+    };
   }
 
   Ok(ParsedOptions {
@@ -282,7 +286,7 @@ mod tests {
     assert_eq!(parsed.dialect, None);
     assert!(!parsed.ts_erase_options.lower_class_fields);
     assert!(parsed.ts_erase_options.use_define_for_class_fields);
-    assert!(!parsed.ts_erase_options.preserve_const_enums);
+    assert_eq!(parsed.ts_erase_options.const_enum_mode, ConstEnumMode::Inline);
   }
 
   #[test]
@@ -302,7 +306,7 @@ mod tests {
     let parsed = parse_minify_options(None, Some(true), Some(false), Some(true)).unwrap();
     assert!(parsed.ts_erase_options.lower_class_fields);
     assert!(!parsed.ts_erase_options.use_define_for_class_fields);
-    assert!(parsed.ts_erase_options.preserve_const_enums);
+    assert_eq!(parsed.ts_erase_options.const_enum_mode, ConstEnumMode::Runtime);
   }
 
   #[test]

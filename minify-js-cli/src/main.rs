@@ -3,7 +3,9 @@ use clap::builder::TypedValueParser;
 use clap::{ArgAction, Parser, ValueEnum};
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{host_error, FileId, Severity, Span, TextRange};
-use minify_js::{minify_with_options, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions};
+use minify_js::{
+  minify_with_options, ConstEnumMode, Dialect, MinifyOptions, TopLevelMode, TsEraseOptions,
+};
 use std::fs::File;
 use std::io::stdin;
 use std::io::stdout;
@@ -136,7 +138,11 @@ fn main() {
   let ts_erase_options = TsEraseOptions {
     lower_class_fields: args.ts_lower_class_fields,
     use_define_for_class_fields: args.ts_use_define_for_class_fields,
-    preserve_const_enums: args.ts_preserve_const_enums,
+    const_enum_mode: if args.ts_preserve_const_enums {
+      ConstEnumMode::Runtime
+    } else {
+      ConstEnumMode::Inline
+    },
     ..TsEraseOptions::default()
   };
   let mut options = MinifyOptions::new(args.mode).with_ts_erase_options(ts_erase_options);
