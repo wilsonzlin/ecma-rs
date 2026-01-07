@@ -205,3 +205,49 @@ fn lowering_class_fields_changes_output() {
     lowered_out
   );
 }
+
+#[test]
+fn ts_preserve_const_enums_changes_output() {
+  let source = br#"eval("x");const enum E{A=1}export const x=E.A;"#;
+
+  let inlined = run_minify(&["--mode", "module"], source);
+  assert!(
+    inlined.status.success(),
+    "expected minify-js to succeed, got status: {:?}, stderr: {}",
+    inlined.status,
+    String::from_utf8_lossy(&inlined.stderr)
+  );
+  let inlined_out = String::from_utf8_lossy(&inlined.stdout);
+  assert!(
+    inlined_out.contains("export const x=1"),
+    "expected const enum member access to be inlined by default, got: {}",
+    inlined_out
+  );
+  assert!(
+    !inlined_out.contains("var E"),
+    "expected const enum declaration to be erased by default, got: {}",
+    inlined_out
+  );
+
+  let preserved = run_minify(
+    &["--mode", "module", "--ts-preserve-const-enums"],
+    source,
+  );
+  assert!(
+    preserved.status.success(),
+    "expected minify-js to succeed with --ts-preserve-const-enums, got status: {:?}, stderr: {}",
+    preserved.status,
+    String::from_utf8_lossy(&preserved.stderr)
+  );
+  let preserved_out = String::from_utf8_lossy(&preserved.stdout);
+  assert!(
+    preserved_out.contains("var E"),
+    "expected preserve mode to emit runtime enum scaffolding, got: {}",
+    preserved_out
+  );
+  assert!(
+    preserved_out.contains("export const x=E.A"),
+    "expected preserve mode to keep enum member access, got: {}",
+    preserved_out
+  );
+}
