@@ -3,7 +3,7 @@ use derive_visitor::{DriveMut, VisitorMut};
 use parse_js::ast::class_or_object::{
   ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
-use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr};
+use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr, LitTemplatePart};
 use parse_js::ast::expr::pat::{ObjPatProp, Pat};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
 use parse_js::ast::node::Node;
@@ -76,27 +76,53 @@ impl PropRewriteVisitor {
 
 fn simplify_computed_member(member: Node<ComputedMemberExpr>, loc: Loc) -> (Expr, bool) {
   let mut member = member;
-  let Expr::LitStr(lit) = member.stx.member.stx.as_ref() else {
-    return (Expr::ComputedMember(member), false);
+  enum StaticKey<'a> {
+    Borrowed(&'a str),
+    Owned(String),
+  }
+
+  impl StaticKey<'_> {
+    fn as_str(&self) -> &str {
+      match self {
+        StaticKey::Borrowed(s) => s,
+        StaticKey::Owned(s) => s.as_str(),
+      }
+    }
+
+    fn into_string(self) -> String {
+      match self {
+        StaticKey::Borrowed(s) => s.to_string(),
+        StaticKey::Owned(s) => s,
+      }
+    }
+  }
+
+  let key = match member.stx.member.stx.as_ref() {
+    Expr::LitStr(lit) => StaticKey::Borrowed(lit.stx.value.as_str()),
+    Expr::LitTemplate(template) => {
+      let Some(key) = template_to_string(&template.stx.parts) else {
+        return (Expr::ComputedMember(member), false);
+      };
+      StaticKey::Owned(key)
+    }
+    _ => return (Expr::ComputedMember(member), false),
   };
 
-  let key = lit.stx.value.as_str();
-
-  if is_identifier_name_token(key) {
+  if is_identifier_name_token(key.as_str()) {
     return (
       Expr::Member(Node::new(
         loc,
         MemberExpr {
           optional_chaining: member.stx.optional_chaining,
           left: member.stx.object,
-          right: key.to_string(),
+          right: key.into_string(),
         },
       )),
       true,
     );
   }
 
-  if let Some(idx) = parse_canonical_u64_index(key) {
+  if let Some(idx) = parse_canonical_u64_index(key.as_str()) {
     member.stx.member = Node::new(
       member.stx.member.loc,
       Expr::LitNum(Node::new(
@@ -170,6 +196,30 @@ fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObj
           (TT::LiteralNumber, idx.to_string())
         } else {
           (TT::LiteralString, key.to_string())
+        };
+
+        (
+          ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
+          true,
+        )
+      }
+      Expr::LitTemplate(template) => {
+        let Some(key_buf) = template_to_string(&template.stx.parts) else {
+          return (ClassOrObjKey::Computed(expr), false);
+        };
+        let key = key_buf.as_str();
+        if proto == ProtoSemantics::Preserve && key == "__proto__" {
+          // `{["__proto__"]: ... }` defines a normal data property, while
+          // `{__proto__: ... }` can change the object's prototype.
+          return (ClassOrObjKey::Computed(expr), false);
+        }
+
+        let (tt, key) = if let Some(tt) = identifier_name_token_tt(key) {
+          (tt, key_buf)
+        } else if let Some(idx) = parse_canonical_u64_index(key) {
+          (TT::LiteralNumber, idx.to_string())
+        } else {
+          (TT::LiteralString, key_buf)
         };
 
         (
@@ -334,6 +384,17 @@ fn parse_canonical_u64_index(value: &str) -> Option<u64> {
   }
 
   Some(parsed)
+}
+
+fn template_to_string(parts: &[LitTemplatePart]) -> Option<String> {
+  let mut out = String::new();
+  for part in parts {
+    match part {
+      LitTemplatePart::String(s) => out.push_str(s),
+      LitTemplatePart::Substitution(_) => return None,
+    }
+  }
+  Some(out)
 }
 
 fn dummy_expr(loc: Loc) -> Expr {

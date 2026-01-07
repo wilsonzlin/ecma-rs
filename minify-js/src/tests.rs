@@ -537,6 +537,12 @@ fn rewrites_computed_member_string_keys_to_dot_access() {
 }
 
 #[test]
+fn rewrites_computed_member_template_string_keys_to_dot_access() {
+  let result = minified(TopLevelMode::Global, r#"let obj={foo:1};obj[`foo`];"#);
+  assert_eq!(result, "let obj={foo:1};obj.foo;");
+}
+
+#[test]
 fn rewrites_computed_member_numeric_string_keys_to_number_access() {
   let result = minified(TopLevelMode::Global, r#"let obj=[1];obj["0"];"#);
   assert_eq!(result, "let obj=[1];obj[0];");
@@ -578,6 +584,12 @@ fn rewrites_object_literal_large_numeric_string_keys_to_number_keys() {
 #[test]
 fn rewrites_object_literal_computed_string_keys_to_direct_keys() {
   let result = minified(TopLevelMode::Global, r#"let obj={["a-b"]:1};"#);
+  assert_eq!(result, r#"let obj={"a-b":1};"#);
+}
+
+#[test]
+fn rewrites_object_literal_computed_template_string_keys_to_direct_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={[`a-b`]:1};"#);
   assert_eq!(result, r#"let obj={"a-b":1};"#);
 }
 
