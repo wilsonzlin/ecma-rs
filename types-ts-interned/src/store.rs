@@ -1177,24 +1177,11 @@ impl TypeStore {
         .optional
         .cmp(&b_param.optional)
         .then_with(|| a_param.rest.cmp(&b_param.rest))
-        .then_with(|| self.type_cmp(a_param.ty, b_param.ty))
-        .then_with(|| self.compare_param_names(a_param.name, b_param.name));
+        .then_with(|| self.type_cmp(a_param.ty, b_param.ty));
       if ord != Ordering::Equal {
         return ord;
       }
       idx += 1;
-    }
-  }
-
-  fn compare_param_names(&self, a: Option<NameId>, b: Option<NameId>) -> Ordering {
-    match (a, b) {
-      (Some(a), Some(b)) => {
-        let names = self.names.read();
-        names.name(a).cmp(names.name(b))
-      }
-      (None, None) => Ordering::Equal,
-      (Some(_), None) => Ordering::Greater,
-      (None, Some(_)) => Ordering::Less,
     }
   }
 
