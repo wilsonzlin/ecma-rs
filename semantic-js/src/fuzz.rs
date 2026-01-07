@@ -185,6 +185,9 @@ const MAX_TS_EXPORTS: usize = 8;
 const MAX_TS_AMBIENT_MODULES: usize = 4;
 const MAX_TS_AMBIENT_DEPTH: usize = 2;
 
+const COMMON_TS_NAMES: [&str; 6] = ["Foo", "Bar", "Baz", "Qux", "NS", "Merged"];
+const COMMON_TS_SPECIFIERS: [&str; 6] = ["pkg", "dep", "mod", "./dep", "../dep", "/dep"];
+
 fn gen_module_spec(cursor: &mut ByteCursor<'_>) -> String {
   let base = ident(cursor, "m");
   match cursor.next_usize(3) {
@@ -195,7 +198,7 @@ fn gen_module_spec(cursor: &mut ByteCursor<'_>) -> String {
 }
 
 fn maybe_pick_name(cursor: &mut ByteCursor<'_>, pool: &[String], prefix: &str) -> String {
-  if !pool.is_empty() && cursor.next_bool() {
+  if !pool.is_empty() && (cursor.next_u8() % 4) != 0 {
     pool[cursor.next_usize(pool.len())].clone()
   } else {
     ident(cursor, prefix)
@@ -538,13 +541,13 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
   };
 
   let name_count = cursor.next_usize(MAX_TS_NAMES) + 1;
-  let mut names = Vec::new();
+  let mut names: Vec<String> = COMMON_TS_NAMES.iter().map(|s| s.to_string()).collect();
   for _ in 0..name_count {
     names.push(ident(cursor, "n"));
   }
 
   let spec_count = cursor.next_usize(MAX_TS_SPECIFIERS) + 1;
-  let mut specifiers = Vec::new();
+  let mut specifiers: Vec<String> = COMMON_TS_SPECIFIERS.iter().map(|s| s.to_string()).collect();
   for _ in 0..spec_count {
     specifiers.push(gen_module_spec(cursor));
   }
