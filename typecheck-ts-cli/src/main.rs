@@ -1,5 +1,5 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
-use diagnostics::paths::normalize_ts_path;
+use diagnostics::paths::{normalize_fs_path, normalize_ts_path};
 use diagnostics::render::{render_diagnostic_with_options, RenderOptions, SourceProvider};
 use diagnostics::{Diagnostic, FileId, Severity};
 use serde::Serialize;
@@ -696,7 +696,9 @@ impl DiskState {
     if let Some(key) = self.path_to_key.get(&path) {
       return key.clone();
     }
-    let key = FileKey::new(path.display().to_string());
+    // Use a stable, TypeScript-style virtual path as the file key so JSON output
+    // (and FileId hashing) is deterministic across platforms.
+    let key = FileKey::new(normalize_fs_path(&path));
     let kind = file_kind_for(&path);
     self.path_to_key.insert(path.clone(), key.clone());
     self.key_to_path.insert(key.clone(), path);
@@ -724,8 +726,15 @@ impl Host for DiskHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    if let Some(base) = self.path_for_key(from) {
+    let base = self
+      .path_for_key(from)
+      .or_else(|| {
+        let candidate = PathBuf::from(from.as_str());
+        candidate.is_file().then_some(candidate)
+      });
+    if let Some(base) = base {
       if let Some(resolved) = self.resolver.resolve(&base, specifier) {
+        let resolved = canonicalize_path(&resolved).unwrap_or(resolved);
         let mut state = self.state.lock().unwrap();
         return Some(state.intern_path(resolved));
       }
@@ -917,7 +926,7 @@ fn lib_file_from_type_package(package: &str, dir: &Path) -> Result<Option<LibFil
     )
   })?;
   Ok(Some(LibFile {
-    key: FileKey::new(canonical.display().to_string()),
+    key: FileKey::new(normalize_fs_path(&canonical)),
     name: Arc::from(format!("types:{package}")),
     kind: FileKind::Dts,
     text: Arc::from(text),
