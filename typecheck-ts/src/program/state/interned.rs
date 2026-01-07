@@ -23,8 +23,19 @@ impl ProgramState {
   ) -> Result<(), FatalError> {
     self.ensure_analyzed_result(host, roots)?;
     self.check_cancelled()?;
-    let revision = db::db_revision(&self.typecheck_db);
-    if self.interned_revision == Some(revision) {
+    let store = self.interned_store.clone().unwrap_or_else(|| {
+      let store = tti::TypeStore::with_options((&self.compiler_options).into());
+      self.interned_store = Some(Arc::clone(&store));
+      self
+        .typecheck_db
+        .set_type_store(crate::db::types::SharedTypeStore(Arc::clone(&store)));
+      store
+    });
+    self
+      .typecheck_db
+      .set_type_store(crate::db::types::SharedTypeStore(Arc::clone(&store)));
+    let fingerprint = db::decl_types_fingerprint(&self.typecheck_db);
+    if self.decl_types_fingerprint == Some(fingerprint) {
       return Ok(());
     }
     self.module_namespace_types.clear();
@@ -32,50 +43,42 @@ impl ProgramState {
     // The interned type tables are rebuilt as a batch; clear any shared caches
     // that may have memoized partial ref expansions against the old tables.
     self.checker_caches.clear_shared();
-    let store = self.interned_store.clone().unwrap_or_else(|| {
-      let store = tti::TypeStore::with_options((&self.compiler_options).into());
-      self.interned_store = Some(Arc::clone(&store));
-      store
-    });
     self.interned_def_types.clear();
     self.interned_named_def_types.clear();
     self.interned_type_params.clear();
     self.interned_type_param_decls.clear();
     self.interned_intrinsics.clear();
-    self.rebuild_module_namespace_defs();
-    self.rebuild_callable_overloads();
+    self.namespace_object_types.clear();
     self.check_cancelled()?;
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
     let mut type_param_decls = HashMap::new();
-
-    fn type_expr_is_intrinsic_marker(
-      arenas: &hir_js::TypeArenas,
-      names: &hir_js::NameInterner,
-      mut type_expr: hir_js::TypeExprId,
-    ) -> bool {
-      loop {
-        let Some(expr) = arenas.type_exprs.get(type_expr.0 as usize) else {
-          return false;
-        };
-        match &expr.kind {
-          hir_js::TypeExprKind::Parenthesized(inner) => {
-            type_expr = *inner;
-          }
-          hir_js::TypeExprKind::Intrinsic => return true,
-          hir_js::TypeExprKind::TypeRef(type_ref) => {
-            if !type_ref.type_args.is_empty() {
-              return false;
-            }
-            return matches!(&type_ref.name, hir_js::TypeName::Ident(id) if names.resolve(*id) == Some("intrinsic"));
-          }
-          _ => return false,
-        }
+    let mut decl_files: Vec<_> = db::all_files(&self.typecheck_db).iter().copied().collect();
+    decl_files.sort_by_key(|file| file.0);
+    for (idx, file) in decl_files.iter().enumerate() {
+      if (idx % 16) == 0 {
+        self.check_cancelled()?;
       }
-    }
-
-    for (def, ty) in self.interned_def_types.iter() {
-      def_types.insert(*def, *ty);
+      let decls = db::decl_types(&self.typecheck_db, *file);
+      for (def, ty) in decls.types.iter() {
+        def_types
+          .entry(*def)
+          .and_modify(|existing| {
+            *existing = ProgramState::merge_interned_decl_types(&store, *existing, *ty);
+          })
+          .or_insert(*ty);
+      }
+      for (def, params) in decls.type_params.iter() {
+        if params.is_empty() {
+          continue;
+        }
+        type_params.insert(*def, params.iter().map(|param| param.id).collect());
+        type_param_decls.insert(*def, Arc::from(params.clone().into_boxed_slice()));
+      }
+      for (def, kind) in decls.intrinsics.iter() {
+        self.interned_intrinsics.insert(*def, *kind);
+      }
+      self.diagnostics.extend(decls.diagnostics.iter().cloned());
     }
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let mut declared_type_cache: HashMap<(FileId, TextRange), Option<TypeId>> = HashMap::new();
@@ -141,11 +144,9 @@ impl ProgramState {
     for (file, lowered) in lowered_entries.iter() {
       self.check_cancelled()?;
       let mut def_map: HashMap<DefId, DefId> = HashMap::new();
-      let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
       for def in lowered.defs.iter() {
         if let Some(name) = lowered.names.resolve(def.name) {
           let name = name.to_string();
-          local_defs.insert(name.clone(), def.id);
           let parent = def.parent;
           let namespaces = hir_namespaces(def.path.kind);
           let preferred = match def.path.kind {
@@ -179,151 +180,7 @@ impl ProgramState {
           }
         }
       }
-      hir_def_maps.insert(*file, def_map.clone());
-      let file_key = self.file_key_for_id(*file);
-      let registry = self.file_registry.clone();
-      let key_to_id = move |key: &FileKey| registry.lookup_id(key);
-      let mut lowerer = check::decls::HirDeclLowerer::new(
-        Arc::clone(&store),
-        &lowered.types,
-        self.semantics.as_deref(),
-        flat_defs.clone(),
-        *file,
-        file_key.clone(),
-        local_defs,
-        &mut self.diagnostics,
-        Some(&def_map),
-        Some(&flat_defs),
-        Some(host.as_ref()),
-        Some(&key_to_id),
-        Some(&self.module_namespace_defs),
-        Some(&self.value_defs),
-      );
-      for def in lowered.defs.iter() {
-        let Some(info) = def.type_info.as_ref() else {
-          continue;
-        };
-        let target_def = def_map.get(&def.id).copied().or_else(|| {
-          lowered.names.resolve(def.name).and_then(|n| {
-            let name = n.to_string();
-            let parent = def.parent;
-            let namespaces = hir_namespaces(def.path.kind);
-            let preferred = match def.path.kind {
-              HirDefKind::Class
-              | HirDefKind::Enum
-              | HirDefKind::Interface
-              | HirDefKind::TypeAlias => [
-                sem_ts::Namespace::TYPE,
-                sem_ts::Namespace::VALUE,
-                sem_ts::Namespace::NAMESPACE,
-              ],
-              HirDefKind::Namespace | HirDefKind::Module => [
-                sem_ts::Namespace::NAMESPACE,
-                sem_ts::Namespace::VALUE,
-                sem_ts::Namespace::TYPE,
-              ],
-              _ => [
-                sem_ts::Namespace::VALUE,
-                sem_ts::Namespace::TYPE,
-                sem_ts::Namespace::NAMESPACE,
-              ],
-            };
-            preferred.into_iter().find_map(|ns| {
-              namespaces
-                .contains(ns)
-                .then_some(())
-                .and_then(|_| def_by_name.get(&(*file, parent, name.clone(), ns)).copied())
-            })
-          })
-        });
-        let Some(mapped) = target_def else {
-          continue;
-        };
-
-        if let hir_js::DefTypeInfo::TypeAlias { type_expr, .. } = info {
-          if let Some(name) = lowered.names.resolve(def.name) {
-            if let Some(kind) = tti::IntrinsicKind::from_name(name) {
-              if let Some(arenas) = lowered.type_arenas(def.id) {
-                if type_expr_is_intrinsic_marker(arenas, &lowered.names, *type_expr) {
-                  self.interned_intrinsics.insert(mapped, kind);
-                }
-              }
-            }
-          }
-        }
-
-        match info {
-          hir_js::DefTypeInfo::Class { .. } => {
-            let Some((instance, value, params)) =
-              lowerer.lower_class_instance_and_value_types(def.id, info, &lowered.names)
-            else {
-              continue;
-            };
-            let instance = def_types
-              .get(&mapped)
-              .copied()
-              .map(|existing| ProgramState::merge_interned_decl_types(&store, existing, instance))
-              .unwrap_or(instance);
-            def_types.insert(mapped, instance);
-            if !params.is_empty() {
-              type_params.insert(mapped, params.iter().map(|param| param.id).collect());
-              type_param_decls.insert(mapped, Arc::from(params.into_boxed_slice()));
-            }
-            let value_def = self
-              .value_defs
-              .get(&mapped)
-              .copied()
-              .or_else(|| self.value_defs.get(&def.id).copied());
-            if let Some(value_def) = value_def {
-              let value = def_types
-                .get(&value_def)
-                .copied()
-                .map(|existing| ProgramState::merge_interned_decl_types(&store, existing, value))
-                .unwrap_or(value);
-              def_types.insert(value_def, value);
-            }
-          }
-          hir_js::DefTypeInfo::Enum { .. } => {
-            let Some((enum_ty, value)) =
-              lowerer.lower_enum_type_and_value(def.id, info, &lowered.names)
-            else {
-              continue;
-            };
-            let enum_ty = def_types
-              .get(&mapped)
-              .copied()
-              .map(|existing| ProgramState::merge_interned_decl_types(&store, existing, enum_ty))
-              .unwrap_or(enum_ty);
-            def_types.insert(mapped, enum_ty);
-            let value_def = self
-              .value_defs
-              .get(&mapped)
-              .copied()
-              .or_else(|| self.value_defs.get(&def.id).copied());
-            if let Some(value_def) = value_def {
-              let value = def_types
-                .get(&value_def)
-                .copied()
-                .map(|existing| ProgramState::merge_interned_decl_types(&store, existing, value))
-                .unwrap_or(value);
-              def_types.insert(value_def, value);
-            }
-          }
-          _ => {
-            let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
-            let ty = def_types
-              .get(&mapped)
-              .copied()
-              .map(|existing| ProgramState::merge_interned_decl_types(&store, existing, ty))
-              .unwrap_or(ty);
-            def_types.insert(mapped, ty);
-            if !params.is_empty() {
-              type_params.insert(mapped, params.iter().map(|param| param.id).collect());
-              type_param_decls.insert(mapped, Arc::from(params.into_boxed_slice()));
-            }
-          }
-        }
-      }
+      hir_def_maps.insert(*file, def_map);
     }
 
     self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
@@ -1036,7 +893,7 @@ impl ProgramState {
     }
     self.recompute_global_bindings();
     codes::normalize_diagnostics(&mut self.diagnostics);
-    self.interned_revision = Some(revision);
+    self.decl_types_fingerprint = Some(fingerprint);
     Ok(())
   }
 }

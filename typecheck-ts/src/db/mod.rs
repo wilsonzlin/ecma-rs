@@ -4,7 +4,7 @@
 //! The types are `pub` so integration tests can exercise the database
 //! end-to-end, but consumers should treat them as unstable internals.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -15,13 +15,16 @@ use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
 use diagnostics::{Diagnostic, FileId};
 use salsa::Setter;
+use types_ts_interned as tti;
 
 pub mod cache;
+pub mod decl;
 pub mod expander;
 mod inputs;
 pub mod queries;
 pub(crate) mod spans;
 pub mod symbols;
+pub mod types;
 
 pub use inputs::CancellationToken;
 pub use queries::body_check::{
@@ -30,13 +33,13 @@ pub use queries::body_check::{
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
   body_parents_in_file, body_to_file, cache_stats, cancelled, compiler_options, db_revision,
-  def_file, def_to_file, expr_at, file_kind, file_span_index, file_text, global_bindings,
-  local_symbol_info, lower_hir, module_dep_diagnostics, module_deps, module_resolve,
-  module_specifiers, parse, parse_query_count, program_diagnostics, reachable_files,
-  reset_parse_query_count, roots, sem_hir, span_of_def, span_of_expr, symbol_occurrences,
-  ts_semantics, type_at, unresolved_module_diagnostics, var_initializer, DeclInfo, DeclKind,
-  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
-  TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  decl_types, decl_types_fingerprint, def_file, def_to_file, expr_at, file_kind, file_span_index,
+  file_text, global_bindings, local_symbol_info, lower_hir, module_dep_diagnostics, module_deps,
+  module_resolve, module_specifiers, parse, parse_query_count, program_diagnostics,
+  reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def, span_of_expr,
+  symbol_occurrences, ts_semantics, type_at, unresolved_module_diagnostics, var_initializer,
+  DeclInfo, DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore,
+  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
 
@@ -64,6 +67,9 @@ impl ModuleKey {
 #[salsa::db]
 pub trait Db: salsa::Database + Send + 'static {
   fn compiler_options_input(&self) -> inputs::CompilerOptionsInput;
+  fn type_store_input(&self) -> inputs::TypeStoreInput;
+  fn value_defs_input(&self) -> inputs::ValueDefsInput;
+  fn module_namespace_defs_input(&self) -> inputs::ModuleNamespaceDefsInput;
   fn roots_input(&self) -> inputs::RootsInput;
   fn cancelled_input(&self) -> inputs::CancelledInput;
   fn file_input(&self, file: FileId) -> Option<inputs::FileInput>;
@@ -87,6 +93,9 @@ pub trait Db: salsa::Database + Send + 'static {
 pub struct Database {
   storage: salsa::Storage<Self>,
   compiler_options_input: Option<inputs::CompilerOptionsInput>,
+  type_store_input: Option<inputs::TypeStoreInput>,
+  value_defs_input: Option<inputs::ValueDefsInput>,
+  module_namespace_defs_input: Option<inputs::ModuleNamespaceDefsInput>,
   roots_input: Option<inputs::RootsInput>,
   cancelled_input: Option<inputs::CancelledInput>,
   files: BTreeMap<FileId, inputs::FileInput>,
@@ -103,6 +112,9 @@ impl Default for Database {
     let mut db = Database {
       storage: salsa::Storage::default(),
       compiler_options_input: None,
+      type_store_input: None,
+      value_defs_input: None,
+      module_namespace_defs_input: None,
       roots_input: None,
       cancelled_input: None,
       files: BTreeMap::new(),
@@ -129,6 +141,24 @@ impl Db for Database {
     self
       .compiler_options_input
       .expect("compiler options must be initialized")
+  }
+
+  fn type_store_input(&self) -> inputs::TypeStoreInput {
+    self
+      .type_store_input
+      .expect("type store must be initialized")
+  }
+
+  fn value_defs_input(&self) -> inputs::ValueDefsInput {
+    self
+      .value_defs_input
+      .expect("value defs must be initialized")
+  }
+
+  fn module_namespace_defs_input(&self) -> inputs::ModuleNamespaceDefsInput {
+    self
+      .module_namespace_defs_input
+      .expect("module namespace defs must be initialized")
   }
 
   fn roots_input(&self) -> inputs::RootsInput {
@@ -218,6 +248,16 @@ impl Database {
     self.compiler_options_input = Some(inputs::CompilerOptionsInput::new(
       self,
       CompilerOptions::default(),
+    ));
+    let store = tti::TypeStore::with_options((&CompilerOptions::default()).into());
+    self.type_store_input = Some(inputs::TypeStoreInput::new(
+      self,
+      crate::db::types::SharedTypeStore(store),
+    ));
+    self.value_defs_input = Some(inputs::ValueDefsInput::new(self, Arc::new(HashMap::new())));
+    self.module_namespace_defs_input = Some(inputs::ModuleNamespaceDefsInput::new(
+      self,
+      Arc::new(HashMap::new()),
     ));
     self.roots_input = Some(inputs::RootsInput::new(self, Arc::<[FileKey]>::from([])));
     self.cancelled_input = Some(inputs::CancelledInput::new(
@@ -442,6 +482,10 @@ impl Database {
     queries::lower_hir(self, file)
   }
 
+  pub fn decl_types(&self, file: FileId) -> Arc<crate::db::types::DeclTypes> {
+    queries::decl_types(self, file)
+  }
+
   pub fn sem_hir(&self, file: FileId) -> semantic_js::ts::HirFile {
     queries::sem_hir(self, file)
   }
@@ -472,6 +516,35 @@ impl Database {
 
   pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
     self.profiler = Some(profiler);
+  }
+
+  /// Override the interned type store used by declaration-type queries.
+  ///
+  /// Callers should only swap the store when compiler options that affect type
+  /// interning change; otherwise retaining the `Arc` identity preserves salsa
+  /// memoization and stable type IDs across revisions.
+  pub fn set_type_store(&mut self, store: crate::db::types::SharedTypeStore) {
+    if let Some(handle) = self.type_store_input {
+      handle.set_store(self).to(store);
+    } else {
+      self.type_store_input = Some(inputs::TypeStoreInput::new(self, store));
+    }
+  }
+
+  pub fn set_value_defs(&mut self, defs: Arc<HashMap<DefId, DefId>>) {
+    if let Some(handle) = self.value_defs_input {
+      handle.set_defs(self).to(defs);
+    } else {
+      self.value_defs_input = Some(inputs::ValueDefsInput::new(self, defs));
+    }
+  }
+
+  pub fn set_module_namespace_defs(&mut self, defs: Arc<HashMap<FileId, DefId>>) {
+    if let Some(handle) = self.module_namespace_defs_input {
+      handle.set_defs(self).to(defs);
+    } else {
+      self.module_namespace_defs_input = Some(inputs::ModuleNamespaceDefsInput::new(self, defs));
+    }
   }
 
   /// Cache a checked body result for reuse by span and type queries.

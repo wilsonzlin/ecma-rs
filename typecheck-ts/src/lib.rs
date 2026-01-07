@@ -152,6 +152,7 @@ mod class_typing;
 pub mod codes;
 #[doc(hidden)]
 pub mod db;
+mod decl_metrics;
 mod error;
 pub mod expand;
 mod files;
@@ -171,6 +172,7 @@ mod type_queries;
 
 pub use api::*;
 pub use db::queries::VarInit;
+pub use decl_metrics::{decl_types_call_count, reset_decl_types_call_count};
 pub use error::*;
 pub use files::FileOrigin;
 pub use lower_metrics::{lower_call_count, reset_lower_call_count};

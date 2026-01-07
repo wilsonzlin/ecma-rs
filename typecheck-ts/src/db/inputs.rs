@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId};
+use hir_js::DefId;
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::BodyId;
@@ -91,4 +92,36 @@ pub struct BodyResultInput {
 pub struct ExtraDiagnosticsInput {
   #[return_ref]
   pub diagnostics: Arc<[Diagnostic]>,
+}
+
+/// Mapping from type-side definition IDs (classes/enums) to their synthesized
+/// value-side definition IDs.
+///
+/// This is populated by [`Program`](crate::Program) so declaration type lowering
+/// can map `typeof Foo` queries to the correct value namespace definition.
+#[salsa::input]
+pub struct ValueDefsInput {
+  #[return_ref]
+  pub defs: Arc<std::collections::HashMap<DefId, DefId>>,
+}
+
+/// Synthetic module namespace definitions keyed by file.
+///
+/// These defs back `typeof import("./mod")` queries and module namespace object
+/// types.
+#[salsa::input]
+pub struct ModuleNamespaceDefsInput {
+  #[return_ref]
+  pub defs: Arc<std::collections::HashMap<FileId, DefId>>,
+}
+
+/// Revision-stable handle to the interned `types-ts-interned` store used while
+/// lowering declaration types.
+///
+/// The shared store is treated as an explicit salsa input so it can remain
+/// pointer-stable across revisions (re-using memoized interned IDs) until
+/// compiler options change.
+#[salsa::input]
+pub struct TypeStoreInput {
+  pub store: crate::db::types::SharedTypeStore,
 }

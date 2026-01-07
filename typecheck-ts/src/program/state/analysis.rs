@@ -325,6 +325,13 @@ impl ProgramState {
     self.check_cancelled()?;
     self.resolve_reexports();
     self.rebuild_callable_overloads();
+    self.rebuild_module_namespace_defs();
+    self
+      .typecheck_db
+      .set_module_namespace_defs(Arc::new(self.module_namespace_defs.clone()));
+    self
+      .typecheck_db
+      .set_value_defs(Arc::new(self.value_defs.clone()));
     self.recompute_global_bindings();
     self.rebuild_namespace_member_index()?;
     self.rebuild_body_owners();
@@ -362,6 +369,25 @@ impl ProgramState {
     self
       .typecheck_db
       .set_cancellation_flag(self.cancelled.clone());
+    let store_options = (&options).into();
+    let store = match self.interned_store.as_ref() {
+      Some(existing) if existing.options() == store_options => Arc::clone(existing),
+      _ => {
+        let store = tti::TypeStore::with_options(store_options);
+        self.interned_store = Some(Arc::clone(&store));
+        self.decl_types_fingerprint = None;
+        self.interned_def_types.clear();
+        self.interned_named_def_types.clear();
+        self.interned_type_params.clear();
+        self.interned_type_param_decls.clear();
+        self.interned_intrinsics.clear();
+        self.namespace_object_types.clear();
+        store
+      }
+    };
+    self
+      .typecheck_db
+      .set_type_store(crate::db::types::SharedTypeStore(Arc::clone(&store)));
     let libs = collect_libs(&options, host.lib_files(), &self.lib_manager);
     if libs.is_empty() && options.no_default_lib {
       self.lib_diagnostics.clear();

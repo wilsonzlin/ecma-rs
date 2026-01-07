@@ -1519,53 +1519,17 @@ impl Program {
       if let Err(fatal) = state.ensure_interned_types(&self.host, &self.roots) {
         state.diagnostics.push(fatal_to_diagnostic(fatal));
       }
-      let mut resolver = state
+      let resolver = state
         .def_data
         .iter()
         .map(|(id, data)| (tti::DefId(id.0), data.name.clone()))
         .collect::<HashMap<_, _>>();
-      let (store, mut ty) = display_type_from_state(&state, ty);
+      let (store, ty) = display_type_from_state(&state, ty);
       let can_evaluate = state
         .interned_store
         .as_ref()
         .map(|interned| Arc::ptr_eq(interned, &store))
         .unwrap_or(false);
-
-      if can_evaluate {
-        let canonical = store.canon(ty);
-        if let tti::TypeKind::Intersection(members) = store.type_kind(canonical) {
-          for (def, data) in state.def_data.iter() {
-            if !matches!(data.kind, DefKind::Function(_)) {
-              continue;
-            }
-            let Some(def_ty) = state.interned_def_types.get(def).copied() else {
-              continue;
-            };
-            if store.canon(def_ty) != canonical {
-              continue;
-            }
-            let Some((ns_ty, _)) = state
-              .namespace_object_types
-              .get(&(data.file, data.name.clone()))
-            else {
-              continue;
-            };
-            let ns_ty = store.canon(*ns_ty);
-            if !members.iter().any(|member| store.canon(*member) == ns_ty) {
-              continue;
-            }
-            let Some(ns_def) = state.find_namespace_def(data.file, &data.name) else {
-              continue;
-            };
-            resolver.insert(tti::DefId(ns_def.0), format!("typeof {}", data.name));
-            ty = store.canon(store.intern_type(tti::TypeKind::Ref {
-              def: tti::DefId(ns_def.0),
-              args: Vec::new(),
-            }));
-            break;
-          }
-        }
-      }
       let ty = match store.type_kind(ty) {
         tti::TypeKind::Mapped(mapped) => {
           if !can_evaluate {

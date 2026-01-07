@@ -25,6 +25,7 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
+use crate::db::types::{DeclTypes, SharedDeclTypes};
 use crate::db::{symbols, Db};
 use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
 use crate::lower_metrics;
@@ -36,7 +37,7 @@ use crate::triple_slash::{
   normalize_reference_path_specifier, scan_triple_slash_directives, TripleSlashReferenceKind,
 };
 use crate::FileKey;
-use crate::{BodyId, DefId, ExprId, TypeId};
+use crate::{BodyId, DefId, ExprId, Host, HostError, TypeId};
 use salsa::plumbing::current_revision;
 use salsa::Setter;
 
@@ -56,6 +57,46 @@ fn file_id_from_key(db: &dyn Db, key: &FileKey) -> Option<FileId> {
 fn panic_if_cancelled(db: &dyn Db) {
   if cancelled(db).load(Ordering::Relaxed) {
     panic_any(crate::FatalError::Cancelled);
+  }
+}
+
+#[derive(Clone)]
+struct StableHasher(u64);
+
+impl StableHasher {
+  const OFFSET: u64 = 0xcbf29ce484222325;
+  const PRIME: u64 = 0x100000001b3;
+
+  fn new() -> Self {
+    StableHasher(Self::OFFSET)
+  }
+
+  fn write_bytes(&mut self, bytes: &[u8]) {
+    for b in bytes {
+      self.0 ^= *b as u64;
+      self.0 = self.0.wrapping_mul(Self::PRIME);
+    }
+  }
+
+  fn write_u8(&mut self, value: u8) {
+    self.write_bytes(&[value]);
+  }
+
+  fn write_u32(&mut self, value: u32) {
+    self.write_bytes(&value.to_le_bytes());
+  }
+
+  fn write_u64(&mut self, value: u64) {
+    self.write_bytes(&value.to_le_bytes());
+  }
+
+  fn write_str(&mut self, value: &str) {
+    self.write_u32(value.len() as u32);
+    self.write_bytes(value.as_bytes());
+  }
+
+  fn finish(&self) -> u64 {
+    self.0
   }
 }
 
@@ -1643,6 +1684,37 @@ impl std::fmt::Debug for TsSemantics {
   }
 }
 
+#[derive(Clone)]
+struct FileSemantics {
+  semantics: Arc<sem_ts::TsProgramSemantics>,
+  fingerprint: u64,
+}
+
+impl std::fmt::Debug for FileSemantics {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("FileSemantics")
+      .field("fingerprint", &self.fingerprint)
+      .finish()
+  }
+}
+
+impl PartialEq for FileSemantics {
+  fn eq(&self, other: &Self) -> bool {
+    self.fingerprint == other.fingerprint
+  }
+}
+
+impl Eq for FileSemantics {}
+
+unsafe impl salsa::Update for FileSemantics {
+  unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+    let old_value = &mut *old_pointer;
+    let changed = old_value.fingerprint != new_value.fingerprint;
+    *old_value = new_value;
+    changed
+  }
+}
+
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   panic_if_cancelled(db);
@@ -1739,6 +1811,209 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     semantics: Arc::new(semantics),
     diagnostics: Arc::new(diagnostics),
   })
+}
+
+fn hash_symbol_group(hasher: &mut StableHasher, group: &sem_ts::SymbolGroup) {
+  match &group.kind {
+    sem_ts::SymbolGroupKind::Merged(symbol) => {
+      hasher.write_u8(0);
+      hasher.write_u64(symbol.0);
+    }
+    sem_ts::SymbolGroupKind::Separate {
+      value,
+      ty,
+      namespace,
+    } => {
+      hasher.write_u8(1);
+      for entry in [value, ty, namespace] {
+        match entry {
+          Some(symbol) => {
+            hasher.write_u8(1);
+            hasher.write_u64(symbol.0);
+          }
+          None => hasher.write_u8(0),
+        }
+      }
+    }
+  }
+}
+
+fn hash_export_map(hasher: &mut StableHasher, exports: &sem_ts::ExportMap) {
+  for (name, group) in exports.iter() {
+    hasher.write_str(name);
+    hash_symbol_group(hasher, group);
+  }
+}
+
+#[salsa::tracked]
+fn file_semantics_for(db: &dyn Db, file: FileInput) -> FileSemantics {
+  panic_if_cancelled(db);
+  let sem = ts_semantics_for(db);
+  let file_id = file.file_id(db);
+  let deps = module_deps_for(db, file);
+  let specs = module_specifiers_for(db, file);
+  let mut hasher = StableHasher::new();
+  hasher.write_u32(file_id.0);
+
+  if let Some(exports) = sem.semantics.exports_of_opt(sem_ts::FileId(file_id.0)) {
+    hasher.write_u8(1);
+    hash_export_map(&mut hasher, exports);
+  } else {
+    hasher.write_u8(0);
+  }
+
+  for dep in deps.iter() {
+    hasher.write_u32(dep.0);
+    if let Some(exports) = sem.semantics.exports_of_opt(sem_ts::FileId(dep.0)) {
+      hasher.write_u8(1);
+      hash_export_map(&mut hasher, exports);
+    } else {
+      hasher.write_u8(0);
+    }
+  }
+
+  for spec in specs.iter() {
+    if module_resolve_ref(db, file_id, spec.as_ref()).is_some() {
+      continue;
+    }
+    if let Some(exports) = sem.semantics.exports_of_ambient_module(spec.as_ref()) {
+      hasher.write_u8(2);
+      hasher.write_str(spec.as_ref());
+      hash_export_map(&mut hasher, exports);
+    }
+  }
+
+  FileSemantics {
+    semantics: Arc::clone(&sem.semantics),
+    fingerprint: hasher.finish(),
+  }
+}
+
+#[salsa::tracked]
+fn flat_defs_for(db: &dyn Db) -> Arc<HashMap<(FileId, String), DefId>> {
+  panic_if_cancelled(db);
+  let mut files: Vec<_> = all_files_for(db).iter().copied().collect();
+  files.sort_by_key(|file| file.0);
+
+  let mut entries: Vec<(FileId, String, (u8, u32, u32, u64), DefId)> = Vec::new();
+  for file in files {
+    panic_if_cancelled(db);
+    let Some(input) = db.file_input(file) else {
+      continue;
+    };
+    let lowered = lower_hir_for(db, input);
+    let Some(lowered) = lowered.lowered.as_deref() else {
+      continue;
+    };
+    let mut children: HashMap<DefId, Vec<&hir_js::DefData>> = HashMap::new();
+    for def in lowered.defs.iter() {
+      if let Some(parent) = def.parent {
+        children.entry(parent).or_default().push(def);
+      }
+    }
+    for def in lowered.defs.iter() {
+      if def.parent.is_some() {
+        continue;
+      }
+      if matches!(def.path.kind, DefKind::VarDeclarator) {
+        if let Some(vars) = children.get(&def.id) {
+          for child in vars.iter().filter(|d| matches!(d.path.kind, DefKind::Var)) {
+            let Some(name) = lowered.names.resolve(child.name) else {
+              continue;
+            };
+            entries.push((
+              file,
+              name.to_string(),
+              (4, child.span.start, child.span.end, child.id.0),
+              child.id,
+            ));
+          }
+        }
+        continue;
+      }
+      let Some(name) = lowered.names.resolve(def.name) else {
+        continue;
+      };
+      let priority = match def.path.kind {
+        DefKind::TypeAlias | DefKind::Interface => 0,
+        DefKind::Class | DefKind::Enum => 1,
+        DefKind::Namespace | DefKind::Module => 2,
+        DefKind::ImportBinding | DefKind::ExportAlias => 3,
+        _ => 4,
+      };
+      entries.push((
+        file,
+        name.to_string(),
+        (priority, def.span.start, def.span.end, def.id.0),
+        def.id,
+      ));
+    }
+  }
+
+  entries.sort_by(|a, b| (a.0 .0, &a.1, a.2).cmp(&(b.0 .0, &b.1, b.2)));
+  let mut map = HashMap::new();
+  for (file, name, _key, def) in entries.into_iter() {
+    map.entry((file, name)).or_insert(def);
+  }
+  Arc::new(map)
+}
+
+#[salsa::tracked]
+fn decl_types_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
+  panic_if_cancelled(db);
+  crate::decl_metrics::record_decl_types_call();
+  let store = db.type_store_input().store(db).arc();
+  let lowered = lower_hir_for(db, file);
+  let Some(lowered) = lowered.lowered.as_deref() else {
+    return SharedDeclTypes(Arc::new(DeclTypes::default()));
+  };
+
+  struct DbHost {
+    db: *const dyn Db,
+  }
+
+  unsafe impl Send for DbHost {}
+  unsafe impl Sync for DbHost {}
+
+  impl Host for DbHost {
+    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+      let db = unsafe { &*self.db };
+      db.file_input_by_key(file)
+        .map(|input| input.text(db))
+        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+    }
+
+    fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+      let db = unsafe { &*self.db };
+      let from_id = db.file_input_by_key(from).map(|input| input.file_id(db))?;
+      let target_id = module_resolve_ref(db, from_id, specifier)?;
+      db.file_input(target_id).map(|input| input.key(db))
+    }
+  }
+
+  let host = DbHost {
+    db: db as *const dyn Db,
+  };
+  let key_to_id = |key: &FileKey| db.file_input_by_key(key).map(|input| input.file_id(db));
+  let file_id = file.file_id(db);
+  let file_key = Some(file.key(db));
+  let defs = flat_defs_for(db);
+  let module_namespace_defs = db.module_namespace_defs_input().defs(db).clone();
+  let value_defs = db.value_defs_input().defs(db).clone();
+  let semantics = file_semantics_for(db, file);
+  let decls = crate::db::decl::lower_decl_types(
+    Arc::clone(&store),
+    lowered,
+    Some(semantics.semantics.as_ref()),
+    defs,
+    file_id,
+    file_key,
+    Some(&host),
+    Some(&key_to_id),
+    Some(module_namespace_defs.as_ref()),
+    Some(value_defs.as_ref()),
+  );
+  SharedDeclTypes(decls.into_shared())
 }
 
 struct DbResolver<'db> {
@@ -2066,6 +2341,32 @@ pub fn all_files(db: &dyn Db) -> Arc<Vec<FileId>> {
 
 pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
   ts_semantics_for(db)
+}
+
+pub fn decl_types(db: &dyn Db, file: FileId) -> Arc<DeclTypes> {
+  db.file_input(file)
+    .map(|input| decl_types_for(db, input).0.clone())
+    .unwrap_or_else(|| Arc::new(DeclTypes::default()))
+}
+
+#[salsa::tracked]
+fn decl_types_fingerprint_for(db: &dyn Db) -> u64 {
+  panic_if_cancelled(db);
+  let files = all_files_for(db);
+  let mut hasher = StableHasher::new();
+  for file in files.iter() {
+    let Some(input) = db.file_input(*file) else {
+      continue;
+    };
+    let decls = decl_types_for(db, input);
+    hasher.write_u32(file.0);
+    hasher.write_u64(Arc::as_ptr(&decls.0) as usize as u64);
+  }
+  hasher.finish()
+}
+
+pub fn decl_types_fingerprint(db: &dyn Db) -> u64 {
+  decl_types_fingerprint_for(db)
 }
 
 /// Expose the current revision for smoke-testing the salsa plumbing.

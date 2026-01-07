@@ -418,6 +418,12 @@ impl Program {
       state.diagnostics.extend(extra_diagnostics);
       state.type_store = snapshot.type_store;
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
+      let store_input = state.interned_store.as_ref().map(Arc::clone);
+      if let Some(store) = store_input {
+        state
+          .typecheck_db
+          .set_type_store(crate::db::types::SharedTypeStore(store));
+      }
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
       state.interned_type_param_decls = snapshot
@@ -455,10 +461,16 @@ impl Program {
       state.next_body = snapshot.next_body;
       state.sync_typecheck_roots();
       state.rebuild_module_namespace_defs();
+      let module_namespace_defs = Arc::new(state.module_namespace_defs.clone());
+      let value_defs = Arc::new(state.value_defs.clone());
+      state
+        .typecheck_db
+        .set_module_namespace_defs(module_namespace_defs);
+      state.typecheck_db.set_value_defs(value_defs);
       state.rebuild_callable_overloads();
       state.merge_callable_overload_types();
       state.rebuild_interned_named_def_types();
-      state.interned_revision = Some(db::db_revision(&state.typecheck_db));
+      state.decl_types_fingerprint = Some(db::decl_types_fingerprint(&state.typecheck_db));
     }
     program
   }

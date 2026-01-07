@@ -153,7 +153,7 @@ struct ProgramState {
   compiler_options: CompilerOptions,
   compiler_options_override: Option<CompilerOptions>,
   file_overrides: HashMap<FileKey, Arc<str>>,
-  interned_revision: Option<salsa::Revision>,
+  decl_types_fingerprint: Option<u64>,
   cached_body_context: Option<CachedBodyCheckContext>,
   typecheck_db: db::TypecheckDb,
   checker_caches: CheckerCaches,
@@ -271,7 +271,7 @@ impl ProgramState {
       compiler_options: default_options.clone(),
       compiler_options_override: None,
       file_overrides: HashMap::new(),
-      interned_revision: None,
+      decl_types_fingerprint: None,
       cached_body_context: None,
       typecheck_db,
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
@@ -331,7 +331,7 @@ impl ProgramState {
   fn reset_analysis_state(&mut self) {
     self.analyzed = false;
     self.snapshot_loaded = false;
-    self.interned_revision = None;
+    self.decl_types_fingerprint = None;
     self.cached_body_context = None;
 
     self.typecheck_db.clear_body_results();

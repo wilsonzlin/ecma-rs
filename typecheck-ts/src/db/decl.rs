@@ -10,6 +10,7 @@ use types_ts_interned::{
 
 use crate::db::types::DeclTypes;
 use crate::program::check::decls::HirDeclLowerer;
+use crate::{FileKey, Host};
 
 /// Lower declaration type information for a single file using the provided
 /// interning store and optional semantic context.
@@ -19,6 +20,11 @@ pub fn lower_decl_types(
   semantics: Option<&TsProgramSemantics>,
   defs: Arc<HashMap<(FileId, String), DefId>>,
   file: FileId,
+  file_key: Option<FileKey>,
+  host: Option<&dyn Host>,
+  key_to_id: Option<&dyn Fn(&FileKey) -> Option<FileId>>,
+  module_namespace_defs: Option<&HashMap<FileId, DefId>>,
+  value_defs: Option<&HashMap<DefId, DefId>>,
 ) -> DeclTypes {
   let mut decls = DeclTypes::default();
   let mut def_map = HashMap::new();
@@ -43,21 +49,20 @@ pub fn lower_decl_types(
     semantics,
     defs_owned,
     file,
-    None,
+    file_key,
     local_defs,
     &mut decls.diagnostics,
     Some(&def_map),
     Some(defs.as_ref()),
-    None,
-    None,
-    None,
-    None,
+    host,
+    key_to_id,
+    module_namespace_defs,
+    value_defs,
   );
   for def in sorted_defs.iter() {
     let Some(info) = def.type_info.as_ref() else {
       continue;
     };
-    let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
     let target_def = def_map
       .get(&def.id)
       .copied()
@@ -68,15 +73,94 @@ pub fn lower_decl_types(
           .and_then(|name| defs.get(&(file, name.to_string())).copied())
       })
       .unwrap_or(def.id);
-    decls
-      .types
-      .entry(target_def)
-      .and_modify(|existing| {
-        *existing = merge_interned_decl_types(&store, *existing, ty);
-      })
-      .or_insert(ty);
-    if !params.is_empty() {
-      decls.type_params.insert(target_def, params);
+
+    if let hir_js::DefTypeInfo::TypeAlias { type_expr, .. } = info {
+      if let Some(name) = lowered.names.resolve(def.name) {
+        if let Some(kind) = tti::IntrinsicKind::from_name(name) {
+          if let Some(arenas) = lowered.type_arenas(def.id) {
+            if type_expr_is_intrinsic_marker(arenas, &lowered.names, *type_expr) {
+              decls.intrinsics.insert(target_def, kind);
+            }
+          }
+        }
+      }
+    }
+
+    match info {
+      hir_js::DefTypeInfo::Class { .. } => {
+        let Some((instance, value, params)) =
+          lowerer.lower_class_instance_and_value_types(def.id, info, &lowered.names)
+        else {
+          continue;
+        };
+        decls
+          .types
+          .entry(target_def)
+          .and_modify(|existing| {
+            *existing = merge_interned_decl_types(&store, *existing, instance);
+          })
+          .or_insert(instance);
+        if !params.is_empty() {
+          decls.type_params.insert(target_def, params);
+        }
+        if let Some(value_defs) = value_defs {
+          if let Some(value_def) = value_defs
+            .get(&target_def)
+            .copied()
+            .or_else(|| value_defs.get(&def.id).copied())
+          {
+            decls
+              .types
+              .entry(value_def)
+              .and_modify(|existing| {
+                *existing = merge_interned_decl_types(&store, *existing, value);
+              })
+              .or_insert(value);
+          }
+        }
+      }
+      hir_js::DefTypeInfo::Enum { .. } => {
+        let Some((enum_ty, value)) =
+          lowerer.lower_enum_type_and_value(def.id, info, &lowered.names)
+        else {
+          continue;
+        };
+        decls
+          .types
+          .entry(target_def)
+          .and_modify(|existing| {
+            *existing = merge_interned_decl_types(&store, *existing, enum_ty);
+          })
+          .or_insert(enum_ty);
+        if let Some(value_defs) = value_defs {
+          if let Some(value_def) = value_defs
+            .get(&target_def)
+            .copied()
+            .or_else(|| value_defs.get(&def.id).copied())
+          {
+            decls
+              .types
+              .entry(value_def)
+              .and_modify(|existing| {
+                *existing = merge_interned_decl_types(&store, *existing, value);
+              })
+              .or_insert(value);
+          }
+        }
+      }
+      _ => {
+        let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
+        decls
+          .types
+          .entry(target_def)
+          .and_modify(|existing| {
+            *existing = merge_interned_decl_types(&store, *existing, ty);
+          })
+          .or_insert(ty);
+        if !params.is_empty() {
+          decls.type_params.insert(target_def, params);
+        }
+      }
     }
   }
 
@@ -112,6 +196,31 @@ pub fn lower_decl_types(
   }
 
   decls
+}
+
+fn type_expr_is_intrinsic_marker(
+  arenas: &hir_js::TypeArenas,
+  names: &hir_js::NameInterner,
+  mut type_expr: hir_js::TypeExprId,
+) -> bool {
+  loop {
+    let Some(expr) = arenas.type_exprs.get(type_expr.0 as usize) else {
+      return false;
+    };
+    match &expr.kind {
+      hir_js::TypeExprKind::Parenthesized(inner) => {
+        type_expr = *inner;
+      }
+      hir_js::TypeExprKind::Intrinsic => return true,
+      hir_js::TypeExprKind::TypeRef(type_ref) => {
+        if !type_ref.type_args.is_empty() {
+          return false;
+        }
+        return matches!(&type_ref.name, hir_js::TypeName::Ident(id) if names.resolve(*id) == Some("intrinsic"));
+      }
+      _ => return false,
+    }
+  }
 }
 
 pub fn merge_interned_decl_types(
