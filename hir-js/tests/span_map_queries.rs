@@ -8,7 +8,9 @@ fn span_map_body_at_offset_prefers_initializer_body() {
   let declarator = lowered
     .defs
     .iter()
-    .find(|def| def.path.kind == DefKind::VarDeclarator && lowered.names.resolve(def.name) == Some("x"))
+    .find(|def| {
+      def.path.kind == DefKind::VarDeclarator && lowered.names.resolve(def.name) == Some("x")
+    })
     .expect("x declarator");
   let init_body = declarator.body.expect("initializer body");
   assert_eq!(
@@ -62,8 +64,10 @@ fn span_map_stmt_at_offset_returns_innermost_statement() {
   assert_eq!(ret_stmt.id.0, func_body);
   let body = lowered.body(ret_stmt.id.0).expect("return body");
   assert!(
-    matches!(body.stmts[ret_stmt.id.1 .0 as usize].kind, StmtKind::Return(_)),
+    matches!(
+      body.stmts[ret_stmt.id.1 .0 as usize].kind,
+      StmtKind::Return(_)
+    ),
     "expected return statement"
   );
 }
-

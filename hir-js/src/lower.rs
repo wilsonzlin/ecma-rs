@@ -2645,7 +2645,9 @@ impl<'a> BodyBuilder<'a> {
     let mut body_span: Option<TextRange> = None;
     let mut include = |span: TextRange| {
       body_span = Some(match body_span {
-        Some(existing) => TextRange::new(existing.start.min(span.start), existing.end.max(span.end)),
+        Some(existing) => {
+          TextRange::new(existing.start.min(span.start), existing.end.max(span.end))
+        }
         None => span,
       });
     };
@@ -2658,7 +2660,9 @@ impl<'a> BodyBuilder<'a> {
     for pat in &self.pats {
       include(pat.span);
     }
-    let body_span = body_span.filter(|span| !span.is_empty()).unwrap_or(self.span);
+    let body_span = body_span
+      .filter(|span| !span.is_empty())
+      .unwrap_or(self.span);
     self.span_map.add_body(body_span, self.body_id);
 
     Body {

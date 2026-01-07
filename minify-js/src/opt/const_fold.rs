@@ -946,11 +946,12 @@ fn js_loose_eq(a: ConstVal<'_>, b: ConstVal<'_>) -> Option<bool> {
     (ConstVal::BigInt(_), _) | (_, ConstVal::BigInt(_)) => None,
     (ConstVal::Undefined, ConstVal::Null) | (ConstVal::Null, ConstVal::Undefined) => Some(true),
     // Same-type comparisons fall back to strict equality semantics.
-    (a, b) if matches!((a, b), (ConstVal::Undefined, ConstVal::Undefined))
-      || matches!((a, b), (ConstVal::Null, ConstVal::Null))
-      || matches!((a, b), (ConstVal::Bool(_), ConstVal::Bool(_)))
-      || matches!((a, b), (ConstVal::Num(_), ConstVal::Num(_)))
-      || matches!((a, b), (ConstVal::Str(_), ConstVal::Str(_))) =>
+    (a, b)
+      if matches!((a, b), (ConstVal::Undefined, ConstVal::Undefined))
+        || matches!((a, b), (ConstVal::Null, ConstVal::Null))
+        || matches!((a, b), (ConstVal::Bool(_), ConstVal::Bool(_)))
+        || matches!((a, b), (ConstVal::Num(_), ConstVal::Num(_)))
+        || matches!((a, b), (ConstVal::Str(_), ConstVal::Str(_))) =>
     {
       Some(js_strict_eq(a, b))
     }

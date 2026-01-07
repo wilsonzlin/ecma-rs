@@ -302,7 +302,10 @@ fn apply_expectation(mut report: CaseReport, expectation: &AppliedExpectation) -
 fn is_xpass(report: &CaseReport) -> bool {
   report.status == CaseStatus::Matched
     && report.expectation.as_ref().is_some_and(|exp| {
-      matches!(exp.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
+      matches!(
+        exp.expectation,
+        ExpectationKind::Xfail | ExpectationKind::Flaky
+      )
     })
 }
 
@@ -519,7 +522,9 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
   let should_fail = if args.fail_on != FailOn::None && summary.xpass > 0 {
     true
   } else {
-    args.fail_on.should_fail(unexpected_mismatches, mismatch_total)
+    args
+      .fail_on
+      .should_fail(unexpected_mismatches, mismatch_total)
   };
   if !args.allow_mismatches && should_fail {
     return Err(anyhow!(

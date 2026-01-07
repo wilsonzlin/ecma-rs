@@ -1211,9 +1211,13 @@ impl<'a> Parser<'a> {
                   return Err(t.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
                 }
               }
-               if operator.name.is_assignment() {
-                 left = lhs_expr_to_assign_target_with_recover(left, operator.name, self.should_recover())?;
-               };
+              if operator.name.is_assignment() {
+                left = lhs_expr_to_assign_target_with_recover(
+                  left,
+                  operator.name,
+                  self.should_recover(),
+                )?;
+              };
               let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
               Node::new(
                 left.loc + right.loc,

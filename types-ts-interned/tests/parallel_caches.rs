@@ -61,7 +61,9 @@ impl TestExpander {
       indexers: Vec::new(),
     };
     let box_shape_id = store.intern_shape(box_shape);
-    let box_obj = store.intern_object(ObjectType { shape: box_shape_id });
+    let box_obj = store.intern_object(ObjectType {
+      shape: box_shape_id,
+    });
     let box_ty = store.intern_type(TypeKind::Object(box_obj));
 
     let maybe_upper_def = DefId(2);
@@ -135,7 +137,9 @@ fn build_evaluator_inputs(store: &Arc<TypeStore>, expander: &TestExpander) -> Ve
     indexers: Vec::new(),
   };
   let obj_shape_id = store.intern_shape(obj_shape);
-  let obj_id = store.intern_object(ObjectType { shape: obj_shape_id });
+  let obj_id = store.intern_object(ObjectType {
+    shape: obj_shape_id,
+  });
   let obj_ty = store.intern_type(TypeKind::Object(obj_id));
 
   let keyof_obj = store.intern_type(TypeKind::KeyOf(obj_ty));
@@ -194,7 +198,10 @@ fn build_evaluator_inputs(store: &Arc<TypeStore>, expander: &TestExpander) -> Ve
   });
   let indexed_union = store.intern_type(TypeKind::IndexedAccess {
     obj: mapped_plain,
-    index: store.union(vec![foo_lit, store.intern_type(TypeKind::StringLiteral(bar))]),
+    index: store.union(vec![
+      foo_lit,
+      store.intern_type(TypeKind::StringLiteral(bar)),
+    ]),
   });
   let keyof_remap = store.intern_type(TypeKind::KeyOf(mapped_remap));
 
@@ -333,7 +340,11 @@ fn build_relation_pairs(store: &Arc<TypeStore>) -> Vec<(TypeId, TypeId)> {
     properties: vec![
       Property {
         key: PropKey::String(a),
-        data: prop_data(store.union(vec![primitives.number, primitives.string]), false, false),
+        data: prop_data(
+          store.union(vec![primitives.number, primitives.string]),
+          false,
+          false,
+        ),
       },
       Property {
         key: PropKey::String(b),
@@ -472,7 +483,10 @@ fn build_relation_pairs(store: &Arc<TypeStore>) -> Vec<(TypeId, TypeId)> {
   let mut pairs = Vec::new();
   for (src_idx, src) in type_pool.iter().copied().enumerate() {
     for salt in 0..6usize {
-      let dst_idx = (src_idx.wrapping_mul(7).wrapping_add(salt.wrapping_mul(13)).wrapping_add(3))
+      let dst_idx = (src_idx
+        .wrapping_mul(7)
+        .wrapping_add(salt.wrapping_mul(13))
+        .wrapping_add(3))
         % type_pool.len();
       pairs.push((src, type_pool[dst_idx]));
     }
@@ -549,4 +563,3 @@ fn relate_caches_and_normalizer_caches_are_deterministic_under_concurrency() {
     );
   }
 }
-

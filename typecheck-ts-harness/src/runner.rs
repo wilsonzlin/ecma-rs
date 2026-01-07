@@ -670,7 +670,11 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     }
 
     if let Some(exp) = &result.expectation {
-      if exp.from_manifest && matches!(exp.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
+      if exp.from_manifest
+        && matches!(
+          exp.expectation,
+          ExpectationKind::Xfail | ExpectationKind::Flaky
+        )
       {
         mismatch_summary.xpass += 1;
       }

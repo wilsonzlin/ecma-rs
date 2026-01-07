@@ -222,7 +222,9 @@ impl<'a> Parser<'a> {
         let checkpoint = p.checkpoint();
         let first = p.peek();
         let is_type_modifier = first.typ == TT::KeywordType
-          || (!p.is_strict_ecmascript() && first.typ == TT::Identifier && p.str(first.loc) == "type");
+          || (!p.is_strict_ecmascript()
+            && first.typ == TT::Identifier
+            && p.str(first.loc) == "type");
         let (type_only, (target, alias)) = if is_type_modifier {
           p.consume(); // type modifier
           match p.import_or_export_name(ctx, false) {
@@ -390,7 +392,9 @@ impl<'a> Parser<'a> {
             let checkpoint = p.checkpoint();
             let first = p.peek();
             let is_type_modifier = first.typ == TT::KeywordType
-              || (!p.is_strict_ecmascript() && first.typ == TT::Identifier && p.str(first.loc) == "type");
+              || (!p.is_strict_ecmascript()
+                && first.typ == TT::Identifier
+                && p.str(first.loc) == "type");
             let (type_only, (target, alias)) = if is_type_modifier {
               p.consume(); // type modifier
               match p.import_or_export_name(ctx, true) {

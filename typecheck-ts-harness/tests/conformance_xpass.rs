@@ -8,11 +8,7 @@ fn conformance_reports_xpass_and_fail_on_new_fails() {
   let dir = tempdir().expect("tempdir");
   let root = dir.path();
 
-  fs::write(
-    root.join("a.ts"),
-    "// @noLib: true\nexport const a = 1;\n",
-  )
-  .expect("write fixture");
+  fs::write(root.join("a.ts"), "// @noLib: true\nexport const a = 1;\n").expect("write fixture");
 
   let manifest_path = root.join("manifest.toml");
   fs::write(
@@ -61,4 +57,3 @@ status = "xfail"
   fail_options.fail_on = FailOn::New;
   assert!(run_conformance(fail_options).is_err());
 }
-

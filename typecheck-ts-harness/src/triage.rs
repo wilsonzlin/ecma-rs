@@ -595,13 +595,13 @@ fn analyze_conformance(input: ConformanceReportInput, top: usize) -> Result<Tria
 
   for case in &input.results {
     if case.outcome == TestOutcome::Match {
-      if case
-        .expectation
-        .as_ref()
-        .is_some_and(|e| {
-          e.from_manifest && matches!(e.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky)
-        })
-      {
+      if case.expectation.as_ref().is_some_and(|e| {
+        e.from_manifest
+          && matches!(
+            e.expectation,
+            ExpectationKind::Xfail | ExpectationKind::Flaky
+          )
+      }) {
         xpass += 1;
         xpasses.push(case.id.clone());
       }
@@ -680,11 +680,12 @@ fn analyze_difftsc(input: DifftscReportInput, top: usize) -> Result<TriageReport
 
   for case in &input.results {
     if case.status == DifftscCaseStatus::Matched {
-      if case
-        .expectation
-        .as_ref()
-        .is_some_and(|e| matches!(e.expectation, ExpectationKind::Xfail | ExpectationKind::Flaky))
-      {
+      if case.expectation.as_ref().is_some_and(|e| {
+        matches!(
+          e.expectation,
+          ExpectationKind::Xfail | ExpectationKind::Flaky
+        )
+      }) {
         xpass += 1;
         xpasses.push(case.name.clone());
       }

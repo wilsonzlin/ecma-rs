@@ -63,4 +63,3 @@ fn triage_counts_difftsc_xpass() {
     report.suggestions
   );
 }
-

@@ -36,9 +36,7 @@ fn assert_accept(src: &str) {
 
 fn assert_accept_module(src: &str) {
   parse_with_options(src, strict_module_opts()).unwrap_or_else(|err| {
-    panic!(
-      "expected strict ECMAScript module parsing to accept {src:?}, got {err:?}"
-    )
+    panic!("expected strict ECMAScript module parsing to accept {src:?}, got {err:?}")
   });
 }
 

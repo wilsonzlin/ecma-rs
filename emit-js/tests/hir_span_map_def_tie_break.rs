@@ -10,4 +10,3 @@ fn def_at_offset_prefers_var_defs_over_shadowing_params() {
 
   assert_eq!(map.def_at_offset(0), Some(DefId(1)));
 }
-

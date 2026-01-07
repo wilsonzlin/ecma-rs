@@ -2203,7 +2203,6 @@ impl Program {
       Ok(res.expr_span(expr).map(|range| Span::new(meta.file, range)))
     })
   }
-
 }
 
 fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
@@ -2212,8 +2211,6 @@ fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
     _ => sem_ts::FileKind::Ts,
   }
 }
-
-
 
 #[derive(Clone)]
 struct CachedBodyCheckContext {
