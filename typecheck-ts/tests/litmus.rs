@@ -156,15 +156,12 @@ fn run_fixture(path: &Path) {
     .map(|root| host.file_key(root))
     .collect();
   let mut program = Program::new(host.clone(), roots);
-  if path.ends_with("argument_type_error") {
-    std::env::set_var("DEBUG_CALL", "1");
-  } else {
-    std::env::remove_var("DEBUG_CALL");
-  }
+  let trace = std::env::var("TRACE_LITMUS").is_ok();
   let diagnostics = program.check();
-  if path.ends_with("contextual_assignment")
-    || path.ends_with("contextual_array_literals")
-    || path.ends_with("contextual_object_literals")
+  if trace
+    && (path.ends_with("contextual_assignment")
+      || path.ends_with("contextual_array_literals")
+      || path.ends_with("contextual_object_literals"))
   {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let snap = program.snapshot();
@@ -198,16 +195,17 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if !diagnostics.is_empty()
+  if trace
+    && !diagnostics.is_empty()
     && !path.ends_with("as_const")
     && !path.ends_with("argument_count_error")
   {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
   }
-  if path.ends_with("argument_count_error") {
+  if trace && path.ends_with("argument_count_error") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
   }
-  if path.ends_with("argument_type_error") {
+  if trace && path.ends_with("argument_type_error") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
@@ -234,7 +232,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("as_const") {
+  if trace && path.ends_with("as_const") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let snap = program.snapshot();
     println!("DEBUG as_const def_types {:?}", snap.def_types);
@@ -265,7 +263,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("excess_props") {
+  if trace && path.ends_with("excess_props") {
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
       println!("defs for excess_props:");
@@ -290,7 +288,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("function_return_inference") {
+  if trace && path.ends_with("function_return_inference") {
     let snap = program.snapshot();
     println!("DEBUG function_return_inference def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -330,7 +328,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("imports_exports") {
+  if trace && path.ends_with("imports_exports") {
     let snap = program.snapshot();
     println!("DEBUG imports_exports def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -360,7 +358,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("literal_widening") {
+  if trace && path.ends_with("literal_widening") {
     let snap = program.snapshot();
     println!("DEBUG literal_widening def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -376,7 +374,7 @@ fn run_fixture(path: &Path) {
       );
     }
   }
-  if path.ends_with("mapped_type_annotation") {
+  if trace && path.ends_with("mapped_type_annotation") {
     let snap = program.snapshot();
     println!("DEBUG mapped_type_annotation def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -392,7 +390,7 @@ fn run_fixture(path: &Path) {
       );
     }
   }
-  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("narrowing_patterns") {
+  if trace && path.ends_with("narrowing_patterns") {
     let snap = program.snapshot();
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
@@ -454,7 +452,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("satisfies") {
+  if trace && path.ends_with("satisfies") {
     let snap = program.snapshot();
     println!("DEBUG satisfies def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -463,7 +461,7 @@ fn run_fixture(path: &Path) {
       }
     }
   }
-  if path.ends_with("contextual_callbacks") {
+  if trace && path.ends_with("contextual_callbacks") {
     let snap = program.snapshot();
     println!("DEBUG contextual_callbacks def types:");
     for (def, ty) in snap.def_types.iter() {
@@ -471,46 +469,44 @@ fn run_fixture(path: &Path) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
     }
-    if std::env::var("TRACE_LITMUS").is_ok() {
-      let store = types_ts_interned::TypeStore::from_snapshot(snap.interned_type_store.clone());
-      println!("DEBUG contextual_callbacks interned def types:");
-      for (def, ty) in snap.interned_def_types.iter() {
-        if let Some(name) = program.def_name(*def) {
-          println!(
-            "  def {:?} {} => {}",
-            def,
-            name,
-            types_ts_interned::TypeDisplay::new(&store, *ty)
-          );
-        }
-      }
-      if let Some(map_def) = snap
-        .def_data
-        .iter()
-        .find(|d| program.def_name(d.def).as_deref() == Some("map"))
-      {
+    let store = types_ts_interned::TypeStore::from_snapshot(snap.interned_type_store.clone());
+    println!("DEBUG contextual_callbacks interned def types:");
+    for (def, ty) in snap.interned_def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
         println!(
-          "DEBUG contextual_callbacks map def kind {:?}",
-          map_def.data.kind
+          "  def {:?} {} => {}",
+          def,
+          name,
+          types_ts_interned::TypeDisplay::new(&store, *ty)
         );
       }
-      let main = host.file_key("main.ts");
-      if let Some(file) = program.file_id(&main) {
-        if let Some(body) = program.file_body(file) {
-          let res = program.check_body(body);
-          println!("DEBUG contextual_callbacks exprs:");
-          for (idx, span) in res.expr_spans().iter().enumerate() {
-            let ty = res
-              .expr_type(ExprId(idx as u32))
-              .map(|t| program.display_type(t).to_string())
-              .unwrap_or_else(|| "<none>".to_string());
-            println!("  {}: {:?} -> {}", idx, span, ty);
-          }
+    }
+    if let Some(map_def) = snap
+      .def_data
+      .iter()
+      .find(|d| program.def_name(d.def).as_deref() == Some("map"))
+    {
+      println!(
+        "DEBUG contextual_callbacks map def kind {:?}",
+        map_def.data.kind
+      );
+    }
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG contextual_callbacks exprs:");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  {}: {:?} -> {}", idx, span, ty);
         }
       }
     }
   }
-  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("contextual_assignment") {
+  if trace && path.ends_with("contextual_assignment") {
     let snap = program.snapshot();
     println!("[litmus] contextual_assignment defs:");
     for entry in snap
@@ -524,7 +520,7 @@ fn run_fixture(path: &Path) {
       );
     }
   }
-  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("contextual_object_literals") {
+  if trace && path.ends_with("contextual_object_literals") {
     let snap = program.snapshot();
     println!("[litmus] contextual_object_literals def types:");
     for entry in snap

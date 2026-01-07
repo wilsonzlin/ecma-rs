@@ -14,7 +14,10 @@ fn def_by_name(program: &Program, file: FileKey, name: &str) -> Option<DefId> {
 fn recursive_alias_type_of_def_is_bounded() {
   let mut host = MemoryHost::default();
   let file = FileKey::new("node.ts");
-  host.insert(file.clone(), Arc::from("type Node<T> = { next: Node<T> };"));
+  host.insert(
+    file.clone(),
+    Arc::from("type ListNode<T> = { next: ListNode<T> };"),
+  );
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
@@ -23,7 +26,7 @@ fn recursive_alias_type_of_def_is_bounded() {
     "expected no diagnostics: {diagnostics:?}"
   );
 
-  let def = def_by_name(&program, file, "Node").expect("Node defined");
+  let def = def_by_name(&program, file, "ListNode").expect("ListNode defined");
   let ty = program.type_of_def_interned(def);
   let summary = program.type_kind(ty);
   assert!(

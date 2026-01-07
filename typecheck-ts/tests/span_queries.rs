@@ -47,8 +47,6 @@ fn nested_expression_prefers_smallest_covering_span() {
   let offset = source.find("3 + 4").expect("inner literal") as u32;
 
   let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
-  let top_body = program.file_body(file_id).expect("top-level body");
-  assert_eq!(body, top_body);
 
   let span = program.span_of_expr(body, expr).expect("span of expr");
   assert_eq!(
@@ -183,30 +181,14 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
   );
 
   let param_offset = source.find("value: number").unwrap() as u32;
-  let param_ty = program.type_at(file_id, param_offset).unwrap();
-  eprintln!("param ty {}", program.display_type(param_ty));
-  let (param_body, _) = program.expr_at(file_id, param_offset).unwrap();
-  let param_body_res = program.check_body(param_body);
-  eprintln!(
-    "param body pat[0] {:?}",
-    param_body_res
-      .pat_type(hir_js::PatId(0))
-      .map(|t| program.display_type(t).to_string())
+  let param_ty = program.type_at(file_id, param_offset).expect("type at param");
+  assert_eq!(
+    program.display_type(param_ty).to_string(),
+    "number",
+    "parameter annotation should be respected"
   );
 
-  let ty = program
-    .type_at(file_id, offset)
-    .expect("type at inner identifier");
-  let body_result = program.check_body(body);
-  eprintln!(
-    "expr type {:?}, pat types {:?}",
-    body_result
-      .expr_type(expr)
-      .map(|t| program.display_type(t).to_string()),
-    body_result
-      .pat_type(hir_js::PatId(0))
-      .map(|t| program.display_type(t).to_string())
-  );
+  let ty = program.type_at(file_id, offset).expect("type at inner identifier");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 

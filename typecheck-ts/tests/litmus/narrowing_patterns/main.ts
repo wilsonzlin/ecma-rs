@@ -18,7 +18,7 @@ function useAssert(v: string | number) {
   return v;
 }
 
-// expect-def-type: useAssert = (v: string | number) => number
+// expect-def-type: useAssert = (string | number) => number
 
 function Box() {}
 

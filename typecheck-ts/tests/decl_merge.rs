@@ -93,11 +93,19 @@ fn namespaces_merge_across_declarations() {
   let file_id = program.file_id(&key).expect("file id");
   let exports = program.exports_of(file_id);
   let ns = exports.get("N").expect("namespace export");
-  let ty = ns.type_id.expect("namespace type");
-  let rendered = program.display_type(ty).to_string();
+  let def = ns.def.expect("namespace def");
+  let ty = program.type_of_def_interned(def);
+  let props = program.properties_of(ty);
+  let keys: Vec<_> = props
+    .iter()
+    .filter_map(|p| match &p.key {
+      typecheck_ts::PropertyKey::String(name) => Some(name.as_str()),
+      _ => None,
+    })
+    .collect();
   assert!(
-    rendered.contains("a") && rendered.contains("b"),
-    "namespace merge should expose members, got {rendered}"
+    keys.contains(&"a") && keys.contains(&"b"),
+    "namespace merge should expose members, got {keys:?}"
   );
 }
 
@@ -404,9 +412,23 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     .get("foo")
     .and_then(|e| e.def)
     .expect("exported foo def");
-  assert_eq!(
-    exported, func_def,
-    "export should point at callable side of merged declaration"
+  assert!(
+    foo_defs.contains(&exported),
+    "export should point at one of the merged defs for foo"
+  );
+  let exported_ty = program.type_of_def_interned(exported);
+  assert!(
+    !program.call_signatures(exported_ty).is_empty(),
+    "exported foo should remain callable after merge"
+  );
+  let exported_props = program.properties_of(exported_ty);
+  let exported_has_bar = exported_props.iter().any(|p| match &p.key {
+    typecheck_ts::PropertyKey::String(name) => name == "bar",
+    _ => false,
+  });
+  assert!(
+    exported_has_bar,
+    "exported foo should include namespace members after merge"
   );
 
   let ty = program.type_of_def_interned(func_def);

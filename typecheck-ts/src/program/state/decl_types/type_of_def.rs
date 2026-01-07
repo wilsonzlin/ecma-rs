@@ -440,10 +440,20 @@ impl ProgramState {
               // The legacy `TypeStore` cannot represent `TypeKind::Ref`, and
               // converting through it also erases rich property metadata
               // (like "method" vs "property"). When we inferred a concrete
-              // interned binding type from the body checker, preserve it
-              // instead of round-tripping through the legacy store.
+              // interned binding type from the body checker, prefer it to the
+              // lossy legacy conversion. Apply the same widening rules that we
+              // apply to legacy types so the public `type_of_def` result stays
+              // consistent between `def_types` (legacy) and `interned_def_types`.
               if let Some(preserved) = preserved_interned_init.take() {
-                interned = preserved;
+                let mut widened = preserved;
+                if !init_is_satisfies {
+                  widened = check::widen::widen_array_elements(store.as_ref(), widened);
+                  widened = check::widen::widen_object_literal_props(store.as_ref(), widened);
+                }
+                if !const_like {
+                  widened = check::widen::widen_literal(store.as_ref(), widened);
+                }
+                interned = store.canon(widened);
               }
             }
             if annotated.is_some() {
