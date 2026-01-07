@@ -568,6 +568,31 @@ impl<'p> HirSourceToInst<'p> {
     };
     let left_nullish = is_nullish(left, left_expr);
     let right_nullish = is_nullish(right, right_expr);
+    let typed_non_nullish_loose_eq_op = if matches!(operator, BinaryOp::Equality | BinaryOp::Inequality)
+      && !left_nullish
+      && !right_nullish
+    {
+      let left_tag = self.typeof_string_expr(left);
+      let right_tag = self.typeof_string_expr(right);
+      match (left_tag, right_tag) {
+        (Some(tag), Some(other_tag)) if tag == other_tag => {
+          if tag == "object"
+            && !(self.expr_excludes_nullish(left) && self.expr_excludes_nullish(right))
+          {
+            None
+          } else {
+            Some(if operator == BinaryOp::Equality {
+              BinOp::StrictEq
+            } else {
+              BinOp::NotStrictEq
+            })
+          }
+        }
+        _ => None,
+      }
+    } else {
+      None
+    };
 
     if matches!(
       operator,
@@ -600,13 +625,15 @@ impl<'p> HirSourceToInst<'p> {
         _ => None,
       };
 
-      // Type-driven folding for `typeof` equality is only valid for strict
-      // equality/inequality. The optimizer doesn't currently lower non-nullish
-      // loose equality operators because they can trigger ToPrimitive coercions
-      // (and user-defined side effects) on objects.
+      // Type-driven folding for `typeof` equality/inequality is valid when the
+      // comparison is effectively strict. This includes `==`/`!=` when both
+      // operands are known to have the same `typeof` tag (e.g. string results).
       if matches!(
         operator,
-        BinaryOp::StrictEquality | BinaryOp::StrictInequality
+        BinaryOp::StrictEquality
+          | BinaryOp::StrictInequality
+          | BinaryOp::Equality
+          | BinaryOp::Inequality
       ) {
         if let Some(((typeof_expr, typeof_operand), typeof_on_left)) =
           match (typeof_left, typeof_right) {
@@ -663,6 +690,16 @@ impl<'p> HirSourceToInst<'p> {
       BinaryOp::GreaterEqual => BinOp::Geq,
       BinaryOp::Equality if left_nullish || right_nullish => BinOp::LooseEq,
       BinaryOp::Inequality if left_nullish || right_nullish => BinOp::NotLooseEq,
+      BinaryOp::Equality | BinaryOp::Inequality => {
+        if let Some(op) = typed_non_nullish_loose_eq_op {
+          op
+        } else {
+          return Err(unsupported_syntax(
+            span,
+            format!("unsupported binary operator {operator:?}"),
+          ));
+        }
+      }
       _ => {
         return Err(unsupported_syntax(
           span,

@@ -480,3 +480,38 @@ fn typed_truthiness_folds_logical_expressions() {
 
   assert_eq!(emit(&typed_program), emit(&expected_program));
 }
+
+#[test]
+fn typed_loose_equality_is_lowered_to_strict_when_tags_match() {
+  let src = r#"
+    declare function a(): number;
+    declare function b(): number;
+    console.log(a() == b());
+  "#;
+  let expected_src = r#"
+    declare function a(): number;
+    declare function b(): number;
+    console.log(a() === b());
+  "#;
+
+  let typed_program = compile_source_typed(src, TopLevelMode::Module, false);
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_loose_equality_is_rejected_when_tags_disagree() {
+  let src = r#"
+    let a: number = 1;
+    let b: string = "2";
+    console.log(a == b);
+  "#;
+
+  let err = optimize_js::compile_source_typed(src, TopLevelMode::Module, false)
+    .expect_err("mixed-type loose equality should be rejected");
+  assert!(err.iter().any(|d| d.code == "OPT0002"));
+  assert!(err
+    .iter()
+    .any(|d| d.message.contains("unsupported binary operator Equality")));
+}
