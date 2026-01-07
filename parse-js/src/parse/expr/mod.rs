@@ -916,6 +916,16 @@ impl<'a> Parser<'a> {
               }
             };
 
+            // Arrow functions are assignment expressions and must be parenthesized when used as the
+            // operand to a higher-precedence unary operator (e.g. `await (x => x)`, not
+            // `await x => x`). `yield`/`yield*` are themselves assignment-level and are exempt.
+            if !matches!(operator.name, OperatorName::Yield | OperatorName::YieldDelegated)
+              && matches!(operand.stx.as_ref(), Expr::ArrowFunc(_))
+              && operand.assoc.get::<ParenthesizedExpr>().is_none()
+            {
+              return Err(operand.error(SyntaxErrorType::ExpectedSyntax("parenthesized expression")));
+            }
+
             if matches!(
               operator.name,
               OperatorName::PrefixIncrement | OperatorName::PrefixDecrement

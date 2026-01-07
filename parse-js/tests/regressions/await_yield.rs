@@ -118,6 +118,32 @@ fn await_allows_unary_operand_after_line_terminator() {
 }
 
 #[test]
+fn await_disallows_unparenthesized_arrow_function_operand() {
+  let source = "async function f(){ await x => x; }";
+  let err = parse_with_options(source, js_module_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+}
+
+#[test]
+fn await_disallows_arrow_function_operand_with_parameter_parentheses_only() {
+  let source = "async function f(){ await (x) => x; }";
+  let err = parse_with_options(source, js_module_opts()).unwrap_err();
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("parenthesized expression")
+  );
+}
+
+#[test]
+fn await_allows_parenthesized_arrow_function_operand() {
+  let source = "async function f(){ await (x => x); }";
+  parse_with_options(source, js_module_opts()).unwrap();
+}
+
+#[test]
 fn top_level_await_allows_operand_after_line_terminator() {
   let source = "await\nfoo()";
   let parsed = parse_with_options(source, js_module_opts()).unwrap();
