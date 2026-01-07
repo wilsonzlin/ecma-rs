@@ -1,4 +1,5 @@
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
+use diagnostics::paths::normalize_ts_path;
 use diagnostics::render::{render_diagnostic_with_options, RenderOptions, SourceProvider};
 use diagnostics::{Diagnostic, FileId, Severity};
 use serde::Serialize;
@@ -173,10 +174,17 @@ struct JsonQueries {
 
 #[derive(Serialize)]
 struct JsonOutput {
+  schema_version: u32,
   files: Vec<String>,
   diagnostics: Vec<Diagnostic>,
   compiler_options: CompilerOptions,
   queries: JsonQueries,
+}
+
+const JSON_SCHEMA_VERSION: u32 = 1;
+
+fn normalize_json_path(raw: &str) -> String {
+  normalize_ts_path(raw)
 }
 
 #[derive(Serialize)]
@@ -367,7 +375,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   sort_diagnostics(&mut diagnostics);
 
   let type_at = match args.type_at {
-    Some(raw) => match query_type_at(&program, &host, &raw) {
+    Some(raw) => match query_type_at(&program, &host, &raw, args.json) {
       Ok(res) => res,
       Err(err) => {
         eprintln!("{err}");
@@ -378,7 +386,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   };
 
   let symbol_at = match args.symbol_at {
-    Some(raw) => match query_symbol_at(&program, &host, &raw) {
+    Some(raw) => match query_symbol_at(&program, &host, &raw, args.json) {
       Ok(res) => res,
       Err(err) => {
         eprintln!("{err}");
@@ -389,7 +397,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   };
 
   let explain_assignability = match args.explain_assignability {
-    Some(raw) => match query_explain_assignability(&program, &host, &raw) {
+    Some(raw) => match query_explain_assignability(&program, &host, &raw, args.json) {
       Ok(res) => res,
       Err(err) => {
         eprintln!("{err}");
@@ -400,7 +408,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   };
 
   let exports = match args.exports {
-    Some(path) => match query_exports(&program, &host, path) {
+    Some(path) => match query_exports(&program, &host, path, args.json) {
       Ok(res) => res,
       Err(err) => {
         eprintln!("{err}");
@@ -415,10 +423,11 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       .files()
       .into_iter()
       .filter_map(|id| program.file_key(id))
-      .map(|key| key.to_string())
+      .map(|key| normalize_json_path(&key.to_string()))
       .collect();
     files.sort();
     let output = JsonOutput {
+      schema_version: JSON_SCHEMA_VERSION,
       files,
       diagnostics: diagnostics.clone(),
       compiler_options: host.compiler_options.clone(),
@@ -1121,21 +1130,28 @@ fn display_file_for_query(
   host: &DiskHost,
   file_id: FileId,
   fallback: &Path,
+  normalize: bool,
 ) -> String {
-  host
+  let raw = host
     .path_for_key(
       &program
         .file_key(file_id)
         .unwrap_or_else(|| FileKey::new(fallback.display().to_string())),
     )
     .map(|p| p.display().to_string())
-    .unwrap_or_else(|| fallback.to_string_lossy().to_string())
+    .unwrap_or_else(|| fallback.to_string_lossy().to_string());
+  if normalize {
+    normalize_json_path(&raw)
+  } else {
+    raw
+  }
 }
 
 fn query_type_at(
   program: &Program,
   host: &DiskHost,
   raw: &str,
+  normalize_paths: bool,
 ) -> Result<Option<TypeAtResult>, String> {
   let (path, offset) = parse_offset_arg(raw)?;
   let file_id = host
@@ -1147,14 +1163,7 @@ fn query_type_at(
   match program.type_at(file_id, offset) {
     Some(ty) => {
       let typ = program.display_type(ty).to_string();
-      let file = host
-        .path_for_key(
-          &program
-            .file_key(file_id)
-            .unwrap_or_else(|| FileKey::new(path.display().to_string())),
-        )
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| path.to_string_lossy().to_string());
+      let file = display_file_for_query(program, host, file_id, &path, normalize_paths);
       Ok(Some(TypeAtResult { file, offset, typ }))
     }
     None => Ok(None),
@@ -1165,6 +1174,7 @@ fn query_explain_assignability(
   program: &Program,
   host: &DiskHost,
   raw: &str,
+  normalize_paths: bool,
 ) -> Result<Option<ExplainAssignabilityResult>, String> {
   let ((src_path, src_offset), (dst_path, dst_offset)) = parse_offset_pair_arg(raw)?;
 
@@ -1196,12 +1206,12 @@ fn query_explain_assignability(
   };
 
   let src = TypeAtResult {
-    file: display_file_for_query(program, host, src_file_id, &src_path),
+    file: display_file_for_query(program, host, src_file_id, &src_path, normalize_paths),
     offset: src_offset,
     typ: program.display_type(src_ty).to_string(),
   };
   let dst = TypeAtResult {
-    file: display_file_for_query(program, host, dst_file_id, &dst_path),
+    file: display_file_for_query(program, host, dst_file_id, &dst_path, normalize_paths),
     offset: dst_offset,
     typ: program.display_type(dst_ty).to_string(),
   };
@@ -1220,6 +1230,7 @@ fn query_symbol_at(
   program: &Program,
   host: &DiskHost,
   raw: &str,
+  normalize_paths: bool,
 ) -> Result<Option<SymbolAtResult>, String> {
   let (path, offset) = parse_offset_arg(raw)?;
   let file_id = host
@@ -1239,21 +1250,21 @@ fn query_symbol_at(
         .file
         .and_then(|id| program.file_key(id))
         .and_then(|key| host.path_for_key(&key))
-        .map(|p| p.display().to_string());
+        .map(|p| p.display().to_string())
+        .map(|p| {
+          if normalize_paths {
+            normalize_json_path(&p)
+          } else {
+            p
+          }
+        });
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
       (info.def.map(|d| d.0), def_file, typ, info.name)
     }
     None => (None, None, None, None),
   };
 
-  let file = host
-    .path_for_key(
-      &program
-        .file_key(file_id)
-        .unwrap_or_else(|| FileKey::new(path.display().to_string())),
-    )
-    .map(|p| p.display().to_string())
-    .unwrap_or_else(|| path.to_string_lossy().to_string());
+  let file = display_file_for_query(program, host, file_id, &path, normalize_paths);
 
   Ok(Some(SymbolAtResult {
     file,
@@ -1270,6 +1281,7 @@ fn query_exports(
   program: &Program,
   host: &DiskHost,
   path: PathBuf,
+  normalize_paths: bool,
 ) -> Result<BTreeMap<String, BTreeMap<String, ExportEntryJson>>, String> {
   let file_id = host
     .key_for_path(&path)
@@ -1291,14 +1303,7 @@ fn query_exports(
     );
   }
   let mut outer = BTreeMap::new();
-  let file_name = host
-    .path_for_key(
-      &program
-        .file_key(file_id)
-        .unwrap_or_else(|| FileKey::new(path.display().to_string())),
-    )
-    .map(|p| p.display().to_string())
-    .unwrap_or_else(|| path.to_string_lossy().to_string());
+  let file_name = display_file_for_query(program, host, file_id, &path, normalize_paths);
   outer.insert(file_name, map);
   Ok(outer)
 }
@@ -1348,4 +1353,18 @@ fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
       .then(a.code.cmp(&b.code))
       .then(a.message.cmp(&b.message))
   });
+}
+
+#[cfg(test)]
+mod tests {
+  use super::normalize_json_path;
+
+  #[test]
+  fn json_path_normalization_is_stable() {
+    assert_eq!(
+      normalize_json_path("C:\\Users\\Test\\..\\Project\\file.ts"),
+      "c:/Users/Project/file.ts"
+    );
+    assert_eq!(normalize_json_path("src/./lib/../main.ts"), "/src/main.ts");
+  }
 }

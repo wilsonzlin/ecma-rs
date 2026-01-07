@@ -2,6 +2,8 @@ dist/
 node_modules/
 !typecheck-ts-cli/tests/fixtures/node_project/node_modules/
 !typecheck-ts-cli/tests/fixtures/node_project/node_modules/**
+!typecheck-ts-cli/tests/fixtures/project_mode/**/node_modules/
+!typecheck-ts-cli/tests/fixtures/project_mode/**/node_modules/**
 package-lock.json
 !typecheck-ts-harness/package-lock.json
 !minify-js-nodejs/package-lock.json

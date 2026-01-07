@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use diagnostics::paths::{normalize_fs_path, normalize_ts_path};
 use predicates::str::{contains, is_empty};
 use serde_json::Value;
 use std::fs;
@@ -20,12 +21,17 @@ fn fixture(name: &str) -> PathBuf {
     .join(name)
 }
 
-fn normalized(path: &Path) -> String {
+fn display_path(path: &Path) -> String {
   path
     .canonicalize()
     .unwrap_or_else(|_| path.to_path_buf())
     .display()
     .to_string()
+}
+
+fn normalized(path: &Path) -> String {
+  let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+  normalize_fs_path(&canonical)
 }
 
 fn write_file(path: &Path, content: &str) {
@@ -50,7 +56,7 @@ fn typecheck_succeeds_on_basic_fixture() {
 #[test]
 fn type_at_reports_number() {
   let path = fixture("basic.ts");
-  let normalized_path = normalized(&path);
+  let normalized_path = display_path(&path);
   let content = fs::read_to_string(&path).expect("read fixture");
   let offset = content
     .find("a + b")
@@ -497,6 +503,11 @@ fn json_output_is_stable_and_parseable() {
   );
 
   let json: Value = serde_json::from_str(&output1).expect("valid JSON output");
+  assert_eq!(
+    json.get("schema_version").and_then(|v| v.as_u64()),
+    Some(1),
+    "expected schema_version 1, got {json:?}"
+  );
   let files = json
     .get("files")
     .and_then(|f| f.as_array())
@@ -505,6 +516,22 @@ fn json_output_is_stable_and_parseable() {
     !files.is_empty(),
     "expected at least one file name, got {json:?}"
   );
+  // Ensure stable ordering and path normalization.
+  let mut prev = None::<&str>;
+  for entry in files.iter().filter_map(|f| f.as_str()) {
+    assert_eq!(
+      normalize_ts_path(entry),
+      entry,
+      "expected JSON path to be normalized, got {entry:?}"
+    );
+    if let Some(prev) = prev {
+      assert!(
+        prev <= entry,
+        "expected files array to be sorted, got {prev:?} then {entry:?}"
+      );
+    }
+    prev = Some(entry);
+  }
   let diagnostics = json
     .get("diagnostics")
     .and_then(|d| d.as_array())

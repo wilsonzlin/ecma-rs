@@ -23,7 +23,7 @@ cargo run -p typecheck-ts-cli -- typecheck fixtures/basic.ts --json
 
 ### Options
 
-- `--json`: emit `{ diagnostics, queries }` as JSON with deterministic ordering.
+- `--json`: emit structured JSON output (see below) with deterministic ordering.
 - `--type-at <file:offset>`: inferred type at a byte offset within the file.
 - `--symbol-at <file:offset>`: resolved symbol information at an offset.
 - `--exports <file>`: export map for the file with symbol/type information.
@@ -53,3 +53,30 @@ looking in `node_modules/`.
 Human output uses `diagnostics::render` with file context. JSON output uses
 stable ordering for diagnostics and query results to ease consumption by other
 tools.
+
+## JSON output schema
+
+When `--json` is passed, the CLI emits a single JSON object:
+
+```jsonc
+{
+  "schema_version": 1,
+  "files": ["..."],
+  "diagnostics": ["..."],
+  "queries": {
+    "type_at": { "file": "...", "offset": 0, "type": "..." },
+    "symbol_at": { "file": "...", "offset": 0, "symbol": 0 },
+    "explain_assignability": { "src": { /* TypeAtResult */ }, "dst": { /* TypeAtResult */ }, "assignable": false },
+    "exports": { "<file>": { "<name>": { "symbol": 0, "def": 0, "type": "..." } } }
+  }
+}
+```
+
+- `schema_version` is a monotonically increasing integer; consumers should gate
+  parsing logic on this value.
+- All file paths in JSON output (`files`, `queries.*.file`, export-map keys,
+  etc.) are normalized to TypeScript-style virtual paths via
+  `diagnostics::paths::normalize_ts_path`:
+  - separators are `/`
+  - Windows drive letters are lowercased (`C:\foo` → `c:/foo`)
+  - `.`/`..` segments are collapsed
