@@ -1,6 +1,8 @@
 use super::{OptCtx, Pass};
 use derive_visitor::{DriveMut, VisitorMut};
-use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
+use parse_js::ast::class_or_object::{
+  ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
+};
 use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
 use parse_js::ast::node::Node;
@@ -26,9 +28,10 @@ impl Pass for PropRewritePass {
 }
 
 type ExprNode = Node<Expr>;
+type ObjMemberNode = Node<ObjMember>;
 
 #[derive(VisitorMut)]
-#[visitor(ExprNode(exit))]
+#[visitor(ExprNode(exit), ObjMemberNode(exit))]
 struct PropRewriteVisitor {
   changed: bool,
 }
@@ -49,6 +52,14 @@ impl PropRewriteVisitor {
     let (replacement, changed) = simplify_computed_member(member, node.loc);
     self.changed |= changed;
     *node.stx = replacement;
+  }
+
+  fn exit_obj_member_node(&mut self, node: &mut ObjMemberNode) {
+    let dummy = dummy_obj_member_type();
+    let typ = std::mem::replace(&mut node.stx.typ, dummy);
+    let (typ, changed) = simplify_object_member_key(typ);
+    node.stx.typ = typ;
+    self.changed |= changed;
   }
 }
 
@@ -88,6 +99,77 @@ fn simplify_computed_member(member: Node<ComputedMemberExpr>, loc: Loc) -> (Expr
   }
 
   (Expr::ComputedMember(member), false)
+}
+
+fn simplify_object_member_key(typ: ObjMemberType) -> (ObjMemberType, bool) {
+  let ObjMemberType::Valued { key, val } = typ else {
+    return (typ, false);
+  };
+
+  let (key, changed) = simplify_object_literal_key(key);
+  (ObjMemberType::Valued { key, val }, changed)
+}
+
+fn simplify_object_literal_key(key: ClassOrObjKey) -> (ClassOrObjKey, bool) {
+  match key {
+    ClassOrObjKey::Direct(mut direct) => {
+      if direct.stx.tt != TT::LiteralString {
+        return (ClassOrObjKey::Direct(direct), false);
+      }
+
+      if let Some(tt) = identifier_name_token_tt(&direct.stx.key) {
+        direct.stx.tt = tt;
+        return (ClassOrObjKey::Direct(direct), true);
+      }
+
+      if let Some(idx) = parse_canonical_u32_index(&direct.stx.key) {
+        direct.stx.key = idx.to_string();
+        direct.stx.tt = TT::LiteralNumber;
+        return (ClassOrObjKey::Direct(direct), true);
+      }
+
+      (ClassOrObjKey::Direct(direct), false)
+    }
+    ClassOrObjKey::Computed(expr) => {
+      match expr.stx.as_ref() {
+        Expr::LitStr(lit) => {
+          let key = lit.stx.value.as_str();
+          // `{["__proto__"]: ... }` defines a normal data property, while
+          // `{__proto__: ... }` can change the object's prototype.
+          if key == "__proto__" {
+            return (ClassOrObjKey::Computed(expr), false);
+          }
+
+          let (tt, key) = if let Some(tt) = identifier_name_token_tt(key) {
+            (tt, key.to_string())
+          } else if let Some(idx) = parse_canonical_u32_index(key) {
+            (TT::LiteralNumber, idx.to_string())
+          } else {
+            (TT::LiteralString, key.to_string())
+          };
+
+          (
+            ClassOrObjKey::Direct(Node::new(
+              expr.loc,
+              ClassOrObjMemberDirectKey { key, tt },
+            )),
+            true,
+          )
+        }
+        Expr::LitNum(num) => (
+          ClassOrObjKey::Direct(Node::new(
+            expr.loc,
+            ClassOrObjMemberDirectKey {
+              key: num.stx.value.to_string(),
+              tt: TT::LiteralNumber,
+            },
+          )),
+          true,
+        ),
+        _ => (ClassOrObjKey::Computed(expr), false),
+      }
+    }
+  }
 }
 
 fn try_shorthand_prop(typ: ObjMemberType) -> (ObjMemberType, bool) {
@@ -142,17 +224,26 @@ fn try_shorthand_prop(typ: ObjMemberType) -> (ObjMemberType, bool) {
 }
 
 fn is_identifier_name_token(name: &str) -> bool {
+  identifier_name_token_tt(name).is_some()
+}
+
+fn identifier_name_token_tt(name: &str) -> Option<TT> {
   let mut lexer = Lexer::new(name);
   let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Ts);
 
   if token.loc.0 != 0 || token.loc.1 != name.len() {
-    return false;
+    return None;
   }
 
-  matches!(
+  if matches!(
     token.typ,
     TT::Identifier | TT::LiteralFalse | TT::LiteralTrue | TT::LiteralNull
   ) || token.typ.is_keyword()
+  {
+    return Some(token.typ);
+  }
+
+  None
 }
 
 fn parse_canonical_u32_index(value: &str) -> Option<u32> {

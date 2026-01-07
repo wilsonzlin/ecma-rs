@@ -523,6 +523,30 @@ fn does_not_rewrite_non_identifier_computed_member_string_keys() {
 }
 
 #[test]
+fn rewrites_object_literal_string_keys_to_identifier_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={"foo":1};obj.foo;"#);
+  assert_eq!(result, "let obj={foo:1};obj.foo;");
+}
+
+#[test]
+fn rewrites_object_literal_numeric_string_keys_to_number_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={"0":1};obj["0"];"#);
+  assert_eq!(result, "let obj={0:1};obj[0];");
+}
+
+#[test]
+fn rewrites_object_literal_computed_string_keys_to_direct_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={["a-b"]:1};"#);
+  assert_eq!(result, r#"let obj={"a-b":1};"#);
+}
+
+#[test]
+fn does_not_rewrite_proto_object_literal_computed_string_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={["__proto__"]:null};"#);
+  assert_eq!(result, r#"let obj={["__proto__"]:null};"#);
+}
+
+#[test]
 fn rewrites_object_literal_value_properties_to_shorthand() {
   let result = minified(TopLevelMode::Global, "let a=1;let obj={a:a};");
   assert_eq!(result, "let a=1;let obj={a};");
