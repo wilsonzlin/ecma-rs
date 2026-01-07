@@ -2,21 +2,23 @@ use super::*;
 
 #[derive(Clone)]
 pub(super) struct CachedBodyCheckContext {
-  revision: salsa::Revision,
+  decl_types_fingerprint: u64,
   cache_options: CacheOptions,
   context: Arc<BodyCheckContext>,
 }
 
 impl ProgramState {
   pub(super) fn body_check_context(&mut self) -> Arc<BodyCheckContext> {
-    let revision = db::db_revision(&self.typecheck_db);
+    let fingerprint = self
+      .decl_types_fingerprint
+      .unwrap_or_else(|| db::decl_types_fingerprint(&self.typecheck_db));
     let cache_options = self.compiler_options.cache.clone();
     let store = self
       .interned_store
       .as_ref()
       .expect("interned store initialized");
     if let Some(cached) = self.cached_body_context.as_ref() {
-      if cached.revision == revision
+      if cached.decl_types_fingerprint == fingerprint
         && cached.cache_options == cache_options
         && Arc::ptr_eq(&cached.context.store, store)
       {
@@ -39,7 +41,7 @@ impl ProgramState {
     );
     let context = Arc::new(self.build_body_check_context());
     self.cached_body_context = Some(CachedBodyCheckContext {
-      revision,
+      decl_types_fingerprint: fingerprint,
       cache_options,
       context: Arc::clone(&context),
     });
@@ -178,5 +180,4 @@ impl ProgramState {
       cancelled: Arc::clone(&self.cancelled),
     }
   }
-
 }
