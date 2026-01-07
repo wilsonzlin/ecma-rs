@@ -655,6 +655,35 @@ where
 
   fn emit_call(&mut self, call: &Node<CallExpr>) -> EmitResult {
     with_node_context(call.loc, || {
+      if call.stx.optional_chaining {
+        if let Expr::Instantiation(instantiation) = call.stx.callee.stx.as_ref() {
+          self.emit_memberish_receiver(&instantiation.stx.expression)?;
+          write!(self.out, "?.<")?;
+          for (i, arg) in instantiation.stx.type_arguments.iter().enumerate() {
+            if i > 0 {
+              write!(self.out, ",")?;
+              self.out.write_str(self.sep())?;
+            }
+            self.emit_type(arg)?;
+          }
+          write!(self.out, ">")?;
+          write!(self.out, "(")?;
+          for (i, arg) in call.stx.arguments.iter().enumerate() {
+            if i > 0 {
+              self.out.write_char(',')?;
+              self.out.write_str(self.sep())?;
+            }
+            let CallArg { spread, value } = arg.stx.as_ref();
+            if *spread {
+              write!(self.out, "...")?;
+            }
+            self.emit_expr_with_min_prec(value, Prec::new(1))?;
+          }
+          write!(self.out, ")")?;
+          return Ok(());
+        }
+      }
+
       self.emit_memberish_receiver(&call.stx.callee)?;
       if call.stx.optional_chaining {
         write!(self.out, "?.(")?;

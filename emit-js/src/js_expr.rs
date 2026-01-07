@@ -1,7 +1,7 @@
 use parse_js::ast::expr::{
   lit::{LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
-  ArrowFuncExpr, BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr,
-  UnaryExpr, UnaryPostfixExpr,
+  ArrowFuncExpr, BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr,
+  InstantiationExpr, MemberExpr, UnaryExpr, UnaryPostfixExpr,
 };
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
@@ -53,6 +53,7 @@ impl<'a> JsExprEmitter<'a> {
       Expr::ComputedMember(member) => self.emit_computed_member(member),
       Expr::Cond(cond) => self.emit_cond(cond),
       Expr::Id(id) => self.emit_id(id),
+      Expr::Instantiation(instantiation) => self.emit_instantiation(instantiation),
       Expr::LitBool(lit) => self.emit_lit_bool(lit),
       Expr::LitNum(lit) => self.emit_lit_num(lit),
       Expr::LitRegex(lit) => self.emit_lit_regex(lit),
@@ -197,6 +198,11 @@ impl<'a> JsExprEmitter<'a> {
     Ok(())
   }
 
+  fn emit_instantiation(&mut self, instantiation: &Node<InstantiationExpr>) -> JsEmitResult {
+    // TypeScript instantiation expressions erase to their underlying expression in JS output.
+    self.emit_expr_with_min_prec(&instantiation.stx.expression, call_member_precedence())
+  }
+
   fn emit_cond(&mut self, cond: &Node<CondExpr>) -> JsEmitResult {
     let cond_prec = OPERATORS[&OperatorName::Conditional].precedence;
     let assignment_prec = assignment_precedence();
@@ -295,6 +301,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, JsEmitError> {
     Expr::Binary(binary) => operator_precedence(binary.stx.operator),
     Expr::Call(_) => Ok(call_member_precedence()),
     Expr::ComputedMember(_) => Ok(call_member_precedence()),
+    Expr::Instantiation(_) => Ok(call_member_precedence()),
     Expr::Cond(_) => Ok(OPERATORS[&OperatorName::Conditional].precedence),
     Expr::Id(_)
     | Expr::LitBool(_)

@@ -235,6 +235,42 @@ fn emit_conditional(em: &mut Emitter, cond: &Node<CondExpr>, ctx: ExprCtx) -> Em
 }
 
 fn emit_call(em: &mut Emitter, call: &Node<CallExpr>, ctx: ExprCtx) -> EmitResult {
+  if call.stx.optional_chaining {
+    if let Expr::Instantiation(instantiation) = call.stx.callee.stx.as_ref() {
+      emit_expr_with_min_prec(
+        em,
+        &instantiation.stx.expression,
+        CALL_MEMBER_PRECEDENCE,
+        ctx,
+      )?;
+      em.write_str("?.");
+      em.write_punct("<");
+      for (idx, arg) in instantiation.stx.type_arguments.iter().enumerate() {
+        if idx > 0 {
+          em.write_punct(",");
+          if !em.minify() {
+            em.write_space();
+          }
+        }
+        emit_ts_type(em, arg)?;
+      }
+      em.write_punct(">");
+      em.write_punct("(");
+      for (i, arg) in call.stx.arguments.iter().enumerate() {
+        if i > 0 {
+          em.write_punct(",");
+        }
+        let CallArg { spread, value } = arg.stx.as_ref();
+        if *spread {
+          em.write_punct("...");
+        }
+        emit_expr_with_min_prec(em, value, 1, ctx)?;
+      }
+      em.write_punct(")");
+      return Ok(());
+    }
+  }
+
   emit_expr_with_min_prec(em, &call.stx.callee, CALL_MEMBER_PRECEDENCE, ctx)?;
   if call.stx.optional_chaining {
     em.write_str("?.(");
