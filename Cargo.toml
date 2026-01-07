@@ -55,7 +55,7 @@ derive_more = "1.0.0"
 derive-visitor = "0.4.0"
 fast-float = "0.2.0"
 globset = { version = "0.4", default-features = false }
-itertools = "0.13"
+itertools = "0.10.5"
 json5 = "0.4"
 maplit = "1"
 memchr = "2"
