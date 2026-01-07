@@ -14,12 +14,10 @@ with-node = []
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 globset = { workspace = true }
-indexmap = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
 toml = { workspace = true }
-tempfile = { workspace = true }
 thiserror = { workspace = true }
 diagnostics = { workspace = true }
 typecheck-ts = { workspace = true, features = ["resolve"] }
@@ -30,4 +28,5 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 assert_cmd = { workspace = true }
+tempfile = { workspace = true }
 types-ts-interned = { workspace = true }

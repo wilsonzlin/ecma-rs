@@ -12,10 +12,12 @@ hir-js = { workspace = true }
 parse-js = { workspace = true }
 semantic-js = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 typecheck-ts = { workspace = true }
 types-ts-interned = { workspace = true }
 ordered-float = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
 
 [[bench]]
 name = "pipeline"

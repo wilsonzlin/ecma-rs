@@ -10,7 +10,6 @@ anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 diagnostics = { workspace = true }
 globset = { workspace = true }
-indexmap = { workspace = true }
 parse-js = { workspace = true, features = ["diagnostics"] }
 rayon = { workspace = true }
 regex = { workspace = true }
