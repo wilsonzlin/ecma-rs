@@ -7,7 +7,9 @@ fn main() {}
 #[cfg(feature = "typed")]
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 #[cfg(feature = "typed")]
-use optimize_js::{compile_source, compile_source_typed, compile_source_with_typecheck, TopLevelMode};
+use optimize_js::{
+  compile_source, compile_source_typed, compile_source_with_typecheck, TopLevelMode,
+};
 #[cfg(feature = "typed")]
 use std::hint::black_box;
 #[cfg(feature = "typed")]
@@ -59,7 +61,9 @@ if (alwaysTrue()) {
 "#;
 
 #[cfg(feature = "typed")]
-fn build_multifile_type_program(source: &str) -> (Arc<typecheck_ts::Program>, typecheck_ts::FileId) {
+fn build_multifile_type_program(
+  source: &str,
+) -> (Arc<typecheck_ts::Program>, typecheck_ts::FileId) {
   let mut host = typecheck_ts::MemoryHost::new();
   let dummy = typecheck_ts::FileKey::new("file0.ts");
   let target = typecheck_ts::FileKey::new("file1.ts");
@@ -69,7 +73,10 @@ fn build_multifile_type_program(source: &str) -> (Arc<typecheck_ts::Program>, ty
   host.insert(dummy.clone(), "let dummy = 0;");
   host.insert(target.clone(), source);
 
-  let program = Arc::new(typecheck_ts::Program::new(host, vec![dummy, target.clone()]));
+  let program = Arc::new(typecheck_ts::Program::new(
+    host,
+    vec![dummy, target.clone()],
+  ));
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -110,13 +117,16 @@ fn bench_typed_compile(c: &mut Criterion) {
   // untyped baseline. Use fewer samples so `cargo bench` stays reasonably fast.
   group.sample_size(10);
   group.measurement_time(Duration::from_secs(10));
-  group.bench_function(BenchmarkId::new("compile_source_typed", "internal_host"), |b| {
-    b.iter(|| {
-      let program =
-        compile_source_typed(black_box(source), TopLevelMode::Module, false).expect("compile typed");
-      black_box(program);
-    });
-  });
+  group.bench_function(
+    BenchmarkId::new("compile_source_typed", "internal_host"),
+    |b| {
+      b.iter(|| {
+        let program = compile_source_typed(black_box(source), TopLevelMode::Module, false)
+          .expect("compile typed");
+        black_box(program);
+      });
+    },
+  );
 
   group.sample_size(100);
   group.measurement_time(Duration::from_secs(5));
