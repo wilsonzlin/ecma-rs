@@ -12,7 +12,7 @@ graph TD
     minify_js["minify-js"]
     minify_js_bench["minify-js-bench"]
     minify_js_cli["minify-js-cli"]
-    minify_js_node["minify-js-node"]
+    minify_js_nodejs["minify-js-nodejs"]
     optimize_js["optimize-js"]
     optimize_js_debugger["optimize-js-debugger"]
     parse_js["parse-js"]
@@ -38,8 +38,8 @@ graph TD
     minify_js_bench --> minify_js
     minify_js_cli --> diagnostics
     minify_js_cli --> minify_js
-    minify_js_node --> diagnostics
-    minify_js_node --> minify_js
+    minify_js_nodejs --> diagnostics
+    minify_js_nodejs --> minify_js
     optimize_js --> diagnostics
     optimize_js --> emit_js
     optimize_js --> hir_js
