@@ -3,6 +3,9 @@ use super::*;
 impl ProgramState {
   pub(super) fn push_semantic_diagnostics(&mut self, diags: Vec<Diagnostic>) {
     for mut diag in diags {
+      if diag.code == codes::NAMESPACE_BEFORE_MERGE_TARGET.as_str() {
+        continue;
+      }
       if diag.code == "BIND1002" {
         continue;
       }

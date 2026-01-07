@@ -3550,7 +3550,7 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let semantic_diags = semantics
     .diagnostics
     .iter()
-    .filter(|diag| diag.code.as_str() != "BIND1002")
+    .filter(|diag| diag.code.as_str() != "BIND1002" && diag.code.as_str() != "TS2434")
     .cloned()
     .chain(module_diags.into_iter());
   aggregate_program_diagnostics(parse_diags, lower_diags, semantic_diags, body_diags)

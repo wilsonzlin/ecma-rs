@@ -132,9 +132,6 @@ pub(super) fn populate_namespace_object_types(
       let Some(member_data) = lookup.get(&member_hir) else {
         continue;
       };
-      if !ns_def.is_ambient && !member_data.is_exported {
-        continue;
-      }
       let Some(member_name) = lowered.names.resolve(member_data.name) else {
         continue;
       };
@@ -370,4 +367,3 @@ pub(super) fn populate_namespace_object_types(
     }
   }
 }
-
