@@ -98,13 +98,25 @@ Install the dependency:
 npm i @minify-js/node
 ```
 
-Call the method (signature: `minify(topLevelType: "global" | "module", src: string | Buffer): Buffer`):
+Call the method (signature: `minify(topLevelType: "global" | "module", src: string | Buffer, options?): Buffer`):
 
 ```typescript
 import {minify} from "@minify-js/node";
 
 const src = Buffer.from("let x = 1;", "utf-8");
 const min = minify("global", src);
+```
+
+To preserve TypeScript `const enum` declarations at runtime (instead of the default
+tsc-like inlining/erasure), pass `preserveConstEnums: true`:
+
+```typescript
+import {minify} from "@minify-js/node";
+
+const min = minify("module", 'eval("x");const enum E{A=1}export const x=E.A;', {
+  dialect: "ts",
+  preserveConstEnums: true,
+});
 ```
 
 ## In progress
