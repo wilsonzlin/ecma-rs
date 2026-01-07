@@ -285,7 +285,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     }
 
     if let Some(ast) = parse_for(db, file).ast.as_deref() {
-      if ast_has_module_syntax(ast) {
+      if sem_ts::module_syntax::ast_has_module_syntax(ast) {
         use parse_js::ast::node::Node;
         use parse_js::ast::stmt::Stmt;
         use parse_js::ast::ts_stmt::ModuleName;
@@ -1855,103 +1855,11 @@ fn collect_type_only_module_specifier_values_from_ast(
   ast.drive(&mut collector);
 }
 
-fn ast_has_module_syntax(ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>) -> bool {
-  use parse_js::ast::node::Node;
-  use parse_js::ast::stmt::Stmt;
-  use parse_js::ast::ts_stmt::ImportEqualsRhs;
-
-  fn walk(stmts: &[Node<Stmt>]) -> bool {
-    for stmt in stmts.iter() {
-      match stmt.stx.as_ref() {
-        Stmt::Import(_)
-        | Stmt::ExportList(_)
-        | Stmt::ExportDefaultExpr(_)
-        | Stmt::ExportAssignmentDecl(_)
-        | Stmt::ExportAsNamespaceDecl(_)
-        | Stmt::ImportTypeDecl(_)
-        | Stmt::ExportTypeDecl(_) => return true,
-        Stmt::ImportEqualsDecl(import_equals) => match import_equals.stx.rhs {
-          ImportEqualsRhs::Require { .. } => return true,
-          ImportEqualsRhs::EntityName { .. } => {
-            if import_equals.stx.export {
-              return true;
-            }
-          }
-        },
-        Stmt::VarDecl(var) => {
-          if var.stx.export {
-            return true;
-          }
-        }
-        Stmt::FunctionDecl(func) => {
-          if func.stx.export {
-            return true;
-          }
-        }
-        Stmt::ClassDecl(class) => {
-          if class.stx.export {
-            return true;
-          }
-        }
-        Stmt::InterfaceDecl(interface) => {
-          if interface.stx.export {
-            return true;
-          }
-        }
-        Stmt::TypeAliasDecl(alias) => {
-          if alias.stx.export {
-            return true;
-          }
-        }
-        Stmt::EnumDecl(en) => {
-          if en.stx.export {
-            return true;
-          }
-        }
-        Stmt::NamespaceDecl(ns) => {
-          if ns.stx.export {
-            return true;
-          }
-        }
-        Stmt::ModuleDecl(module) => {
-          if module.stx.export {
-            return true;
-          }
-        }
-        Stmt::AmbientVarDecl(av) => {
-          if av.stx.export {
-            return true;
-          }
-        }
-        Stmt::AmbientFunctionDecl(af) => {
-          if af.stx.export {
-            return true;
-          }
-        }
-        Stmt::AmbientClassDecl(ac) => {
-          if ac.stx.export {
-            return true;
-          }
-        }
-        Stmt::GlobalDecl(global) => {
-          if walk(&global.stx.body) {
-            return true;
-          }
-        }
-        _ => {}
-      }
-    }
-    false
-  }
-
-  walk(&ast.stx.body)
-}
-
 fn collect_module_augmentation_specifier_values_from_ast(
   ast: &parse_js::ast::node::Node<parse_js::ast::stx::TopLevel>,
   specs: &mut Vec<Arc<str>>,
 ) {
-  if !ast_has_module_syntax(ast) {
+  if !sem_ts::module_syntax::ast_has_module_syntax(ast) {
     return;
   }
 
