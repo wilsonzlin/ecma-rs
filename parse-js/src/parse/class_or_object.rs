@@ -627,7 +627,11 @@ impl<'a> Parser<'a> {
       if self.should_recover() {
         self.create_synthetic_class_key()
       } else {
-        return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("method name")));
+        return Err(
+          self
+            .peek()
+            .error(SyntaxErrorType::ExpectedSyntax("method name")),
+        );
       }
     } else {
       self.class_or_obj_key(ctx)?
