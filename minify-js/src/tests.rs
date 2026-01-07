@@ -547,6 +547,34 @@ fn does_not_rewrite_proto_object_literal_computed_string_keys() {
 }
 
 #[test]
+fn rewrites_object_pattern_numeric_string_keys_to_number_keys() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"const obj={0:1};const {"0":x}=obj;console.log(x);"#,
+  );
+  assert_eq!(result, r#"const a={0:1};const{0:b}=a;console.log(b);"#);
+}
+
+#[test]
+fn rewrites_object_pattern_computed_string_keys_to_direct_keys() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"const obj={"a-b":1};const {["a-b"]:x}=obj;console.log(x);"#,
+  );
+  assert_eq!(result, r#"const a={"a-b":1};const{"a-b":b}=a;console.log(b);"#);
+}
+
+#[test]
+fn rewrites_object_pattern_computed_proto_keys_to_direct_keys() {
+  // Object patterns have no special `__proto__` semantics, so dropping computed keys is safe.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"const obj={["__proto__"]:1};const {["__proto__"]:x}=obj;console.log(x);"#,
+  );
+  assert_eq!(result, r#"const a={["__proto__"]:1};const{__proto__:b}=a;console.log(b);"#);
+}
+
+#[test]
 fn rewrites_object_literal_value_properties_to_shorthand() {
   let result = minified(TopLevelMode::Global, "let a=1;let obj={a:a};");
   assert_eq!(result, "let a=1;let obj={a};");

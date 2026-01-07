@@ -4,6 +4,7 @@ use parse_js::ast::class_or_object::{
   ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType,
 };
 use parse_js::ast::expr::lit::{LitNullExpr, LitNumExpr};
+use parse_js::ast::expr::pat::ObjPatProp;
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
@@ -29,9 +30,10 @@ impl Pass for PropRewritePass {
 
 type ExprNode = Node<Expr>;
 type ObjMemberNode = Node<ObjMember>;
+type ObjPatPropNode = Node<ObjPatProp>;
 
 #[derive(VisitorMut)]
-#[visitor(ExprNode(exit), ObjMemberNode(exit))]
+#[visitor(ExprNode(exit), ObjMemberNode(exit), ObjPatPropNode(exit))]
 struct PropRewriteVisitor {
   changed: bool,
 }
@@ -59,6 +61,14 @@ impl PropRewriteVisitor {
     let typ = std::mem::replace(&mut node.stx.typ, dummy);
     let (typ, changed) = simplify_object_member_key(typ);
     node.stx.typ = typ;
+    self.changed |= changed;
+  }
+
+  fn exit_obj_pat_prop_node(&mut self, node: &mut ObjPatPropNode) {
+    let dummy = dummy_key();
+    let key = std::mem::replace(&mut node.stx.key, dummy);
+    let (key, changed) = simplify_object_pattern_key(key);
+    node.stx.key = key;
     self.changed |= changed;
   }
 }
@@ -111,6 +121,20 @@ fn simplify_object_member_key(typ: ObjMemberType) -> (ObjMemberType, bool) {
 }
 
 fn simplify_object_literal_key(key: ClassOrObjKey) -> (ClassOrObjKey, bool) {
+  simplify_object_key(key, ProtoSemantics::Preserve)
+}
+
+fn simplify_object_pattern_key(key: ClassOrObjKey) -> (ClassOrObjKey, bool) {
+  simplify_object_key(key, ProtoSemantics::None)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProtoSemantics {
+  Preserve,
+  None,
+}
+
+fn simplify_object_key(key: ClassOrObjKey, proto: ProtoSemantics) -> (ClassOrObjKey, bool) {
   match key {
     ClassOrObjKey::Direct(mut direct) => {
       if direct.stx.tt != TT::LiteralString {
@@ -130,42 +154,43 @@ fn simplify_object_literal_key(key: ClassOrObjKey) -> (ClassOrObjKey, bool) {
 
       (ClassOrObjKey::Direct(direct), false)
     }
-    ClassOrObjKey::Computed(expr) => {
-      match expr.stx.as_ref() {
-        Expr::LitStr(lit) => {
-          let key = lit.stx.value.as_str();
+    ClassOrObjKey::Computed(expr) => match expr.stx.as_ref() {
+      Expr::LitStr(lit) => {
+        let key = lit.stx.value.as_str();
+        if proto == ProtoSemantics::Preserve && key == "__proto__" {
           // `{["__proto__"]: ... }` defines a normal data property, while
           // `{__proto__: ... }` can change the object's prototype.
-          if key == "__proto__" {
-            return (ClassOrObjKey::Computed(expr), false);
-          }
-
-          let (tt, key) = if let Some(tt) = identifier_name_token_tt(key) {
-            (tt, key.to_string())
-          } else if let Some(idx) = parse_canonical_u32_index(key) {
-            (TT::LiteralNumber, idx.to_string())
-          } else {
-            (TT::LiteralString, key.to_string())
-          };
-
-          (
-            ClassOrObjKey::Direct(Node::new(expr.loc, ClassOrObjMemberDirectKey { key, tt })),
-            true,
-          )
+          return (ClassOrObjKey::Computed(expr), false);
         }
-        Expr::LitNum(num) => (
+
+        let (tt, key) = if let Some(tt) = identifier_name_token_tt(key) {
+          (tt, key.to_string())
+        } else if let Some(idx) = parse_canonical_u32_index(key) {
+          (TT::LiteralNumber, idx.to_string())
+        } else {
+          (TT::LiteralString, key.to_string())
+        };
+
+        (
           ClassOrObjKey::Direct(Node::new(
             expr.loc,
-            ClassOrObjMemberDirectKey {
-              key: num.stx.value.to_string(),
-              tt: TT::LiteralNumber,
-            },
+            ClassOrObjMemberDirectKey { key, tt },
           )),
           true,
-        ),
-        _ => (ClassOrObjKey::Computed(expr), false),
+        )
       }
-    }
+      Expr::LitNum(num) => (
+        ClassOrObjKey::Direct(Node::new(
+          expr.loc,
+          ClassOrObjMemberDirectKey {
+            key: num.stx.value.to_string(),
+            tt: TT::LiteralNumber,
+          },
+        )),
+        true,
+      ),
+      _ => (ClassOrObjKey::Computed(expr), false),
+    },
   }
 }
 
@@ -265,6 +290,16 @@ fn parse_canonical_u32_index(value: &str) -> Option<u32> {
 
 fn dummy_expr(loc: Loc) -> Expr {
   Expr::LitNull(Node::new(loc, LitNullExpr {}))
+}
+
+fn dummy_key() -> ClassOrObjKey {
+  ClassOrObjKey::Direct(Node::new(
+    Loc(0, 0),
+    ClassOrObjMemberDirectKey {
+      key: String::new(),
+      tt: TT::Identifier,
+    },
+  ))
 }
 
 fn dummy_obj_member_type() -> ObjMemberType {
