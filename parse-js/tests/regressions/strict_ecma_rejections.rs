@@ -107,6 +107,7 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("for (var x, y of z) {}");
   assert_reject("for (let x, y of z) {}");
   assert_reject("for (const x, y of z) {}");
+  assert_reject("import.meta;");
   assert_reject_module("import.meta = 1;");
 }
 

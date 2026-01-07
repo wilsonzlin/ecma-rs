@@ -149,12 +149,17 @@ impl<'a> Parser<'a> {
 
   pub fn import_meta(&mut self) -> SyntaxResult<Node<ImportMeta>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordImport)?;
+      let start = p.require(TT::KeywordImport)?;
       p.require(TT::Dot)?;
       let prop = p.require(TT::Identifier)?;
       if p.str(prop.loc) != "meta" {
         return Err(prop.error(SyntaxErrorType::ExpectedSyntax("`meta` property")));
       };
+      if p.is_strict_ecmascript() && !p.is_module() {
+        return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+          "import.meta not allowed in scripts",
+        )));
+      }
       Ok(ImportMeta {})
     })
   }
