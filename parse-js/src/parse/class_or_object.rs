@@ -551,8 +551,7 @@ impl<'a> Parser<'a> {
         self.require(TT::Equals)?;
         let prev_new_target_allowed = self.new_target_allowed;
         self.new_target_allowed += 1;
-        let initializer =
-          self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
+        let initializer = self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
         self.new_target_allowed = prev_new_target_allowed;
         let initializer = initializer?;
         Ok(ClassOrObjVal::Prop(Some(initializer)))
