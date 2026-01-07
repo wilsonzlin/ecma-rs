@@ -12,18 +12,19 @@ use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitObjExpr,
   LitRegexExpr, LitStrExpr, LitTemplateExpr, LitTemplatePart,
 };
-use parse_js::ast::expr::pat::{ArrPat, ArrPatElem, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
+use parse_js::ast::expr::pat::{
+  ArrPat, ArrPatElem, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat,
+};
 use parse_js::ast::expr::{
   ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ClassExpr, ComputedMemberExpr, CondExpr, Decorator,
   Expr, FuncExpr, IdExpr, ImportExpr, ImportMeta, InstantiationExpr, MemberExpr, NewTarget,
   NonNullAssertionExpr, SatisfiesExpr, SuperExpr, TaggedTemplateExpr, ThisExpr, TypeAssertionExpr,
-  UnaryExpr,
-  UnaryPostfixExpr,
+  UnaryExpr, UnaryPostfixExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::decl::{Accessibility, ParamDecl};
+use parse_js::ast::stmt::Stmt;
 use parse_js::operator::OperatorName;
 use parse_js::token::TT;
 
@@ -882,7 +883,11 @@ fn hash_vec<T>(hasher: &mut StableHasher, values: &[T], mut f: impl FnMut(&mut S
 }
 
 #[inline]
-fn hash_option<T>(hasher: &mut StableHasher, value: Option<&T>, f: impl FnOnce(&mut StableHasher, &T)) {
+fn hash_option<T>(
+  hasher: &mut StableHasher,
+  value: Option<&T>,
+  f: impl FnOnce(&mut StableHasher, &T),
+) {
   match value {
     None => hasher.write_u64(0),
     Some(value) => {

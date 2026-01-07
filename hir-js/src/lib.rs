@@ -22,11 +22,11 @@
 //! cargo run -p hir-js --example basic_lowering
 //! ```
 
+pub(crate) mod fingerprint;
 pub mod hir;
 pub mod ids;
 pub mod intern;
 pub mod lower;
-pub(crate) mod fingerprint;
 mod lower_types;
 pub mod span_map;
 
