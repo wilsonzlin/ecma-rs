@@ -1025,7 +1025,11 @@ impl ProgramState {
     (sig_id, type_param_ids, diagnostics)
   }
 
-  pub(super) fn merge_namespace_store_types(&mut self, existing: TypeId, incoming: TypeId) -> TypeId {
+  pub(super) fn merge_namespace_store_types(
+    &mut self,
+    existing: TypeId,
+    incoming: TypeId,
+  ) -> TypeId {
     match (
       self.type_store.kind(existing).clone(),
       self.type_store.kind(incoming).clone(),
@@ -1350,5 +1354,4 @@ impl ProgramState {
     }
     Ok(())
   }
-
 }
