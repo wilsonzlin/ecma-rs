@@ -358,6 +358,29 @@ fn pruned_import_preserves_attributes() {
 }
 
 #[test]
+fn empty_reexport_from_becomes_import() {
+  let result = minified(TopLevelMode::Module, r#"export {} from "x";console.log(1);"#);
+  assert_eq!(result, r#"import"x";console.log(1);"#);
+}
+
+#[test]
+fn empty_reexport_from_preserves_attributes() {
+  let result = minified(
+    TopLevelMode::Module,
+    r#"export {} from "x" with { type: "json" };console.log(1);"#,
+  );
+  let normalized: String = result.chars().filter(|ch| !ch.is_whitespace()).collect();
+  assert!(
+    normalized.contains(r#"import"x"with{type:"json"}"#),
+    "expected empty re-export to become attribute-preserving side-effect import: {result}"
+  );
+  assert!(
+    !normalized.contains("export{}from"),
+    "expected empty re-export to be rewritten to import: {result}"
+  );
+}
+
+#[test]
 fn type_only_import_does_not_become_side_effect_import() {
   let result = minified(
     TopLevelMode::Module,

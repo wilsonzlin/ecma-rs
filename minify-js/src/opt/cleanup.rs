@@ -1,8 +1,9 @@
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
+use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::Stmt;
-use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
+use parse_js::ast::stmt::{ExportListStmt, ForBody, ImportStmt, SwitchBranch, TryStmt};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 
@@ -127,6 +128,33 @@ fn clean_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
     Stmt::Label(mut label_stmt) => {
       label_stmt.stx.statement = clean_single_stmt(label_stmt.stx.statement, changed);
       new_node(loc, assoc, Stmt::Label(label_stmt))
+    }
+    Stmt::ExportList(export_stmt)
+      if export_stmt.stx.from.is_some()
+        && !export_stmt.stx.type_only
+        && matches!(export_stmt.stx.names, ExportNames::Specific(ref names) if names.is_empty()) =>
+    {
+      *changed = true;
+      let Node {
+        loc: inner_loc,
+        assoc: inner_assoc,
+        stx: export_stmt,
+      } = export_stmt;
+      let ExportListStmt {
+        from, attributes, ..
+      } = *export_stmt;
+      let import_stmt = Node {
+        loc: inner_loc,
+        assoc: inner_assoc,
+        stx: Box::new(ImportStmt {
+          type_only: false,
+          default: None,
+          names: None,
+          module: from.expect("guarded by is_some"),
+          attributes,
+        }),
+      };
+      new_node(loc, assoc, Stmt::Import(import_stmt))
     }
     Stmt::FunctionDecl(decl) => new_node(loc, assoc, Stmt::FunctionDecl(decl)),
     Stmt::ClassDecl(decl) => new_node(loc, assoc, Stmt::ClassDecl(decl)),
