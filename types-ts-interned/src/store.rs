@@ -44,9 +44,12 @@ fn stable_hash64<T: Hash>(value: &T, domain: u64, salt: u64) -> u64 {
 }
 
 /// Produce a 128-bit fingerprint for a value using domain-separated, stable
-/// hashing. Two hashes are mixed to virtually eliminate collisions without
-/// relying on insertion order. An explicit salt is used so that callers can
-/// deterministically rehash to resolve collisions.
+/// hashing.
+///
+/// Two hashes are mixed to make collisions astronomically unlikely. An explicit
+/// salt is available so callers can rehash on collision; note that any
+/// salt-based collision resolution is necessarily insertion-order dependent
+/// because IDs must remain stable once returned.
 fn fingerprint<T: Hash>(value: &T, domain: u64, salt: u64) -> u128 {
   let base_salt = salt.wrapping_mul(2);
   let primary = stable_hash64(value, domain, base_salt);
@@ -75,7 +78,10 @@ impl NameInterner {
       return *id;
     }
 
+    #[cfg(not(feature = "strict-determinism"))]
     let mut salt = 0u64;
+    #[cfg(feature = "strict-determinism")]
+    let salt = 0u64;
     loop {
       let id = Self::hash_name(&name, salt);
       match self.by_id.get(&id) {
@@ -88,8 +94,15 @@ impl NameInterner {
           self.by_name.insert(name.clone(), id);
           return id;
         }
-        Some(_) => {
-          salt = salt.wrapping_add(1);
+        Some(_existing) => {
+          #[cfg(feature = "strict-determinism")]
+          panic!(
+            "strict-determinism: name ID collision for {id:?} (existing={_existing:?}, new={name:?})"
+          );
+          #[cfg(not(feature = "strict-determinism"))]
+          {
+            salt = salt.wrapping_add(1);
+          }
         }
       }
     }
@@ -120,10 +133,19 @@ pub struct PrimitiveIds {
   pub unique_symbol: TypeId,
 }
 
-/// Thread-safe, deterministic interner for canonicalized types, shapes, objects,
-/// names, and signatures. IDs are derived from stable hashes of canonical data
-/// to ensure that interning order does not affect results, even when requests
-/// arrive from multiple threads.
+/// Thread-safe, interned store for canonicalized types, shapes, objects, names,
+/// and signatures.
+///
+/// IDs are derived from stable hashes of canonical data and are therefore
+/// deterministic and thread-scheduling independent **assuming no hash
+/// collisions**.
+///
+/// In the extremely unlikely event of a hash collision, the default
+/// configuration falls back to salt-based rehashing. This preserves the
+/// invariant that IDs must never change once returned, but it does not define a
+/// canonical, order-independent assignment under collisions (the first value
+/// inserted keeps the lower-salt ID). Enable the `strict-determinism` feature
+/// to treat collisions as an internal error instead.
 #[derive(Debug)]
 pub struct TypeStore {
   types: DashMap<TypeId, TypeKind, RandomState>,
@@ -165,9 +187,10 @@ impl TypeStore {
     Self::with_options_and_fingerprint(options, default_fingerprint)
   }
 
-  fn with_options_and_fingerprint(
+  #[doc(hidden)]
+  pub fn with_options_and_fingerprint(
     options: TypeOptions,
-    fingerprint_fn: FingerprintFn,
+    fingerprint_fn: fn(u128, u64, u64) -> u128,
   ) -> Arc<Self> {
     let mut store = Self {
       types: Self::new_dashmap(TYPE_DOMAIN),
@@ -234,6 +257,11 @@ impl TypeStore {
   /// Insert a value keyed by a fingerprint-derived ID, retrying with an
   /// incremented salt when an occupied entry holds a different value. This
   /// mirrors `NameInterner::intern` but is safe to call from multiple threads.
+  ///
+  /// Note that collision resolution is deterministic for a fixed insertion
+  /// sequence, but does not define a canonical assignment under hash
+  /// collisions. When built with the `strict-determinism` feature, collisions
+  /// instead cause an immediate panic.
   fn insert_with_collision<T, Id, MakeId>(
     map: &DashMap<Id, T, RandomState>,
     value: T,
@@ -245,7 +273,10 @@ impl TypeStore {
     Id: Copy + Eq + Hash + std::fmt::Debug,
     MakeId: FnMut(&T, u64) -> Id,
   {
+    #[cfg(not(feature = "strict-determinism"))]
     let mut salt = 0u64;
+    #[cfg(feature = "strict-determinism")]
+    let salt = 0u64;
     loop {
       let id = make_id(&value, salt);
       match map.entry(id) {
@@ -253,7 +284,17 @@ impl TypeStore {
           if entry.get() == &value {
             return id;
           }
-          salt = salt.wrapping_add(1);
+          #[cfg(feature = "strict-determinism")]
+          {
+            let next_id = make_id(&value, salt.wrapping_add(1));
+            panic!(
+              "strict-determinism: {_kind} ID collision for {id:?} (next candidate: {next_id:?})"
+            );
+          }
+          #[cfg(not(feature = "strict-determinism"))]
+          {
+            salt = salt.wrapping_add(1);
+          }
         }
         Entry::Vacant(entry) => {
           entry.insert(value);
@@ -1349,7 +1390,7 @@ impl<'de> Deserialize<'de> for TypeStore {
   }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "strict-determinism")))]
 mod tests {
   use super::*;
   use ordered_float::OrderedFloat;
@@ -1362,6 +1403,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(feature = "strict-determinism"))]
   fn deterministic_rehash_on_collisions() {
     let store =
       TypeStore::with_options_and_fingerprint(TypeOptions::default(), colliding_fingerprint);
@@ -1430,6 +1472,7 @@ mod tests {
   }
 
   #[test]
+  #[cfg(not(feature = "strict-determinism"))]
   fn parallel_interning_retries_collisions() {
     let store =
       TypeStore::with_options_and_fingerprint(TypeOptions::default(), colliding_fingerprint);

@@ -3,8 +3,22 @@
 //! Deterministic, interned TypeScript type representation.
 //!
 //! [`TypeStore`] interns canonicalized [`TypeKind`] values into stable IDs
-//! (`TypeId`, `ShapeId`, `ObjectId`, `SignatureId`, ...). IDs are derived from
-//! stable hashes so insertion order (and parallelism) does not affect results.
+//! (`TypeId`, `ShapeId`, `ObjectId`, `SignatureId`, `NameId`, ...). IDs are
+//! derived from stable hashes of canonical data, making them deterministic and
+//! thread-scheduling independent **assuming no hash collisions**.
+//!
+//! ## Hash collisions and determinism
+//!
+//! Hash collisions are astronomically unlikely with the default 128-bit
+//! fingerprints, but the store still has a salt-based rehashing fallback for
+//! robustness. This fallback is deterministic for a *fixed insertion sequence*,
+//! however it does **not** define a canonical, order-independent ID assignment
+//! under collisions: the first value inserted keeps the lowest-salt ID, because
+//! already-returned IDs must never change.
+//!
+//! Downstream code that wants strict schedule-independence even in the presence
+//! of collisions can enable the `strict-determinism` feature to treat collisions
+//! as an internal error.
 //!
 //! # Example
 //! ```

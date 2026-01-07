@@ -8,6 +8,7 @@ description = "Interned TypeScript type representation (imported from worker-10)
 default = []
 fuzzing = []
 tracing = ["dep:tracing"]
+strict-determinism = []
 
 [dependencies]
 hir-js = { path = "../hir-js", features = ["serde"] }
