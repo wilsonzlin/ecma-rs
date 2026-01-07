@@ -24,14 +24,20 @@ fn top_level_await_allows_operand_after_line_terminator() {
 fn await_requires_operand() {
   let source = "async function f(){ await; }";
   let err = parse_with_options(source, js_module_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("expression operand"));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("expression operand")
+  );
 }
 
 #[test]
 fn yield_delegated_requires_operand() {
   let source = "function* g(){ yield*; }";
   let err = parse_with_options(source, js_module_opts()).unwrap_err();
-  assert_eq!(err.typ, SyntaxErrorType::ExpectedSyntax("expression operand"));
+  assert_eq!(
+    err.typ,
+    SyntaxErrorType::ExpectedSyntax("expression operand")
+  );
 }
 
 #[test]
