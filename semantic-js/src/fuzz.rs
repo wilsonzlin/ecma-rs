@@ -1,5 +1,6 @@
 use diagnostics::{FileId, TextRange};
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::js::{bind_js, TopLevelMode};
@@ -225,6 +226,7 @@ fn gen_decl(
   spans: &mut SpanCursor,
   names: &[String],
   allow_import_binding: bool,
+  file_id: FileId,
 ) -> ts::Decl {
   let kind = if allow_import_binding && cursor.next_usize(12) == 0 {
     ts::DeclKind::ImportBinding
@@ -232,7 +234,7 @@ fn gen_decl(
     gen_decl_kind(cursor)
   };
   ts::Decl {
-    def_id: ts::DefId(cursor.next_u32().into()),
+    def_id: ts::DefId::new(file_id, cursor.next_u32()),
     name: maybe_pick_name(cursor, names, "d"),
     kind,
     is_ambient: cursor.next_bool(),
@@ -443,6 +445,7 @@ fn gen_ambient_module(
   names: &[String],
   specifiers: &[String],
   depth: usize,
+  file_id: FileId,
 ) -> ts::AmbientModule {
   let name = maybe_pick_name(cursor, specifiers, "m");
   let name_span = spans.next_range(cursor);
@@ -450,7 +453,7 @@ fn gen_ambient_module(
   let decl_count = cursor.next_usize(MAX_TS_DECLS.min(8) + 1);
   let mut decls = Vec::new();
   for _ in 0..decl_count {
-    let mut decl = gen_decl(cursor, spans, names, true);
+    let mut decl = gen_decl(cursor, spans, names, true, file_id);
     // Ambient module declarations default to `declare`, but still allow callers to
     // toggle flags via the generator.
     decl.is_ambient = true;
@@ -498,6 +501,7 @@ fn gen_ambient_module(
         names,
         specifiers,
         depth - 1,
+        file_id,
       ));
     }
     nested
@@ -547,7 +551,7 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
   let decl_count = cursor.next_usize(MAX_TS_DECLS + 1);
   let mut decls = Vec::new();
   for _ in 0..decl_count {
-    decls.push(gen_decl(cursor, &mut spans, &names, false));
+    decls.push(gen_decl(cursor, &mut spans, &names, true, file_id));
   }
 
   let type_import_count = cursor.next_usize(3);
@@ -589,6 +593,7 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
       &names,
       &specifiers,
       MAX_TS_AMBIENT_DEPTH,
+      file_id,
     ));
   }
 
@@ -676,8 +681,22 @@ fn snapshot_ts_program(sem: &ts::TsProgramSemantics) -> TsProgramSnapshot {
 #[doc(hidden)]
 pub fn fuzz_ts_binder(data: &[u8]) {
   let mut cursor = ByteCursor::new(data);
-  let file_id = FileId(0);
-  let hir = Arc::new(gen_ts_hir_file(&mut cursor, file_id));
+  let file_count = cursor.next_usize(4) + 1;
+  let base_id = cursor.next_u32();
+  let mut roots = Vec::with_capacity(file_count);
+  let mut files: BTreeMap<FileId, Arc<ts::HirFile>> = BTreeMap::new();
+  for idx in 0..file_count {
+    let file_id = FileId(base_id.wrapping_add(idx as u32));
+    roots.push(file_id);
+    files.insert(file_id, Arc::new(gen_ts_hir_file(&mut cursor, file_id)));
+  }
+
+  for i in (1..roots.len()).rev() {
+    let j = cursor.next_usize(i + 1);
+    roots.swap(i, j);
+  }
+  let mut reversed_roots = roots.clone();
+  reversed_roots.reverse();
 
   struct NullResolver;
 
@@ -688,22 +707,30 @@ pub fn fuzz_ts_binder(data: &[u8]) {
   }
 
   let resolver = NullResolver;
-  let bind = |hir: Arc<ts::HirFile>| {
-    ts::bind_ts_program(&[file_id], &resolver, move |id| {
-      if id == file_id {
-        hir.clone()
-      } else {
-        Arc::new(ts::HirFile::module(id))
-      }
+  let files = Arc::new(files);
+  let bind = |roots: &[FileId]| {
+    let files = files.clone();
+    ts::bind_ts_program(roots, &resolver, move |id| {
+      files
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| Arc::new(ts::HirFile::module(id)))
     })
   };
 
-  let (sem1, diags1) = bind(hir.clone());
-  let (sem2, diags2) = bind(hir);
+  let (sem1, diags1) = bind(&roots);
+  let (sem2, diags2) = bind(&roots);
 
   assert_eq!(diags1, diags2);
   assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem2));
   assert_eq!(sem1.symbols.symbols, sem2.symbols.symbols);
   assert_eq!(sem1.symbols.decls, sem2.symbols.decls);
   assert_eq!(sem1.def_to_symbol, sem2.def_to_symbol);
+
+  if roots.len() > 1 {
+    let (sem3, diags3) = bind(&reversed_roots);
+    assert_eq!(diags1, diags3);
+    assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem3));
+    assert_eq!(sem1.def_to_symbol, sem3.def_to_symbol);
+  }
 }
