@@ -228,13 +228,19 @@ impl<'a> Parser<'a> {
               let prev_in_switch = p.in_switch;
               let prev_labels = std::mem::take(&mut p.labels);
               let prev_new_target_allowed = p.new_target_allowed;
+              let prev_super_prop_allowed = p.super_prop_allowed;
+              let prev_super_call_allowed = p.super_call_allowed;
               p.in_iteration = 0;
               p.in_switch = 0;
               p.new_target_allowed += 1;
+              p.super_prop_allowed += 1;
+              p.super_call_allowed = 0;
               let body = p.stmts(ctx.non_top_level(), TT::BraceClose);
               p.in_iteration = prev_in_iteration;
               p.in_switch = prev_in_switch;
               p.new_target_allowed = prev_new_target_allowed;
+              p.super_prop_allowed = prev_super_prop_allowed;
+              p.super_call_allowed = prev_super_call_allowed;
               p.labels = prev_labels;
               let body = body?;
               p.require(TT::BraceClose)?;
@@ -336,7 +342,7 @@ impl<'a> Parser<'a> {
                 };
 
               // Now check for method/getter/setter or property initializer
-              let value = p.class_member_value(ctx, &key, abstract_)?;
+              let value = p.class_member_value(ctx, &key, static_, abstract_)?;
 
               (key, value, definite_assignment, optional, type_annotation)
             }
@@ -388,7 +394,7 @@ impl<'a> Parser<'a> {
                 };
 
               // Now check for method/getter/setter or property initializer
-              let value = p.class_member_value(ctx, &key, abstract_)?;
+              let value = p.class_member_value(ctx, &key, static_, abstract_)?;
 
               (key, value, definite_assignment, optional, type_annotation)
             }
@@ -476,16 +482,18 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
     key: &ClassOrObjKey,
+    static_: bool,
     abstract_: bool,
   ) -> SyntaxResult<ClassOrObjVal> {
     // Check what follows the key/type annotation
     let t = self.peek();
 
     // Check if this is a constructor method
-    let is_constructor = match key {
-      ClassOrObjKey::Direct(k) => k.stx.key == "constructor",
-      _ => false,
-    };
+    let is_constructor = !static_
+      && match key {
+        ClassOrObjKey::Direct(k) => k.stx.key == "constructor",
+        _ => false,
+      };
 
     match t.typ {
       // Method with type parameters or parenthesis
@@ -530,7 +538,12 @@ impl<'a> Parser<'a> {
               let _ = p.consume_if(TT::Semicolon);
               None
             } else {
-              Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
+              let is_derived_class = p.class_is_derived.last().copied().unwrap_or(false);
+              Some(
+                p
+                  .parse_method_block_body(fn_ctx, is_constructor && is_derived_class)?
+                  .into(),
+              )
             };
             Ok(Func {
               arrow: false,
@@ -550,9 +563,16 @@ impl<'a> Parser<'a> {
       TT::Equals => {
         self.require(TT::Equals)?;
         let prev_new_target_allowed = self.new_target_allowed;
+        let prev_super_prop_allowed = self.super_prop_allowed;
+        let prev_super_call_allowed = self.super_call_allowed;
         self.new_target_allowed += 1;
-        let initializer = self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
+        self.super_prop_allowed += 1;
+        self.super_call_allowed = 0;
+        let initializer =
+          self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can());
         self.new_target_allowed = prev_new_target_allowed;
+        self.super_prop_allowed = prev_super_prop_allowed;
+        self.super_call_allowed = prev_super_call_allowed;
         let initializer = initializer?;
         Ok(ClassOrObjVal::Prop(Some(initializer)))
       }
@@ -610,7 +630,7 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
-        Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
+        Some(p.parse_method_block_body(fn_ctx, false)?.into())
       };
       Ok(Func {
         arrow: false,
@@ -732,12 +752,15 @@ impl<'a> Parser<'a> {
       } else {
         let is_module = p.is_module();
         Some(
-          p.parse_non_arrow_func_block_body(ctx.with_rules(ParsePatternRules {
+          p.parse_method_block_body(
+            ctx.with_rules(ParsePatternRules {
             await_allowed: !is_module,
             yield_allowed: !is_module,
             await_expr_allowed: false,
             yield_expr_allowed: false,
-          }))?
+            }),
+            false,
+          )?
           .into(),
         )
       };
@@ -945,7 +968,7 @@ impl<'a> Parser<'a> {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
-        Some(p.parse_non_arrow_func_block_body(setter_ctx)?.into())
+        Some(p.parse_method_block_body(setter_ctx, false)?.into())
       };
       Ok(Func {
         arrow: false,
@@ -992,13 +1015,19 @@ impl<'a> Parser<'a> {
         self.require(value_delimiter)?;
         if value_delimiter == TT::Equals {
           let prev_new_target_allowed = self.new_target_allowed;
+          let prev_super_prop_allowed = self.super_prop_allowed;
+          let prev_super_call_allowed = self.super_call_allowed;
           self.new_target_allowed += 1;
+          self.super_prop_allowed += 1;
+          self.super_call_allowed = 0;
           let expr = self.expr_with_asi(
             ctx,
             [statement_delimiter, TT::BraceClose],
             property_initialiser_asi,
           );
           self.new_target_allowed = prev_new_target_allowed;
+          self.super_prop_allowed = prev_super_prop_allowed;
+          self.super_call_allowed = prev_super_call_allowed;
           Ok(expr?)
         } else {
           Ok(self.expr_with_asi(
@@ -1137,7 +1166,7 @@ impl<'a> Parser<'a> {
                 let _ = p.consume_if(TT::Semicolon);
                 None
               } else {
-                Some(p.parse_non_arrow_func_block_body(fn_ctx)?.into())
+                Some(p.parse_method_block_body(fn_ctx, false)?.into())
               };
             Ok(Func {
               arrow: false,
@@ -1157,13 +1186,19 @@ impl<'a> Parser<'a> {
           self.require(value_delimiter)?;
           if value_delimiter == TT::Equals {
             let prev_new_target_allowed = self.new_target_allowed;
+            let prev_super_prop_allowed = self.super_prop_allowed;
+            let prev_super_call_allowed = self.super_call_allowed;
             self.new_target_allowed += 1;
+            self.super_prop_allowed += 1;
+            self.super_call_allowed = 0;
             let expr = self.expr_with_asi(
               ctx,
               [statement_delimiter, TT::BraceClose],
               property_initialiser_asi,
             );
             self.new_target_allowed = prev_new_target_allowed;
+            self.super_prop_allowed = prev_super_prop_allowed;
+            self.super_call_allowed = prev_super_call_allowed;
             Some(expr?)
           } else {
             Some(self.expr_with_asi(

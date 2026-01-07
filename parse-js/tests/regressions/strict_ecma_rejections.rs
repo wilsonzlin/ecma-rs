@@ -71,6 +71,8 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject_module("function f() { await 1; }");
   assert_reject_module("var yield = 1;");
   assert_reject_module("yield;");
+  assert_reject("for await (const x of y) {}");
+  assert_reject_module("function f() { for await (const x of y) {} }");
 
   // `return` is only valid within functions.
   assert_reject("return 1;");
@@ -116,6 +118,20 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject_module("new.target;");
   assert_reject("(() => new.target);");
   assert_reject("class A { [new.target] = 1 }");
+
+  // `super` is only valid within methods/class element initialisers; `super()` is only
+  // valid in derived constructors (and arrow functions nested within them).
+  assert_reject("super.foo;");
+  assert_reject("super();");
+  assert_reject_module("super.foo;");
+  assert_reject_module("super();");
+  assert_reject("function f() { super.foo; }");
+  assert_reject("class A { constructor() { super(); } }");
+  assert_reject("class B {} class A extends B { m() { super(); } }");
+  assert_reject("class B {} class A extends B { m() { (() => super())(); } }");
+  assert_reject("class B {} class A extends B { x = super(); }");
+  assert_reject("class B {} class A extends B { x = (() => super())(); }");
+  assert_reject("class B {} class A extends B { static { super(); } }");
 }
 
 #[test]
@@ -136,6 +152,14 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("class A { x = new.target; }");
   assert_accept("class A { x = (() => new.target)(); }");
   assert_accept("class A { static { new.target; } }");
+  assert_accept("class A { m() { super.foo; } }");
+  assert_accept("({ m() { super.foo; } });");
+  assert_accept("class B {} class A extends B { constructor() { super(); } }");
+  assert_accept("class B {} class A extends B { constructor() { (() => super())(); } }");
+  assert_accept("class B {} class A extends B { x = super.foo; }");
+  assert_accept("class A { x = super.foo; }");
+  assert_accept("class B {} class A extends B { static { super.foo; } }");
+  assert_accept("class A { static { super.foo; } }");
   assert_accept("function f(x) { return x; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");
@@ -146,4 +170,7 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept_module("export { type } from \"mod\";");
   assert_accept_module("import.meta;");
   assert_accept_module("await 1;");
+  assert_accept("async function f() { for await (const x of y) {} }");
+  assert_accept_module("for await (const x of y) {}");
+  assert_accept_module("async function f() { for await (const x of y) {} }");
 }

@@ -744,7 +744,20 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       let header_ctx = ctx.for_statement_header();
       p.require(TT::KeywordFor)?;
-      let await_ = p.consume_if(TT::KeywordAwait).is_match();
+      let await_token = p.consume_if(TT::KeywordAwait);
+      let await_ = await_token.is_match();
+      if await_ && p.is_strict_ecmascript() && !ctx.rules.await_expr_allowed {
+        // `for await (...)` is only permitted in async functions and modules.
+        return Err(
+          await_token
+            .match_loc()
+            .unwrap()
+            .error(
+              SyntaxErrorType::ExpectedSyntax("for-await-of not allowed outside async contexts"),
+              Some(TT::KeywordAwait),
+            ),
+        );
+      }
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(header_ctx)?;
       // Special case: if variable name is 'of', the keyword was already consumed

@@ -471,7 +471,12 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let members = p.class_body(ctx)?;
+      let is_derived_class = extends.is_some();
+      let prev_class_depth = p.class_is_derived.len();
+      p.class_is_derived.push(is_derived_class);
+      let members = p.class_body(ctx);
+      p.class_is_derived.truncate(prev_class_depth);
+      let members = members?;
       Ok(ClassExpr {
         decorators: Vec::new(),
         name,
@@ -514,7 +519,12 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let members = p.class_body(ctx)?;
+      let is_derived_class = extends.is_some();
+      let prev_class_depth = p.class_is_derived.len();
+      p.class_is_derived.push(is_derived_class);
+      let members = p.class_body(ctx);
+      p.class_is_derived.truncate(prev_class_depth);
+      let members = members?;
       Ok(ClassExpr {
         decorators,
         name,
@@ -1312,7 +1322,30 @@ impl<'a> Parser<'a> {
 
   pub fn super_expr(&mut self) -> SyntaxResult<Node<SuperExpr>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordSuper)?;
+      let start = p.require(TT::KeywordSuper)?;
+      if p.is_strict_ecmascript() {
+        match p.peek().typ {
+          TT::Dot | TT::BracketOpen => {
+            if p.super_prop_allowed == 0 {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "super property access not allowed outside methods and class elements",
+              )));
+            }
+          }
+          TT::ParenthesisOpen => {
+            if p.super_call_allowed == 0 {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "super call not allowed outside derived constructors",
+              )));
+            }
+          }
+          _ => {
+            return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+              "super property access or call",
+            )));
+          }
+        }
+      }
       Ok(SuperExpr {}.into())
     })
   }

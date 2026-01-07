@@ -266,7 +266,12 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let members = p.class_body_with_context(ctx, declare || abstract_)?;
+      let is_derived_class = extends.is_some();
+      let prev_class_depth = p.class_is_derived.len();
+      p.class_is_derived.push(is_derived_class);
+      let members = p.class_body_with_context(ctx, declare || abstract_);
+      p.class_is_derived.truncate(prev_class_depth);
+      let members = members?;
       Ok(ClassDecl {
         decorators,
         export,

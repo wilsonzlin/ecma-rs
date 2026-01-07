@@ -157,9 +157,40 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
   ) -> SyntaxResult<Vec<Node<Stmt>>> {
     let prev_new_target_allowed = self.new_target_allowed;
+    let prev_super_prop_allowed = self.super_prop_allowed;
+    let prev_super_call_allowed = self.super_call_allowed;
     self.new_target_allowed += 1;
+    // Regular functions do not have a `super` binding.
+    self.super_prop_allowed = 0;
+    self.super_call_allowed = 0;
     let res = self.parse_func_block_body(ctx);
     self.new_target_allowed = prev_new_target_allowed;
+    self.super_prop_allowed = prev_super_prop_allowed;
+    self.super_call_allowed = prev_super_call_allowed;
+    res
+  }
+
+  pub fn parse_method_block_body(
+    &mut self,
+    ctx: ParseCtx,
+    allow_super_call: bool,
+  ) -> SyntaxResult<Vec<Node<Stmt>>> {
+    let prev_new_target_allowed = self.new_target_allowed;
+    let prev_super_prop_allowed = self.super_prop_allowed;
+    let prev_super_call_allowed = self.super_call_allowed;
+    self.new_target_allowed += 1;
+    self.super_prop_allowed += 1;
+    if allow_super_call {
+      self.super_call_allowed += 1;
+    } else {
+      // `super()` is only valid in derived constructors (and arrow functions nested
+      // within them); it is never valid in methods/fields/static blocks.
+      self.super_call_allowed = 0;
+    }
+    let res = self.parse_func_block_body(ctx);
+    self.new_target_allowed = prev_new_target_allowed;
+    self.super_prop_allowed = prev_super_prop_allowed;
+    self.super_call_allowed = prev_super_call_allowed;
     res
   }
 }
