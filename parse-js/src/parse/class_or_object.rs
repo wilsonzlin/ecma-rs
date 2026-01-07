@@ -650,7 +650,10 @@ impl<'a> Parser<'a> {
     // normal method named `async`, not an async method.
     let is_async = if self.peek().typ == TT::KeywordAsync {
       let [_, next] = self.peek_n::<2>();
-      if next.typ != TT::ParenthesisOpen && !next.preceded_by_line_terminator {
+      if next.typ != TT::ParenthesisOpen
+        && next.typ != TT::ChevronLeft
+        && !next.preceded_by_line_terminator
+      {
         self.consume();
         true
       } else {
@@ -1274,7 +1277,11 @@ impl<'a> Parser<'a> {
         self.require(TT::Asterisk)?;
       }
       let key = self.class_or_obj_key(ctx)?;
-      return Ok(if self.peek().typ == TT::ParenthesisOpen {
+      let looks_like_method = self.peek().typ == TT::ParenthesisOpen
+        || (!self.is_strict_ecmascript()
+          && self.peek().typ == TT::ChevronLeft
+          && self.is_start_of_type_arguments());
+      return Ok(if looks_like_method {
         let method = self.with_loc(|p| {
           let func = p.with_loc(|p| {
             // TypeScript: generic type parameters
@@ -1377,8 +1384,59 @@ impl<'a> Parser<'a> {
     // Check if this looks like a method with type parameters: foo<T>(...)
     // We need to consume the identifier and check if next is <type-args>(
     let checkpoint = self.checkpoint();
-    let has_type_params = if a.typ == TT::Identifier && b.typ == TT::ChevronLeft {
-      self.consume(); // consume identifier
+    let key_can_have_type_params = matches!(
+      a.typ,
+      TT::Identifier
+        | TT::PrivateMember
+        | TT::LiteralString
+        | TT::LiteralNumber
+        | TT::LiteralBigInt
+    ) || KEYWORDS_MAPPING.contains_key(&a.typ);
+
+    let has_type_params = if key_can_have_type_params && b.typ == TT::ChevronLeft {
+      self.consume(); // consume key
+      let result = self.is_start_of_type_arguments();
+      self.restore_checkpoint(checkpoint);
+      result
+    } else {
+      false
+    };
+
+    // Async/generator methods can also have type parameters: async foo<T>(), *foo<T>(), async *foo<T>().
+    let async_method_has_type_params = if a.typ == TT::KeywordAsync
+      && c.typ == TT::ChevronLeft
+      && !b.preceded_by_line_terminator
+    {
+      let checkpoint = self.checkpoint();
+      self.consume(); // async
+      self.consume(); // key
+      let result = self.is_start_of_type_arguments();
+      self.restore_checkpoint(checkpoint);
+      result
+    } else {
+      false
+    };
+
+    let generator_method_has_type_params = if a.typ == TT::Asterisk && c.typ == TT::ChevronLeft {
+      let checkpoint = self.checkpoint();
+      self.consume(); // *
+      self.consume(); // key
+      let result = self.is_start_of_type_arguments();
+      self.restore_checkpoint(checkpoint);
+      result
+    } else {
+      false
+    };
+
+    let async_generator_method_has_type_params = if a.typ == TT::KeywordAsync
+      && b.typ == TT::Asterisk
+      && d.typ == TT::ChevronLeft
+      && !b.preceded_by_line_terminator
+    {
+      let checkpoint = self.checkpoint();
+      self.consume(); // async
+      self.consume(); // *
+      self.consume(); // key
       let result = self.is_start_of_type_arguments();
       self.restore_checkpoint(checkpoint);
       result
@@ -1406,6 +1464,21 @@ impl<'a> Parser<'a> {
         (k, v.into())
       }
       (TT::KeywordAsync, _, TT::ParenthesisOpen, _) if !b.preceded_by_line_terminator => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Async method with type parameters: `async foo<T>()`
+      (TT::KeywordAsync, _, TT::ChevronLeft, _) if async_method_has_type_params => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Generator method with type parameters: `*foo<T>()`
+      (TT::Asterisk, _, TT::ChevronLeft, _) if generator_method_has_type_params => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Async generator method with type parameters: `async *foo<T>()`
+      (TT::KeywordAsync, TT::Asterisk, _, TT::ChevronLeft) if async_generator_method_has_type_params => {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
