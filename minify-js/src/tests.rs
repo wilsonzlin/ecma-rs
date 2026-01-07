@@ -56,6 +56,33 @@ fn minified_program(
   (output, parsed)
 }
 
+fn count_obj_pat_var_decls(top: &Node<TopLevel>) -> usize {
+  type VarDeclNode = Node<parse_js::ast::stmt::decl::VarDecl>;
+
+  #[derive(Default, Visitor)]
+  #[visitor(VarDeclNode(enter))]
+  struct Counter {
+    count: usize,
+  }
+
+  impl Counter {
+    fn enter_var_decl_node(&mut self, node: &VarDeclNode) {
+      if node.stx.declarators.iter().any(|decl| {
+        matches!(
+          decl.pattern.stx.pat.stx.as_ref(),
+          parse_js::ast::expr::pat::Pat::Obj(_)
+        )
+      }) {
+        self.count += 1;
+      }
+    }
+  }
+
+  let mut counter = Counter::default();
+  top.drive(&mut counter);
+  counter.count
+}
+
 #[cfg(feature = "emit-minify")]
 fn minified_with_backend_options(options: MinifyOptions, src: &str) -> (String, EmitBackend) {
   clear_last_emit_backend_for_tests();
@@ -1706,6 +1733,51 @@ fn direct_eval_disables_nullish_or_rewrite_in_descendant_scopes() {
 fn removes_unused_var_decls_with_pure_initializers() {
   let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
   assert_eq!(result, "console.log(2);");
+}
+
+#[test]
+fn dce_removes_unused_object_destructuring_declarators() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const f=()=>{let {a}={a:1};return 2;};",
+  );
+  assert_eq!(result, "const f=()=>{return 2;};");
+}
+
+#[test]
+fn dce_preserves_effects_when_removing_unused_object_destructuring() {
+  let src = "const f=()=>{let {a}={a:sideEffect()};return 2;};";
+  let (output, parsed) = minified_program(TopLevelMode::Global, Dialect::Js, Dialect::Js, src);
+
+  assert_eq!(
+    count_obj_pat_var_decls(&parsed),
+    0,
+    "expected object destructuring var decl to be removed: {output}"
+  );
+  assert!(
+    output.contains("sideEffect()"),
+    "expected sideEffect() to be preserved: {output}"
+  );
+}
+
+#[test]
+fn dce_keeps_object_destructuring_when_property_missing() {
+  let src = "const f=()=>{let {a}={};return 2;};";
+  let (output, parsed) = minified_program(TopLevelMode::Global, Dialect::Js, Dialect::Js, src);
+  assert!(
+    count_obj_pat_var_decls(&parsed) > 0,
+    "expected object destructuring var decl to remain: {output}"
+  );
+}
+
+#[test]
+fn dce_keeps_object_destructuring_when_accessing_getters() {
+  let src = "const f=()=>{let {a}={get a(){sideEffect()}};return 2;};";
+  let (output, parsed) = minified_program(TopLevelMode::Global, Dialect::Js, Dialect::Js, src);
+  assert!(
+    count_obj_pat_var_decls(&parsed) > 0,
+    "expected object destructuring var decl to remain: {output}"
+  );
 }
 
 #[test]

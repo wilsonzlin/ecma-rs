@@ -2,10 +2,12 @@ use super::side_effects::{is_side_effect_free_class_decl, is_side_effect_free_ex
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use crate::rename::ExportNameSymbol;
+use ahash::HashMap;
 use ahash::HashSet;
 use derive_visitor::{Drive, Visitor};
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::LitNumExpr;
-use parse_js::ast::expr::pat::{IdPat, Pat};
+use parse_js::ast::expr::pat::{IdPat, ObjPat, Pat};
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::expr::{BinaryExpr, Expr, UnaryExpr};
 use parse_js::ast::import_export::ExportName;
@@ -19,6 +21,7 @@ use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
+use parse_js::token::TT;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol};
 use semantic_js::js::{ScopeKind, SymbolId, TopLevelMode};
 
@@ -286,7 +289,7 @@ fn dce_stmt_in_list(
       let mut kept = Vec::with_capacity(decl.stx.declarators.len());
       let mut pending_effects = Vec::new();
       for declarator in decl.stx.declarators.into_iter() {
-        if can_remove_declarator(&declarator.pattern.stx.pat, cx, used) {
+        if can_remove_declarator(&declarator.pattern.stx.pat, declarator.initializer.as_ref(), cx, used) {
           match declarator.initializer {
             None => {
               *changed = true;
@@ -436,22 +439,112 @@ fn dce_single_stmt(
   }
 }
 
-fn can_remove_declarator(pat: &Node<Pat>, cx: &OptCtx, used: &HashSet<SymbolId>) -> bool {
-  let Pat::Id(id) = pat.stx.as_ref() else {
+fn can_remove_declarator(
+  pat: &Node<Pat>,
+  initializer: Option<&Node<Expr>>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+) -> bool {
+  match pat.stx.as_ref() {
+    Pat::Id(id) => {
+      let Some(sym) = declared_symbol(&id.assoc) else {
+        return false;
+      };
+      if used.contains(&sym) {
+        return false;
+      }
+      if cx
+        .disabled_scopes
+        .contains(&cx.sem().symbol(sym).decl_scope)
+      {
+        return false;
+      }
+      true
+    }
+    Pat::Obj(obj) => can_remove_obj_destructure_declarator(obj, initializer, cx, used),
+    // Array destructuring uses the iterator protocol and can have observable
+    // side effects even for array literals. Do not attempt to DCE it in this
+    // pass.
+    Pat::Arr(_) => false,
+    Pat::AssignTarget(_) => false,
+  }
+}
+
+fn can_remove_obj_destructure_declarator(
+  pat: &Node<ObjPat>,
+  initializer: Option<&Node<Expr>>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+) -> bool {
+  // Only remove object destructuring when we can prove the destructuring reads
+  // are side-effect-free.
+  let Some(initializer) = initializer else {
     return false;
   };
-  let Some(sym) = declared_symbol(&id.assoc) else {
+  let Expr::LitObj(obj_lit) = initializer.stx.as_ref() else {
     return false;
   };
-  if used.contains(&sym) {
+
+  if pat.stx.rest.is_some() {
     return false;
   }
-  if cx
-    .disabled_scopes
-    .contains(&cx.sem().symbol(sym).decl_scope)
-  {
-    return false;
+
+  let sem = cx.sem();
+  let mut keys = Vec::with_capacity(pat.stx.properties.len());
+  for prop in &pat.stx.properties {
+    if prop.stx.default_value.is_some() {
+      return false;
+    }
+    let ClassOrObjKey::Direct(key) = &prop.stx.key else {
+      return false;
+    };
+    let Pat::Id(id) = prop.stx.target.stx.as_ref() else {
+      return false;
+    };
+    let Some(sym) = declared_symbol(&id.assoc) else {
+      return false;
+    };
+    if used.contains(&sym) {
+      return false;
+    }
+    if cx.disabled_scopes.contains(&sem.symbol(sym).decl_scope) {
+      return false;
+    }
+    keys.push(key.stx.key.as_str());
   }
+
+  let mut last_defs: HashMap<&str, &ClassOrObjVal> = HashMap::default();
+  for member in &obj_lit.stx.members {
+    match &member.stx.typ {
+      ObjMemberType::Rest { .. } | ObjMemberType::Shorthand { .. } => return false,
+      ObjMemberType::Valued { key, val } => {
+        let ClassOrObjKey::Direct(direct_key) = key else {
+          // Conservatively avoid computed keys since we cannot reliably reason
+          // about which properties they define.
+          return false;
+        };
+        // `__proto__` as an identifier is a prototype mutation rather than an
+        // own-property definition.
+        if direct_key.stx.key == "__proto__" && direct_key.stx.tt == TT::Identifier {
+          continue;
+        }
+        last_defs.insert(direct_key.stx.key.as_str(), val);
+      }
+    }
+  }
+
+  for key in keys {
+    let Some(val) = last_defs.get(key) else {
+      return false;
+    };
+    match val {
+      ClassOrObjVal::Prop(_) | ClassOrObjVal::Method(_) => {}
+      // Accessors execute on property read, so keep the destructuring.
+      ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) => return false,
+      _ => return false,
+    }
+  }
+
   true
 }
 
