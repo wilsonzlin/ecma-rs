@@ -365,6 +365,8 @@ impl<'a> Parser<'a> {
                 | (TT::KeywordAsync, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, _, TT::ParenthesisOpen)
                 | (TT::Asterisk, TT::BracketOpen, _)
+                | (TT::KeywordGet, TT::BracketOpen, _)
+                | (TT::KeywordSet, TT::BracketOpen, _)
                 | (TT::KeywordGet, _, TT::ParenthesisOpen)
                 | (TT::KeywordSet, _, TT::ParenthesisOpen)
             );

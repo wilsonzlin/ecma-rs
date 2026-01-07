@@ -16,6 +16,8 @@ mod async_line_terminator_comments;
 mod class_async_method_line_terminator;
 #[path = "regressions/class_get_set_line_terminator.rs"]
 mod class_get_set_line_terminator;
+#[path = "regressions/class_get_set_computed.rs"]
+mod class_get_set_computed;
 #[path = "regressions/class_heritage.rs"]
 mod class_heritage;
 #[path = "regressions/class_method_overload.rs"]
