@@ -1,13 +1,13 @@
 use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Router;
-use axum_msgpack::MsgPack;
 use diagnostics::Diagnostic;
 use optimize_js::cfg::cfg::Cfg;
 use optimize_js::il::inst::{Arg, BinOp, Const, Inst, InstTyp, UnOp};
 use optimize_js::{
   compile_source, ProgramFunction, ProgramScope, ProgramScopeKind, ProgramSymbols, TopLevelMode,
 };
+use rmp_serde;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
@@ -17,6 +17,66 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use tower_http::cors::Any;
 use tower_http::cors::CorsLayer;
+
+/// MessagePack request/response wrapper.
+///
+/// We implement this internally rather than depending on `axum-msgpack` to keep
+/// the server's dependency graph (and compile time) minimal.
+#[derive(Debug)]
+pub struct MsgPack<T>(pub T);
+
+#[axum::async_trait]
+impl<S, T> axum::extract::FromRequest<S> for MsgPack<T>
+where
+  S: Send + Sync,
+  T: serde::de::DeserializeOwned,
+{
+  type Rejection = (StatusCode, String);
+
+  async fn from_request(
+    req: axum::http::Request<axum::body::Body>,
+    _state: &S,
+  ) -> Result<Self, Self::Rejection> {
+    let (parts, body) = req.into_parts();
+    if let Some(content_type) = parts.headers.get(axum::http::header::CONTENT_TYPE) {
+      let content_type = content_type.as_bytes();
+      let ok = content_type.starts_with(b"application/msgpack")
+        || content_type.starts_with(b"application/x-msgpack");
+      if !ok {
+        return Err((
+          StatusCode::UNSUPPORTED_MEDIA_TYPE,
+          "expected application/msgpack".to_string(),
+        ));
+      }
+    }
+
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+      .await
+      .map_err(|err| (StatusCode::BAD_REQUEST, err.to_string()))?;
+    rmp_serde::from_slice(&bytes).map(MsgPack).map_err(|err| {
+      (
+        StatusCode::BAD_REQUEST,
+        format!("invalid msgpack payload: {err}"),
+      )
+    })
+  }
+}
+
+impl<T> axum::response::IntoResponse for MsgPack<T>
+where
+  T: Serialize,
+{
+  fn into_response(self) -> axum::response::Response {
+    match rmp_serde::to_vec_named(&self.0) {
+      Ok(buf) => (
+        [(axum::http::header::CONTENT_TYPE, "application/msgpack")],
+        buf,
+      )
+        .into_response(),
+      Err(err) => (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()).into_response(),
+    }
+  }
+}
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PostCompileReq {
