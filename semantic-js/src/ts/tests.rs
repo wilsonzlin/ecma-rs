@@ -984,7 +984,13 @@ fn class_namespace_merge_in_both_orders() {
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(namespace_first) };
   let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
-  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+  assert_eq!(
+    diags.len(),
+    1,
+    "expected TS2434 diagnostic, got {:?}",
+    diags
+  );
+  assert_eq!(diags[0].code, "TS2434");
   let namespace_first_sym = assert_merged_value_type_namespace(&semantics, file, "C");
 
   assert_eq!(
@@ -1947,6 +1953,252 @@ fn duplicate_import_binding_reports_previous_span() {
 }
 
 #[test]
+fn duplicate_type_alias_reports_ts2300() {
+  let file = FileId(5000);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::TypeAlias, Exported::No));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::TypeAlias, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2300");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(1));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file);
+  assert_eq!(diag.labels[0].span.range, span(0));
+
+  let sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::TYPE)
+    .expect("Foo type symbol should exist");
+  assert_eq!(semantics.symbol_decls(sym, Namespace::TYPE).len(), 1);
+}
+
+#[test]
+fn duplicate_class_reports_ts2300() {
+  let file = FileId(5001);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Class, Exported::No));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Class, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2300");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(1));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file);
+  assert_eq!(diag.labels[0].span.range, span(0));
+
+  let sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::VALUE)
+    .expect("Foo value symbol should exist");
+  assert_eq!(semantics.symbol_decls(sym, Namespace::VALUE).len(), 1);
+  assert_eq!(semantics.symbol_decls(sym, Namespace::TYPE).len(), 1);
+}
+
+#[test]
+fn enum_interface_conflict_reports_ts2300() {
+  let file = FileId(5002);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Enum, Exported::No));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Interface, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2300");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(1));
+
+  let sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::TYPE)
+    .expect("Foo symbol should exist");
+  let symbols = semantics.symbols();
+  assert!(symbols.symbol(sym).namespaces.contains(Namespace::VALUE));
+  assert!(symbols.symbol(sym).namespaces.contains(Namespace::TYPE));
+  assert_eq!(semantics.symbol_decls(sym, Namespace::TYPE).len(), 1);
+}
+
+#[test]
+fn var_namespace_conflict_reports_ts2300_and_does_not_merge() {
+  let file = FileId(5003);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Var, Exported::No));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Namespace, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2300");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(1));
+
+  assert!(semantics
+    .resolve_in_module(file, "Foo", Namespace::NAMESPACE)
+    .is_none());
+  let value_sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::VALUE)
+    .expect("Foo value symbol should exist");
+  assert!(!semantics
+    .symbols()
+    .symbol(value_sym)
+    .namespaces
+    .contains(Namespace::NAMESPACE));
+}
+
+#[test]
+fn merged_interface_export_mismatch_reports_ts2395() {
+  let file = FileId(5004);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Interface, Exported::Named));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Interface, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2395");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(1));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file);
+  assert_eq!(diag.labels[0].span.range, span(0));
+
+  let sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::TYPE)
+    .expect("Foo type symbol should exist");
+  assert_eq!(semantics.symbol_decls(sym, Namespace::TYPE).len(), 2);
+}
+
+#[test]
+fn namespace_before_function_merge_reports_ts2434() {
+  let file = FileId(5005);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Namespace, Exported::No));
+  hir
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Function, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2434");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(0));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file);
+  assert_eq!(diag.labels[0].span.range, span(1));
+
+  let value_sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::VALUE)
+    .expect("Foo value symbol should exist");
+  let namespace_sym = semantics
+    .resolve_in_module(file, "Foo", Namespace::NAMESPACE)
+    .expect("Foo namespace symbol should exist");
+  assert_eq!(
+    value_sym, namespace_sym,
+    "function and namespace should still merge"
+  );
+  assert_eq!(semantics.symbol_decls(value_sym, Namespace::VALUE).len(), 2);
+}
+
+#[test]
+fn binder_diagnostics_are_deterministic_across_orders_and_threads() {
+  let file_a = FileId(6000);
+  let file_b = FileId(6001);
+
+  let mut a = HirFile::script(file_a);
+  a.decls
+    .push(mk_decl(0, "Dup", DeclKind::TypeAlias, Exported::No));
+  let mut b = HirFile::script(file_b);
+  b.decls
+    .push(mk_decl(0, "Dup", DeclKind::TypeAlias, Exported::No));
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let roots = vec![file_a, file_b];
+
+  let (baseline, baseline_diags) =
+    bind_ts_program(&roots, &resolver, |f| files.get(&f).unwrap().clone());
+  let baseline_exports = export_snapshot(&baseline, &roots);
+  let baseline_symbols = symbol_table_snapshot(baseline.symbols());
+
+  let files = Arc::new(files);
+  let mut orders = vec![roots.clone()];
+  for seed in 0..5 {
+    let mut order = roots.clone();
+    order.shuffle(&mut StdRng::seed_from_u64(seed + 10));
+    orders.push(order);
+  }
+
+  let handles: Vec<_> = orders
+    .into_iter()
+    .map(|order| {
+      let files = files.clone();
+      thread::spawn(move || {
+        let resolver = StaticResolver::new(HashMap::new());
+        let (sem, diags) = bind_ts_program(&order, &resolver, |f| files.get(&f).unwrap().clone());
+        (
+          export_snapshot(&sem, &order),
+          symbol_table_snapshot(sem.symbols()),
+          diags,
+        )
+      })
+    })
+    .collect();
+
+  for handle in handles {
+    let (exports, symbols, diags) = handle.join().unwrap();
+    assert_eq!(exports, baseline_exports);
+    assert_eq!(symbols, baseline_symbols);
+    assert_eq!(diags, baseline_diags);
+  }
+}
+
+#[test]
 fn dts_script_decls_participate_in_globals() {
   let file = FileId(51);
   let mut hir = HirFile::script(file);
@@ -2662,7 +2914,14 @@ fn external_module_augmentation_merges_without_new_exports() {
 
   let (semantics, diags) =
     bind_ts_program(&[file_aug], &resolver, |f| files.get(&f).unwrap().clone());
-  assert!(diags.is_empty());
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "TS2395");
+  assert_eq!(diag.primary.file, file_aug);
+  assert_eq!(diag.primary.range, span(1));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file_a);
+  assert_eq!(diag.labels[0].span.range, span(0));
 
   let request_symbol = semantics
     .resolve_export(file_a, "Request", Namespace::TYPE)

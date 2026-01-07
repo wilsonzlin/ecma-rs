@@ -233,6 +233,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     if self.is_cancelled() {
       return (TsProgramSemantics::empty(), Vec::new());
     }
+    self.canonicalize_module_symbol_groups();
     self.reconcile_unresolved();
 
     // Compute exports for every module.
@@ -292,6 +293,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
       self.handle_export_as_namespace(state, &mut export_as_namespace_spans);
     }
+
+    self.canonicalize_global_symbol_groups();
 
     let global_symbols = self.global_symbols.clone();
 
@@ -614,6 +617,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         namespaces,
         decl.is_ambient,
         decl.is_global,
+        decl.exported.clone(),
+        decl.span,
         order,
         Some(decl.def_id),
         None,
@@ -799,6 +804,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             namespaces,
             false,
             false,
+            if import.is_exported {
+              Exported::Named
+            } else {
+              Exported::No
+            },
+            import.local_span,
             order,
             import_def_ids.get(&import.local).copied(),
             Some(AliasTarget::EntityName {
@@ -1019,6 +1030,405 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     }
   }
 
+  fn canonicalize_module_symbol_groups(&mut self) {
+    if self.is_cancelled() {
+      return;
+    }
+
+    let module_ids: Vec<FileId> = self.modules.keys().copied().collect();
+    for file_id in module_ids {
+      if self.is_cancelled() {
+        return;
+      }
+      if let Some(mut module) = self.modules.remove(&file_id) {
+        self.canonicalize_symbol_groups(&module.owner, &mut module.symbols);
+        self.prune_import_entries(&mut module);
+        self.modules.insert(file_id, module);
+      }
+    }
+
+    let ambient_ids: Vec<String> = self.ambient_modules.keys().cloned().collect();
+    for spec in ambient_ids {
+      if self.is_cancelled() {
+        return;
+      }
+      if let Some(mut module) = self.ambient_modules.remove(&spec) {
+        self.canonicalize_symbol_groups(&module.owner, &mut module.symbols);
+        self.prune_import_entries(&mut module);
+        self.ambient_modules.insert(spec, module);
+      }
+    }
+  }
+
+  fn canonicalize_global_symbol_groups(&mut self) {
+    if self.is_cancelled() {
+      return;
+    }
+    let mut symbols = std::mem::take(&mut self.global_symbols);
+    self.canonicalize_symbol_groups(&SymbolOwner::Global, &mut symbols);
+    self.global_symbols = symbols;
+  }
+
+  fn prune_import_entries(&mut self, module: &mut ModuleState) {
+    let names: Vec<String> = module.imports.keys().cloned().collect();
+    for name in names {
+      let Some(group) = module.symbols.get(&name) else {
+        module.imports.remove(&name);
+        continue;
+      };
+      if !symbol_group_contains_decl_kind(group, DeclKind::ImportBinding, &self.symbols) {
+        module.imports.remove(&name);
+      }
+    }
+  }
+
+  fn canonicalize_symbol_groups(&mut self, owner: &SymbolOwner, symbols: &mut SymbolGroups) {
+    let entries: Vec<(String, SymbolGroup)> = symbols
+      .iter()
+      .map(|(name, group)| (name.clone(), group.clone()))
+      .collect();
+
+    for (name, group) in entries {
+      if self.is_cancelled() {
+        return;
+      }
+      let canonical = self.canonicalize_symbol_group(owner, &name, group);
+      if let Some(slot) = symbols.get_mut(&name) {
+        *slot = canonical;
+      }
+    }
+  }
+
+  fn canonicalize_symbol_group(
+    &mut self,
+    owner: &SymbolOwner,
+    name: &str,
+    group: SymbolGroup,
+  ) -> SymbolGroup {
+    let old_symbols = symbol_group_symbol_ids(&group);
+
+    let mut collected: [Vec<DeclId>; 3] = Default::default();
+    collect_decls(&group, &self.symbols, &mut collected);
+    let mut decls: Vec<DeclId> = collected.into_iter().flatten().collect();
+    decls.sort_by_key(|d| d.0);
+    decls.dedup();
+    decls.sort_by(|a, b| decl_sort_key(&self.symbols, *a).cmp(&decl_sort_key(&self.symbols, *b)));
+
+    let mut kept: Vec<DeclId> = Vec::new();
+    let mut rejected: Vec<DeclId> = Vec::new();
+    for decl in decls {
+      let data = self.symbols.decl(decl);
+      if data.namespaces.is_empty() {
+        continue;
+      }
+      let mut ok = true;
+      for other in &kept {
+        let other_data = self.symbols.decl(*other);
+        if !decls_are_compatible(other_data, data) {
+          ok = false;
+          break;
+        }
+      }
+      if ok {
+        kept.push(decl);
+      } else {
+        rejected.push(decl);
+      }
+    }
+
+    for loser in &rejected {
+      let loser_data = self.symbols.decl(*loser);
+      let mut winner: Option<DeclId> = None;
+      for candidate in &kept {
+        let candidate_data = self.symbols.decl(*candidate);
+        if !decls_are_compatible(candidate_data, loser_data) {
+          winner = Some(*candidate);
+          break;
+        }
+      }
+      let winner = winner.or_else(|| kept.first().copied()).unwrap_or(*loser);
+      let winner_data = self.symbols.decl(winner);
+      self.diagnostics.push(
+        Diagnostic::error(
+          "TS2300",
+          format!("Duplicate identifier '{}'.", name),
+          Span::new(loser_data.file, loser_data.span),
+        )
+        .with_label(Label::secondary(
+          Span::new(winner_data.file, winner_data.span),
+          "previous declaration here",
+        )),
+      );
+    }
+
+    let (new_group, referenced_symbols) = self.build_symbol_group_from_decls(owner, name, &kept);
+
+    emit_merge_mismatch_diagnostics(
+      &mut self.diagnostics,
+      &self.symbols,
+      &referenced_symbols,
+      name,
+    );
+    emit_namespace_ordering_diagnostics(&mut self.diagnostics, &self.symbols, &referenced_symbols);
+
+    for sym in old_symbols {
+      if !referenced_symbols.contains(&sym) {
+        self.symbols.symbols.remove(&sym);
+      }
+    }
+
+    new_group
+  }
+
+  fn build_symbol_group_from_decls(
+    &mut self,
+    owner: &SymbolOwner,
+    name: &str,
+    decls: &[DeclId],
+  ) -> (SymbolGroup, Vec<SymbolId>) {
+    let mut class_decl: Option<DeclId> = None;
+    let mut enum_decls = Vec::new();
+    let mut function_decls = Vec::new();
+    let mut var_decls = Vec::new();
+    let mut interface_decls = Vec::new();
+    let mut type_alias_decl: Option<DeclId> = None;
+    let mut namespace_decls = Vec::new();
+    let mut import_decls = Vec::new();
+
+    for decl in decls {
+      match self.symbols.decl(*decl).kind {
+        DeclKind::Class => class_decl = Some(*decl),
+        DeclKind::Enum => enum_decls.push(*decl),
+        DeclKind::Function => function_decls.push(*decl),
+        DeclKind::Var => var_decls.push(*decl),
+        DeclKind::Interface => interface_decls.push(*decl),
+        DeclKind::TypeAlias => type_alias_decl = Some(*decl),
+        DeclKind::Namespace => namespace_decls.push(*decl),
+        DeclKind::ImportBinding => import_decls.push(*decl),
+      }
+    }
+
+    let mut value_symbol: Option<SymbolId> = None;
+    let mut type_symbol: Option<SymbolId> = None;
+    let mut namespace_symbol: Option<SymbolId> = None;
+
+    let mut referenced_symbols: Vec<SymbolId> = Vec::new();
+
+    // Import bindings are never merged with non-import declarations. They may
+    // still occupy multiple namespaces (e.g. namespace imports), and in that
+    // case the group slots all point at the same symbol.
+    if !import_decls.is_empty() {
+      let mut mask = Namespace::empty();
+      for decl in &import_decls {
+        mask |= self.symbols.decl(*decl).namespaces;
+      }
+      let sym = self
+        .symbols
+        .alloc_symbol(owner, name, mask, SymbolOrigin::Local);
+      let origin = self.symbols.symbol(sym).origin.clone();
+      reset_symbol(&mut self.symbols, sym, mask, origin.clone());
+      for decl in &import_decls {
+        let decl_data = self.symbols.decl(*decl);
+        self
+          .symbols
+          .add_decl_to_symbol(sym, *decl, decl_data.namespaces);
+      }
+      referenced_symbols.push(sym);
+
+      if mask.contains(Namespace::VALUE) {
+        value_symbol = Some(sym);
+      }
+      if mask.contains(Namespace::TYPE) {
+        type_symbol = Some(sym);
+      }
+      if mask.contains(Namespace::NAMESPACE) {
+        namespace_symbol = Some(sym);
+      }
+    }
+
+    // Build non-import symbols for the remaining declarations.
+    if let Some(class) = class_decl {
+      let mut mask = Namespace::VALUE | Namespace::TYPE;
+      if !namespace_decls.is_empty() {
+        mask |= Namespace::NAMESPACE;
+      }
+      let sym = self
+        .symbols
+        .alloc_symbol(owner, name, mask, SymbolOrigin::Local);
+      reset_symbol(&mut self.symbols, sym, mask, SymbolOrigin::Local);
+      let class_ns = self.symbols.decl(class).namespaces;
+      self.symbols.add_decl_to_symbol(sym, class, class_ns);
+      for decl in &interface_decls {
+        self
+          .symbols
+          .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+      }
+      for decl in &namespace_decls {
+        self
+          .symbols
+          .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+      }
+      referenced_symbols.push(sym);
+      value_symbol = Some(sym);
+      type_symbol = Some(sym);
+      if mask.contains(Namespace::NAMESPACE) {
+        namespace_symbol = Some(sym);
+      }
+    } else if !enum_decls.is_empty() {
+      let mut mask = Namespace::VALUE | Namespace::TYPE;
+      if !namespace_decls.is_empty() {
+        mask |= Namespace::NAMESPACE;
+      }
+      let sym = self
+        .symbols
+        .alloc_symbol(owner, name, mask, SymbolOrigin::Local);
+      reset_symbol(&mut self.symbols, sym, mask, SymbolOrigin::Local);
+      for decl in &enum_decls {
+        self
+          .symbols
+          .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+      }
+      for decl in &namespace_decls {
+        self
+          .symbols
+          .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+      }
+      referenced_symbols.push(sym);
+      value_symbol = Some(sym);
+      type_symbol = Some(sym);
+      if mask.contains(Namespace::NAMESPACE) {
+        namespace_symbol = Some(sym);
+      }
+    } else if !function_decls.is_empty() || !var_decls.is_empty() || !namespace_decls.is_empty() {
+      // Build the value-side symbol. If there are namespace declarations, we
+      // can only merge them with functions (or with each other). Vars are
+      // handled separately and never merge with namespaces.
+      if !namespace_decls.is_empty() {
+        let mask = Namespace::VALUE | Namespace::NAMESPACE;
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, mask, SymbolOrigin::Local);
+        reset_symbol(&mut self.symbols, sym, mask, SymbolOrigin::Local);
+        for decl in &function_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        for decl in &namespace_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        referenced_symbols.push(sym);
+        value_symbol = Some(sym);
+        namespace_symbol = Some(sym);
+      } else if !function_decls.is_empty() {
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, Namespace::VALUE, SymbolOrigin::Local);
+        reset_symbol(
+          &mut self.symbols,
+          sym,
+          Namespace::VALUE,
+          SymbolOrigin::Local,
+        );
+        for decl in &function_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        for decl in &var_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        referenced_symbols.push(sym);
+        value_symbol = Some(sym);
+      } else if !var_decls.is_empty() {
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, Namespace::VALUE, SymbolOrigin::Local);
+        reset_symbol(
+          &mut self.symbols,
+          sym,
+          Namespace::VALUE,
+          SymbolOrigin::Local,
+        );
+        for decl in &var_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        referenced_symbols.push(sym);
+        value_symbol = Some(sym);
+      } else if !namespace_decls.is_empty() {
+        let mask = Namespace::VALUE | Namespace::NAMESPACE;
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, mask, SymbolOrigin::Local);
+        reset_symbol(&mut self.symbols, sym, mask, SymbolOrigin::Local);
+        for decl in &namespace_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        referenced_symbols.push(sym);
+        value_symbol = Some(sym);
+        namespace_symbol = Some(sym);
+      }
+    }
+
+    // Build a standalone type symbol when not already covered by class/enum/import.
+    if type_symbol.is_none() {
+      if let Some(type_alias) = type_alias_decl {
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, Namespace::TYPE, SymbolOrigin::Local);
+        reset_symbol(&mut self.symbols, sym, Namespace::TYPE, SymbolOrigin::Local);
+        self
+          .symbols
+          .add_decl_to_symbol(sym, type_alias, self.symbols.decl(type_alias).namespaces);
+        referenced_symbols.push(sym);
+        type_symbol = Some(sym);
+      } else if !interface_decls.is_empty() {
+        let sym = self
+          .symbols
+          .alloc_symbol(owner, name, Namespace::TYPE, SymbolOrigin::Local);
+        reset_symbol(&mut self.symbols, sym, Namespace::TYPE, SymbolOrigin::Local);
+        for decl in &interface_decls {
+          self
+            .symbols
+            .add_decl_to_symbol(sym, *decl, self.symbols.decl(*decl).namespaces);
+        }
+        referenced_symbols.push(sym);
+        type_symbol = Some(sym);
+      }
+    }
+
+    // If we built a namespace symbol via imports and haven't filled the slot via
+    // value-side declaration merging, keep it.
+    if namespace_symbol.is_none() {
+      namespace_symbol = value_symbol.and_then(|sym| {
+        if self
+          .symbols
+          .symbol(sym)
+          .namespaces
+          .contains(Namespace::NAMESPACE)
+        {
+          Some(sym)
+        } else {
+          None
+        }
+      });
+    }
+
+    referenced_symbols.sort_by_key(|s| s.0);
+    referenced_symbols.dedup();
+
+    let group = finalize_symbol_group(value_symbol, type_symbol, namespace_symbol);
+    (group, referenced_symbols)
+  }
+
   fn reconcile_unresolved(&mut self) {
     let mut seen: BTreeSet<(FileId, TextRange)> = BTreeSet::new();
     let module_ids: Vec<FileId> = self.modules.keys().cloned().collect();
@@ -1182,6 +1592,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       namespaces,
       true,
       true,
+      Exported::No,
+      export.span.range,
       export.span.range.start,
       None,
       None,
@@ -1244,6 +1656,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       namespaces,
       false,
       false,
+      Exported::No,
+      entry.local_span,
       order,
       entry.def_id,
       None,
@@ -1818,6 +2232,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       namespaces,
       false,
       false,
+      Exported::No,
+      expr_span.range,
       expr_span.range.start,
       None,
       Some(AliasTarget::ExportAssignment {
@@ -1861,6 +2277,237 @@ fn has_relative_ambient_module(modules: &[AmbientModule]) -> bool {
     is_relative_module_specifier(&m.name)
       || (!m.ambient_modules.is_empty() && has_relative_ambient_module(&m.ambient_modules))
   })
+}
+
+fn decl_sort_key(symbols: &SymbolTable, decl: DeclId) -> (FileId, u32, u32, DeclId) {
+  let data = symbols.decl(decl);
+  (data.file, data.span.start, data.span.end, decl)
+}
+
+fn decls_are_compatible(a: &DeclData, b: &DeclData) -> bool {
+  let overlap = a.namespaces & b.namespaces;
+  if overlap.is_empty() {
+    return true;
+  }
+
+  let a_kind = &a.kind;
+  let b_kind = &b.kind;
+
+  if matches!(a_kind, DeclKind::ImportBinding) || matches!(b_kind, DeclKind::ImportBinding) {
+    return matches!(a_kind, DeclKind::ImportBinding) && matches!(b_kind, DeclKind::ImportBinding);
+  }
+
+  if matches!(a_kind, DeclKind::TypeAlias) || matches!(b_kind, DeclKind::TypeAlias) {
+    // Type aliases never participate in declaration merging within the type namespace.
+    return false;
+  }
+
+  match (a_kind, b_kind) {
+    (DeclKind::Class, DeclKind::Class) => false,
+    (DeclKind::Class, DeclKind::Interface) | (DeclKind::Interface, DeclKind::Class) => true,
+    (DeclKind::Class, DeclKind::Namespace) | (DeclKind::Namespace, DeclKind::Class) => true,
+    (DeclKind::Enum, DeclKind::Enum) => true,
+    (DeclKind::Enum, DeclKind::Namespace) | (DeclKind::Namespace, DeclKind::Enum) => true,
+    (DeclKind::Enum, _) | (_, DeclKind::Enum) => false,
+    (DeclKind::Namespace, DeclKind::Namespace) => true,
+    (DeclKind::Namespace, DeclKind::Function) | (DeclKind::Function, DeclKind::Namespace) => true,
+    (DeclKind::Function, DeclKind::Function) => true,
+    (DeclKind::Function, DeclKind::Var) | (DeclKind::Var, DeclKind::Function) => true,
+    (DeclKind::Var, DeclKind::Var) => true,
+    (DeclKind::Interface, DeclKind::Interface) => true,
+    _ => false,
+  }
+}
+
+fn symbol_group_symbol_ids(group: &SymbolGroup) -> Vec<SymbolId> {
+  let mut ids = Vec::new();
+  match &group.kind {
+    SymbolGroupKind::Merged(sym) => ids.push(*sym),
+    SymbolGroupKind::Separate {
+      value,
+      ty,
+      namespace,
+    } => {
+      ids.extend([*value, *ty, *namespace].into_iter().flatten());
+    }
+  }
+  ids.sort_by_key(|s| s.0);
+  ids.dedup();
+  ids
+}
+
+fn symbol_group_contains_decl_kind(
+  group: &SymbolGroup,
+  kind: DeclKind,
+  symbols: &SymbolTable,
+) -> bool {
+  let mut decls: [Vec<DeclId>; 3] = Default::default();
+  collect_decls(group, symbols, &mut decls);
+  decls
+    .into_iter()
+    .flatten()
+    .any(|decl| symbols.decl(decl).kind == kind)
+}
+
+fn reset_symbol(
+  symbols: &mut SymbolTable,
+  sym: SymbolId,
+  namespaces: Namespace,
+  origin: SymbolOrigin,
+) {
+  let data = symbols.symbol_mut(sym);
+  data.namespaces = namespaces;
+  data.origin = origin;
+  data.decls = Default::default();
+}
+
+fn finalize_symbol_group(
+  value: Option<SymbolId>,
+  ty: Option<SymbolId>,
+  namespace: Option<SymbolId>,
+) -> SymbolGroup {
+  let mut unique: Vec<SymbolId> = [value, ty, namespace].into_iter().flatten().collect();
+  unique.sort_by_key(|s| s.0);
+  unique.dedup();
+  if unique.len() == 1 {
+    return SymbolGroup::merged(unique[0]);
+  }
+  SymbolGroup {
+    kind: SymbolGroupKind::Separate {
+      value,
+      ty,
+      namespace,
+    },
+  }
+}
+
+fn emit_merge_mismatch_diagnostics(
+  diags: &mut Vec<Diagnostic>,
+  symbols: &SymbolTable,
+  symbol_ids: &[SymbolId],
+  name: &str,
+) {
+  for sym in symbol_ids {
+    let sym_data = symbols.symbol(*sym);
+    let mut decls: Vec<DeclId> = sym_data
+      .namespaces
+      .iter_bits()
+      .flat_map(|ns| sym_data.decls_for(ns).iter().copied())
+      .collect();
+    decls.sort_by_key(|d| d.0);
+    decls.dedup();
+    if decls.len() <= 1 {
+      continue;
+    }
+
+    decls.sort_by(|a, b| decl_sort_key(symbols, *a).cmp(&decl_sort_key(symbols, *b)));
+    let baseline = decls[0];
+    let baseline_data = symbols.decl(baseline);
+    let baseline_exported = !matches!(baseline_data.exported, Exported::No);
+
+    for decl in decls.iter().skip(1) {
+      let decl_data = symbols.decl(*decl);
+      let exported = !matches!(decl_data.exported, Exported::No);
+      if exported == baseline_exported {
+        continue;
+      }
+
+      diags.push(
+        Diagnostic::error(
+          "TS2395",
+          format!(
+            "Individual declarations in merged declaration '{}' must be all exported or all local.",
+            name
+          ),
+          Span::new(decl_data.file, decl_data.span),
+        )
+        .with_label(Label::secondary(
+          Span::new(baseline_data.file, baseline_data.span),
+          "first declaration here",
+        )),
+      );
+    }
+  }
+}
+
+fn emit_namespace_ordering_diagnostics(
+  diags: &mut Vec<Diagnostic>,
+  symbols: &SymbolTable,
+  symbol_ids: &[SymbolId],
+) {
+  for sym in symbol_ids {
+    let sym_data = symbols.symbol(*sym);
+    let mut decls: Vec<DeclId> = sym_data
+      .namespaces
+      .iter_bits()
+      .flat_map(|ns| sym_data.decls_for(ns).iter().copied())
+      .collect();
+    decls.sort_by_key(|d| d.0);
+    decls.dedup();
+
+    let mut namespace_decls: Vec<DeclId> = decls
+      .iter()
+      .copied()
+      .filter(|decl| symbols.decl(*decl).kind == DeclKind::Namespace)
+      .collect();
+    if namespace_decls.is_empty() {
+      continue;
+    }
+
+    let targets: Vec<DeclId> = decls
+      .iter()
+      .copied()
+      .filter(|decl| {
+        matches!(
+          symbols.decl(*decl).kind,
+          DeclKind::Class | DeclKind::Function
+        )
+      })
+      .collect();
+    if targets.is_empty() {
+      continue;
+    }
+
+    namespace_decls.sort_by(|a, b| decl_sort_key(symbols, *a).cmp(&decl_sort_key(symbols, *b)));
+
+    let mut earliest_target_by_file: BTreeMap<FileId, DeclId> = BTreeMap::new();
+    for target in targets {
+      let data = symbols.decl(target);
+      earliest_target_by_file
+        .entry(data.file)
+        .and_modify(|current| {
+          if decl_sort_key(symbols, target) < decl_sort_key(symbols, *current) {
+            *current = target;
+          }
+        })
+        .or_insert(target);
+    }
+
+    for ns_decl in namespace_decls {
+      let ns_data = symbols.decl(ns_decl);
+      let Some(target_decl) = earliest_target_by_file.get(&ns_data.file).copied() else {
+        continue;
+      };
+      let target_data = symbols.decl(target_decl);
+      if ns_data.is_ambient || target_data.is_ambient {
+        continue;
+      }
+      if ns_data.span.start >= target_data.span.start {
+        continue;
+      }
+      diags.push(
+        Diagnostic::error(
+          "TS2434",
+          "Namespace declaration cannot appear before the class or function it merges with.",
+          Span::new(ns_data.file, ns_data.span),
+        )
+        .with_label(Label::secondary(
+          Span::new(target_data.file, target_data.span),
+          "merge target here",
+        )),
+      );
+    }
+  }
 }
 
 fn add_decl_to_groups(

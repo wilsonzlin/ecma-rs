@@ -37,6 +37,9 @@
 //! - `BIND1003`: unsupported export assignment expression or exports in a script
 //!   module
 //! - `BIND1004`: duplicate import binding
+//! - `TS2300`: duplicate identifier
+//! - `TS2395`: merged declarations must be all exported or all local
+//! - `TS2434`: namespace declaration cannot appear before the class/function it merges with
 //! - `TS2309`: `export =` combined with other exports
 //! - `BIND1006`: conflicting `export as namespace` declarations across modules
 //!
@@ -366,6 +369,8 @@ pub struct DeclData {
   pub namespaces: Namespace,
   pub is_ambient: bool,
   pub is_global: bool,
+  pub exported: Exported,
+  pub span: TextRange,
   pub order: u32,
   /// Alias metadata for declarations that create a local binding referencing
   /// another entity (e.g. `import Foo = Bar.Baz`).
@@ -586,6 +591,8 @@ impl SymbolTable {
     namespaces: Namespace,
     is_ambient: bool,
     is_global: bool,
+    exported: Exported,
+    span: TextRange,
     order: u32,
     def_id: Option<DefId>,
     alias: Option<AliasTarget>,
@@ -599,6 +606,12 @@ impl SymbolTable {
         "decl alias mismatch for {:?}",
         id
       );
+      debug_assert_eq!(
+        existing.exported, exported,
+        "decl exported mismatch for {:?}",
+        id
+      );
+      debug_assert_eq!(existing.span, span, "decl span mismatch for {:?}", id);
     } else {
       self.decls.insert(
         id,
@@ -611,6 +624,8 @@ impl SymbolTable {
           namespaces,
           is_ambient,
           is_global,
+          exported,
+          span,
           order,
           alias,
         },
