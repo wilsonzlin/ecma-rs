@@ -1426,7 +1426,7 @@ fn interned_type_for_exported_function() {
   let ty = program.type_of_def(def);
   assert_eq!(
     program.display_type(ty).to_string(),
-    "(a: number, b: number) => number"
+    "(number, number) => number"
   );
 }
 
