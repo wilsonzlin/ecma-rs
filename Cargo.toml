@@ -49,7 +49,7 @@ axum = { version = "0.7.9", default-features = false }
 bitflags = "2"
 bumpalo = "3.14"
 clap = { version = "4.5.17", default-features = false, features = ["std", "help", "usage", "error-context"] }
-criterion = { version = "0.7", default-features = false }
+criterion = { version = "0.5.1", default-features = false }
 dashmap = "6.1.0"
 derive_more = "1.0.0"
 derive-visitor = "0.4.0"
