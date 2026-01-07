@@ -42,3 +42,20 @@ fn fuzz_smoke_js_binder() {
     iters += 1;
   }
 }
+
+#[test]
+#[ignore]
+fn fuzz_smoke_ts_binder() {
+  let mut rng = Lcg(0x243f_6a88_85a3_08d3);
+  let start = Instant::now();
+  let mut iters = 0usize;
+
+  while iters < 5_000 && start.elapsed() < Duration::from_secs(2) {
+    let len = (rng.next_u32() as usize) % 512;
+    let mut buf = vec![0u8; len];
+    rng.fill_bytes(&mut buf);
+
+    semantic_js::fuzz::fuzz_ts_binder(&buf);
+    iters += 1;
+  }
+}
