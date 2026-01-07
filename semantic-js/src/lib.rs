@@ -111,6 +111,12 @@
 //! );
 //! ```
 //!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p semantic-js --example js_mode_basic
+//! ```
+//!
 //! ## Determinism and integration notes
 //!
 //! - JS mode writes attachments into [`parse_js::ast::node::NodeAssocData`];

@@ -28,7 +28,6 @@ fn main() {
 fn render_error(err: parse_js::error::SyntaxError) {
   use diagnostics::render::render_diagnostic;
   use diagnostics::SimpleFiles;
-  use diagnostics::FileId;
 
   let mut files = SimpleFiles::new();
   let file = files.add("example.ts", SOURCE);
@@ -41,4 +40,3 @@ fn render_error(err: parse_js::error::SyntaxError) {
   eprintln!("parse error: {err}");
   eprintln!("span: {}..{}", err.loc.0, err.loc.1);
 }
-

@@ -1,3 +1,14 @@
+//! JavaScript/TypeScript parser for the ecma-rs toolchain.
+//!
+//! All source text is treated as UTF-8; spans and diagnostics use UTF-8 byte
+//! offsets.
+//!
+//! # Runnable example
+//!
+//! ```bash
+//! cargo run -p parse-js --example basic
+//! ```
+
 use ast::node::Node;
 use ast::stx::TopLevel;
 use error::{SyntaxError, SyntaxErrorType, SyntaxResult};
