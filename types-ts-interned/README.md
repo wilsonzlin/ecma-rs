@@ -2,6 +2,15 @@
 
 Interned, deterministic TypeScript type representation + evaluator/relation engine.
 
+## Runnable example
+
+```bash
+cargo run -p types-ts-interned --example basic
+```
+
+This example shows how to create a [`TypeStore`], intern structural types, and
+run assignability checks via [`RelateCtx`].
+
 ## Fuzzing
 
 This crate exposes a fuzz entry point behind the `fuzzing` feature:
