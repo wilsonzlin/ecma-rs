@@ -76,6 +76,12 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("obj?.a = 1;");
   assert_reject("for (foo() of bar) {}");
   assert_reject("for ((a) of b) {}");
+  assert_reject("for (var x = 1 of y) {}");
+  assert_reject("for (let x = 1 of y) {}");
+  assert_reject("for (const x = 1 of y) {}");
+  assert_reject("for (var x, y of z) {}");
+  assert_reject("for (let x, y of z) {}");
+  assert_reject("for (const x, y of z) {}");
   assert_reject_module("import.meta = 1;");
 }
 
@@ -84,6 +90,8 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("({ [x]: y, while: 1, class: 2 });");
   assert_accept("a != b; a !== b;");
   assert_accept("for (a of b) {}");
+  assert_accept("for (var x of y) {}");
+  assert_accept("for (var x in y) {}");
   assert_accept("function f(x) { return x; }");
 
   // `type` remains a valid binding/import/export name in ECMAScript.

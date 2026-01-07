@@ -503,6 +503,9 @@ impl<'a> Parser<'a> {
   /// For error recovery, consume an initializer in a for-in/of header and stop before the loop
   /// keyword so the parser can continue parsing the right-hand side.
   fn recover_for_in_of_initializer(&mut self, ctx: ParseCtx) {
+    if !self.should_recover() {
+      return;
+    }
     if self.consume_if(TT::Equals).is_match() {
       let _ = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf]);
     }
@@ -529,20 +532,22 @@ impl<'a> Parser<'a> {
 
         // Error recovery: consume excess declarations (e.g., `for (const a, b of arr)`)
         // This handles malformed syntax like: `for (var x, y of arr)` or `for (const a, { [b]: c} of arr)`
-        while self.peek().typ == TT::Comma {
-          self.consume(); // consume comma
+        if self.should_recover() {
+          while self.peek().typ == TT::Comma {
+            self.consume(); // consume comma
 
-          // Check if we've reached 'in' or 'of' (edge case)
-          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
-            break;
-          }
+            // Check if we've reached 'in' or 'of' (edge case)
+            if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+              break;
+            }
 
-          // Parse and discard additional pattern (for error recovery)
-          let _ = self.pat_decl(ctx);
+            // Parse and discard additional pattern (for error recovery)
+            let _ = self.pat_decl(ctx);
 
-          // Parse and discard type annotation if present
-          if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
-            let _ = self.type_expr(ctx);
+            // Parse and discard type annotation if present
+            if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
+              let _ = self.type_expr(ctx);
+            }
           }
         }
 
@@ -572,17 +577,19 @@ impl<'a> Parser<'a> {
           self.recover_for_in_of_initializer(ctx);
 
           // Error recovery: consume excess declarations
-          while self.peek().typ == TT::Comma {
-            self.consume(); // consume comma
+          if self.should_recover() {
+            while self.peek().typ == TT::Comma {
+              self.consume(); // consume comma
 
-            if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
-              break;
-            }
+              if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+                break;
+              }
 
-            let _ = self.pat_decl(ctx);
+              let _ = self.pat_decl(ctx);
 
-            if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
-              let _ = self.type_expr(ctx);
+              if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
+                let _ = self.type_expr(ctx);
+              }
             }
           }
 
@@ -606,17 +613,19 @@ impl<'a> Parser<'a> {
         self.recover_for_in_of_initializer(ctx);
 
         // Error recovery: consume excess declarations
-        while self.peek().typ == TT::Comma {
-          self.consume(); // consume comma
+        if self.should_recover() {
+          while self.peek().typ == TT::Comma {
+            self.consume(); // consume comma
 
-          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
-            break;
-          }
+            if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+              break;
+            }
 
-          let _ = self.pat_decl(ctx);
+            let _ = self.pat_decl(ctx);
 
-          if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
-            let _ = self.type_expr(ctx);
+            if !self.is_strict_ecmascript() && self.consume_if(TT::Colon).is_match() {
+              let _ = self.type_expr(ctx);
+            }
           }
         }
 
