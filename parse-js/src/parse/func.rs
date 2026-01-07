@@ -133,7 +133,12 @@ impl<'a> Parser<'a> {
 
   pub fn parse_func_block_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<Stmt>>> {
     let prev_in_function = self.in_function;
+    let prev_in_iteration = self.in_iteration;
+    let prev_in_switch = self.in_switch;
+    let prev_labels = std::mem::take(&mut self.labels);
     self.in_function += 1;
+    self.in_iteration = 0;
+    self.in_switch = 0;
     let res = (|| {
       self.require(TT::BraceOpen)?;
       let body = self.stmts(ctx.non_top_level(), TT::BraceClose)?;
@@ -141,6 +146,9 @@ impl<'a> Parser<'a> {
       Ok(body)
     })();
     self.in_function = prev_in_function;
+    self.in_iteration = prev_in_iteration;
+    self.in_switch = prev_in_switch;
+    self.labels = prev_labels;
     res
   }
 }

@@ -222,7 +222,18 @@ impl<'a> Parser<'a> {
             p.consume(); // consume 'static'
             let block = p.with_loc(|p| {
               p.require(TT::BraceOpen)?;
-              let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
+              // Static blocks have their own break/continue/label scope; they cannot
+              // target iteration statements or labels outside the block.
+              let prev_in_iteration = p.in_iteration;
+              let prev_in_switch = p.in_switch;
+              let prev_labels = std::mem::take(&mut p.labels);
+              p.in_iteration = 0;
+              p.in_switch = 0;
+              let body = p.stmts(ctx.non_top_level(), TT::BraceClose);
+              p.in_iteration = prev_in_iteration;
+              p.in_switch = prev_in_switch;
+              p.labels = prev_labels;
+              let body = body?;
               p.require(TT::BraceClose)?;
               Ok(crate::ast::class_or_object::ClassStaticBlock { body })
             })?;

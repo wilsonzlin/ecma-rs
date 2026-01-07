@@ -141,6 +141,12 @@ struct BufferedToken {
   lex_mode: LexMode,
 }
 
+#[derive(Clone)]
+struct LabelInfo {
+  name: String,
+  is_iteration: bool,
+}
+
 pub struct Parser<'a> {
   lexer: Lexer<'a>,
   buf: Vec<BufferedToken>,
@@ -148,6 +154,9 @@ pub struct Parser<'a> {
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
   in_function: u32,
+  in_iteration: u32,
+  in_switch: u32,
+  labels: Vec<LabelInfo>,
   cancel: Option<Arc<AtomicBool>>,
 }
 
@@ -175,6 +184,9 @@ impl<'a> Parser<'a> {
       options,
       allow_bare_ts_type_args: false,
       in_function: 0,
+      in_iteration: 0,
+      in_switch: 0,
+      labels: Vec::new(),
       cancel,
     }
   }

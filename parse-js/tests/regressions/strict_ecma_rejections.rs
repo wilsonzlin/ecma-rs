@@ -76,6 +76,19 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("return 1;");
   assert_reject_module("return 1;");
 
+  // `break`/`continue` are only valid within the appropriate control-flow contexts,
+  // and label resolution does not cross function/static-block boundaries.
+  assert_reject("break;");
+  assert_reject("continue;");
+  assert_reject("break missing;");
+  assert_reject("continue missing;");
+  assert_reject("foo: { continue foo; }");
+  assert_reject("a: a: while (true) {}");
+  assert_reject("while (true) { function f() { break; } }");
+  assert_reject("while (true) { class A { static { break; } } }");
+  assert_reject_module("break;");
+  assert_reject_module("continue;");
+
   // Recovery-only constructs that should be syntax errors in strict ECMAScript.
   assert_reject("();");
   assert_reject("({ [x] })");
@@ -104,6 +117,11 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("for (a of b) {}");
   assert_accept("for (var x of y) {}");
   assert_accept("for (var x in y) {}");
+  assert_accept("while (true) { break; }");
+  assert_accept("switch (x) { default: break; }");
+  assert_accept("foo: { break foo; }");
+  assert_accept("foo: while (true) { continue foo; }");
+  assert_accept("a: b: while (true) { continue a; }");
   assert_accept("function f(x) { return x; }");
   assert_accept("var f = await => await + 1;");
   assert_accept("async function g() { function f() { var await = 1; return await; } }");

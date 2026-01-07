@@ -329,14 +329,45 @@ impl<'a> Parser<'a> {
 
   pub fn label_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LabelStmt>> {
     self.with_loc(|p| {
-      let label_name = p.consume_as_string();
+      let label_tok = p.consume();
+      let label_name = p.string(label_tok.loc);
+      if p.is_strict_ecmascript() && p.labels.iter().any(|l| l.name == label_name) {
+        return Err(label_tok.error(SyntaxErrorType::ExpectedSyntax("unique label")));
+      }
       p.require(TT::Colon)?;
-      let statement = p.stmt(ctx.non_top_level())?;
+      let is_iteration = p.label_targets_iteration(ctx);
+      let prev_labels_len = p.labels.len();
+      p.labels.push(super::LabelInfo {
+        name: label_name.clone(),
+        is_iteration,
+      });
+      let statement = p.stmt(ctx.non_top_level());
+      p.labels.truncate(prev_labels_len);
+      let statement = statement?;
       Ok(LabelStmt {
         name: label_name,
         statement,
       })
     })
+  }
+
+  fn label_targets_iteration(&mut self, ctx: ParseCtx) -> bool {
+    let checkpoint = self.checkpoint();
+    loop {
+      let [t0, t1] = self.peek_n::<2>();
+      if is_valid_pattern_identifier(t0.typ, ctx.rules) && t1.typ == TT::Colon {
+        self.consume(); // label name
+        self.consume(); // colon
+        continue;
+      }
+      break;
+    }
+    let is_iteration = matches!(
+      self.peek().typ,
+      TT::KeywordFor | TT::KeywordWhile | TT::KeywordDo
+    );
+    self.restore_checkpoint(checkpoint);
+    is_iteration
   }
 
   pub fn empty_stmt(&mut self) -> SyntaxResult<Node<EmptyStmt>> {
@@ -371,16 +402,58 @@ impl<'a> Parser<'a> {
 
   pub fn break_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<BreakStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordBreak)?;
+      let start = p.require(TT::KeywordBreak)?;
       let label = p.break_or_continue_label(ctx)?;
+      if p.is_strict_ecmascript() {
+        match label.as_deref() {
+          None => {
+            if p.in_iteration == 0 && p.in_switch == 0 {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "break statement not allowed outside loops or switch statements",
+              )));
+            }
+          }
+          Some(label) => {
+            if !p.labels.iter().rev().any(|l| l.name == label) {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "break label must refer to an enclosing labeled statement",
+              )));
+            }
+          }
+        }
+      }
       Ok(BreakStmt { label })
     })
   }
 
   pub fn continue_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ContinueStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordContinue)?;
+      let start = p.require(TT::KeywordContinue)?;
       let label = p.break_or_continue_label(ctx)?;
+      if p.is_strict_ecmascript() {
+        match label.as_deref() {
+          None => {
+            if p.in_iteration == 0 {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "continue statement not allowed outside loops",
+              )));
+            }
+          }
+          Some(label) => match p.labels.iter().rev().find(|l| l.name == label) {
+            None => {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "continue label must refer to an enclosing labeled statement",
+              )))
+            }
+            Some(label_info) if !label_info.is_iteration => {
+              return Err(start.error(SyntaxErrorType::ExpectedSyntax(
+                "continue label must refer to an iteration statement",
+              )))
+            }
+            Some(_) => {}
+          },
+        }
+      }
       Ok(ContinueStmt { label })
     })
   }
@@ -422,18 +495,24 @@ impl<'a> Parser<'a> {
 
   fn for_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForBody>> {
     self.with_loc(|p| {
-      if p.peek().typ == TT::BraceOpen {
-        // Block.
-        p.require(TT::BraceOpen)?;
-        let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
-        p.require(TT::BraceClose)?;
-        Ok(ForBody { body })
-      } else {
-        // Single statement.
-        Ok(ForBody {
-          body: vec![p.stmt(ctx.non_top_level())?],
-        })
-      }
+      let prev_in_iteration = p.in_iteration;
+      p.in_iteration += 1;
+      let res = (|| {
+        if p.peek().typ == TT::BraceOpen {
+          // Block.
+          p.require(TT::BraceOpen)?;
+          let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
+          p.require(TT::BraceClose)?;
+          Ok(ForBody { body })
+        } else {
+          // Single statement.
+          Ok(ForBody {
+            body: vec![p.stmt(ctx.non_top_level())?],
+          })
+        }
+      })();
+      p.in_iteration = prev_in_iteration;
+      res
     })
   }
 
@@ -935,7 +1014,11 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.stmt(ctx.non_top_level())?;
+      let prev_in_iteration = p.in_iteration;
+      p.in_iteration += 1;
+      let body = p.stmt(ctx.non_top_level());
+      p.in_iteration = prev_in_iteration;
+      let body = body?;
       Ok(WhileStmt { condition, body })
     })
   }
@@ -954,7 +1037,11 @@ impl<'a> Parser<'a> {
   pub fn do_while_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<DoWhileStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordDo)?;
-      let body = p.stmt(ctx.non_top_level())?;
+      let prev_in_iteration = p.in_iteration;
+      p.in_iteration += 1;
+      let body = p.stmt(ctx.non_top_level());
+      p.in_iteration = prev_in_iteration;
+      let body = body?;
       // Consume optional semicolon after body statement (ASI)
       let _ = p.consume_if(TT::Semicolon);
       p.require(TT::KeywordWhile)?;
@@ -972,6 +1059,8 @@ impl<'a> Parser<'a> {
       let test = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       p.require(TT::BraceOpen)?;
+      let prev_in_switch = p.in_switch;
+      p.in_switch += 1;
       let branches = p.repeat_until_tt_with_loc(TT::BraceClose, |p| {
         let case = if p.consume_if(TT::KeywordCase).is_match() {
           Some(p.expr(ctx, [TT::Colon])?)
@@ -990,7 +1079,9 @@ impl<'a> Parser<'a> {
           |p| p.stmt(ctx.non_top_level()),
         )?;
         Ok(SwitchBranch { case, body })
-      })?;
+      });
+      p.in_switch = prev_in_switch;
+      let branches = branches?;
       p.require(TT::BraceClose)?;
       Ok(SwitchStmt { test, branches })
     })
