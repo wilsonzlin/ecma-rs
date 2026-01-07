@@ -1,10 +1,5 @@
 import { useMemo } from "react";
-import {
-  StableProgramSymbols,
-  StableScope,
-  StableProgramSymbol,
-  formatId,
-} from "./schema";
+import { StableProgramSymbols, StableScope, StableProgramSymbol, formatId } from "./schema";
 
 const buildScopeMap = (symbols: StableProgramSymbols) => {
   const map = new Map<string, StableScope>();
@@ -18,9 +13,7 @@ const collectScopeSymbols = (
   scope: StableScope,
   symbols: StableProgramSymbols,
 ): StableProgramSymbol[] =>
-  symbols.symbols.filter(
-    (symbol) => formatId(symbol.scope) === formatId(scope.id),
-  );
+  symbols.symbols.filter((symbol) => formatId(symbol.scope) === formatId(scope.id));
 
 const scopeMatchesQuery = (
   scope: StableScope,
@@ -56,12 +49,8 @@ const ScopeTree = ({
   scopeMap: Map<string, StableScope>;
   filter: string;
 }) => {
-  const children =
-    scope.children?.map((id) => scopeMap.get(formatId(id))!).filter(Boolean) ??
-    [];
-  const visibleChildren = children.filter((child) =>
-    scopeMatchesQuery(child, symbols, filter),
-  );
+  const children = scope.children?.map((id) => scopeMap.get(formatId(id))!).filter(Boolean) ?? [];
+  const visibleChildren = children.filter((child) => scopeMatchesQuery(child, symbols, filter));
   const scopeSymbols = collectScopeSymbols(scope, symbols).filter(
     (symbol) =>
       !filter ||

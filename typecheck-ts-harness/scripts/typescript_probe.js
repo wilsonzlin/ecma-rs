@@ -8,4 +8,3 @@ try {
   process.stderr.write(`${err?.message ?? String(err)}\n`);
   process.exitCode = 1;
 }
-

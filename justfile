@@ -20,6 +20,24 @@ fmt:
 fmt-fix:
   cargo fmt --all
 
+fmt-js:
+  npx --yes prettier@3.4.2 --check
+    'version'
+    '.github/workflows/*.yaml'
+    'minify-js-nodejs/**/*.{js,json,ts,d.ts}'
+    'optimize-js-debugger/src/**/*.{ts,tsx,css,html}'
+    'optimize-js-debugger/*.ts'
+    'typecheck-ts-harness/scripts/*.js'
+
+fmt-js-fix:
+  npx --yes prettier@3.4.2 --write
+    'version'
+    '.github/workflows/*.yaml'
+    'minify-js-nodejs/**/*.{js,json,ts,d.ts}'
+    'optimize-js-debugger/src/**/*.{ts,tsx,css,html}'
+    'optimize-js-debugger/*.ts'
+    'typecheck-ts-harness/scripts/*.js'
+
 utf8-apis:
   ./scripts/check_utf8_apis.sh
 
@@ -45,7 +63,7 @@ test:
 docs:
   ./scripts/gen_deps_graph.sh
 
-lint: fmt utf8-apis diagnostic-codes clippy
+lint: fmt fmt-js utf8-apis diagnostic-codes clippy
 
-ci: fmt utf8-apis diagnostic-codes clippy check test docs
+ci: fmt fmt-js utf8-apis diagnostic-codes clippy check test docs
   git diff --exit-code docs/deps.md

@@ -289,17 +289,10 @@ const normalizeBBlockEntries = (
     ? [...blocks.entries()]
     : Object.entries(blocks).map(([k, v]) => [Number(k), v]);
 
-const normalizeChildEntries = (
-  children: StableDebugStep["cfgChildren"],
-): Map<number, number[]> =>
+const normalizeChildEntries = (children: StableDebugStep["cfgChildren"]): Map<number, number[]> =>
   children instanceof Map
     ? children
-    : new Map(
-        Object.entries(children).map(([k, v]) => [
-          Number(k),
-          v.map((n) => Number(n)),
-        ]),
-      );
+    : new Map(Object.entries(children).map(([k, v]) => [Number(k), v.map((n) => Number(n))]));
 
 export const normalizeStep = (step: StableDebugStep): NormalizedStep => {
   const blocks = normalizeBBlockEntries(step.bblocks)
@@ -368,9 +361,7 @@ const instSignature = (inst: StableInst): string =>
     unknown: inst.unknown,
   });
 
-export const computeChangedBlocks = (
-  steps: NormalizedStep[],
-): Array<Set<number>> => {
+export const computeChangedBlocks = (steps: NormalizedStep[]): Array<Set<number>> => {
   const results: Array<Set<number>> = [];
   for (let i = 0; i < steps.length; i++) {
     const current = steps[i];

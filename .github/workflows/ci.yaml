@@ -11,8 +11,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  fmt-js:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: prettier --check
+        run: >
+          npx --yes prettier@3.4.2 --check
+          'version'
+          '.github/workflows/*.yaml'
+          'minify-js-nodejs/**/*.{js,json,ts,d.ts}'
+          'optimize-js-debugger/src/**/*.{ts,tsx,css,html}'
+          'optimize-js-debugger/*.ts'
+          'typecheck-ts-harness/scripts/*.js'
+
   test:
     runs-on: ubuntu-24.04
+    needs: fmt-js
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

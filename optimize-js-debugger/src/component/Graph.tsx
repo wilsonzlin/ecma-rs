@@ -50,15 +50,9 @@ const ConstElement = ({ value }: { value: StableConst }) => {
   }
 };
 
-const VarElement = ({ id }: { id: number }) => (
-  <span className="var">%{id}</span>
-);
+const VarElement = ({ id }: { id: number }) => <span className="var">%{id}</span>;
 
-const ArgElement = ({
-  arg,
-}: {
-  arg: StableArg;
-}) => {
+const ArgElement = ({ arg }: { arg: StableArg }) => {
   switch (arg.kind) {
     case "builtin":
       return <span className="builtin">{arg.value}</span>;
@@ -103,11 +97,7 @@ const InstElement = ({
       return (
         <>
           <div>
-            {inst.tgts[0] == undefined ? (
-              <span />
-            ) : (
-              <VarElement id={inst.tgts[0]} />
-            )}
+            {inst.tgts[0] == undefined ? <span /> : <VarElement id={inst.tgts[0]} />}
             <span className="eq"> =</span>
           </div>
           <div>
@@ -338,9 +328,7 @@ export const Graph = ({
   const filteredBlocks: NormalizedBlock[] = useMemo(
     () =>
       query
-        ? step.blocks.filter((block) =>
-            blockMatchesQuery(block, query, symbolNames),
-          )
+        ? step.blocks.filter((block) => blockMatchesQuery(block, query, symbolNames))
         : step.blocks,
     [step, query, symbolNames],
   );

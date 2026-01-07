@@ -91,9 +91,7 @@ function utf8ByteOffsetToUtf16(text, bytePos) {
 
 function toAbsolute(fileName) {
   const normalized = normalizePath(fileName);
-  return path.posix.isAbsolute(normalized)
-    ? normalized
-    : path.posix.join(VIRTUAL_ROOT, normalized);
+  return path.posix.isAbsolute(normalized) ? normalized : path.posix.join(VIRTUAL_ROOT, normalized);
 }
 
 function collectVirtualDirectories(fileNames) {
@@ -178,8 +176,7 @@ function collectTypeQueries(files) {
       let search = line.indexOf("^?");
       while (search !== -1) {
         const before = line.slice(0, search);
-        const hasCodeBefore =
-          before.trim().length > 0 && !before.trim().startsWith("//");
+        const hasCodeBefore = before.trim().length > 0 && !before.trim().startsWith("//");
         const targetLine = hasCodeBefore ? i : i - 1;
         if (targetLine >= 0) {
           const startUtf16 = lineStarts[targetLine] ?? 0;
@@ -228,14 +225,9 @@ function collectExportTypes(checker, sourceFile) {
   }
   const facts = [];
   for (const sym of exports) {
-    const target =
-      sym.getFlags() & ts.SymbolFlags.Alias
-        ? checker.getAliasedSymbol(sym)
-        : sym;
+    const target = sym.getFlags() & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(sym) : sym;
     const decl =
-      target.valueDeclaration ||
-      (target.declarations && target.declarations[0]) ||
-      sourceFile;
+      target.valueDeclaration || (target.declarations && target.declarations[0]) || sourceFile;
     const type = checker.getTypeOfSymbolAtLocation(target, decl);
     const typeStr = renderType(checker, type, decl);
     facts.push({
@@ -347,53 +339,29 @@ function createInMemoryHost(files, options) {
     getCanonicalFileName: (fileName) => normalizePath(fileName),
     fileExists: (fileName) => {
       const absolute = toAbsolute(fileName);
-      return (
-        normalizedFiles.has(absolute) ||
-        defaultHost.fileExists(absolute)
-      );
+      return normalizedFiles.has(absolute) || defaultHost.fileExists(absolute);
     },
     readFile: (fileName) => {
       const absolute = toAbsolute(fileName);
-      return (
-        normalizedFiles.get(absolute) ??
-        defaultHost.readFile(absolute)
-      );
+      return normalizedFiles.get(absolute) ?? defaultHost.readFile(absolute);
     },
     directoryExists: (dirName) => {
       const absolute = toAbsolute(dirName);
-      return (
-        virtualDirectories.has(absolute) ||
-        (defaultHost.directoryExists?.(absolute) ?? false)
-      );
+      return virtualDirectories.has(absolute) || (defaultHost.directoryExists?.(absolute) ?? false);
     },
     getDirectories: (dirName) => {
       const absolute = toAbsolute(dirName);
       const fromDefault = defaultHost.getDirectories?.(absolute) ?? [];
-      const virtual = listVirtualSubdirectories(
-        absolute,
-        virtualDirectories,
-      );
+      const virtual = listVirtualSubdirectories(absolute, virtualDirectories);
       return Array.from(new Set([...fromDefault, ...virtual]));
     },
-    getSourceFile: (
-      fileName,
-      languageVersion,
-      onError,
-      shouldCreateNewSourceFile,
-    ) => {
+    getSourceFile: (fileName, languageVersion, onError, shouldCreateNewSourceFile) => {
       const normalized = toAbsolute(fileName);
       const text = normalizedFiles.get(normalized);
       if (text !== undefined) {
         const scriptKind = ts.getScriptKindFromFileName(normalized);
-        const target =
-          languageVersion ?? options.target ?? ts.ScriptTarget.Latest;
-        return ts.createSourceFile(
-          normalized,
-          text,
-          target,
-          true,
-          scriptKind,
-        );
+        const target = languageVersion ?? options.target ?? ts.ScriptTarget.Latest;
+        return ts.createSourceFile(normalized, text, target, true, scriptKind);
       }
       return defaultHost.getSourceFile(
         normalized,
@@ -411,12 +379,8 @@ function runRequest(request) {
   const rootNames = (request.rootNames ?? []).map(toAbsolute);
   const host = createInMemoryHost(request.files ?? {}, options);
   const program = ts.createProgram({ rootNames, options, host });
-  const diagnostics = [
-    ...optionErrors,
-    ...ts.getPreEmitDiagnostics(program),
-  ];
-  const diagnosticsOnly =
-    request.diagnosticsOnly === true || request.diagnostics_only === true;
+  const diagnostics = [...optionErrors, ...ts.getPreEmitDiagnostics(program)];
+  const diagnosticsOnly = request.diagnosticsOnly === true || request.diagnostics_only === true;
 
   let typeFacts = null;
   if (!diagnosticsOnly) {

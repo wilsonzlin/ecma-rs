@@ -33,13 +33,7 @@ function loadTypeScript() {
   }
 
   const repoRoot = path.resolve(__dirname, "..", "..");
-  const tsSubmodulePkg = path.join(
-    repoRoot,
-    "parse-js",
-    "tests",
-    "TypeScript",
-    "package.json",
-  );
+  const tsSubmodulePkg = path.join(repoRoot, "parse-js", "tests", "TypeScript", "package.json");
   if (fs.existsSync(tsSubmodulePkg)) {
     try {
       return createRequire(tsSubmodulePkg)("typescript");
@@ -47,7 +41,9 @@ function loadTypeScript() {
       attempts.push(formatAttempt("parse-js/tests/TypeScript/package.json", tsSubmodulePkg, err));
     }
   } else {
-    attempts.push(formatAttempt("parse-js/tests/TypeScript/package.json missing", tsSubmodulePkg, null));
+    attempts.push(
+      formatAttempt("parse-js/tests/TypeScript/package.json missing", tsSubmodulePkg, null),
+    );
   }
 
   try {
@@ -73,4 +69,3 @@ function loadTypeScript() {
 }
 
 module.exports = { loadTypeScript };
-

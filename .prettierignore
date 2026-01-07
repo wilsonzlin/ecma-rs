@@ -1,0 +1,17 @@
+# Build artifacts
+target/
+**/target/
+dist/
+**/dist/
+pkg/
+**/pkg/
+
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Native module / binaries
+*.node
+
+# Submodules / large corpora
+test262/data/

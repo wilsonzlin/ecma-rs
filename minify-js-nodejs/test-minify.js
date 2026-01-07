@@ -18,11 +18,7 @@ assert.strictEqual(typeof minify, "function", "minify export should be a functio
 
 expectMinify("global", "let x = 1;", "let x=1;");
 expectMinify("module", "export default 1;", "export default 1;");
-expectMinify(
-  "module",
-  "const enum E { A = 1 } export const x = E.A;",
-  "export const x=1;",
-);
+expectMinify("module", "const enum E { A = 1 } export const x = E.A;", "export const x=1;");
 
 // Preserve const enums at runtime when requested.
 const preservedConstEnum = utf8(
@@ -48,8 +44,7 @@ const preservedConstEnumLegacy = utf8(
   }),
 );
 assert(
-  preservedConstEnumLegacy.includes("var E") ||
-    preservedConstEnumLegacy.includes("let E"),
+  preservedConstEnumLegacy.includes("var E") || preservedConstEnumLegacy.includes("let E"),
   `expected legacy option to emit runtime enum scaffolding, got: ${preservedConstEnumLegacy}`,
 );
 assert(

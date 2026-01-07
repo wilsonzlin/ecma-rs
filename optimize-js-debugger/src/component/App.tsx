@@ -83,20 +83,14 @@ export const App = () => {
   }, [source, isGlobal]);
 
   const symbolNames = useMemo(() => buildSymbolNames(data?.symbols), [data]);
-  const currentFunction =
-    curFnId == undefined ? data?.top_level : data?.functions[curFnId];
+  const currentFunction = curFnId == undefined ? data?.top_level : data?.functions[curFnId];
   const normalizedSteps: NormalizedStep[] = useMemo(
     () => currentFunction?.debug.steps.map(normalizeStep) ?? [],
     [currentFunction],
   );
-  const diffs = useMemo(
-    () => computeChangedBlocks(normalizedSteps),
-    [normalizedSteps],
-  );
+  const diffs = useMemo(() => computeChangedBlocks(normalizedSteps), [normalizedSteps]);
   const safeStepIdx =
-    normalizedSteps.length === 0
-      ? 0
-      : Math.min(stepIdx, normalizedSteps.length - 1);
+    normalizedSteps.length === 0 ? 0 : Math.min(stepIdx, normalizedSteps.length - 1);
   const currentStep = normalizedSteps[safeStepIdx];
 
   useEffect(() => {
@@ -107,9 +101,7 @@ export const App = () => {
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         setStepIdx((idx) => Math.max(0, idx - 1));
       } else if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-        setStepIdx((idx) =>
-          Math.min((normalizedSteps.length ?? 1) - 1, idx + 1),
-        );
+        setStepIdx((idx) => Math.min((normalizedSteps.length ?? 1) - 1, idx + 1));
       }
     };
     window.addEventListener("keydown", listener);
@@ -122,28 +114,23 @@ export const App = () => {
         <div className="canvas">
           <div className="toolbar">
             <div className="function-tabs">
-              {[undefined, ...(data?.functions.map((_, i) => i) ?? [])].map(
-                (fnId) => (
-                  <button
-                    key={fnId ?? -1}
-                    className={fnId === curFnId ? "active" : ""}
-                    onClick={() => {
-                      setCurFnId(fnId);
-                      setStepIdx(0);
-                    }}
-                  >
-                    {fnId == undefined ? "Top level" : `Fn${fnId}`}
-                  </button>
-                ),
-              )}
+              {[undefined, ...(data?.functions.map((_, i) => i) ?? [])].map((fnId) => (
+                <button
+                  key={fnId ?? -1}
+                  className={fnId === curFnId ? "active" : ""}
+                  onClick={() => {
+                    setCurFnId(fnId);
+                    setStepIdx(0);
+                  }}
+                >
+                  {fnId == undefined ? "Top level" : `Fn${fnId}`}
+                </button>
+              ))}
             </div>
             <div className="step-controls">
               <label>
                 Step:
-                <select
-                  value={safeStepIdx}
-                  onChange={(e) => setStepIdx(Number(e.target.value))}
-                >
+                <select value={safeStepIdx} onChange={(e) => setStepIdx(Number(e.target.value))}>
                   {normalizedSteps.map((step, i) => (
                     <option key={i} value={i}>
                       {i}. {step.name}
@@ -203,17 +190,14 @@ export const App = () => {
               filter={filter}
             />
           )}
-          {view === "symbols" && (
-            <SymbolsPanel symbols={data?.symbols} filter={filter} />
-          )}
+          {view === "symbols" && <SymbolsPanel symbols={data?.symbols} filter={filter} />}
         </div>
         <div className="pane">
           <div className="info">
             {error && <p className="error">{error}</p>}
             {data?.symbols && (
               <p className="symbol-summary">
-                {data.symbols.symbols.length} symbols across{" "}
-                {data.symbols.scopes.length} scopes
+                {data.symbols.symbols.length} symbols across {data.symbols.scopes.length} scopes
               </p>
             )}
           </div>

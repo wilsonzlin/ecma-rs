@@ -56,19 +56,15 @@ const cmd = (...cfg) => {
     throw new Error(`${msg}\n  ${command} ${args.join(" ")}`);
   };
 
-  const { status, signal, error, stdout, stderr } = spawnSync(
-    command,
-    args.map(String),
-    {
-      cwd: workingDir,
-      stdio: [
-        "ignore",
-        captureStdio ? "pipe" : "inherit",
-        captureStdio || throwOnStdErr ? "pipe" : "inherit",
-      ],
-      encoding: "utf8",
-    }
-  );
+  const { status, signal, error, stdout, stderr } = spawnSync(command, args.map(String), {
+    cwd: workingDir,
+    stdio: [
+      "ignore",
+      captureStdio ? "pipe" : "inherit",
+      captureStdio || throwOnStdErr ? "pipe" : "inherit",
+    ],
+    encoding: "utf8",
+  });
   if (error) {
     throwErr(error.message);
   }
@@ -101,8 +97,7 @@ if (
 ) {
   throw new Error("Working directory not clean");
 }
-const hasRemote =
-  cmd("git", "remote", { captureStdio: true }).stdout.trim().length > 0;
+const hasRemote = cmd("git", "remote", { captureStdio: true }).stdout.trim().length > 0;
 if (hasRemote) {
   cmd("git", "pull");
 } else {
@@ -122,25 +117,21 @@ for (const file of [
 replaceInFile(
   "minify-js-nodejs/Cargo.toml",
   /^(minify-js = { version = )"\d+\.\d+\.\d+"/m,
-  `$1"${NEW_VERSION}"`
+  `$1"${NEW_VERSION}"`,
 );
 
 replaceInFile(
   "minify-js-nodejs/package.json",
   /^(\s*"version": )"\d+\.\d+\.\d+",\s*$/m,
-  `$1"${NEW_VERSION}",`
+  `$1"${NEW_VERSION}",`,
 );
 
-replaceInFile(
-  "minify-js/README.md",
-  /^(minify-js = )"\d+\.\d+\.\d+"/m,
-  `$1"${NEW_VERSION}"`
-);
+replaceInFile("minify-js/README.md", /^(minify-js = )"\d+\.\d+\.\d+"/m, `$1"${NEW_VERSION}"`);
 
 replaceInFile(
   "minify-js/README.md",
   /(static.wilsonl\.in\/minify-js\/(?:bench|cli)\/)\d+\.\d+\.\d+/g,
-  `$1${NEW_VERSION}`
+  `$1${NEW_VERSION}`,
 );
 
 cmd("cargo", "generate-lockfile");
