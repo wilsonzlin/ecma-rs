@@ -465,9 +465,33 @@ fn folds_numeric_expressions() {
 }
 
 #[test]
+fn folds_constant_comparisons() {
+  let result = minified(TopLevelMode::Global, "console.log(1<2);");
+  assert_eq!(result, "console.log(true);");
+}
+
+#[test]
+fn folds_constant_strict_equality() {
+  let result = minified(TopLevelMode::Global, "console.log(1===2);");
+  assert_eq!(result, "console.log(false);");
+}
+
+#[test]
+fn folds_constant_loose_equality() {
+  let result = minified(TopLevelMode::Global, "console.log(null==undefined);");
+  assert_eq!(result, "console.log(true);");
+}
+
+#[test]
 fn folds_string_concatenation() {
   let result = minified(TopLevelMode::Global, r#"console.log("a"+"b");"#);
   assert_eq!(result, r#"console.log("ab");"#);
+}
+
+#[test]
+fn folds_string_concatenation_with_non_string_literals() {
+  let result = minified(TopLevelMode::Global, r#"console.log("a"+1);"#);
+  assert_eq!(result, r#"console.log("a1");"#);
 }
 
 #[test]
@@ -492,6 +516,18 @@ fn rewrites_if_to_ternary_expression() {
 fn removes_unreachable_if_branches() {
   let result = minified(TopLevelMode::Global, "if(false)foo();bar();");
   assert_eq!(result, "bar();");
+}
+
+#[test]
+fn removes_branches_after_const_folding() {
+  let result = minified(TopLevelMode::Global, "if(1<2)foo();else bar();");
+  assert_eq!(result, "foo();");
+}
+
+#[test]
+fn folds_nullish_coalescing_with_void_zero() {
+  let result = minified(TopLevelMode::Global, "console.log((void 0)??1);");
+  assert_eq!(result, "console.log(1);");
 }
 
 #[test]

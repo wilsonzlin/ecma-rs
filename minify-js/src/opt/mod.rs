@@ -32,6 +32,7 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
   let mut post = PassPipeline::new(vec![
     Box::new(dce::DcePass),
     Box::new(sem_rewrite::SemanticRewritePass),
+    Box::new(const_fold::ConstFoldPass),
     Box::new(cleanup::CleanupPass),
   ]);
   for _ in 0..2 {
