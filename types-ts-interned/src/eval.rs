@@ -213,6 +213,29 @@ pub struct EvaluatorCaches {
   refs: Arc<ShardedCache<RefKey, TypeId>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct EvaluatorLimits {
+  pub depth_limit: usize,
+  pub step_limit: usize,
+  pub max_template_strings: usize,
+}
+
+impl EvaluatorLimits {
+  pub const DEFAULT_DEPTH_LIMIT: usize = 64;
+  pub const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
+  pub const DEFAULT_STEP_LIMIT: usize = usize::MAX;
+}
+
+impl Default for EvaluatorLimits {
+  fn default() -> Self {
+    Self {
+      depth_limit: Self::DEFAULT_DEPTH_LIMIT,
+      step_limit: Self::DEFAULT_STEP_LIMIT,
+      max_template_strings: Self::DEFAULT_MAX_TEMPLATE_STRINGS,
+    }
+  }
+}
+
 impl EvaluatorCaches {
   pub fn new(config: CacheConfig) -> Self {
     Self {
@@ -260,28 +283,20 @@ pub struct TypeEvaluator<'a, E: TypeExpander> {
   caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
-  step_limit: usize,
+  limits: EvaluatorLimits,
   steps: usize,
-  depth_limit: usize,
-  max_template_strings: usize,
 }
 
 impl<'a, E: TypeExpander> std::fmt::Debug for TypeEvaluator<'a, E> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("TypeEvaluator")
-      .field("step_limit", &self.step_limit)
+      .field("limits", &self.limits)
       .field("steps", &self.steps)
-      .field("depth_limit", &self.depth_limit)
-      .field("max_template_strings", &self.max_template_strings)
       .finish()
   }
 }
 
 impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
-  const DEFAULT_DEPTH_LIMIT: usize = 64;
-  const DEFAULT_MAX_TEMPLATE_STRINGS: usize = 1024;
-  const DEFAULT_STEP_LIMIT: usize = usize::MAX;
-
   fn has_free_type_param(
     &self,
     ty: TypeId,
@@ -289,7 +304,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     visited: &mut AHashSet<TypeId>,
     depth: usize,
   ) -> bool {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       // Depth-limit hits are treated conservatively so we don't incorrectly
       // collapse conditional types when a free type parameter exists behind a
       // recursive type graph.
@@ -450,10 +465,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
-      step_limit: Self::DEFAULT_STEP_LIMIT,
+      limits: EvaluatorLimits::default(),
       steps: 0,
-      depth_limit: Self::DEFAULT_DEPTH_LIMIT,
-      max_template_strings: Self::DEFAULT_MAX_TEMPLATE_STRINGS,
     }
   }
 
@@ -465,18 +478,27 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     self
   }
 
+  pub fn with_limits(mut self, limits: EvaluatorLimits) -> Self {
+    self.limits = limits;
+    self
+  }
+
+  pub fn limits(&self) -> EvaluatorLimits {
+    self.limits
+  }
+
   pub fn with_depth_limit(mut self, limit: usize) -> Self {
-    self.depth_limit = limit;
+    self.limits.depth_limit = limit;
     self
   }
 
   pub fn with_step_limit(mut self, limit: usize) -> Self {
-    self.step_limit = limit;
+    self.limits.step_limit = limit;
     self
   }
 
   pub fn with_max_template_strings(mut self, limit: usize) -> Self {
-    self.max_template_strings = limit;
+    self.limits.max_template_strings = limit;
     self
   }
 
@@ -510,7 +532,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   fn evaluate_with_subst(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> TypeId {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       return ty;
     }
     let key = EvalKey {
@@ -521,8 +543,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       return cached;
     }
 
-    if self.step_limit != Self::DEFAULT_STEP_LIMIT {
-      if self.steps >= self.step_limit {
+    if self.limits.step_limit != EvaluatorLimits::DEFAULT_STEP_LIMIT {
+      if self.steps >= self.limits.step_limit {
         return ty;
       }
       self.steps += 1;
@@ -855,7 +877,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     extends: TypeId,
     depth: usize,
   ) -> bool {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       return false;
     }
 
@@ -888,7 +910,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   fn type_requires_object_like(&self, ty: TypeId, depth: usize) -> bool {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       return false;
     }
     match self.store.type_kind(ty) {
@@ -917,7 +939,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     depth: usize,
     visited: &mut AHashSet<TypeId>,
   ) -> bool {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       // If we can't soundly inspect the operand (usually due to deep recursion),
       // do not attempt to reduce the conditional.
       return true;
@@ -1833,7 +1855,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   fn indexer_accepts_key_inner(&self, key: &PropKey, idx_key: TypeId, depth: usize) -> bool {
-    if depth >= self.depth_limit {
+    if depth >= self.limits.depth_limit {
       return false;
     }
 
@@ -1892,13 +1914,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         break;
       }
       match acc.len().checked_mul(atom_strings.len()) {
-        Some(product) if product <= self.max_template_strings => {}
+        Some(product) if product <= self.limits.max_template_strings => {}
         _ => return TemplateStringComputation::TooLarge,
       }
       let mut next = Vec::new();
       for base in &acc {
         for atom in &atom_strings {
-          if next.len() >= self.max_template_strings {
+          if next.len() >= self.limits.max_template_strings {
             return TemplateStringComputation::TooLarge;
           }
           let mut new = base.clone();
@@ -1909,7 +1931,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
       acc = next;
     }
-    if acc.len() > self.max_template_strings {
+    if acc.len() > self.limits.max_template_strings {
       return TemplateStringComputation::TooLarge;
     }
     acc.sort();
@@ -1937,7 +1959,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             TemplateStringComputation::Finite(mut vals) => {
               if !saw_too_large {
                 out.append(&mut vals);
-                if out.len() > self.max_template_strings {
+                if out.len() > self.limits.max_template_strings {
                   saw_too_large = true;
                   out.clear();
                 }

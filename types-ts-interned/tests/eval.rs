@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  Accessibility, DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, Param,
-  PropData, PropKey, Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem,
-  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
+  Accessibility, DefId, EvaluatorLimits, ExpandedType, Indexer, MappedModifier, MappedType,
+  ObjectType, Param, PropData, PropKey, Property, Shape, Signature, TemplateChunk,
+  TemplateLiteralType, TupleElem, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeOptions,
+  TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -2187,7 +2188,11 @@ fn template_literal_expansion_bails_out_on_blowup() {
   }));
 
   let default_expander = MockExpander::default();
-  let mut eval = evaluator(store.clone(), &default_expander).with_max_template_strings(4);
+  let mut eval = evaluator(store.clone(), &default_expander).with_limits(EvaluatorLimits {
+    max_template_strings: 4,
+    ..EvaluatorLimits::default()
+  });
+  assert_eq!(eval.limits().max_template_strings, 4);
   let result = eval.evaluate(tpl);
   assert_eq!(result, primitives.string);
 }

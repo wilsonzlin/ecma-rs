@@ -10,6 +10,7 @@ use types_ts_interned::ReasonNode;
 use types_ts_interned::RelateCtx;
 use types_ts_interned::RelateHooks;
 use types_ts_interned::RelateTypeExpander;
+use types_ts_interned::RelationLimits;
 use types_ts_interned::TupleElem;
 use types_ts_interned::TypeKind;
 use types_ts_interned::TypeOptions;
@@ -43,6 +44,40 @@ fn callable(
   store.intern_type(TypeKind::Callable {
     overloads: vec![sig],
   })
+}
+
+#[test]
+fn relation_depth_limit_short_circuits_with_reason_note() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let ctx = RelateCtx::new(store.clone(), store.options()).with_limits(RelationLimits {
+    max_relation_depth: 0,
+    ..RelationLimits::default()
+  });
+  assert_eq!(ctx.limits().max_relation_depth, 0);
+
+  let result = ctx.explain_assignable(primitives.string, primitives.number);
+  assert!(result.result, "expected depth limit to conservatively assume success");
+  let reason = result.reason.expect("expected reason node");
+  assert_eq!(reason.note.as_deref(), Some("depth limit"));
+}
+
+#[test]
+fn relation_step_limit_short_circuits_with_reason_note() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let ctx = RelateCtx::new(store.clone(), store.options()).with_limits(RelationLimits {
+    step_limit: 0,
+    ..RelationLimits::default()
+  });
+  assert_eq!(ctx.limits().step_limit, 0);
+
+  let result = ctx.explain_assignable(primitives.string, primitives.number);
+  assert!(result.result, "expected step limit to conservatively assume success");
+  let reason = result.reason.expect("expected reason node");
+  assert_eq!(reason.note.as_deref(), Some("step limit"));
 }
 
 #[test]

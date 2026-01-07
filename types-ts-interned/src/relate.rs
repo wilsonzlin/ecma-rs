@@ -70,21 +70,50 @@ pub struct ReasonNode {
 
 const MAX_REASON_DEPTH: usize = 12;
 const MAX_REASON_NODES: usize = 256;
-// Defensive recursion caps for the relation engine itself.
-//
-// `RelateCtx` uses recursion for structural type comparisons, and while cycles
-// are handled via `in_progress`, deeply-nested or adversarial graphs (common in
-// proptests and real lib types like `Awaited`/`Promise`) can still build call
-// stacks large enough to overflow.
-//
-// Mirror TypeScript's behaviour: apply conservative, deterministic cutoffs and
-// assume success when exceeded to preserve termination.
-const MAX_RELATION_DEPTH: usize = 64;
-const MAX_RELATION_IN_PROGRESS: usize = 128;
-const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
-const MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
-const MAX_TEMPLATE_MATCH_STATES: usize = 1024;
-const MAX_TEMPLATE_ATOM_STRINGS: usize = 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RelationLimits {
+  /// Maximum number of relation steps before conservatively assuming success.
+  ///
+  /// Use `usize::MAX` to disable step tracking entirely (the default).
+  pub step_limit: usize,
+  /// Maximum recursion depth for `RelateCtx::relate_internal`.
+  pub max_relation_depth: usize,
+  /// Maximum number of entries in the `in_progress` relation set.
+  pub max_in_progress: usize,
+  /// Maximum recursion depth when matching indexer keys.
+  pub max_indexer_key_match_depth: usize,
+  /// Maximum recursion depth when enumerating or matching template literal atoms.
+  pub max_template_match_depth: usize,
+  /// Maximum number of explored states when matching a string against a template literal.
+  pub max_template_match_states: usize,
+  /// Maximum number of concrete strings produced when enumerating template literal atoms.
+  pub max_template_atom_strings: usize,
+}
+
+impl RelationLimits {
+  pub const DEFAULT_STEP_LIMIT: usize = usize::MAX;
+  pub const DEFAULT_MAX_RELATION_DEPTH: usize = 64;
+  pub const DEFAULT_MAX_IN_PROGRESS: usize = 128;
+  pub const DEFAULT_MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
+  pub const DEFAULT_MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
+  pub const DEFAULT_MAX_TEMPLATE_MATCH_STATES: usize = 1024;
+  pub const DEFAULT_MAX_TEMPLATE_ATOM_STRINGS: usize = 1024;
+}
+
+impl Default for RelationLimits {
+  fn default() -> Self {
+    Self {
+      step_limit: Self::DEFAULT_STEP_LIMIT,
+      max_relation_depth: Self::DEFAULT_MAX_RELATION_DEPTH,
+      max_in_progress: Self::DEFAULT_MAX_IN_PROGRESS,
+      max_indexer_key_match_depth: Self::DEFAULT_MAX_INDEXER_KEY_MATCH_DEPTH,
+      max_template_match_depth: Self::DEFAULT_MAX_TEMPLATE_MATCH_DEPTH,
+      max_template_match_states: Self::DEFAULT_MAX_TEMPLATE_MATCH_STATES,
+      max_template_atom_strings: Self::DEFAULT_MAX_TEMPLATE_ATOM_STRINGS,
+    }
+  }
+}
 
 #[derive(Default, Debug)]
 struct ReasonBudget {
@@ -214,7 +243,7 @@ pub struct RelateCtx<'a> {
   normalizer_caches: EvaluatorCaches,
   in_progress: RefCell<HashSet<RelationKey>>,
   reason_budget: RefCell<ReasonBudget>,
-  step_limit: usize,
+  limits: RelationLimits,
   steps: Cell<usize>,
 }
 
@@ -222,13 +251,12 @@ impl<'a> fmt::Debug for RelateCtx<'a> {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("RelateCtx")
       .field("options", &self.options)
+      .field("limits", &self.limits)
       .finish()
   }
 }
 
 impl<'a> RelateCtx<'a> {
-  const DEFAULT_STEP_LIMIT: usize = usize::MAX;
-
   /// Create a new [`RelateCtx`].
   ///
   /// `options.exact_optional_property_types` and `options.no_unchecked_indexed_access`
@@ -332,13 +360,22 @@ impl<'a> RelateCtx<'a> {
       normalizer_caches,
       in_progress: RefCell::new(HashSet::new()),
       reason_budget: RefCell::new(ReasonBudget::default()),
-      step_limit: Self::DEFAULT_STEP_LIMIT,
+      limits: RelationLimits::default(),
       steps: Cell::new(0),
     }
   }
 
+  pub fn with_limits(mut self, limits: RelationLimits) -> Self {
+    self.limits = limits;
+    self
+  }
+
+  pub fn limits(&self) -> RelationLimits {
+    self.limits
+  }
+
   pub fn with_step_limit(mut self, limit: usize) -> Self {
-    self.step_limit = limit;
+    self.limits.step_limit = limit;
     self
   }
 
@@ -428,7 +465,7 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
-    if depth == 0 && self.step_limit != Self::DEFAULT_STEP_LIMIT {
+    if depth == 0 && self.limits.step_limit != RelationLimits::DEFAULT_STEP_LIMIT {
       self.steps.set(0);
     }
 
@@ -438,7 +475,7 @@ impl<'a> RelateCtx<'a> {
       kind,
       mode,
     };
-    if depth >= MAX_RELATION_DEPTH {
+    if depth >= self.limits.max_relation_depth {
       let record = record && self.take_reason_slot();
       return RelationResult {
         result: true,
@@ -469,9 +506,9 @@ impl<'a> RelateCtx<'a> {
       };
     }
 
-    if self.step_limit != Self::DEFAULT_STEP_LIMIT {
+    if self.limits.step_limit != RelationLimits::DEFAULT_STEP_LIMIT {
       let current_steps = self.steps.get();
-      if current_steps >= self.step_limit {
+      if current_steps >= self.limits.step_limit {
         let record = record && self.take_reason_slot();
         return RelationResult {
           result: true,
@@ -488,7 +525,7 @@ impl<'a> RelateCtx<'a> {
       self.steps.set(current_steps + 1);
     }
 
-    if self.in_progress.borrow().len() >= MAX_RELATION_IN_PROGRESS {
+    if self.in_progress.borrow().len() >= self.limits.max_in_progress {
       // Stop recursion before we overflow the stack. This mirrors TypeScript's
       // behavior of assuming structural compatibility when the relation engine
       // hits its internal recursion limits.
@@ -1266,7 +1303,7 @@ impl<'a> RelateCtx<'a> {
     depth: usize,
     visited: &mut HashSet<TypeId>,
   ) -> Option<Vec<String>> {
-    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+    if depth >= self.limits.max_template_match_depth {
       return None;
     }
     if !visited.insert(ty) {
@@ -1288,7 +1325,7 @@ impl<'a> RelateCtx<'a> {
             break;
           };
           out.append(&mut vals);
-          if out.len() > MAX_TEMPLATE_ATOM_STRINGS {
+          if out.len() > self.limits.max_template_atom_strings {
             ok = false;
             break;
           }
@@ -1302,7 +1339,7 @@ impl<'a> RelateCtx<'a> {
     if let Some(strings) = result.as_mut() {
       strings.sort();
       strings.dedup();
-      if strings.len() > MAX_TEMPLATE_ATOM_STRINGS {
+      if strings.len() > self.limits.max_template_atom_strings {
         result = None;
       }
     }
@@ -1317,7 +1354,7 @@ impl<'a> RelateCtx<'a> {
     depth: usize,
     visited: &mut HashSet<TypeId>,
   ) -> Option<Vec<String>> {
-    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+    if depth >= self.limits.max_template_match_depth {
       return None;
     }
 
@@ -1332,13 +1369,13 @@ impl<'a> RelateCtx<'a> {
         break;
       }
       match acc.len().checked_mul(atom_strings.len()) {
-        Some(product) if product <= MAX_TEMPLATE_ATOM_STRINGS => {}
+        Some(product) if product <= self.limits.max_template_atom_strings => {}
         _ => return None,
       }
       let mut next = Vec::new();
       for base in &acc {
         for atom in &atom_strings {
-          if next.len() >= MAX_TEMPLATE_ATOM_STRINGS {
+          if next.len() >= self.limits.max_template_atom_strings {
             return None;
           }
           let mut new = base.clone();
@@ -1349,7 +1386,7 @@ impl<'a> RelateCtx<'a> {
       }
       acc = next;
     }
-    if acc.len() > MAX_TEMPLATE_ATOM_STRINGS {
+    if acc.len() > self.limits.max_template_atom_strings {
       return None;
     }
     acc.sort();
@@ -1363,7 +1400,7 @@ impl<'a> RelateCtx<'a> {
     tpl: &crate::TemplateLiteralType,
     depth: usize,
   ) -> bool {
-    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+    if depth >= self.limits.max_template_match_depth {
       return false;
     }
 
@@ -1388,7 +1425,7 @@ impl<'a> RelateCtx<'a> {
         continue;
       }
       processed += 1;
-      if processed > MAX_TEMPLATE_MATCH_STATES {
+      if processed > self.limits.max_template_match_states {
         return false;
       }
 
@@ -1424,7 +1461,7 @@ impl<'a> RelateCtx<'a> {
           if span.literal.is_empty() {
             queue.push_back((idx + 1, pos));
             for (off, _) in remainder.char_indices().skip(1) {
-              if processed + queue.len() >= MAX_TEMPLATE_MATCH_STATES {
+              if processed + queue.len() >= self.limits.max_template_match_states {
                 break;
               }
               queue.push_back((idx + 1, pos + off));
@@ -1441,7 +1478,7 @@ impl<'a> RelateCtx<'a> {
               };
               let found = search_pos + found_rel;
               queue.push_back((idx + 1, found + span.literal.len()));
-              if processed + queue.len() >= MAX_TEMPLATE_MATCH_STATES {
+              if processed + queue.len() >= self.limits.max_template_match_states {
                 break;
               }
               let Some(ch) = value.get(found..).and_then(|s| s.chars().next()) else {
@@ -2576,7 +2613,7 @@ impl<'a> RelateCtx<'a> {
     };
     let mut evaluator =
       TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone())
-        .with_step_limit(self.step_limit)
+        .with_step_limit(self.limits.step_limit)
         .with_conditional_assignability(self);
     evaluator.evaluate(ty)
   }
@@ -3041,7 +3078,7 @@ impl<'a> RelateCtx<'a> {
     depth: usize,
     match_depth: usize,
   ) -> bool {
-    if match_depth >= MAX_INDEXER_KEY_MATCH_DEPTH {
+    if match_depth >= self.limits.max_indexer_key_match_depth {
       return false;
     }
 
