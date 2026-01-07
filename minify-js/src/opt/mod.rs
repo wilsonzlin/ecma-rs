@@ -11,6 +11,7 @@ use crate::rename::UsageData;
 mod cleanup;
 mod const_fold;
 mod dce;
+mod prop_rewrite;
 mod sem_rewrite;
 mod side_effects;
 mod stmt_rewrite;
@@ -21,6 +22,7 @@ pub(crate) fn optimize(file: FileId, top_level_mode: TopLevelMode, top: &mut Nod
 
   let mut pre = PassPipeline::new(vec![
     Box::new(const_fold::ConstFoldPass),
+    Box::new(prop_rewrite::PropRewritePass),
     Box::new(stmt_rewrite::StmtRewritePass),
     Box::new(cleanup::CleanupPass),
   ]);

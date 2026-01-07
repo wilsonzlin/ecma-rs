@@ -505,6 +505,39 @@ fn folds_boolean_negation() {
 }
 
 #[test]
+fn rewrites_computed_member_string_keys_to_dot_access() {
+  let result = minified(TopLevelMode::Global, r#"let obj={foo:1};obj["foo"];"#);
+  assert_eq!(result, "let obj={foo:1};obj.foo;");
+}
+
+#[test]
+fn rewrites_computed_member_numeric_string_keys_to_number_access() {
+  let result = minified(TopLevelMode::Global, r#"let obj=[1];obj["0"];"#);
+  assert_eq!(result, "let obj=[1];obj[0];");
+}
+
+#[test]
+fn does_not_rewrite_non_identifier_computed_member_string_keys() {
+  let result = minified(TopLevelMode::Global, r#"let obj={};obj["a-b"];"#);
+  assert_eq!(result, r#"let obj={};obj["a-b"];"#);
+}
+
+#[test]
+fn rewrites_object_literal_value_properties_to_shorthand() {
+  let result = minified(TopLevelMode::Global, "let a=1;let obj={a:a};");
+  assert_eq!(result, "let a=1;let obj={a};");
+}
+
+#[test]
+fn does_not_rewrite_proto_object_literal_value_properties_to_shorthand() {
+  let result = minified(
+    TopLevelMode::Global,
+    "let __proto__=1;let obj={__proto__:__proto__};",
+  );
+  assert_eq!(result, "let __proto__=1;let obj={__proto__:__proto__};");
+}
+
+#[test]
 fn rewrites_if_to_logical_and() {
   let result = minified(TopLevelMode::Global, "if(foo)bar();");
   assert_eq!(result, "foo&&bar();");
@@ -1762,8 +1795,8 @@ fn lowers_dotted_runtime_namespaces_to_parseable_js() {
   };
   assert!(decl.stx.export);
   assert!(
-    code.contains("\"B\""),
-    "dotted namespace lowering should initialize A[\"B\"]"
+    code.contains(".B"),
+    "dotted namespace lowering should initialize A.B"
   );
 }
 
@@ -3057,17 +3090,11 @@ fn lowers_class_fields_with_define_for_class_fields_semantics() {
   match assign_stmt.stx.as_ref() {
     Stmt::Expr(expr) => match expr.stx.expr.stx.as_ref() {
       Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => {
-        let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
-          panic!(
-            "expected this[\"foo\"]=... assignment, got {:?}",
-            bin.stx.left
-          );
+        let Expr::Member(member) = bin.stx.left.stx.as_ref() else {
+          panic!("expected this.foo=... assignment, got {:?}", bin.stx.left);
         };
-        assert!(matches!(member.stx.object.stx.as_ref(), Expr::This(_)));
-        match member.stx.member.stx.as_ref() {
-          Expr::LitStr(key) => assert_eq!(key.stx.value, "foo"),
-          other => panic!("expected string literal member key, got {other:?}"),
-        }
+        assert!(matches!(member.stx.left.stx.as_ref(), Expr::This(_)));
+        assert_eq!(member.stx.right, "foo");
       }
       other => panic!("expected assignment expression, got {other:?}"),
     },

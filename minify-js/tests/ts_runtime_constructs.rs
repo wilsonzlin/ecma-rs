@@ -141,13 +141,14 @@ fn lowers_enums_with_runtime_semantics_to_js() {
       panic!("expected assignment expression in Str enum body, got {stmt:?}");
     };
     assert_eq!(assign.stx.operator, OperatorName::Assignment);
-    let Expr::ComputedMember(member) = assign.stx.left.stx.as_ref() else {
-      panic!("expected computed member assignment in Str enum body, got {stmt:?}");
-    };
-    assert!(
-      matches!(member.stx.member.stx.as_ref(), Expr::LitStr(_)),
-      "string enums should only assign E[\"name\"], got {member:?}"
-    );
+    match assign.stx.left.stx.as_ref() {
+      Expr::Member(_) => {}
+      Expr::ComputedMember(member) => assert!(
+        matches!(member.stx.member.stx.as_ref(), Expr::LitStr(_)),
+        "string enums should only assign E[\"name\"], got {member:?}"
+      ),
+      other => panic!("expected member assignment in Str enum body, got {other:?}"),
+    }
   }
 }
 
@@ -169,7 +170,7 @@ fn lowers_namespaces_with_runtime_semantics_to_js() {
   );
   assert!(has_exported_var_decl(&parsed, "NS"));
   assert!(
-    code.contains("\"Inner\""),
+    code.contains(".Inner") || code.contains("\"Inner\""),
     "nested namespace lowering should reference the Inner object: {code}"
   );
 
@@ -254,16 +255,24 @@ fn lowers_constructor_parameter_properties_to_this_assignments() {
       if assign.stx.operator != OperatorName::Assignment {
         return None;
       }
-      let Expr::ComputedMember(member) = assign.stx.left.stx.as_ref() else {
-        return None;
-      };
-      if !matches!(member.stx.object.stx.as_ref(), Expr::This(_)) {
-        return None;
+      match assign.stx.left.stx.as_ref() {
+        Expr::ComputedMember(member) => {
+          if !matches!(member.stx.object.stx.as_ref(), Expr::This(_)) {
+            return None;
+          }
+          let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
+            return None;
+          };
+          Some(key.stx.value.as_str())
+        }
+        Expr::Member(member) => {
+          if !matches!(member.stx.left.stx.as_ref(), Expr::This(_)) {
+            return None;
+          }
+          Some(member.stx.right.as_str())
+        }
+        _ => None,
       }
-      let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
-        return None;
-      };
-      Some(key.stx.value.as_str())
     })
     .collect::<Vec<_>>();
   assigned_props.sort_unstable();
@@ -331,10 +340,11 @@ fn derived_constructor_parameter_properties_follow_super_call() {
     if assign.stx.operator != OperatorName::Assignment {
       return false;
     }
-    let Expr::ComputedMember(member) = assign.stx.left.stx.as_ref() else {
-      return false;
-    };
-    matches!(member.stx.object.stx.as_ref(), Expr::This(_))
+    match assign.stx.left.stx.as_ref() {
+      Expr::ComputedMember(member) => matches!(member.stx.object.stx.as_ref(), Expr::This(_)),
+      Expr::Member(member) => matches!(member.stx.left.stx.as_ref(), Expr::This(_)),
+      _ => false,
+    }
   };
   assert!(
     is_this_assignment_stmt(&stmts[1]),
@@ -384,13 +394,17 @@ fn lowers_namespaces_merged_with_classes_inside_runtime_namespaces() {
         if bin.stx.operator != OperatorName::Assignment {
           continue;
         }
-        let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() else {
-          continue;
+        let is_class_prop = match bin.stx.left.stx.as_ref() {
+          Expr::ComputedMember(member) => {
+            matches!(member.stx.object.stx.as_ref(), Expr::Id(_))
+              && matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "C")
+          }
+          Expr::Member(member) => {
+            matches!(member.stx.left.stx.as_ref(), Expr::Id(_)) && member.stx.right == "C"
+          }
+          _ => false,
         };
-        if !matches!(member.stx.object.stx.as_ref(), Expr::Id(_)) {
-          continue;
-        }
-        if !matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "C") {
+        if !is_class_prop {
           continue;
         }
         if !matches!(bin.stx.right.stx.as_ref(), Expr::Id(id) if id.stx.name == class_name) {
@@ -452,16 +466,20 @@ fn lowers_export_import_equals_inside_runtime_namespaces() {
         if assign.stx.operator != OperatorName::Assignment {
           continue;
         }
-        let Expr::ComputedMember(member) = assign.stx.left.stx.as_ref() else {
-          continue;
-        };
-        let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
-          continue;
+        let exported_name = match assign.stx.left.stx.as_ref() {
+          Expr::ComputedMember(member) => {
+            let Expr::LitStr(key) = member.stx.member.stx.as_ref() else {
+              continue;
+            };
+            key.stx.value.clone()
+          }
+          Expr::Member(member) => member.stx.right.clone(),
+          _ => continue,
         };
         let Expr::Id(value) = assign.stx.right.stx.as_ref() else {
           continue;
         };
-        exports.insert(key.stx.value.clone(), value.stx.name.clone());
+        exports.insert(exported_name, value.stx.name.clone());
       }
       _ => {}
     }
@@ -595,8 +613,12 @@ fn lowers_computed_numeric_enum_members_and_preserves_auto_increments() {
       Expr::ComputedMember(member)
         if matches!(member.stx.object.stx.as_ref(), Expr::Id(_))
           && matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "A")
+    ) || matches!(
+      b_add.stx.left.stx.as_ref(),
+      Expr::Member(member)
+        if matches!(member.stx.left.stx.as_ref(), Expr::Id(_)) && member.stx.right == "A"
     ),
-    "expected B to be initialized from E[\"A\"] + 1, got {b_value:?}"
+    "expected B to be initialized from E.A + 1, got {b_value:?}"
   );
   assert!(
     matches!(b_add.stx.right.stx.as_ref(), Expr::LitNum(num) if num.stx.value.0 == 1.0),
@@ -614,8 +636,12 @@ fn lowers_computed_numeric_enum_members_and_preserves_auto_increments() {
       Expr::ComputedMember(member)
         if matches!(member.stx.object.stx.as_ref(), Expr::Id(_))
           && matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "C")
+    ) || matches!(
+      d_add.stx.left.stx.as_ref(),
+      Expr::Member(member)
+        if matches!(member.stx.left.stx.as_ref(), Expr::Id(_)) && member.stx.right == "C"
     ),
-    "expected D to be initialized from E[\"C\"] + 1, got {d_value:?}"
+    "expected D to be initialized from E.C + 1, got {d_value:?}"
   );
   assert!(
     matches!(d_add.stx.right.stx.as_ref(), Expr::LitNum(num) if num.stx.value.0 == 1.0),
@@ -637,8 +663,8 @@ fn lowers_dotted_namespaces_with_reserved_keyword_segments_to_parseable_js() {
   let (code, _parsed) = minify_ts_module(src);
 
   assert!(
-    code.contains("\"class\""),
-    "expected reserved namespace segment to be accessed via a string key: {code}"
+    code.contains(".class") || code.contains("\"class\""),
+    "expected reserved namespace segment to be accessed without introducing invalid bindings: {code}"
   );
   assert!(
     !code.contains("var class"),
@@ -664,8 +690,9 @@ fn lowers_dotted_namespaces_with_strict_mode_restricted_identifiers_to_parseable
   let (code, _parsed) = minify_ts_module(src);
 
   assert!(
-    code.contains("\"eval\"") && code.contains("\"arguments\""),
-    "expected restricted namespace segments to be accessed via string keys: {code}"
+    (code.contains(".eval") || code.contains("\"eval\""))
+      && (code.contains(".arguments") || code.contains("\"arguments\"")),
+    "expected restricted namespace segments to be referenced without using invalid strict-mode bindings: {code}"
   );
   assert!(
     !code.contains("var eval"),
@@ -770,8 +797,8 @@ fn lowers_dotted_namespaces_with_strict_reserved_identifier_package_to_parseable
   let (code, _parsed) = minify_ts_module(src);
 
   assert!(
-    code.contains("\"package\""),
-    "expected reserved namespace segment to be accessed via a string key: {code}"
+    code.contains(".package") || code.contains("\"package\""),
+    "expected reserved namespace segment to be referenced without introducing invalid strict-mode bindings: {code}"
   );
   assert!(
     !code.contains("var package"),
@@ -932,8 +959,8 @@ fn lowers_exported_enums_with_strict_reserved_names_inside_namespaces_to_parseab
   let (code, _parsed) = minify_ts_module(src);
 
   assert!(
-    code.contains("\"static\""),
-    "expected enum name to be accessed via a string key on the namespace object: {code}"
+    code.contains(".static") || code.contains("\"static\""),
+    "expected enum name to be referenced without introducing invalid strict-mode bindings: {code}"
   );
   assert!(
     !code.contains("var static"),
