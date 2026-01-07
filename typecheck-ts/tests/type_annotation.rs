@@ -126,39 +126,18 @@ fn type_params_shadow_type_names() {
     "unexpected diagnostics: {:?}",
     diagnostics
   );
-  let file_id = program.file_id(&FileKey::new("main.ts")).unwrap();
-  for def in program.definitions_in_file(file_id) {
-    println!("def {:?} name {:?}", def, program.def_name(def));
-  }
   let foo_def = def_by_name(&mut program, FileKey::new("main.ts"), "Foo");
   let bar_def = def_by_name(&mut program, FileKey::new("main.ts"), "Bar");
-  println!(
-    "bar type {:?}",
-    program.interned_type_kind(program.declared_type_of_def_interned(bar_def))
-  );
-  println!(
-    "bar expanded {:?}",
-    program.type_kind(program.declared_type_of_def_interned(bar_def))
-  );
-  println!(
-    "foo type {:?}",
-    program.interned_type_kind(program.declared_type_of_def_interned(foo_def))
+  let foo_ty = program.declared_type_of_def_interned(foo_def);
+  assert!(
+    matches!(program.interned_type_kind(foo_ty), TypeKind::TypeParam(_)),
+    "expected Foo<T> = T to lower to a type parameter, got {:?}",
+    program.interned_type_kind(foo_ty)
   );
   let ty = program.declared_type_of_def_interned(bar_def);
   let TypeKind::Ref { def, args } = program.interned_type_kind(ty) else {
     panic!("expected ref, got {:?}", program.interned_type_kind(ty));
   };
-  println!(
-    "foo_def {:?} bar_def {:?} ty def {:?} args {:?}",
-    foo_def, bar_def, def, args
-  );
-  println!(
-    "arg kinds {:?}",
-    args
-      .iter()
-      .map(|a| program.interned_type_kind(*a))
-      .collect::<Vec<_>>()
-  );
   assert_eq!(def, foo_def);
   assert_eq!(args.len(), 1);
   let arg_kind = program.interned_type_kind(args[0]);
