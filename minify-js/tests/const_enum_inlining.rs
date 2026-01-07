@@ -171,3 +171,86 @@ fn preserve_const_enums_option_keeps_runtime_lowering() {
     other => panic!("expected enum member access, got {other:?}"),
   }
 }
+
+#[test]
+fn non_inlinable_const_enum_does_not_fall_back_to_outer_const_enum_values() {
+  // When we can't evaluate a `const enum`, we fall back to runtime enum lowering
+  // for that enum. Ensure we don't accidentally inline an outer const-enum with
+  // the same name.
+  let src = r#"
+    const enum E { A = 1 }
+    (() => {
+      eval("x");
+      const enum E { A = foo() }
+      const x = E.A;
+      return x;
+    })();
+    function foo() { return 2; }
+  "#;
+  let (code, mut parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+
+  // Keep the assertion on the emitted code stable by disabling renaming in the
+  // inner scope with `eval("x")`, then validate the inner `const x=E.A` is left
+  // as a member access (not inlined to `1`).
+  assert!(
+    code.contains("const x=E.A") || code.contains("let x=E.A") || code.contains("var x=E.A"),
+    "expected inner const-enum access to remain a member access: {code}"
+  );
+
+  use derive_visitor::{DriveMut, VisitorMut};
+  use parse_js::ast::stmt::decl::VarDecl;
+
+  type VarDeclNode = Node<VarDecl>;
+
+  #[derive(VisitorMut)]
+  #[visitor(VarDeclNode(enter))]
+  struct FindVarInit<'a> {
+    target: &'a str,
+    found: bool,
+  }
+
+  impl FindVarInit<'_> {
+    fn enter_var_decl_node(&mut self, node: &mut VarDeclNode) {
+      for declarator in &node.stx.declarators {
+        if !matches!(
+          declarator.pattern.stx.pat.stx.as_ref(),
+          Pat::Id(id) if id.stx.name == self.target
+        ) {
+          continue;
+        }
+        let init = declarator
+          .initializer
+          .as_ref()
+          .expect("variable should have initializer");
+        match init.stx.as_ref() {
+          Expr::Member(member) => {
+            assert_eq!(member.stx.right, "A");
+            assert!(
+              matches!(member.stx.left.stx.as_ref(), Expr::Id(id) if id.stx.name == "E"),
+              "expected member base to be `E`, got {init:?}"
+            );
+          }
+          Expr::ComputedMember(member) => {
+            assert!(
+              matches!(member.stx.object.stx.as_ref(), Expr::Id(id) if id.stx.name == "E"),
+              "expected computed member base to be `E`, got {init:?}"
+            );
+            assert!(
+              matches!(member.stx.member.stx.as_ref(), Expr::LitStr(key) if key.stx.value == "A"),
+              "expected computed member key to be \"A\", got {init:?}"
+            );
+          }
+          other => panic!("expected `x` initializer to be an enum member access, got {other:?}"),
+        }
+        self.found = true;
+      }
+    }
+  }
+
+  let mut visitor = FindVarInit {
+    target: "x",
+    found: false,
+  };
+  parsed.drive_mut(&mut visitor);
+  assert!(visitor.found, "expected to find `const x = ...` in output");
+}

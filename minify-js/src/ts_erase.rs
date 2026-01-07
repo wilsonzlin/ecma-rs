@@ -1231,6 +1231,19 @@ enum ConstEnumValue {
   String(String),
 }
 
+#[derive(Debug)]
+enum ConstEnumBinding {
+  Values(HashMap<String, ConstEnumValue>),
+  Blocked,
+}
+
+#[derive(Debug)]
+enum ConstEnumLookupResult {
+  NotFound,
+  NotInlinable,
+  Value(ConstEnumValue),
+}
+
 fn unwrap_ts_const_expr<'a>(mut expr: &'a Node<Expr>) -> &'a Node<Expr> {
   loop {
     match expr.stx.as_ref() {
@@ -1373,8 +1386,9 @@ fn extract_static_member_chain(expr: &Node<Expr>) -> Option<(String, Vec<String>
 fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
   #[derive(Default)]
   struct Inliner {
-    const_enums: Vec<HashMap<Vec<String>, HashMap<String, ConstEnumValue>>>,
+    const_enums: Vec<HashMap<Vec<String>, ConstEnumBinding>>,
     shadowed: Vec<HashSet<String>>,
+    namespace_path: Vec<String>,
     erased_top_level: HashSet<String>,
   }
 
@@ -1387,14 +1401,20 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       &self,
       enum_path: &[String],
       member: &str,
-    ) -> Option<ConstEnumValue> {
+    ) -> ConstEnumLookupResult {
       for scope in self.const_enums.iter().rev() {
-        let Some(enum_members) = scope.get(enum_path) else {
+        let Some(binding) = scope.get(enum_path) else {
           continue;
         };
-        return enum_members.get(member).cloned();
+        return match binding {
+          ConstEnumBinding::Blocked => ConstEnumLookupResult::NotInlinable,
+          ConstEnumBinding::Values(members) => match members.get(member) {
+            Some(value) => ConstEnumLookupResult::Value(value.clone()),
+            None => ConstEnumLookupResult::NotInlinable,
+          },
+        };
       }
-      None
+      ConstEnumLookupResult::NotFound
     }
 
     fn try_inline_member_access(&self, expr: &mut Node<Expr>) -> bool {
@@ -1405,11 +1425,26 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
         return false;
       }
       let (enum_parts, member) = parts.split_at(parts.len() - 1);
+      let member = &member[0];
       let mut enum_path = Vec::with_capacity(1 + enum_parts.len());
       enum_path.push(base);
       enum_path.extend(enum_parts.iter().cloned());
-      let Some(value) = self.lookup_const_enum_member(&enum_path, &member[0]) else {
-        return false;
+      let value = match self.lookup_const_enum_member(&enum_path, member) {
+        ConstEnumLookupResult::Value(value) => value,
+        ConstEnumLookupResult::NotInlinable => return false,
+        ConstEnumLookupResult::NotFound => {
+          if self.namespace_path.is_empty() {
+            return false;
+          }
+          let mut qualified_path =
+            Vec::with_capacity(self.namespace_path.len().saturating_add(enum_path.len()));
+          qualified_path.extend(self.namespace_path.iter().cloned());
+          qualified_path.extend(enum_path);
+          match self.lookup_const_enum_member(&qualified_path, member) {
+            ConstEnumLookupResult::Value(value) => value,
+            _ => return false,
+          }
+        }
       };
 
       let loc = expr.loc;
@@ -1574,7 +1609,7 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       &self,
       decl: &NamespaceDecl,
       prefix: &mut Vec<String>,
-      out: &mut HashMap<Vec<String>, HashMap<String, ConstEnumValue>>,
+      out: &mut HashMap<Vec<String>, ConstEnumBinding>,
     ) {
       match &decl.body {
         NamespaceBody::Block(stmts) => {
@@ -1584,7 +1619,7 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
                 if let Some(values) = compute_const_enum_values(&enum_decl.stx) {
                   let mut path = prefix.clone();
                   path.push(enum_decl.stx.name.clone());
-                  out.insert(path, values);
+                  out.insert(path, ConstEnumBinding::Values(values));
                 }
               }
               Stmt::NamespaceDecl(ns_decl) if ns_decl.stx.export => {
@@ -1608,19 +1643,26 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       &mut self,
       stmts: &mut [Node<Stmt>],
       is_top_level: bool,
-    ) -> HashMap<Vec<String>, HashMap<String, ConstEnumValue>> {
+    ) -> HashMap<Vec<String>, ConstEnumBinding> {
       let mut out = HashMap::new();
       for stmt in stmts.iter_mut() {
         match stmt.stx.as_mut() {
           Stmt::EnumDecl(decl) if decl.stx.const_ => {
-            if let Some(values) = compute_const_enum_values(&decl.stx) {
-              if is_top_level {
-                self.erased_top_level.insert(decl.stx.name.clone());
-              }
-              out.insert(vec![decl.stx.name.clone()], values);
-            } else if decl.stx.declare {
+            let name = decl.stx.name.clone();
+            let values = compute_const_enum_values(&decl.stx);
+            if values.is_none() && decl.stx.declare {
               decl.stx.declare = false;
             }
+            let binding = match values {
+              Some(values) => {
+                if is_top_level {
+                  self.erased_top_level.insert(name.clone());
+                }
+                ConstEnumBinding::Values(values)
+              }
+              None => ConstEnumBinding::Blocked,
+            };
+            out.insert(vec![name], binding);
           }
           Stmt::NamespaceDecl(decl) => {
             let mut prefix = vec![decl.stx.name.clone()];
@@ -1640,17 +1682,18 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
 
       let mut rewritten = Vec::with_capacity(stmts.len());
       for mut stmt in stmts.drain(..) {
-        if matches!(stmt.stx.as_ref(), Stmt::EnumDecl(decl) if decl.stx.const_)
-          && self
-            .const_enums
-            .last()
-            .expect("const enum stack should never be empty")
-            .contains_key(&match stmt.stx.as_ref() {
-              Stmt::EnumDecl(decl) => vec![decl.stx.name.clone()],
-              _ => unreachable!(),
-            })
-        {
-          continue;
+        if let Stmt::EnumDecl(decl) = stmt.stx.as_ref() {
+          if decl.stx.const_ {
+            let current_scope = self
+              .const_enums
+              .last()
+              .expect("const enum stack should never be empty");
+            let key = vec![decl.stx.name.clone()];
+            let should_erase = matches!(current_scope.get(&key), Some(ConstEnumBinding::Values(_)));
+            if should_erase {
+              continue;
+            }
+          }
         }
         self.rewrite_stmt(&mut stmt);
         rewritten.push(stmt);
@@ -1857,10 +1900,12 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
     }
 
     fn rewrite_namespace_decl(&mut self, decl: &mut NamespaceDecl) {
+      self.namespace_path.push(decl.name.clone());
       match &mut decl.body {
         NamespaceBody::Block(stmts) => self.rewrite_stmts_in_block(stmts, false),
         NamespaceBody::Namespace(inner) => self.rewrite_namespace_decl(&mut inner.stx),
       }
+      self.namespace_path.pop();
     }
 
     fn rewrite_stmt(&mut self, stmt: &mut Node<Stmt>) {
