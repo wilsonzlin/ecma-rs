@@ -13,7 +13,7 @@
   "version": "0.6.0",
   "types": "index.d.ts",
   "scripts": {
-    "build": "cargo-cp-artifact --artifact cdylib minify-js-node index.node -- cargo build --message-format=json-render-diagnostics",
+    "build": "cargo-cp-artifact --artifact cdylib minify-js-nodejs index.node -- cargo build --message-format=json-render-diagnostics",
     "build-debug": "npm run build --",
     "build-release": "npm run build -- --release",
     "clean": "shx rm -rf target index.node",
