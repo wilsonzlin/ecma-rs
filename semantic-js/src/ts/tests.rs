@@ -1867,13 +1867,15 @@ fn global_symbol_table_is_deterministic_across_root_orders() {
   };
   let resolver = StaticResolver::new(HashMap::new());
 
-  let (baseline, diags) =
-    bind_ts_program(&[file_a, file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  let (baseline, diags) = bind_ts_program(&[file_a, file_b], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
   assert!(diags.is_empty());
   let baseline_symbols = symbol_table_snapshot(baseline.symbols());
 
-  let (swapped, diags) =
-    bind_ts_program(&[file_b, file_a], &resolver, |f| files.get(&f).unwrap().clone());
+  let (swapped, diags) = bind_ts_program(&[file_b, file_a], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
   assert!(diags.is_empty());
   let swapped_symbols = symbol_table_snapshot(swapped.symbols());
 
