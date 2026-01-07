@@ -218,6 +218,39 @@ impl TypeContext {
       expr_types,
     }
   }
+
+  /// Build a [`TypeContext`] from a `typecheck-ts` program assuming the
+  /// optimizer is using the same `hir-js` lowering cached inside the program.
+  ///
+  /// When the optimizer and type checker share a [`hir_js::LowerResult`] (for
+  /// example via `typecheck_ts::Program::hir_lowered`) then `BodyId`/`ExprId`
+  /// values are guaranteed to line up and we can map types directly without
+  /// span matching.
+  pub fn from_typecheck_program_aligned(
+    program: std::sync::Arc<typecheck_ts::Program>,
+    file: typecheck_ts::FileId,
+    lower: &hir_js::LowerResult,
+  ) -> Self {
+    use ahash::HashMapExt;
+
+    let _ = file;
+    let mut expr_types = ahash::HashMap::new();
+
+    for (body_id, idx) in lower.body_index.iter() {
+      let checked = program.check_body(*body_id);
+      let body = &lower.bodies[*idx];
+      let mut body_types = Vec::with_capacity(body.exprs.len());
+      for idx in 0..body.exprs.len() {
+        body_types.push(checked.expr_types().get(idx).copied());
+      }
+      expr_types.insert(*body_id, body_types);
+    }
+
+    Self {
+      program: Some(program),
+      expr_types,
+    }
+  }
 }
 
 #[cfg(feature = "typed")]

@@ -232,6 +232,7 @@ impl<'p> HirSourceToInst<'p> {
           VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),
           VarType::Builtin(builtin) => {
             return Err(unsupported_syntax_range(
+              self.program.lower.hir.file,
               self.body.pats[pat.0 as usize].span,
               format!("assignment to builtin {builtin}"),
             ))
@@ -245,6 +246,7 @@ impl<'p> HirSourceToInst<'p> {
           ExprKind::Member(member) => {
             if member.optional {
               return Err(unsupported_syntax_range(
+                self.program.lower.hir.file,
                 expr.span,
                 "optional chaining in assignment target",
               ));
@@ -255,6 +257,7 @@ impl<'p> HirSourceToInst<'p> {
           }
           other => {
             return Err(unsupported_syntax_range(
+              self.program.lower.hir.file,
               expr.span,
               format!("unsupported assignment target {other:?}"),
             ))
@@ -264,6 +267,7 @@ impl<'p> HirSourceToInst<'p> {
       }
       _ => {
         return Err(unsupported_syntax_range(
+          self.program.lower.hir.file,
           self.body.pats[pat.0 as usize].span,
           "unsupported destructuring pattern",
         ))
@@ -285,6 +289,7 @@ impl<'p> HirSourceToInst<'p> {
         None => match decl.kind {
           VarDeclKind::Const | VarDeclKind::Using | VarDeclKind::AwaitUsing => {
             return Err(unsupported_syntax_range(
+              self.program.lower.hir.file,
               pat_span,
               format!("{:?} declarations must have initializers", decl.kind),
             ));
@@ -295,6 +300,7 @@ impl<'p> HirSourceToInst<'p> {
             }
             _ => {
               return Err(unsupported_syntax_range(
+                self.program.lower.hir.file,
                 pat_span,
                 "destructuring declarations must have initializers",
               ));
@@ -321,6 +327,7 @@ impl<'p> HirSourceToInst<'p> {
       ForHead::Var(decl) => {
         if decl.declarators.len() != 1 {
           return Err(unsupported_syntax_range(
+            self.program.lower.hir.file,
             span,
             "for-in/of variable declarations must have a single declarator",
           ));
@@ -342,6 +349,7 @@ impl<'p> HirSourceToInst<'p> {
   ) -> OptimizeResult<()> {
     if await_ && !is_for_of {
       return Err(unsupported_syntax_range(
+        self.program.lower.hir.file,
         span,
         "for-in statements do not support await",
       ));
@@ -723,6 +731,7 @@ impl<'p> HirSourceToInst<'p> {
   }
 
   pub fn compile_stmt(&mut self, stmt_id: StmtId) -> OptimizeResult<()> {
+    let file = self.program.lower.hir.file;
     let stmt = &self.body.stmts[stmt_id.0 as usize];
     let span = Loc(stmt.span.start as usize, stmt.span.end as usize);
     match &stmt.kind {
@@ -742,6 +751,7 @@ impl<'p> HirSourceToInst<'p> {
             .map(|entry| entry.break_target)
             .ok_or_else(|| {
               unsupported_syntax_range(
+                file,
                 stmt.span,
                 format!("break to unknown label {}", self.name_for(*label)),
               )
@@ -751,7 +761,7 @@ impl<'p> HirSourceToInst<'p> {
             .break_stack
             .last()
             .copied()
-            .ok_or_else(|| unsupported_syntax_range(stmt.span, "break statement outside loop"))?
+            .ok_or_else(|| unsupported_syntax_range(file, stmt.span, "break statement outside loop"))?
         };
         self.out.push(Inst::goto(target));
         Ok(())
@@ -766,19 +776,21 @@ impl<'p> HirSourceToInst<'p> {
               .find(|entry| entry.label == *label)
               .ok_or_else(|| {
                 unsupported_syntax_range(
+                  file,
                   stmt.span,
                   format!("continue to unknown label {}", self.name_for(*label)),
                 )
               })?;
             entry.continue_target.ok_or_else(|| {
               unsupported_syntax_range(
+                file,
                 stmt.span,
                 format!("continue to non-loop label {}", self.name_for(*label)),
               )
             })?
           } else {
             self.continue_stack.last().copied().ok_or_else(|| {
-              unsupported_syntax_range(stmt.span, "continue statement outside loop")
+              unsupported_syntax_range(file, stmt.span, "continue statement outside loop")
             })?
           };
         self.out.push(Inst::goto(target));
@@ -832,7 +844,7 @@ impl<'p> HirSourceToInst<'p> {
           let _ = self.compile_expr(*value)?;
         }
         let target = self.return_label.ok_or_else(|| {
-          unsupported_syntax_range(stmt.span, "return statement outside function")
+          unsupported_syntax_range(file, stmt.span, "return statement outside function")
         })?;
         self.out.push(Inst::goto(target));
         Ok(())
@@ -841,7 +853,7 @@ impl<'p> HirSourceToInst<'p> {
         let _ = self.compile_expr(*value)?;
         let target = self
           .return_label
-          .ok_or_else(|| unsupported_syntax_range(stmt.span, "throw statement outside function"))?;
+          .ok_or_else(|| unsupported_syntax_range(file, stmt.span, "throw statement outside function"))?;
         self.out.push(Inst::goto(target));
         Ok(())
       }
@@ -878,10 +890,12 @@ impl<'p> HirSourceToInst<'p> {
       StmtKind::Empty => Ok(()),
       StmtKind::Decl(_) => Ok(()),
       StmtKind::With { .. } => Err(unsupported_syntax_range(
+        file,
         stmt.span,
         "with statements introduce dynamic scope and are not supported",
       )),
       other => Err(unsupported_syntax_range(
+        file,
         stmt.span,
         format!("unsupported statement {other:?}"),
       )),

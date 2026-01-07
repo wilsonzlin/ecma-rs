@@ -107,7 +107,13 @@ impl<'p> HirSourceToInst<'p> {
       hir_js::Literal::Undefined => Arg::Const(Const::Undefined),
       hir_js::Literal::BigInt(v) => {
         let value = BigInt::parse_bytes(v.as_bytes(), 10)
-          .ok_or_else(|| unsupported_syntax(span, format!("invalid bigint literal {v:?}")))?;
+          .ok_or_else(|| {
+            unsupported_syntax(
+              self.program.lower.hir.file,
+              span,
+              format!("invalid bigint literal {v:?}"),
+            )
+          })?;
         Arg::Const(Const::BigInt(value))
       }
       hir_js::Literal::Regex(v) => {
@@ -165,6 +171,7 @@ impl<'p> HirSourceToInst<'p> {
       PatKind::Array(_) | PatKind::Object(_) => {
         if operator != AssignOp::Assign {
           return Err(unsupported_syntax_range(
+            self.program.lower.hir.file,
             self.body.pats[target.0 as usize].span,
             format!("unsupported destructuring assignment operator {operator:?}"),
           ));
@@ -184,6 +191,7 @@ impl<'p> HirSourceToInst<'p> {
           VarType::Unknown(name) => Inst::unknown_store(name, dummy_val),
           VarType::Builtin(builtin) => {
             return Err(unsupported_syntax(
+              self.program.lower.hir.file,
               span,
               format!("assignment to builtin {builtin}"),
             ))
@@ -218,7 +226,13 @@ impl<'p> HirSourceToInst<'p> {
                 ));
                 Arg::Var(left_tmp_var)
               }
-              _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
+              _ => {
+                return Err(unsupported_syntax(
+                  self.program.lower.hir.file,
+                  span,
+                  "unsupported assignment target",
+                ))
+              }
             };
 
             self
@@ -279,6 +293,7 @@ impl<'p> HirSourceToInst<'p> {
               AssignOp::ExponentAssign => BinOp::Exp,
               _ => {
                 return Err(unsupported_syntax(
+                  self.program.lower.hir.file,
                   span,
                   format!("unsupported assignment operator {operator:?}"),
                 ))
@@ -301,7 +316,13 @@ impl<'p> HirSourceToInst<'p> {
                 ));
                 Arg::Var(left_tmp_var)
               }
-              _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
+              _ => {
+                return Err(unsupported_syntax(
+                  self.program.lower.hir.file,
+                  span,
+                  "unsupported assignment target",
+                ))
+              }
             };
             let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
             self.out.push(rhs_inst);
@@ -318,6 +339,7 @@ impl<'p> HirSourceToInst<'p> {
           ExprKind::Member(ref member) => {
             if member.optional {
               return Err(unsupported_syntax(
+                self.program.lower.hir.file,
                 span,
                 "optional chaining in assignment target",
               ));
@@ -326,7 +348,13 @@ impl<'p> HirSourceToInst<'p> {
             let member_arg = key_arg(self, &member.property)?;
             Inst::prop_assign(left_arg, member_arg, dummy_val)
           }
-          _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
+          _ => {
+            return Err(unsupported_syntax(
+              self.program.lower.hir.file,
+              span,
+              "unsupported assignment target",
+            ))
+          }
         };
         let value_tmp_var = self.c_temp.bump();
         match operator {
@@ -403,15 +431,16 @@ impl<'p> HirSourceToInst<'p> {
               AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
               AssignOp::BitAndAssign => BinOp::BitAnd,
               AssignOp::BitOrAssign => BinOp::BitOr,
-              AssignOp::BitXorAssign => BinOp::BitXor,
-              AssignOp::ExponentAssign => BinOp::Exp,
-              _ => {
-                return Err(unsupported_syntax(
-                  span,
-                  format!("unsupported assignment operator {operator:?}"),
-                ))
-              }
-            };
+                AssignOp::BitXorAssign => BinOp::BitXor,
+                AssignOp::ExponentAssign => BinOp::Exp,
+                _ => {
+                  return Err(unsupported_syntax(
+                    self.program.lower.hir.file,
+                    span,
+                    format!("unsupported assignment operator {operator:?}"),
+                  ))
+                }
+              };
             let (obj, prop, _) = assign_inst.as_prop_assign();
             let left_tmp_var = self.c_temp.bump();
             self.out.push(Inst::bin(
@@ -428,7 +457,11 @@ impl<'p> HirSourceToInst<'p> {
           }
         }
       }
-      _ => Err(unsupported_syntax(span, "unsupported assignment target")),
+      _ => Err(unsupported_syntax(
+        self.program.lower.hir.file,
+        span,
+        "unsupported assignment target",
+      )),
     }
   }
 
@@ -467,6 +500,7 @@ impl<'p> HirSourceToInst<'p> {
       BinaryOp::LogicalOr => Inst::cond_goto(left, converge_label_id, DUMMY_LABEL),
       other => {
         return Err(unsupported_syntax(
+          self.program.lower.hir.file,
           span,
           format!("unsupported logical operator {other:?}"),
         ))
@@ -696,6 +730,7 @@ impl<'p> HirSourceToInst<'p> {
           op
         } else {
           return Err(unsupported_syntax(
+            self.program.lower.hir.file,
             span,
             format!("unsupported binary operator {operator:?}"),
           ));
@@ -703,6 +738,7 @@ impl<'p> HirSourceToInst<'p> {
       }
       _ => {
         return Err(unsupported_syntax(
+          self.program.lower.hir.file,
           span,
           format!("unsupported binary operator {operator:?}"),
         ))
@@ -846,6 +882,7 @@ impl<'p> HirSourceToInst<'p> {
           ExprKind::Member(member) => {
             if member.optional {
               return Err(unsupported_syntax(
+                self.program.lower.hir.file,
                 span,
                 "optional chaining in delete operand",
               ));
@@ -862,10 +899,15 @@ impl<'p> HirSourceToInst<'p> {
             ));
             Ok(Arg::Var(tmp))
           }
-          _ => Err(unsupported_syntax(span, "unsupported delete operand")),
+          _ => Err(unsupported_syntax(
+            self.program.lower.hir.file,
+            span,
+            "unsupported delete operand",
+          )),
         }
       }
       _ => Err(unsupported_syntax(
+        self.program.lower.hir.file,
         span,
         format!("unsupported unary operator {operator:?}"),
       )),
@@ -905,7 +947,11 @@ impl<'p> HirSourceToInst<'p> {
     if !call.is_new {
       if let ExprKind::Ident(name) = self.body.exprs[call.callee.0 as usize].kind {
         if self.name_for(name) == "eval" && self.symbol_for_expr(call.callee).is_none() {
-          return Err(unsupported_syntax(span, "direct eval is not supported"));
+          return Err(unsupported_syntax(
+            self.program.lower.hir.file,
+            span,
+            "direct eval is not supported",
+          ));
         }
       }
     }
@@ -913,6 +959,7 @@ impl<'p> HirSourceToInst<'p> {
     if call.is_new {
       if call.optional {
         return Err(unsupported_syntax(
+          self.program.lower.hir.file,
           span,
           "optional chaining in new expressions is not supported",
         ));
@@ -1036,6 +1083,7 @@ impl<'p> HirSourceToInst<'p> {
             } => {
               if *method {
                 return Err(unsupported_syntax(
+                  self.program.lower.hir.file,
                   span,
                   "object method literals are not supported",
                 ));
@@ -1071,6 +1119,7 @@ impl<'p> HirSourceToInst<'p> {
             }
             hir_js::ObjectProperty::Getter { .. } | hir_js::ObjectProperty::Setter { .. } => {
               return Err(unsupported_syntax(
+                self.program.lower.hir.file,
                 span,
                 "object accessor literals are not supported",
               ));
@@ -1173,6 +1222,7 @@ impl<'p> HirSourceToInst<'p> {
         is_arrow: _,
       } => self.compile_func(*def, *body, *name),
       other => Err(unsupported_syntax(
+        self.program.lower.hir.file,
         span,
         format!("unsupported expression {other:?}"),
       )),

@@ -93,33 +93,44 @@ const SOURCE_FILE: FileId = FileId(0);
 
 pub type OptimizeResult<T> = Result<T, Vec<Diagnostic>>;
 
-fn diagnostic_with_span(code: &'static str, message: impl Into<String>, loc: Loc) -> Diagnostic {
+fn diagnostic_with_span(
+  file: FileId,
+  code: &'static str,
+  message: impl Into<String>,
+  loc: Loc,
+) -> Diagnostic {
   let (range, note) = loc.to_diagnostics_range_with_note();
-  let mut diagnostic = Diagnostic::error(code, message, Span::new(SOURCE_FILE, range));
+  let mut diagnostic = Diagnostic::error(code, message, Span::new(file, range));
   if let Some(note) = note {
     diagnostic = diagnostic.with_note(note);
   }
   diagnostic
 }
 
-fn unsupported_syntax(loc: Loc, message: impl Into<String>) -> Vec<Diagnostic> {
-  vec![diagnostic_with_span("OPT0002", message, loc)]
+fn unsupported_syntax(file: FileId, loc: Loc, message: impl Into<String>) -> Vec<Diagnostic> {
+  vec![diagnostic_with_span(file, "OPT0002", message, loc)]
 }
 
 fn diagnostic_with_range(
+  file: FileId,
   code: &'static str,
   message: impl Into<String>,
   range: TextRange,
 ) -> Diagnostic {
-  Diagnostic::error(code, message, Span::new(SOURCE_FILE, range))
+  Diagnostic::error(code, message, Span::new(file, range))
 }
 
-fn unsupported_syntax_range(range: TextRange, message: impl Into<String>) -> Vec<Diagnostic> {
-  vec![diagnostic_with_range("OPT0002", message, range)]
+fn unsupported_syntax_range(
+  file: FileId,
+  range: TextRange,
+  message: impl Into<String>,
+) -> Vec<Diagnostic> {
+  vec![diagnostic_with_range(file, "OPT0002", message, range)]
 }
 
-fn use_before_declaration(name: &str, loc: Loc) -> Diagnostic {
+fn use_before_declaration(file: FileId, name: &str, loc: Loc) -> Diagnostic {
   diagnostic_with_span(
+    file,
     "OPT0001",
     format!("use of `{name}` before declaration"),
     loc,
@@ -596,18 +607,53 @@ pub fn compile_source_with_typecheck(
   type_program: std::sync::Arc<typecheck_ts::Program>,
   type_file: typecheck_ts::FileId,
 ) -> OptimizeResult<Program> {
-  let disable_types = type_program
+  let matches_file_text = type_program
     .file_text(type_file)
-    .map(|text| text.as_ref() != source)
+    .map(|text| text.as_ref() == source)
     .unwrap_or(false);
+
+  if matches_file_text {
+    return compile_file_with_typecheck(type_program, type_file, mode, debug);
+  }
+
   let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
-  let lower = hir_js::lower_file(type_file, HirFileKind::Ts, &top_level_node);
-  let types = if disable_types {
-    Default::default()
+  Program::compile(top_level_node, mode, debug)
+}
+
+/// Compile a file from a `typecheck-ts` [`typecheck_ts::Program`].
+///
+/// This reuses the `hir-js` lowering cached inside the type program so `BodyId`
+/// / `ExprId` values match the IDs used for type checking. If the type program
+/// does not have a cached lowering for `file`, the optimizer falls back to
+/// lowering the parsed AST itself.
+#[cfg(feature = "typed")]
+pub fn compile_file_with_typecheck(
+  program: std::sync::Arc<typecheck_ts::Program>,
+  file: typecheck_ts::FileId,
+  mode: TopLevelMode,
+  debug: bool,
+) -> OptimizeResult<Program> {
+  let source = program.file_text(file).ok_or_else(|| {
+    vec![Diagnostic::error(
+      "OPT0003",
+      format!("missing source text for {file:?}"),
+      Span::new(file, TextRange::new(0, 0)),
+    )]
+  })?;
+  let top_level_node = parse(&source).map_err(|err| vec![err.to_diagnostic(file)])?;
+
+  if let Some(lowered) = program.hir_lowered(file) {
+    let types = crate::types::TypeContext::from_typecheck_program_aligned(
+      Arc::clone(&program),
+      file,
+      lowered.as_ref(),
+    );
+    Program::compile_with_lower(top_level_node, lowered, mode, debug, types)
   } else {
-    crate::types::TypeContext::from_typecheck_program(type_program, type_file, &lower)
-  };
-  Program::compile_with_lower(top_level_node, lower, mode, debug, types)
+    let lower = hir_js::lower_file(file, HirFileKind::Ts, &top_level_node);
+    let types = crate::types::TypeContext::from_typecheck_program(Arc::clone(&program), file, &lower);
+    Program::compile_with_lower(top_level_node, Arc::new(lower), mode, debug, types)
+  }
 }
 
 /// Compile and type-check a single source string using the bundled
@@ -626,7 +672,7 @@ pub fn compile_source_typed(
   let type_file = type_program
     .file_id(&file)
     .expect("typecheck program should know the inserted file");
-  compile_source_with_typecheck(source, mode, debug, type_program, type_file)
+  compile_file_with_typecheck(type_program, type_file, mode, debug)
 }
 
 fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> ProgramSymbols {
@@ -711,13 +757,14 @@ fn collect_free_symbols(func: &ProgramFunction) -> Vec<SymbolId> {
 impl Program {
   fn compile_with_lower(
     mut top_level_node: Node<TopLevel>,
-    lower: LowerResult,
+    lower: Arc<LowerResult>,
     top_level_mode: TopLevelMode,
     debug: bool,
     types: crate::types::TypeContext,
   ) -> OptimizeResult<Self> {
+    let source_file = lower.hir.file;
     let (semantics, diagnostics) =
-      JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
+      JsSymbols::bind(&mut top_level_node, top_level_mode, source_file);
     if !diagnostics.is_empty() {
       return Err(diagnostics);
     }
@@ -729,6 +776,7 @@ impl Program {
     } = VarAnalysis::analyze(&mut top_level_node, &semantics);
     if let Some(loc) = dynamic_scope {
       return Err(unsupported_syntax(
+        source_file,
         loc,
         "with statements introduce dynamic scope and are not supported",
       ));
@@ -737,15 +785,14 @@ impl Program {
     if !use_before_decl.is_empty() {
       let mut diagnostics: Vec<_> = use_before_decl
         .into_iter()
-        .map(|(_, (name, loc))| use_before_declaration(&name, loc))
+        .map(|(_, (name, loc))| use_before_declaration(source_file, &name, loc))
         .collect();
       sort_diagnostics(&mut diagnostics);
       return Err(diagnostics);
     };
     let mut symbol_table = collect_symbol_table(&semantics, &foreign);
 
-    let bindings = collect_hir_symbol_bindings(&mut top_level_node, &lower);
-    let lower = Arc::new(lower);
+    let bindings = collect_hir_symbol_bindings(&mut top_level_node, lower.as_ref());
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
       foreign_vars: foreign.clone(),
       functions: DashMap::new(),
@@ -797,7 +844,7 @@ impl Program {
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
-    let lower = hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
+    let lower = Arc::new(hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node));
     Self::compile_with_lower(
       top_level_node,
       lower,
@@ -813,10 +860,11 @@ impl Program {
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
-    let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+    let source_file = lower.hir.file;
+    let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(source_file)])?;
     Self::compile_with_lower(
       top_level_node,
-      lower,
+      Arc::new(lower),
       top_level_mode,
       debug,
       Default::default(),

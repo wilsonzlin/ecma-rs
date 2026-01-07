@@ -113,6 +113,21 @@ impl Program {
     }
   }
 
+  /// Cached `hir-js` lowering for a loaded file, if available.
+  ///
+  /// This exposes the lowering computed during analysis so downstream tools can
+  /// share HIR IDs (`BodyId`/`ExprId`) with the type checker without having to
+  /// re-lower the same parsed AST.
+  pub fn hir_lowered(&self, file: FileId) -> Option<Arc<hir_js::LowerResult>> {
+    match self.with_analyzed_state(|state| Ok(state.hir_lowered.get(&file).cloned())) {
+      Ok(lowered) => lowered,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
     self

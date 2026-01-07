@@ -68,6 +68,26 @@ fn typed_optional_chaining_is_elided_when_receiver_is_non_nullish() {
 }
 
 #[test]
+fn compile_file_with_typecheck_elides_optional_chaining() {
+  let src = "let x = 1; console?.log(x);";
+  let expected_src = "let x = 1; console.log(x);";
+
+  let mut host = typecheck_ts::MemoryHost::new();
+  let input = typecheck_ts::FileKey::new("input.ts");
+  host.insert(input.clone(), src);
+  let tc_program = Arc::new(typecheck_ts::Program::new(host, vec![input.clone()]));
+  let _ = tc_program.check();
+  let file_id = tc_program.file_id(&input).expect("typecheck file id");
+
+  let typed_program =
+    optimize_js::compile_file_with_typecheck(tc_program, file_id, TopLevelMode::Module, false)
+      .expect("compile with type info");
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
 fn typed_optional_chaining_is_elided_for_non_nullish_union() {
   let src = r#"
     let x: string | number = 1;
@@ -561,4 +581,29 @@ fn typed_loose_equality_is_rejected_when_tags_disagree() {
   assert!(err
     .iter()
     .any(|d| d.message.contains("unsupported binary operator Equality")));
+}
+
+#[test]
+fn compile_file_with_typecheck_reports_non_zero_file_ids_in_diagnostics() {
+  let src = r#"with (obj) { answer = 42; }"#;
+
+  let mut host = typecheck_ts::MemoryHost::new();
+  let first = typecheck_ts::FileKey::new("a.ts");
+  let input = typecheck_ts::FileKey::new("input.ts");
+  host.insert(first.clone(), "export {}");
+  host.insert(input.clone(), src);
+  let tc_program = Arc::new(typecheck_ts::Program::new(host, vec![input.clone(), first]));
+  let _ = tc_program.check();
+  let file_id = tc_program.file_id(&input).expect("typecheck file id");
+
+  assert_ne!(file_id.0, 0, "input file id should be non-zero for this test");
+
+  let err =
+    optimize_js::compile_file_with_typecheck(tc_program, file_id, TopLevelMode::Global, false)
+      .expect_err("with statements are unsupported");
+
+  assert!(
+    err.iter().any(|diag| diag.code == "OPT0002" && diag.primary.file == file_id),
+    "expected OPT0002 diagnostic for input file id {file_id:?}, got {err:?}"
+  );
 }
