@@ -64,8 +64,37 @@ unsafe impl Update for SharedTypeStore {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SharedDeclTypes(pub Arc<DeclTypes>);
+#[derive(Clone)]
+pub struct SharedDeclTypes {
+  /// Stable digest of the declaration tables, used for cheap change detection.
+  pub fingerprint: u64,
+  pub decls: Arc<DeclTypes>,
+}
+
+impl SharedDeclTypes {
+  pub fn arc(&self) -> Arc<DeclTypes> {
+    Arc::clone(&self.decls)
+  }
+}
+
+impl std::fmt::Debug for SharedDeclTypes {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("SharedDeclTypes")
+      .field("fingerprint", &self.fingerprint)
+      .finish()
+  }
+}
+
+impl PartialEq for SharedDeclTypes {
+  fn eq(&self, other: &Self) -> bool {
+    if self.fingerprint != other.fingerprint {
+      return false;
+    }
+    Arc::ptr_eq(&self.decls, &other.decls) || self.decls.as_ref() == other.decls.as_ref()
+  }
+}
+
+impl Eq for SharedDeclTypes {}
 
 unsafe impl Update for SharedDeclTypes {
   unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {

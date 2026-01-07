@@ -1958,6 +1958,108 @@ fn flat_defs_for(db: &dyn Db) -> Arc<HashMap<(FileId, String), DefId>> {
   Arc::new(map)
 }
 
+fn decl_types_digest(decls: &DeclTypes) -> u64 {
+  let mut hasher = StableHasher::new();
+
+  let mut type_entries: Vec<_> = decls.types.iter().collect();
+  type_entries.sort_by_key(|(def, _)| def.0);
+  hasher.write_u32(type_entries.len() as u32);
+  for (def, ty) in type_entries {
+    hasher.write_u64(def.0);
+    hasher.write_bytes(&ty.0.to_le_bytes());
+  }
+
+  let mut param_entries: Vec<_> = decls.type_params.iter().collect();
+  param_entries.sort_by_key(|(def, _)| def.0);
+  hasher.write_u32(param_entries.len() as u32);
+  for (def, params) in param_entries {
+    hasher.write_u64(def.0);
+    hasher.write_u32(params.len() as u32);
+    let mut params: Vec<_> = params.iter().collect();
+    params.sort_by_key(|param| param.id.0);
+    for param in params {
+      hasher.write_u32(param.id.0);
+      match param.constraint {
+        Some(ty) => {
+          hasher.write_u8(1);
+          hasher.write_bytes(&ty.0.to_le_bytes());
+        }
+        None => hasher.write_u8(0),
+      }
+      match param.default {
+        Some(ty) => {
+          hasher.write_u8(1);
+          hasher.write_bytes(&ty.0.to_le_bytes());
+        }
+        None => hasher.write_u8(0),
+      }
+      hasher.write_u8(match param.variance {
+        None => 0,
+        Some(types_ts_interned::TypeParamVariance::In) => 1,
+        Some(types_ts_interned::TypeParamVariance::Out) => 2,
+        Some(types_ts_interned::TypeParamVariance::InOut) => 3,
+      });
+      hasher.write_u8(param.const_ as u8);
+    }
+  }
+
+  let mut namespace_entries: Vec<_> = decls.namespace_members.iter().collect();
+  namespace_entries.sort_by_key(|(def, _)| def.0);
+  hasher.write_u32(namespace_entries.len() as u32);
+  for (def, members) in namespace_entries {
+    hasher.write_u64(def.0);
+    hasher.write_u32(members.len() as u32);
+    for member in members.iter() {
+      hasher.write_str(member);
+    }
+  }
+
+  let mut intrinsic_entries: Vec<_> = decls.intrinsics.iter().collect();
+  intrinsic_entries.sort_by_key(|(def, _)| def.0);
+  hasher.write_u32(intrinsic_entries.len() as u32);
+  for (def, kind) in intrinsic_entries {
+    hasher.write_u64(def.0);
+    hasher.write_str(kind.as_str());
+  }
+
+  let mut diagnostics: Vec<_> = decls.diagnostics.iter().collect();
+  diagnostics.sort();
+  hasher.write_u32(diagnostics.len() as u32);
+  for diagnostic in diagnostics {
+    hasher.write_str(diagnostic.code.as_str());
+    hasher.write_u8(match diagnostic.severity {
+      diagnostics::Severity::Error => 0,
+      diagnostics::Severity::Warning => 1,
+      diagnostics::Severity::Note => 2,
+      diagnostics::Severity::Help => 3,
+    });
+    hasher.write_str(&diagnostic.message);
+    hasher.write_u32(diagnostic.primary.file.0);
+    hasher.write_u32(diagnostic.primary.range.start);
+    hasher.write_u32(diagnostic.primary.range.end);
+
+    let mut labels: Vec<_> = diagnostic.labels.iter().collect();
+    labels.sort();
+    hasher.write_u32(labels.len() as u32);
+    for label in labels {
+      hasher.write_u32(label.span.file.0);
+      hasher.write_u32(label.span.range.start);
+      hasher.write_u32(label.span.range.end);
+      hasher.write_str(&label.message);
+      hasher.write_u8(label.is_primary as u8);
+    }
+
+    let mut notes: Vec<_> = diagnostic.notes.iter().collect();
+    notes.sort();
+    hasher.write_u32(notes.len() as u32);
+    for note in notes {
+      hasher.write_str(note);
+    }
+  }
+
+  hasher.finish()
+}
+
 #[salsa::tracked]
 fn decl_types_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
   panic_if_cancelled(db);
@@ -1965,7 +2067,12 @@ fn decl_types_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
   let store = db.type_store_input().store(db).arc();
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
-    return SharedDeclTypes(Arc::new(DeclTypes::default()));
+    let decls = DeclTypes::default();
+    let fingerprint = decl_types_digest(&decls);
+    return SharedDeclTypes {
+      fingerprint,
+      decls: decls.into_shared(),
+    };
   };
 
   struct DbHost {
@@ -2013,7 +2120,11 @@ fn decl_types_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
     Some(module_namespace_defs.as_ref()),
     Some(value_defs.as_ref()),
   );
-  SharedDeclTypes(decls.into_shared())
+  let fingerprint = decl_types_digest(&decls);
+  SharedDeclTypes {
+    fingerprint,
+    decls: decls.into_shared(),
+  }
 }
 
 struct DbResolver<'db> {
@@ -2345,7 +2456,7 @@ pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
 
 pub fn decl_types(db: &dyn Db, file: FileId) -> Arc<DeclTypes> {
   db.file_input(file)
-    .map(|input| decl_types_for(db, input).0.clone())
+    .map(|input| decl_types_for(db, input).arc())
     .unwrap_or_else(|| Arc::new(DeclTypes::default()))
 }
 
@@ -2360,7 +2471,7 @@ fn decl_types_fingerprint_for(db: &dyn Db) -> u64 {
     };
     let decls = decl_types_for(db, input);
     hasher.write_u32(file.0);
-    hasher.write_u64(Arc::as_ptr(&decls.0) as usize as u64);
+    hasher.write_u64(decls.fingerprint);
   }
   hasher.finish()
 }
