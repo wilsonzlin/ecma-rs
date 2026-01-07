@@ -35,7 +35,7 @@ cargo run -p typecheck-ts --example memory_host_basic
 cargo run -p typecheck-ts --example json_snapshot
 ```
 
-## 2) Optional submodules (TypeScript + test262)
+## 3) Optional submodules (TypeScript + test262)
 
 Two test corpora live in submodules (see [`.gitmodules`](../.gitmodules)):
 
@@ -60,7 +60,7 @@ cargo run -p test262 --release --locked -- \
   --fail-on new
 ```
 
-## 3) TypeScript conformance + difftsc locally (Node required)
+## 4) TypeScript conformance + difftsc locally (Node required)
 
 The full “run against upstream conformance suites” flow requires:
 

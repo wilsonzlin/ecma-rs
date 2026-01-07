@@ -45,6 +45,18 @@ Note: CI runs the same commands with `--locked` after generating `Cargo.lock`; t
 - `cargo test --workspace`
 - `./scripts/gen_deps_graph.sh` (then verifies `docs/deps.md` is unchanged)
 
+### Run the in-repo examples
+
+The repository includes compiled examples demonstrating the public APIs of the
+core crates (especially `typecheck-ts`):
+
+```bash
+cargo run -p typecheck-ts --example memory_host_basic
+cargo run -p typecheck-ts --example json_snapshot
+```
+
+See [`docs/examples.md`](./docs/examples.md) for the full list.
+
 ### Run the CLIs
 
 All tools treat input source as **UTF-8 text** (see [UTF-8 policy](#utf-8--source-text-policy)).
