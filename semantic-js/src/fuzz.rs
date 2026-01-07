@@ -480,9 +480,14 @@ fn gen_import_equals(
 fn gen_export_specifier(
   cursor: &mut ByteCursor<'_>,
   spans: &mut SpanCursor,
+  available: &[String],
   names: &[String],
 ) -> ts::ExportSpecifier {
-  let local = maybe_pick_name(cursor, names, "e");
+  let local = if !available.is_empty() && cursor.next_bool() {
+    available[cursor.next_usize(available.len())].clone()
+  } else {
+    maybe_pick_name(cursor, names, "e")
+  };
   let local_span = spans.next_range(cursor);
   let exported = if cursor.next_bool() {
     Some(maybe_pick_name(cursor, names, "ex"))
@@ -501,6 +506,7 @@ fn gen_export_specifier(
 fn gen_export(
   cursor: &mut ByteCursor<'_>,
   spans: &mut SpanCursor,
+  available: &[String],
   names: &[String],
   specifiers: &[String],
 ) -> ts::Export {
@@ -517,7 +523,7 @@ fn gen_export(
       let item_count = cursor.next_usize(MAX_TS_IMPORT_ITEMS + 1);
       let mut items = Vec::new();
       for _ in 0..item_count {
-        items.push(gen_export_specifier(cursor, spans, names));
+        items.push(gen_export_specifier(cursor, spans, available, names));
       }
       ts::Export::Named(ts::NamedExport {
         specifier,
@@ -549,8 +555,12 @@ fn gen_export(
       let path = if cursor.next_bool() {
         let count = cursor.next_usize(3) + 1;
         let mut path = Vec::new();
-        for _ in 0..count {
-          path.push(maybe_pick_name(cursor, names, "p"));
+        for idx in 0..count {
+          if idx == 0 && !available.is_empty() && cursor.next_bool() {
+            path.push(available[cursor.next_usize(available.len())].clone());
+          } else {
+            path.push(maybe_pick_name(cursor, names, "p"));
+          }
         }
         Some(path)
       } else {
@@ -639,10 +649,33 @@ fn gen_ambient_module(
     import_equals.push(gen_import_equals(cursor, spans, names, specifiers));
   }
 
+  let mut available_names: BTreeSet<String> = decls.iter().map(|d| d.name.clone()).collect();
+  for import in imports.iter() {
+    if let Some(default) = import.default.as_ref() {
+      available_names.insert(default.local.clone());
+    }
+    if let Some(ns) = import.namespace.as_ref() {
+      available_names.insert(ns.local.clone());
+    }
+    for named in import.named.iter() {
+      available_names.insert(named.local.clone());
+    }
+  }
+  for ie in import_equals.iter() {
+    available_names.insert(ie.local.clone());
+  }
+  let available_names: Vec<String> = available_names.into_iter().collect();
+
   let export_count = cursor.next_usize(MAX_TS_EXPORTS.min(4) + 1);
   let mut exports = Vec::new();
   for _ in 0..export_count {
-    exports.push(gen_export(cursor, spans, names, specifiers));
+    exports.push(gen_export(
+      cursor,
+      spans,
+      &available_names,
+      names,
+      specifiers,
+    ));
   }
 
   let export_as_namespace_count = cursor.next_usize(2);
@@ -771,10 +804,33 @@ fn gen_ts_hir_file(cursor: &mut ByteCursor<'_>, file_id: FileId) -> ts::HirFile 
     import_equals.push(gen_import_equals(cursor, &mut spans, &names, &specifiers));
   }
 
+  let mut available_names: BTreeSet<String> = decls.iter().map(|d| d.name.clone()).collect();
+  for import in imports.iter() {
+    if let Some(default) = import.default.as_ref() {
+      available_names.insert(default.local.clone());
+    }
+    if let Some(ns) = import.namespace.as_ref() {
+      available_names.insert(ns.local.clone());
+    }
+    for named in import.named.iter() {
+      available_names.insert(named.local.clone());
+    }
+  }
+  for ie in import_equals.iter() {
+    available_names.insert(ie.local.clone());
+  }
+  let available_names: Vec<String> = available_names.into_iter().collect();
+
   let export_count = cursor.next_usize(MAX_TS_EXPORTS + 1);
   let mut exports = Vec::new();
   for _ in 0..export_count {
-    exports.push(gen_export(cursor, &mut spans, &names, &specifiers));
+    exports.push(gen_export(
+      cursor,
+      &mut spans,
+      &available_names,
+      &names,
+      &specifiers,
+    ));
   }
 
   let export_as_namespace_count = cursor.next_usize(3);
