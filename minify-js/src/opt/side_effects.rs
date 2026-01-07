@@ -2,6 +2,7 @@ use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal, 
 use parse_js::ast::expr::lit::{LitArrElem, LitTemplatePart};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::ClassDecl;
 use parse_js::operator::OperatorName;
 
 pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
@@ -100,6 +101,22 @@ pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
     }),
     _ => false,
   }
+}
+
+pub(super) fn is_side_effect_free_class_decl(decl: &Node<ClassDecl>) -> bool {
+  if !decl.stx.decorators.is_empty() {
+    return false;
+  }
+  if decl.stx.extends.is_some() {
+    // Conservatively treat `extends` as potentially throwing even if the
+    // expression itself is "pure" (e.g. `class extends 1 {}` throws).
+    return false;
+  }
+  decl
+    .stx
+    .members
+    .iter()
+    .all(|member| is_side_effect_free_class_member(member))
 }
 
 fn is_side_effect_free_class_member(member: &Node<ClassMember>) -> bool {

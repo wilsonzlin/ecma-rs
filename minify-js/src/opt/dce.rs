@@ -1,4 +1,4 @@
-use super::side_effects::is_side_effect_free_expr;
+use super::side_effects::{is_side_effect_free_class_decl, is_side_effect_free_expr};
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use crate::rename::ExportNameSymbol;
@@ -20,7 +20,7 @@ use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol};
-use semantic_js::js::SymbolId;
+use semantic_js::js::{ScopeKind, SymbolId};
 
 pub(super) struct DcePass;
 
@@ -41,6 +41,7 @@ impl Pass for DcePass {
       let mut used = collect_used_symbols(top);
       // Exported symbols are always considered used.
       used.extend(cx.usage().exported.iter().copied());
+      propagate_annex_b_liveness(cx, &mut used);
 
       let changed =
         apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed));
@@ -61,6 +62,27 @@ where
     loc,
     assoc,
     stx: Box::new(stx),
+  }
+}
+
+fn propagate_annex_b_liveness(cx: &OptCtx, used: &mut HashSet<SymbolId>) {
+  let sem = cx.sem();
+  if sem.annex_b_function_decls.is_empty() {
+    return;
+  }
+
+  // Annex B block function declarations introduce two linked bindings: a block
+  // binding and a hoisted `var` binding. Treat the pair as a single liveness
+  // group so DCE doesn't drop the declaration when only one side is referenced.
+  for (block_sym, var_sym) in sem.annex_b_function_decls.iter() {
+    if used.contains(block_sym) {
+      used.insert(*var_sym);
+    }
+  }
+  for (block_sym, var_sym) in sem.annex_b_function_decls.iter() {
+    if used.contains(var_sym) {
+      used.insert(*block_sym);
+    }
   }
 }
 
@@ -254,8 +276,8 @@ fn dce_stmt_in_list(
       label_stmt.stx.statement = dce_single_stmt(label_stmt.stx.statement, cx, used, changed);
       vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
     }
-    Stmt::FunctionDecl(decl) => vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))],
-    Stmt::ClassDecl(decl) => vec![new_node(loc, assoc, Stmt::ClassDecl(decl))],
+    Stmt::FunctionDecl(decl) => dce_func_decl_stmt(loc, assoc, decl, cx, used, changed),
+    Stmt::ClassDecl(decl) => dce_class_decl_stmt(loc, assoc, decl, cx, used, changed),
     Stmt::VarDecl(mut decl) => {
       if decl.stx.export || matches!(decl.stx.mode, VarDeclMode::Using | VarDeclMode::AwaitUsing) {
         return vec![new_node(loc, assoc, Stmt::VarDecl(decl))];
@@ -312,6 +334,86 @@ fn dce_stmt_in_list(
     }
     other => vec![new_node(loc, assoc, other)],
   }
+}
+
+fn dce_func_decl_stmt(
+  loc: Loc,
+  assoc: NodeAssocData,
+  decl: Node<parse_js::ast::stmt::decl::FuncDecl>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+  changed: &mut bool,
+) -> Vec<Node<Stmt>> {
+  if decl.stx.export {
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  }
+  let Some(name) = decl.stx.name.as_ref() else {
+    // `export default function() {}` has no declared symbol; keep it.
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  };
+  let Some(sym) = declared_symbol(&name.assoc) else {
+    // In `TopLevelMode::Global`, globals are intentionally not surfaced as
+    // symbols, so treat missing symbols as pinned.
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  };
+
+  let sem = cx.sem();
+  let mut effective_syms = vec![sym];
+  if let Some(var_sym) = sem.annex_b_function_decls.get(&sym).copied() {
+    // In `TopLevelMode::Global`, the hoisted `var` binding can be synthetic and
+    // not referenced by resolution. Never remove such declarations since global
+    // uses are not tracked.
+    let var_scope = sem.symbol(var_sym).decl_scope;
+    if sem.scope(var_scope).kind == ScopeKind::Global {
+      return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+    }
+    effective_syms.push(var_sym);
+  }
+
+  if effective_syms.iter().any(|sym| used.contains(sym)) {
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  }
+  if effective_syms
+    .iter()
+    .any(|sym| cx.disabled_scopes.contains(&sem.symbol(*sym).decl_scope))
+  {
+    return vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))];
+  }
+
+  *changed = true;
+  Vec::new()
+}
+
+fn dce_class_decl_stmt(
+  loc: Loc,
+  assoc: NodeAssocData,
+  decl: Node<parse_js::ast::stmt::decl::ClassDecl>,
+  cx: &OptCtx,
+  used: &HashSet<SymbolId>,
+  changed: &mut bool,
+) -> Vec<Node<Stmt>> {
+  if decl.stx.export || decl.stx.export_default {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  }
+  let Some(name) = decl.stx.name.as_ref() else {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  };
+  let Some(sym) = declared_symbol(&name.assoc) else {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  };
+  let sem = cx.sem();
+  if used.contains(&sym) {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  }
+  if cx.disabled_scopes.contains(&sem.symbol(sym).decl_scope) {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  }
+  if !is_side_effect_free_class_decl(&decl) {
+    return vec![new_node(loc, assoc, Stmt::ClassDecl(decl))];
+  }
+
+  *changed = true;
+  Vec::new()
 }
 
 fn dce_single_stmt(

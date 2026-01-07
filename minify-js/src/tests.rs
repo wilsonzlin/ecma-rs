@@ -7,16 +7,20 @@ use crate::{
   minify, minify_with_options, Diagnostic, Dialect, FileId, MinifyOptions, Severity, TopLevelMode,
   TsEraseOptions,
 };
+use derive_visitor::{Drive, Visitor};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
 use parse_js::ast::expr::Expr;
+use parse_js::ast::func::FuncBody;
 use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::VarDeclMode;
+use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
 use parse_js::{parse, parse_with_options, ParseOptions, SourceType};
+use semantic_js::assoc::js::resolved_symbol;
+use semantic_js::js::bind_js;
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
   let mut out = Vec::new();
@@ -585,6 +589,127 @@ fn dce_eliminates_transitively_unused_closure_chains() {
 fn dce_removes_unused_class_expr_initializers() {
   let result = minified(TopLevelMode::Module, "let C=class{m(){}};console.log(2);");
   assert_eq!(result, "console.log(2);");
+}
+
+#[test]
+fn annex_b_block_function_used_via_hoisted_var_is_not_removed() {
+  let src = "function outer(){if(false){function foo(){} }foo;}outer();";
+  let (output, mut parsed) = minified_program(TopLevelMode::Global, Dialect::Js, Dialect::Js, src);
+
+  let (_sem, diagnostics) = bind_js(&mut parsed, TopLevelMode::Global, FileId(0));
+  assert!(
+    diagnostics.is_empty(),
+    "expected output to bind cleanly, got {diagnostics:?}"
+  );
+
+  let outer_decl = parsed
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::FunctionDecl(decl) => Some(decl),
+      _ => None,
+    })
+    .expect("expected top-level outer function decl");
+  let Some(body) = outer_decl.stx.function.stx.body.as_ref() else {
+    panic!("outer function should have a body: {output}");
+  };
+  let FuncBody::Block(stmts) = body else {
+    panic!("outer function should have a block body: {output}");
+  };
+  let id_use = stmts
+    .iter()
+    .find_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
+        Expr::Id(id) => Some(id),
+        _ => None,
+      },
+      _ => None,
+    })
+    .expect("expected identifier use in outer function body");
+
+  assert!(
+    resolved_symbol(&id_use.assoc).is_some(),
+    "expected identifier use to resolve to a local binding: {output}"
+  );
+}
+
+#[test]
+fn dce_removes_unused_function_decls() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){function dead(){}return 1;}outer();",
+  );
+
+  type FuncDeclNode = Node<FuncDecl>;
+  #[derive(Default, Visitor)]
+  #[visitor(FuncDeclNode(enter))]
+  struct Counter {
+    count: usize,
+  }
+  impl Counter {
+    fn enter_func_decl_node(&mut self, _node: &FuncDeclNode) {
+      self.count += 1;
+    }
+  }
+
+  let mut counter = Counter::default();
+  parsed.drive(&mut counter);
+  assert_eq!(counter.count, 1, "unexpected output: {output}");
+}
+
+#[test]
+fn dce_removes_unused_side_effect_free_class_decls() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){class C{}return 1;}outer();",
+  );
+
+  type ClassDeclNode = Node<ClassDecl>;
+  #[derive(Default, Visitor)]
+  #[visitor(ClassDeclNode(enter))]
+  struct Counter {
+    count: usize,
+  }
+  impl Counter {
+    fn enter_class_decl_node(&mut self, _node: &ClassDeclNode) {
+      self.count += 1;
+    }
+  }
+
+  let mut counter = Counter::default();
+  parsed.drive(&mut counter);
+  assert_eq!(counter.count, 0, "unexpected output: {output}");
+}
+
+#[test]
+fn dce_keeps_side_effectful_class_decls() {
+  let (output, parsed) = minified_program(
+    TopLevelMode::Module,
+    Dialect::Js,
+    Dialect::Js,
+    "function outer(){class C{static{sideEffect()}}return 1;}outer();",
+  );
+
+  type ClassDeclNode = Node<ClassDecl>;
+  #[derive(Default, Visitor)]
+  #[visitor(ClassDeclNode(enter))]
+  struct Counter {
+    count: usize,
+  }
+  impl Counter {
+    fn enter_class_decl_node(&mut self, _node: &ClassDeclNode) {
+      self.count += 1;
+    }
+  }
+
+  let mut counter = Counter::default();
+  parsed.drive(&mut counter);
+  assert_eq!(counter.count, 1, "unexpected output: {output}");
 }
 
 #[test]
@@ -1223,7 +1348,16 @@ fn erases_type_annotations_and_aliases() {
     const value: number = (foo as any) satisfies Alias ? 1 : 2;
     function wrap<T>(item: T): T { return item; }
   "#;
-  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
   assert_eq!(parsed.stx.body.len(), 2);
   match parsed.stx.body[0].stx.as_ref() {
     Stmt::VarDecl(_) | Stmt::Expr(_) => {}
@@ -2977,7 +3111,16 @@ fn drops_method_signatures_in_abstract_classes() {
 #[test]
 fn erases_class_auto_accessors_to_parseable_js() {
   let src = r#"class Foo { protected override accessor bar!: number; }"#;
-  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
   assert_eq!(parsed.stx.body.len(), 1);
 
   let class_decl = match parsed.stx.body[0].stx.as_ref() {
