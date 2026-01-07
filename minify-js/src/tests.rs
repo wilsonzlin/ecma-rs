@@ -512,10 +512,149 @@ fn dce_keeps_class_expr_static_blocks_with_side_effects() {
     TopLevelMode::Global,
     "function f(){let C=class{static{sideEffect()}};return 1;}f();",
   );
-  assert_eq!(
-    result,
-    "function f(){let a=class{static{sideEffect();}};return 1;}f();"
+  assert_eq!(result, "function f(){(class{static{sideEffect();}});return 1;}f();");
+}
+
+#[test]
+fn dce_rewrites_unused_side_effectful_single_declarator_into_expr_stmt() {
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(){let x=sideEffect();return 1;}f();",
   );
+  assert_eq!(result, "function f(){sideEffect();return 1;}f();");
+}
+
+#[test]
+fn dce_preserves_order_when_dropping_leading_side_effectful_declarator() {
+  let (_output, parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "function f(){let a=sideEffect(),b=keep();return b;}f();",
+  );
+  let func = match parsed.stx.body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::FunctionDecl(func)) => func,
+    other => panic!("expected function decl, got {other:?}"),
+  };
+  let body = match func.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+  let var_decl = match body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::VarDecl(decl)) => decl,
+    other => panic!("expected var decl stmt, got {other:?}"),
+  };
+  assert_eq!(var_decl.stx.mode, VarDeclMode::Let);
+  assert_eq!(var_decl.stx.declarators.len(), 1);
+  let init = var_decl.stx.declarators[0]
+    .initializer
+    .as_ref()
+    .expect("initializer");
+  fn collect_calls(expr: &Node<Expr>, out: &mut Vec<String>) {
+    match expr.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+        collect_calls(&bin.stx.left, out);
+        collect_calls(&bin.stx.right, out);
+      }
+      Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+        Expr::Id(id) => out.push(id.stx.name.clone()),
+        other => panic!("expected id callee, got {other:?}"),
+      },
+      other => panic!("expected comma/call expr, got {other:?}"),
+    }
+  }
+  let mut calls: Vec<String> = Vec::new();
+  collect_calls(init, &mut calls);
+  assert_eq!(calls, vec!["sideEffect".to_string(), "keep".to_string()]);
+}
+
+#[test]
+fn dce_preserves_order_when_dropping_trailing_side_effectful_declarator() {
+  let (_output, parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "function f(){let b=keep(),a=sideEffect();return b;}f();",
+  );
+  let func = match parsed.stx.body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::FunctionDecl(func)) => func,
+    other => panic!("expected function decl, got {other:?}"),
+  };
+  let body = match func.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+  assert_eq!(body.len(), 3);
+  match body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => {
+      assert_eq!(decl.stx.declarators.len(), 1);
+      let init = decl.stx.declarators[0].initializer.as_ref().expect("initializer");
+      assert!(matches!(init.stx.as_ref(), Expr::Call(_)));
+    }
+    other => panic!("expected var decl stmt, got {other:?}"),
+  }
+  match body[1].stx.as_ref() {
+    Stmt::Expr(expr_stmt) => match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+        Expr::Id(id) => assert_eq!(id.stx.name, "sideEffect"),
+        other => panic!("expected id callee, got {other:?}"),
+      },
+      other => panic!("expected call expression, got {other:?}"),
+    },
+    other => panic!("expected expr stmt, got {other:?}"),
+  }
+}
+
+#[test]
+fn dce_preserves_order_when_dropping_mid_side_effectful_declarator() {
+  let (_output, parsed) = minified_program(
+    TopLevelMode::Global,
+    Dialect::Js,
+    Dialect::Js,
+    "function f(){let b=keep1(),a=sideEffect(),c=keep2();return b+c;}f();",
+  );
+  let func = match parsed.stx.body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::FunctionDecl(func)) => func,
+    other => panic!("expected function decl, got {other:?}"),
+  };
+  let body = match func.stx.function.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+  let var_decl = match body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::VarDecl(decl)) => decl,
+    other => panic!("expected var decl stmt, got {other:?}"),
+  };
+  assert_eq!(var_decl.stx.declarators.len(), 2);
+  let init = var_decl.stx.declarators[1]
+    .initializer
+    .as_ref()
+    .expect("initializer");
+  let mut calls: Vec<String> = Vec::new();
+  fn collect_calls(expr: &Node<Expr>, out: &mut Vec<String>) {
+    match expr.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+        collect_calls(&bin.stx.left, out);
+        collect_calls(&bin.stx.right, out);
+      }
+      Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+        Expr::Id(id) => out.push(id.stx.name.clone()),
+        other => panic!("expected id callee, got {other:?}"),
+      },
+      other => panic!("expected comma/call expr, got {other:?}"),
+    }
+  }
+  collect_calls(init, &mut calls);
+  assert_eq!(calls, vec!["sideEffect".to_string(), "keep2".to_string()]);
+}
+
+#[test]
+fn dce_keeps_exported_bindings_and_converts_unused_side_effect_decls() {
+  let result = minified(
+    TopLevelMode::Module,
+    "export const x=sideEffect();const y=sideEffect2();",
+  );
+  assert_eq!(result, "export const x=sideEffect();sideEffect2();");
 }
 
 #[test]
@@ -1000,7 +1139,7 @@ fn erases_type_annotations_and_aliases() {
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert_eq!(parsed.stx.body.len(), 2);
   match parsed.stx.body[0].stx.as_ref() {
-    Stmt::VarDecl(_) => {}
+    Stmt::VarDecl(_) | Stmt::Expr(_) => {}
     other => panic!("expected var decl, got {other:?}"),
   }
   match parsed.stx.body[1].stx.as_ref() {
@@ -1051,16 +1190,16 @@ fn preserves_tsx_and_jsx_content() {
   "#;
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Tsx, Dialect::Jsx, src);
   assert_eq!(parsed.stx.body.len(), 1);
-  let decl = match parsed.stx.body[0].stx.as_ref() {
-    Stmt::VarDecl(decl) => decl,
-    other => panic!("expected var decl, got {other:?}"),
+  let initializer = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl
+      .stx
+      .declarators
+      .first()
+      .and_then(|decl| decl.initializer.as_ref())
+      .expect("initializer should exist"),
+    Stmt::Expr(expr) => &expr.stx.expr,
+    other => panic!("expected var decl or expr stmt, got {other:?}"),
   };
-  let initializer = decl
-    .stx
-    .declarators
-    .first()
-    .and_then(|decl| decl.initializer.as_ref())
-    .expect("initializer should exist");
   let jsx = match initializer.stx.as_ref() {
     Expr::JsxElem(elem) => elem,
     other => panic!("expected JSX element, got {other:?}"),
@@ -1196,17 +1335,19 @@ fn lowers_import_equals_require() {
   "#;
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert_eq!(parsed.stx.body.len(), 1);
-  let decl = match parsed.stx.body[0].stx.as_ref() {
-    Stmt::VarDecl(decl) => decl,
-    other => panic!("expected var decl, got {other:?}"),
+  let initializer = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => {
+      assert_eq!(decl.stx.mode, VarDeclMode::Const);
+      decl
+        .stx
+        .declarators
+        .first()
+        .and_then(|declarator| declarator.initializer.as_ref())
+        .expect("initializer should exist")
+    }
+    Stmt::Expr(expr) => &expr.stx.expr,
+    other => panic!("expected var decl or expr stmt, got {other:?}"),
   };
-  assert_eq!(decl.stx.mode, VarDeclMode::Const);
-  let initializer = decl
-    .stx
-    .declarators
-    .first()
-    .and_then(|declarator| declarator.initializer.as_ref())
-    .expect("initializer should exist");
   match initializer.stx.as_ref() {
     Expr::Call(call) => match call.stx.callee.stx.as_ref() {
       Expr::Id(id) => assert_eq!(id.stx.name, "require"),
