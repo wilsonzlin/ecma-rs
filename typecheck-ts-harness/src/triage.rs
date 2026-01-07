@@ -135,6 +135,7 @@ enum DifftscCaseStatus {
   BaselineMissing,
   TscFailed,
   RustFailed,
+  Timeout,
   Skipped,
 }
 
@@ -146,6 +147,7 @@ impl DifftscCaseStatus {
         | DifftscCaseStatus::BaselineMissing
         | DifftscCaseStatus::TscFailed
         | DifftscCaseStatus::RustFailed
+        | DifftscCaseStatus::Timeout
     )
   }
 
@@ -157,6 +159,7 @@ impl DifftscCaseStatus {
       DifftscCaseStatus::BaselineMissing => "baseline_missing",
       DifftscCaseStatus::TscFailed => "tsc_failed",
       DifftscCaseStatus::RustFailed => "rust_failed",
+      DifftscCaseStatus::Timeout => "timeout",
       DifftscCaseStatus::Skipped => "skipped",
     }
   }

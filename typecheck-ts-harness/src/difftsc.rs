@@ -6,14 +6,15 @@ use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::{is_normalized_virtual_path, normalize_name_cow, normalize_name_into};
 use crate::runner::{
-  build_tsc_request, is_source_root, run_rust, EngineStatus, HarnessFileSet, HarnessHost,
-  TscRunnerPool,
+  build_tsc_request, is_source_root, EngineDiagnostics, EngineStatus, HarnessFileSet, HarnessHost,
+  TimeoutManager, TscPoolError, TscRunnerPool,
 };
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TypeAtFact, TypeFacts, TypeQuery,
   TSC_BASELINE_SCHEMA_VERSION,
 };
-use crate::{read_utf8_file, FailOn, VirtualFile};
+use crate::{build_filter, Filter, FailOn, Shard, VirtualFile};
+use crate::{read_utf8_file};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use num_cpus;
@@ -25,6 +26,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::io::{BufReader, BufWriter, Write};
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -40,11 +42,21 @@ fn default_jobs() -> usize {
   num_cpus::get().min(4)
 }
 
+const DEFAULT_TIMEOUT_SECS: u64 = 20;
+
 #[derive(Debug, Clone, Args)]
 pub struct DifftscArgs {
   /// Path to the suite containing fixture tests.
   #[arg(long)]
   pub suite: PathBuf,
+
+  /// Glob or regex to filter tests (matches `<suite>/<test>` ids).
+  #[arg(long)]
+  pub filter: Option<String>,
+
+  /// Run only a shard (zero-based): `i/n`
+  #[arg(long)]
+  pub shard: Option<String>,
 
   /// Whether to regenerate baselines from tsc output.
   #[arg(long)]
@@ -78,6 +90,10 @@ pub struct DifftscArgs {
   #[arg(long, default_value_t = 0)]
   pub span_tolerance: u32,
 
+  /// Timeout per test case (seconds).
+  #[arg(long, default_value_t = DEFAULT_TIMEOUT_SECS)]
+  pub timeout_secs: u64,
+
   /// Path to a manifest describing expected failures.
   #[arg(long)]
   pub manifest: Option<PathBuf>,
@@ -106,6 +122,7 @@ enum CaseStatus {
   BaselineMissing,
   TscFailed,
   RustFailed,
+  Timeout,
   Skipped,
 }
 
@@ -114,6 +131,7 @@ impl CaseStatus {
     matches!(
       self,
       CaseStatus::BaselineMissing | CaseStatus::TscFailed | CaseStatus::RustFailed
+        | CaseStatus::Timeout
     )
   }
 
@@ -125,6 +143,7 @@ impl CaseStatus {
       CaseStatus::BaselineMissing => "baseline_missing",
       CaseStatus::TscFailed => "tsc_failed",
       CaseStatus::RustFailed => "rust_failed",
+      CaseStatus::Timeout => "timeout",
       CaseStatus::Skipped => "skipped",
     }
   }
@@ -290,6 +309,12 @@ struct TestCase {
   files: Vec<VirtualFile>,
 }
 
+#[derive(Debug, Clone)]
+struct PlannedTestCase {
+  id: String,
+  case: TestCase,
+}
+
 pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
   if needs_live_tsc(&args) && !cfg!(feature = "with-node") {
     eprintln!("difftsc skipped: built without `with-node` feature");
@@ -328,16 +353,26 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
       .with_context(|| format!("create baselines directory at {}", baselines_root.display()))?;
   }
 
+  let filter =
+    build_filter(args.filter.as_deref()).map_err(|err| anyhow!(err.to_string()))?;
+  let shard = match args.shard.as_deref() {
+    Some(raw) => Some(Shard::parse(raw).map_err(|err| anyhow!(err.to_string()))?),
+    None => None,
+  };
+
   let tests = collect_tests(&suite_path)?;
   if tests.is_empty() {
     return Err(anyhow!("suite `{}` contains no tests", suite_name));
   }
+  let tests = plan_tests(&suite_name, tests, &filter, args.filter.as_deref(), shard)?;
 
   let jobs = args.jobs.max(1);
   let pool = ThreadPoolBuilder::new()
     .num_threads(jobs)
     .build()
     .map_err(|err| anyhow!("create thread pool: {err}"))?;
+  let timeout = Duration::from_secs(args.timeout_secs);
+  let timeout_manager = TimeoutManager::new();
 
   let needs_live_tsc = needs_live_tsc(&args);
   let tsc_pool = if needs_live_tsc {
@@ -363,18 +398,14 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
 
   let normalization = NormalizationOptions::with_span_tolerance(args.span_tolerance);
   let tsc_pool = tsc_pool.as_ref();
-  // `collect_tests` sorts by case name and Rayon preserves order for indexed
-  // parallel iterators collected into a `Vec`, so we can keep output
-  // deterministically ordered without an explicit post-pass sort.
   let results: Vec<CaseReport> = pool.install(|| {
     tests
       .par_iter()
       .map(|test| {
-        let test_id = format!("{suite_name}/{}", test.name);
-        let expectation = expectations.lookup(&test_id);
+        let expectation = expectations.lookup(&test.id);
         if expectation.expectation.kind == ExpectationKind::Skip {
           return CaseReport {
-            name: test.name.clone(),
+            name: test.case.name.clone(),
             status: CaseStatus::Skipped,
             harness_options: None,
             tsc_options: None,
@@ -389,7 +420,17 @@ fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
           };
         }
 
-        run_single_test(test, &args, tsc_pool, &baselines_root, &normalization)
+        let deadline = Instant::now() + timeout;
+        run_single_test(
+          &test.case,
+          &args,
+          tsc_pool,
+          &baselines_root,
+          &normalization,
+          &timeout_manager,
+          deadline,
+          timeout,
+        )
       })
       .collect()
   });
@@ -468,7 +509,10 @@ fn summarize(results: &[CaseReport]) -> Summary {
       CaseStatus::Mismatch => summary.mismatched += 1,
       CaseStatus::BaselineUpdated => summary.updated += 1,
       CaseStatus::Skipped => summary.skipped += 1,
-      CaseStatus::BaselineMissing | CaseStatus::TscFailed | CaseStatus::RustFailed => {
+      CaseStatus::BaselineMissing
+      | CaseStatus::TscFailed
+      | CaseStatus::RustFailed
+      | CaseStatus::Timeout => {
         summary.errors += 1
       }
     }
@@ -531,18 +575,71 @@ fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
   }
 }
 
+fn run_rust_check(program: &Program, file_set: &HarnessFileSet, timeout: Duration) -> EngineDiagnostics {
+  match std::panic::catch_unwind(AssertUnwindSafe(|| program.check_fallible())) {
+    Err(_) => EngineDiagnostics {
+      status: EngineStatus::Ice,
+      diagnostics: Vec::new(),
+      error: Some("typechecker panicked".to_string()),
+    },
+    Ok(Err(typecheck_ts::FatalError::Cancelled)) => EngineDiagnostics {
+      status: EngineStatus::Timeout,
+      diagnostics: Vec::new(),
+      error: Some(format!("timed out after {}ms", timeout.as_millis())),
+    },
+    Ok(Err(fatal)) => EngineDiagnostics {
+      status: EngineStatus::Ice,
+      diagnostics: Vec::new(),
+      error: Some(fatal.to_string()),
+    },
+    Ok(Ok(diags)) => {
+      let mut normalized = crate::diagnostic_norm::normalize_rust_diagnostics(&diags, |id| {
+        program
+          .file_key(id)
+          .and_then(|key| file_set.name_for_key(&key).map(|name| name.to_string()))
+      });
+      sort_diagnostics(&mut normalized);
+      EngineDiagnostics {
+        status: EngineStatus::Ok,
+        diagnostics: normalized,
+        error: None,
+      }
+    }
+  }
+}
+
 fn run_single_test(
   test: &TestCase,
   args: &DifftscArgs,
   tsc_pool: Option<&TscRunnerPool>,
   baselines_root: &Path,
   normalization: &NormalizationOptions,
+  timeout_manager: &TimeoutManager,
+  deadline: Instant,
+  timeout: Duration,
 ) -> CaseReport {
   let baseline_path = baselines_root.join(format!("{}.json", test.name));
   let mut notes = Vec::new();
   let harness_options = harness_options_from_files(&test.files);
   let tsc_options = harness_options.to_tsc_options_map();
   let file_set = HarnessFileSet::new(&test.files);
+
+  if Instant::now() >= deadline {
+    return CaseReport {
+      name: test.name.clone(),
+      status: CaseStatus::Timeout,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
+      expected: None,
+      actual: None,
+      diff: None,
+      expected_types: None,
+      actual_types: None,
+      type_diff: None,
+      report: None,
+      notes: vec![format!("timed out after {}ms", timeout.as_millis())],
+    };
+  }
 
   let live_tsc = if needs_live_tsc(args) {
     let Some(pool) = tsc_pool else {
@@ -563,12 +660,25 @@ fn run_single_test(
     };
 
     let request = build_tsc_request(&file_set, &tsc_options, false);
-    // `difftsc` is primarily a developer tool, but keep a reasonable upper
-    // bound so a wedged Node process does not hang the whole run forever.
-    let deadline = Instant::now() + Duration::from_secs(60);
     match pool.run_request(request, deadline) {
       Ok(diags) => Some(diags),
-      Err(err) => {
+      Err(TscPoolError::Timeout) => {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::Timeout,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
+          expected: None,
+          actual: None,
+          diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
+          report: None,
+          notes: vec![format!("timed out after {}ms", timeout.as_millis())],
+        };
+      }
+      Err(TscPoolError::Crashed(err)) => {
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::TscFailed,
@@ -581,7 +691,7 @@ fn run_single_test(
           actual_types: None,
           type_diff: None,
           report: None,
-          notes: vec![err.to_string()],
+          notes: vec![err],
         };
       }
     }
@@ -718,7 +828,6 @@ fn run_single_test(
     &tsc_diags.metadata.options,
   ));
 
-  let rust = run_rust(&file_set, &harness_options);
   let mut expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   sort_diagnostics(&mut expected);
   let compare_type_facts = tsc_diags.type_facts.is_some();
@@ -729,17 +838,50 @@ fn run_single_test(
     .unwrap_or(&[]);
   let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
   let marker_queries = marker_queries_from_type_facts(&tsc_diags.type_facts);
-  let actual_types = if rust.status == EngineStatus::Ok && compare_type_facts {
-    collect_rust_type_facts(
-      &file_set,
-      &harness_options,
-      export_queries,
-      &marker_queries,
-      normalization,
-    )
-  } else {
-    NormalizedTypeFacts::default()
-  };
+
+  if Instant::now() >= deadline {
+    return CaseReport {
+      name: test.name.clone(),
+      status: CaseStatus::Timeout,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
+      expected: Some(expected),
+      actual: None,
+      diff: None,
+      expected_types: None,
+      actual_types: None,
+      type_diff: None,
+      report: None,
+      notes: vec![format!("timed out after {}ms", timeout.as_millis())],
+    };
+  }
+
+  let timeout_guard = timeout_manager.register(deadline);
+  let compiler_options = harness_options.to_compiler_options();
+  let host = HarnessHost::new(file_set.clone(), compiler_options);
+  let roots = file_set.root_keys();
+  let program = Arc::new(Program::new(host, roots));
+  timeout_guard.set_program(Arc::clone(&program));
+
+  let rust = run_rust_check(&program, &file_set, timeout);
+
+  if rust.status == EngineStatus::Timeout || Instant::now() >= deadline {
+    return CaseReport {
+      name: test.name.clone(),
+      status: CaseStatus::Timeout,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
+      expected: Some(expected),
+      actual: None,
+      diff: None,
+      expected_types: None,
+      actual_types: None,
+      type_diff: None,
+      report: None,
+      notes: vec![format!("timed out after {}ms", timeout.as_millis())],
+    };
+  }
+
   if rust.status != EngineStatus::Ok {
     return CaseReport {
       name: test.name.clone(),
@@ -754,6 +896,54 @@ fn run_single_test(
       type_diff: None,
       report: None,
       notes: rust.error.into_iter().collect(),
+    };
+  }
+
+  let actual_types = if compare_type_facts {
+    match collect_rust_type_facts(
+      &program,
+      &file_set,
+      export_queries,
+      &marker_queries,
+      normalization,
+      deadline,
+    ) {
+      Some(types) => types,
+      None => {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::Timeout,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
+          expected: Some(expected),
+          actual: None,
+          diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
+          report: None,
+          notes: vec![format!("timed out after {}ms", timeout.as_millis())],
+        };
+      }
+    }
+  } else {
+    NormalizedTypeFacts::default()
+  };
+
+  if Instant::now() >= deadline {
+    return CaseReport {
+      name: test.name.clone(),
+      status: CaseStatus::Timeout,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
+      expected: Some(expected),
+      actual: None,
+      diff: None,
+      expected_types: None,
+      actual_types: None,
+      type_diff: None,
+      report: None,
+      notes: vec![format!("timed out after {}ms", timeout.as_millis())],
     };
   }
 
@@ -1619,35 +1809,45 @@ fn baseline_option_mismatch_notes(
 }
 
 fn collect_rust_type_facts(
+  program: &Program,
   file_set: &HarnessFileSet,
-  options: &HarnessOptions,
   export_queries: &[ExportTypeFact],
   markers: &[TypeQuery],
   normalization: &NormalizationOptions,
-) -> NormalizedTypeFacts {
-  let compiler_options = options.to_compiler_options();
-  let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
-  let roots = file_set.root_keys();
-  let program = Program::new(host, roots);
-  let _ = program.check();
-  let facts = TypeFacts {
-    exports: collect_export_type_facts(&program, file_set, export_queries),
-    markers: collect_marker_type_facts(&program, file_set, markers),
-  };
-  normalize_type_facts(&Some(facts), normalization)
+  deadline: Instant,
+) -> Option<NormalizedTypeFacts> {
+  if Instant::now() >= deadline {
+    program.cancel();
+    return None;
+  }
+
+  let exports = collect_export_type_facts(program, file_set, export_queries, deadline)?;
+  if Instant::now() >= deadline {
+    program.cancel();
+    return None;
+  }
+  let markers = collect_marker_type_facts(program, file_set, markers, deadline)?;
+
+  let facts = TypeFacts { exports, markers };
+  Some(normalize_type_facts(&Some(facts), normalization))
 }
 
 fn collect_export_type_facts(
   program: &Program,
   file_set: &HarnessFileSet,
   expected: &[ExportTypeFact],
-) -> Vec<ExportTypeFact> {
+  deadline: Instant,
+) -> Option<Vec<ExportTypeFact>> {
   let mut cache: HashMap<typecheck_ts::FileId, typecheck_ts::ExportMap> = HashMap::new();
   let mut seen: HashSet<(&str, &str)> = HashSet::new();
   let mut facts = Vec::new();
   let mut normalized_buf = String::new();
 
   for export in expected {
+    if Instant::now() >= deadline {
+      program.cancel();
+      return None;
+    }
     if !seen.insert((export.file.as_str(), export.name.as_str())) {
       continue;
     }
@@ -1696,17 +1896,22 @@ fn collect_export_type_facts(
     });
   }
 
-  facts
+  Some(facts)
 }
 
 fn collect_marker_type_facts(
   program: &Program,
   file_set: &HarnessFileSet,
   markers: &[TypeQuery],
-) -> Vec<TypeAtFact> {
+  deadline: Instant,
+) -> Option<Vec<TypeAtFact>> {
   let mut facts = Vec::new();
   let mut normalized_buf = String::new();
   for marker in markers {
+    if Instant::now() >= deadline {
+      program.cancel();
+      return None;
+    }
     let normalized = if is_normalized_virtual_path(&marker.file) {
       marker.file.as_str()
     } else {
@@ -1779,7 +1984,7 @@ fn collect_marker_type_facts(
       type_str,
     });
   }
-  facts
+  Some(facts)
 }
 
 fn needs_live_tsc(args: &DifftscArgs) -> bool {
@@ -1804,6 +2009,42 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
   } else {
     Ok(suite_path)
   }
+}
+
+fn plan_tests(
+  suite_name: &str,
+  tests: Vec<TestCase>,
+  filter: &Filter,
+  filter_pattern: Option<&str>,
+  shard: Option<Shard>,
+) -> Result<Vec<PlannedTestCase>> {
+  let mut planned: Vec<PlannedTestCase> = tests
+    .into_iter()
+    .map(|case| PlannedTestCase {
+      id: format!("{suite_name}/{}", case.name),
+      case,
+    })
+    .collect();
+
+  planned.sort_by(|a, b| a.id.cmp(&b.id));
+  planned.retain(|case| filter.matches(&case.id));
+
+  if planned.is_empty() {
+    if let Some(pattern) = filter_pattern {
+      return Err(anyhow!("no difftsc tests matched filter `{pattern}`"));
+    }
+  }
+
+  if let Some(shard) = shard {
+    planned = planned
+      .into_iter()
+      .enumerate()
+      .filter(|(idx, _)| shard.includes(*idx))
+      .map(|(_, case)| case)
+      .collect();
+  }
+
+  Ok(planned)
 }
 
 fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
@@ -1976,6 +2217,7 @@ mod tests {
   use crate::diagnostic_norm::{DiagnosticCode, DiagnosticEngine, NormalizedDiagnostic};
   use crate::tsc::{TscDiagnostic, TscMetadata};
   use serde_json::Value;
+  use std::time::{Duration, Instant};
   use typecheck_ts::lib_support::CompilerOptions;
 
   #[test]
@@ -2016,6 +2258,105 @@ mod tests {
       error.to_lowercase().contains("rename one test")
         || error.to_lowercase().contains("move it into a subdirectory"),
       "{error}"
+    );
+  }
+
+  #[test]
+  fn plan_tests_filters_ids_with_glob_filter() {
+    let tests = vec![
+      TestCase {
+        name: "b".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "a".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "bb".to_string(),
+        files: Vec::new(),
+      },
+    ];
+
+    let filter = build_filter(Some("difftsc/b*")).unwrap();
+    let planned = plan_tests("difftsc", tests, &filter, Some("difftsc/b*"), None).unwrap();
+    let ids: Vec<_> = planned.iter().map(|case| case.id.as_str()).collect();
+    assert_eq!(ids, vec!["difftsc/b", "difftsc/bb"]);
+  }
+
+  #[test]
+  fn plan_tests_filters_ids_with_regex_filter() {
+    let tests = vec![
+      TestCase {
+        name: "b".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "a".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "bb".to_string(),
+        files: Vec::new(),
+      },
+    ];
+
+    let filter = Filter::Regex(regex::Regex::new(r"^difftsc/(a|bb)$").unwrap());
+    let planned = plan_tests("difftsc", tests, &filter, None, None).unwrap();
+    let ids: Vec<_> = planned.iter().map(|case| case.id.as_str()).collect();
+    assert_eq!(ids, vec!["difftsc/a", "difftsc/bb"]);
+  }
+
+  #[test]
+  fn plan_tests_applies_shard_after_sorting_ids() {
+    let tests = vec![
+      TestCase {
+        name: "b".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "a".to_string(),
+        files: Vec::new(),
+      },
+      TestCase {
+        name: "c".to_string(),
+        files: Vec::new(),
+      },
+    ];
+
+    let filter = build_filter(None).unwrap();
+    let shard = Shard::parse("0/2").unwrap();
+    let planned = plan_tests("difftsc", tests, &filter, None, Some(shard)).unwrap();
+    let ids: Vec<_> = planned.iter().map(|case| case.id.as_str()).collect();
+    assert_eq!(ids, vec!["difftsc/a", "difftsc/c"]);
+  }
+
+  #[test]
+  fn run_rust_check_reports_timeout_when_cancelled() {
+    let manager = TimeoutManager::new();
+    let guard = manager.register(Instant::now() - Duration::from_millis(1));
+
+    let file_set = HarnessFileSet::new(&[VirtualFile {
+      name: "case.ts".to_string(),
+      content: "const x = 1;\n".into(),
+    }]);
+    let mut compiler_options = CompilerOptions::default();
+    compiler_options.no_default_lib = true;
+    let host = HarnessHost::new(file_set.clone(), compiler_options);
+    let program = Arc::new(Program::new(host, file_set.root_keys()));
+
+    guard.set_program(Arc::clone(&program));
+
+    let diagnostics = run_rust_check(program.as_ref(), &file_set, Duration::from_millis(123));
+    assert_eq!(diagnostics.status, EngineStatus::Timeout);
+    assert!(
+      diagnostics
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("123"),
+      "expected timeout error to mention duration; got {:?}",
+      diagnostics.error
     );
   }
 
@@ -2249,7 +2590,13 @@ export interface Foo { x: number }
         type_str: String::new(),
       },
     ];
-    let mut exports = collect_export_type_facts(&program, &file_set, &expected);
+    let mut exports = collect_export_type_facts(
+      &program,
+      &file_set,
+      &expected,
+      Instant::now() + Duration::from_secs(1),
+    )
+    .expect("exports");
     exports.sort_by(|a, b| a.name.cmp(&b.name));
     assert_eq!(exports.len(), 2);
     assert_eq!(exports[0].name, "f");

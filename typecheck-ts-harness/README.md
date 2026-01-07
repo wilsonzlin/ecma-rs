@@ -188,6 +188,14 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 # Differential mode using stored baselines instead of shelling out to tsc
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --use-baselines
 
+# Filter by id (`<suite>/<test>`) and shard (zero-based)
+cargo run -p typecheck-ts-harness --release -- difftsc \
+  --suite fixtures/difftsc \
+  --filter "difftsc/triple_slash_*" \
+  --shard 0/4 \
+  --compare-rust \
+  --use-baselines
+
 # Allow small span drift (bytes)
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --span-tolerance 2
 
@@ -196,6 +204,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 
 # Limit parallel workers (defaults to CPU count)
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --use-baselines --jobs 4
+
+# Increase timeout per test (seconds)
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --timeout-secs 40
 
 # Emit JSON (includes diff details) and continue even if mismatches are found
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --json --allow-mismatches
@@ -210,6 +221,15 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 - TSC and Rust executions are parallelized across `--jobs` workers. Node
   invocations are concurrency-limited to keep process count bounded, and JSON
   output is stably ordered regardless of scheduling.
+- Filters accept globs or regexes; they match the difftsc test id (`<suite>/<test>`,
+  e.g. `difftsc/win_paths`).
+- Shards are zero-based (`i/n`) and are applied after sorting test ids.
+- `--update-baselines` honors `--filter` and `--shard`, so baselines can be
+  regenerated in parallel CI jobs.
+- Timeouts apply per test case (default 20s) and cancel only the offending test:
+  - Rust typechecking is cooperatively cancelled via `typecheck_ts::Program::cancel()`.
+  - Live `tsc` checks kill the Node.js runner process on timeout so blocked reads
+    unblock and the pool can recover.
 - Baselines are read from/written to `baselines/<suite>/<test>.json`, where the
   test name is derived from the fixture file stem or directory name (so single-file
   tests become `<name>.json` and names must be unique within the suite; see below).
@@ -225,6 +245,22 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
     (`difftsc` passes an empty `type_queries` list so `scripts/tsc_runner.js`
     performs the marker scan, keeping the behavior consistent with `tsc`.)
   Baseline JSON omits `type_facts` when no exports or markers were collected.
+
+**GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
+
+Run 8–16 shards in parallel matrix jobs:
+
+```
+matrix:
+  shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
+
+run: cargo run -p typecheck-ts-harness --release -- difftsc \
+  --suite typecheck-ts-harness/fixtures/difftsc \
+  --compare-rust --use-baselines \
+  --shard ${{matrix.shard}}/16 \
+  --timeout-secs 20 \
+  --json
+```
 
 ## Triage reports (`triage`)
 

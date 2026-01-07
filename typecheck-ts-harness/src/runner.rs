@@ -819,7 +819,7 @@ fn resolve_compare_mode(
   }
 }
 
-struct TimeoutManager {
+pub(crate) struct TimeoutManager {
   inner: Arc<TimeoutManagerInner>,
   thread: Mutex<Option<std::thread::JoinHandle<()>>>,
   next_token: AtomicU64,
@@ -841,14 +841,14 @@ struct TimeoutEntry {
   cancelled: bool,
 }
 
-struct TimeoutGuard {
+pub(crate) struct TimeoutGuard {
   token: u64,
   deadline: Instant,
   inner: Arc<TimeoutManagerInner>,
 }
 
 impl TimeoutManager {
-  fn new() -> Self {
+  pub(crate) fn new() -> Self {
     let inner = Arc::new(TimeoutManagerInner {
       state: Mutex::new(TimeoutManagerState {
         active: HashMap::new(),
@@ -867,7 +867,7 @@ impl TimeoutManager {
     }
   }
 
-  fn register(&self, deadline: Instant) -> TimeoutGuard {
+  pub(crate) fn register(&self, deadline: Instant) -> TimeoutGuard {
     let token = self.next_token.fetch_add(1, Ordering::Relaxed);
     let mut state = self.inner.state.lock().unwrap();
     state.active.insert(
@@ -901,7 +901,7 @@ impl Drop for TimeoutManager {
 }
 
 impl TimeoutGuard {
-  fn set_program(&self, program: Arc<Program>) {
+  pub(crate) fn set_program(&self, program: Arc<Program>) {
     let mut state = self.inner.state.lock().unwrap();
     let Some(entry) = state.active.get_mut(&self.token) else {
       return;
@@ -1152,15 +1152,14 @@ fn execute_case(
   }
 }
 
-pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
+#[cfg(test)]
+fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
   let compiler_options = options.to_compiler_options();
   let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_keys();
   let program = Program::new(host, roots);
   match run_rust_with_profile(&program, file_set, false) {
     RustRunResult::Completed { diagnostics, .. } => diagnostics,
-    // `run_rust` is only used in non-timeout contexts; treat cancellation as a
-    // skipped run if it ever occurs unexpectedly.
     RustRunResult::Cancelled => EngineDiagnostics::skipped(Some("cancelled".to_string())),
   }
 }
