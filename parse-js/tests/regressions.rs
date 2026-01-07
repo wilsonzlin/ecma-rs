@@ -6,6 +6,8 @@ mod async_arrow_line_terminator;
 mod async_function_decl_line_terminator;
 #[path = "regressions/async_identifier_disambiguation.rs"]
 mod async_identifier_disambiguation;
+#[path = "regressions/async_line_terminator_comments.rs"]
+mod async_line_terminator_comments;
 #[path = "regressions/class_async_method_line_terminator.rs"]
 mod class_async_method_line_terminator;
 #[path = "regressions/class_get_set_line_terminator.rs"]
