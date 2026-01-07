@@ -1612,29 +1612,58 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
       out: &mut HashMap<Vec<String>, ConstEnumBinding>,
     ) {
       match &decl.body {
-        NamespaceBody::Block(stmts) => {
-          for stmt in stmts {
-            match stmt.stx.as_ref() {
-              Stmt::EnumDecl(enum_decl) if enum_decl.stx.export && enum_decl.stx.const_ => {
-                if let Some(values) = compute_const_enum_values(&enum_decl.stx) {
-                  let mut path = prefix.clone();
-                  path.push(enum_decl.stx.name.clone());
-                  out.insert(path, ConstEnumBinding::Values(values));
-                }
-              }
-              Stmt::NamespaceDecl(ns_decl) if ns_decl.stx.export => {
-                prefix.push(ns_decl.stx.name.clone());
-                self.collect_exported_const_enums_from_namespace(&ns_decl.stx, prefix, out);
-                prefix.pop();
-              }
-              _ => {}
-            }
-          }
-        }
+        NamespaceBody::Block(stmts) => self.collect_exported_const_enums_from_namespace_like_stmts(
+          stmts, prefix, out,
+        ),
         NamespaceBody::Namespace(inner) => {
           prefix.push(inner.stx.name.clone());
           self.collect_exported_const_enums_from_namespace(&inner.stx, prefix, out);
           prefix.pop();
+        }
+      }
+    }
+
+    fn collect_exported_const_enums_from_module_body(
+      &self,
+      body: &[Node<Stmt>],
+      prefix: &mut Vec<String>,
+      out: &mut HashMap<Vec<String>, ConstEnumBinding>,
+    ) {
+      self.collect_exported_const_enums_from_namespace_like_stmts(body, prefix, out);
+    }
+
+    fn collect_exported_const_enums_from_namespace_like_stmts(
+      &self,
+      stmts: &[Node<Stmt>],
+      prefix: &mut Vec<String>,
+      out: &mut HashMap<Vec<String>, ConstEnumBinding>,
+    ) {
+      for stmt in stmts {
+        match stmt.stx.as_ref() {
+          Stmt::EnumDecl(enum_decl) if enum_decl.stx.export && enum_decl.stx.const_ => {
+            if let Some(values) = compute_const_enum_values(&enum_decl.stx) {
+              let mut path = prefix.clone();
+              path.push(enum_decl.stx.name.clone());
+              out.insert(path, ConstEnumBinding::Values(values));
+            }
+          }
+          Stmt::NamespaceDecl(ns_decl) if ns_decl.stx.export => {
+            prefix.push(ns_decl.stx.name.clone());
+            self.collect_exported_const_enums_from_namespace(&ns_decl.stx, prefix, out);
+            prefix.pop();
+          }
+          Stmt::ModuleDecl(module_decl) if module_decl.stx.export => {
+            let ModuleName::Identifier(name) = &module_decl.stx.name else {
+              continue;
+            };
+            let Some(body) = module_decl.stx.body.as_ref() else {
+              continue;
+            };
+            prefix.push(name.clone());
+            self.collect_exported_const_enums_from_module_body(body, prefix, out);
+            prefix.pop();
+          }
+          _ => {}
         }
       }
     }
@@ -1667,6 +1696,16 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
           Stmt::NamespaceDecl(decl) => {
             let mut prefix = vec![decl.stx.name.clone()];
             self.collect_exported_const_enums_from_namespace(&decl.stx, &mut prefix, &mut out);
+          }
+          Stmt::ModuleDecl(decl) => {
+            let ModuleName::Identifier(name) = &decl.stx.name else {
+              continue;
+            };
+            let Some(body) = decl.stx.body.as_ref() else {
+              continue;
+            };
+            let mut prefix = vec![name.clone()];
+            self.collect_exported_const_enums_from_module_body(body, &mut prefix, &mut out);
           }
           _ => {}
         }
@@ -2050,7 +2089,13 @@ fn inline_const_enums(top_level: &mut Node<TopLevel>) -> HashSet<String> {
         Stmt::NamespaceDecl(ns_decl) => self.rewrite_namespace_decl(&mut ns_decl.stx),
         Stmt::ModuleDecl(module_decl) => {
           if let Some(body) = module_decl.stx.body.as_mut() {
-            self.rewrite_stmts_in_block(body, false);
+            if let ModuleName::Identifier(name) = &module_decl.stx.name {
+              self.namespace_path.push(name.clone());
+              self.rewrite_stmts_in_block(body, false);
+              self.namespace_path.pop();
+            } else {
+              self.rewrite_stmts_in_block(body, false);
+            }
           }
         }
         Stmt::ExportDefaultExpr(export_default) => {

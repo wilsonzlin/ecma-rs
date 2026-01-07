@@ -191,6 +191,24 @@ fn exported_const_enum_in_namespace_is_inlined() {
 }
 
 #[test]
+fn exported_const_enum_in_module_is_inlined() {
+  let src = r#"
+    module N { export const enum E { A = 1 } }
+    export const x = N.E.A;
+  "#;
+  let (code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitNum(num) => assert_eq!(num.stx.value.0, 1.0),
+    other => panic!("expected numeric literal initializer, got {other:?}"),
+  }
+  assert!(
+    !code.contains(".E") && !code.contains("\"E\""),
+    "expected `E` to be erased from the emitted module/namespace: {code}"
+  );
+}
+
+#[test]
 fn preserve_const_enums_option_keeps_runtime_lowering() {
   let src = r#"eval("x");const enum E{A=1,B=A}export const x=E.B;"#;
   let ts_erase_options = TsEraseOptions {
