@@ -1,6 +1,7 @@
 use types_ts_interned::Accessibility;
 use types_ts_interned::DefId;
 use types_ts_interned::Indexer;
+use types_ts_interned::IntrinsicKind;
 use types_ts_interned::ObjectType;
 use types_ts_interned::Param;
 use types_ts_interned::PropData;
@@ -258,6 +259,32 @@ fn type_params_treated_as_unknown() {
   assert!(!ctx.is_assignable(tp_a, tp_b));
   assert!(!ctx.is_comparable(tp_a, primitives.unknown));
   assert!(ctx.is_comparable(tp_a, tp_a));
+}
+
+#[test]
+fn intrinsic_assignability_is_not_universal() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let uppercase_string = store.intern_type(TypeKind::Intrinsic {
+    kind: IntrinsicKind::Uppercase,
+    ty: primitives.string,
+  });
+
+  assert!(ctx.is_assignable(uppercase_string, primitives.string));
+  assert!(!ctx.is_assignable(uppercase_string, primitives.number));
+
+  assert!(ctx.is_assignable(primitives.string, uppercase_string));
+  assert!(!ctx.is_assignable(primitives.number, uppercase_string));
+
+  let builtin_iter_return = store.intern_type(TypeKind::Intrinsic {
+    kind: IntrinsicKind::BuiltinIteratorReturn,
+    ty: primitives.never,
+  });
+
+  assert!(ctx.is_assignable(builtin_iter_return, primitives.number));
+  assert!(ctx.is_assignable(primitives.number, builtin_iter_return));
 }
 
 #[test]

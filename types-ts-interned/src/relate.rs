@@ -11,6 +11,7 @@ use crate::shape::Shape;
 use crate::signature::{Signature, TypeParamDecl, TypeParamVariance};
 use crate::Accessibility;
 use crate::DefId;
+use crate::IntrinsicKind;
 use crate::ObjectId;
 use crate::PropData;
 use crate::PropKey;
@@ -1668,6 +1669,17 @@ impl<'a> RelateCtx<'a> {
     {
       return Some(true);
     }
+
+    let is_string_mapping_intrinsic = |kind: IntrinsicKind| {
+      matches!(
+        kind,
+        IntrinsicKind::Uppercase
+          | IntrinsicKind::Lowercase
+          | IntrinsicKind::Capitalize
+          | IntrinsicKind::Uncapitalize
+      )
+    };
+
     match (src, dst) {
       (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => Some(a == b),
       // Unresolved type parameters are treated conservatively as `unknown` to
@@ -1675,11 +1687,62 @@ impl<'a> RelateCtx<'a> {
       // any source but are only assignable to top types when used as sources.
       (_, TypeKind::TypeParam(_)) => Some(true),
       (TypeKind::TypeParam(_), _) => Some(matches!(dst, TypeKind::Any | TypeKind::Unknown)),
-      // String-mapping intrinsics are always string-like as sources. When used
-      // as destinations they behave like unresolved type parameters (accepting
-      // any source) to avoid spurious incompatibilities in generic contexts.
-      (TypeKind::Intrinsic { .. }, TypeKind::String) => Some(true),
-      (_, TypeKind::Intrinsic { .. }) => Some(true),
+      // `NoInfer<T>` is transparent for assignability. The evaluator usually
+      // erases `NoInfer`, but keep this shortcut for SKIP_NORMALIZE checks.
+      (TypeKind::Intrinsic {
+        kind: IntrinsicKind::NoInfer,
+        ty,
+      }, _) => self.assignable_special(&self.store.type_kind(*ty), dst),
+      (
+        _,
+        TypeKind::Intrinsic {
+          kind: IntrinsicKind::NoInfer,
+          ty,
+        },
+      ) => self.assignable_special(src, &self.store.type_kind(*ty)),
+      // `BuiltinIteratorReturn` behaves like `any` in TypeScript.
+      (
+        TypeKind::Intrinsic {
+          kind: IntrinsicKind::BuiltinIteratorReturn,
+          ..
+        },
+        _,
+      )
+      | (
+        _,
+        TypeKind::Intrinsic {
+          kind: IntrinsicKind::BuiltinIteratorReturn,
+          ..
+        },
+      ) => Some(true),
+      // String-mapping intrinsics (Uppercase/Lowercase/Capitalize/Uncapitalize)
+      // are always string-like. When used as destinations, treat them like
+      // `string` (accept only string-like sources).
+      (
+        TypeKind::Intrinsic { kind, .. },
+        TypeKind::String,
+      ) if is_string_mapping_intrinsic(*kind) => Some(true),
+      (
+        src,
+        TypeKind::Intrinsic { kind, .. },
+      ) if is_string_mapping_intrinsic(*kind) => match src {
+        // Preserve the meaning of `any` and `never`, which are handled below.
+        TypeKind::Any | TypeKind::Never => None,
+        TypeKind::String | TypeKind::StringLiteral(_) | TypeKind::TemplateLiteral(_) => Some(true),
+        TypeKind::Intrinsic {
+          kind: src_kind, ..
+        } if is_string_mapping_intrinsic(*src_kind) => Some(true),
+        // Defer composite types to the structural relation engine so it can
+        // distribute unions/intersections and expand references.
+        TypeKind::Union(_)
+        | TypeKind::Intersection(_)
+        | TypeKind::Ref { .. }
+        | TypeKind::IndexedAccess { .. }
+        | TypeKind::Conditional { .. }
+        | TypeKind::Mapped(_)
+        | TypeKind::KeyOf(_) => None,
+        _ => Some(false),
+      },
       (TypeKind::Any, _) | (_, TypeKind::Any) => Some(true),
       (TypeKind::Unknown, TypeKind::Unknown) => Some(true),
       (_, TypeKind::Unknown) => Some(true),
