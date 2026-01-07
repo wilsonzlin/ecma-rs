@@ -5,7 +5,7 @@ use crate::assoc::ts::{
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, TextRange};
-use parse_js::ast::class_or_object::ObjMemberType;
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
@@ -1012,6 +1012,22 @@ impl DeclarePass {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter_mut() {
           self.mark_scope(&mut member.assoc);
+          match &mut member.stx.typ {
+            ObjMemberType::Shorthand { .. } => {}
+            ObjMemberType::Rest { val } => self.walk_expr(val),
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                self.walk_expr(expr);
+              }
+              match val {
+                ClassOrObjVal::Prop(Some(expr)) => self.walk_expr(expr),
+                ClassOrObjVal::Getter(getter) => self.walk_func(&mut getter.stx.func),
+                ClassOrObjVal::Setter(setter) => self.walk_func(&mut setter.stx.func),
+                ClassOrObjVal::Method(method) => self.walk_func(&mut method.stx.func),
+                _ => {}
+              }
+            }
+          }
         }
       }
       AstExpr::Unary(unary) => self.walk_expr(&mut unary.stx.argument),
@@ -1751,14 +1767,29 @@ impl<'a> ResolvePass<'a> {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter_mut() {
           self.push_scope_from_assoc(&member.assoc);
-          if let ObjMemberType::Shorthand { id } = &mut member.stx.typ {
-            let span = span_for_name(id.loc, &id.stx.name);
-            let sym = self
-              .builder
-              .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
-            id.assoc.set(ResolvedSymbol(sym));
-            if let Some(sym) = sym {
-              self.expr_resolutions.insert(span, sym);
+          match &mut member.stx.typ {
+            ObjMemberType::Shorthand { id } => {
+              let span = span_for_name(id.loc, &id.stx.name);
+              let sym = self
+                .builder
+                .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+              id.assoc.set(ResolvedSymbol(sym));
+              if let Some(sym) = sym {
+                self.expr_resolutions.insert(span, sym);
+              }
+            }
+            ObjMemberType::Rest { val } => self.walk_expr(val),
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                self.walk_expr(expr);
+              }
+              match val {
+                ClassOrObjVal::Prop(Some(expr)) => self.walk_expr(expr),
+                ClassOrObjVal::Getter(getter) => self.walk_func(&mut getter.stx.func),
+                ClassOrObjVal::Setter(setter) => self.walk_func(&mut setter.stx.func),
+                ClassOrObjVal::Method(method) => self.walk_func(&mut method.stx.func),
+                _ => {}
+              }
             }
           }
           self.pop_scope_from_assoc(&member.assoc);
@@ -2467,6 +2498,22 @@ impl DeclareTablesPass {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter() {
           self.mark_scope(member);
+          match &member.stx.typ {
+            ObjMemberType::Shorthand { .. } => {}
+            ObjMemberType::Rest { val } => self.walk_expr(val),
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                self.walk_expr(expr);
+              }
+              match val {
+                ClassOrObjVal::Prop(Some(expr)) => self.walk_expr(expr),
+                ClassOrObjVal::Getter(getter) => self.walk_func(&getter.stx.func),
+                ClassOrObjVal::Setter(setter) => self.walk_func(&setter.stx.func),
+                ClassOrObjVal::Method(method) => self.walk_func(&method.stx.func),
+                _ => {}
+              }
+            }
+          }
         }
       }
       AstExpr::Unary(unary) => self.walk_expr(&unary.stx.argument),
@@ -3184,6 +3231,31 @@ impl<'a> ResolveTablesPass<'a> {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter() {
           self.push_scope_for_node(member);
+          match &member.stx.typ {
+            ObjMemberType::Shorthand { id } => {
+              let span = span_for_name(id.loc, &id.stx.name);
+              let sym = self
+                .builder
+                .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+              if let Some(sym) = sym {
+                self.expr_resolutions.insert(span, sym);
+                self.tables.record_expr_resolution(span, sym);
+              }
+            }
+            ObjMemberType::Rest { val } => self.walk_expr(val),
+            ObjMemberType::Valued { key, val } => {
+              if let ClassOrObjKey::Computed(expr) = key {
+                self.walk_expr(expr);
+              }
+              match val {
+                ClassOrObjVal::Prop(Some(expr)) => self.walk_expr(expr),
+                ClassOrObjVal::Getter(getter) => self.walk_func(&getter.stx.func),
+                ClassOrObjVal::Setter(setter) => self.walk_func(&setter.stx.func),
+                ClassOrObjVal::Method(method) => self.walk_func(&method.stx.func),
+                _ => {}
+              }
+            }
+          }
           self.pop_scope_for_node(member);
         }
       }

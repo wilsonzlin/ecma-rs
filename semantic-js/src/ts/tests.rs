@@ -2,7 +2,9 @@ use super::*;
 use crate::assoc::{js, ts};
 use crate::hash::stable_hash;
 use crate::ts::from_hir_js::lower_to_ts_hir;
-use crate::ts::locals::{bind_ts_locals, map_module_scope_locals_to_program, ScopeKind};
+use crate::ts::locals::{
+  bind_ts_locals, bind_ts_locals_tables, map_module_scope_locals_to_program, ScopeKind,
+};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
@@ -187,6 +189,75 @@ fn locals_resolve_object_literal_shorthand() {
     decl_symbol, shorthand_symbol,
     "object literal shorthand should resolve to declared binding"
   );
+}
+
+#[test]
+fn locals_tables_resolve_object_literal_members() {
+  let source = "function f() { const x = 1; const y = 2; const obj = { x, a: y }; return obj; }";
+  let mut ast_mut = parse(source).expect("parse object literal members (mut)");
+  let locals_mut = bind_ts_locals(&mut ast_mut, FileId(0));
+  let ast_tables = parse(source).expect("parse object literal members (tables)");
+  let (locals_tables, _tables) = bind_ts_locals_tables(&ast_tables, FileId(0));
+
+  let xs = positions(source, "x");
+  assert!(
+    xs.len() >= 2,
+    "expected declaration and shorthand x occurrences"
+  );
+  let x_decl = xs[0];
+  let x_shorthand = xs[1];
+
+  let x_decl_sym_mut = locals_mut
+    .resolve_expr_at_offset(x_decl)
+    .map(|(_, id)| id)
+    .expect("x declaration should resolve (mut)");
+  let x_shorthand_sym_mut = locals_mut
+    .resolve_expr_at_offset(x_shorthand)
+    .map(|(_, id)| id)
+    .expect("x shorthand should resolve (mut)");
+
+  let x_decl_sym_tables = locals_tables
+    .resolve_expr_at_offset(x_decl)
+    .map(|(_, id)| id)
+    .expect("x declaration should resolve (tables)");
+  let x_shorthand_sym_tables = locals_tables
+    .resolve_expr_at_offset(x_shorthand)
+    .map(|(_, id)| id)
+    .expect("x shorthand should resolve (tables)");
+
+  assert_eq!(x_decl_sym_mut, x_shorthand_sym_mut);
+  assert_eq!(x_decl_sym_tables, x_shorthand_sym_tables);
+  assert_eq!(x_decl_sym_mut, x_decl_sym_tables);
+
+  let ys = positions(source, "y");
+  assert!(
+    ys.len() >= 2,
+    "expected declaration and value y occurrences"
+  );
+  let y_decl = ys[0];
+  let y_value = ys[1];
+
+  let y_decl_sym_mut = locals_mut
+    .resolve_expr_at_offset(y_decl)
+    .map(|(_, id)| id)
+    .expect("y declaration should resolve (mut)");
+  let y_value_sym_mut = locals_mut
+    .resolve_expr_at_offset(y_value)
+    .map(|(_, id)| id)
+    .expect("y value should resolve (mut)");
+
+  let y_decl_sym_tables = locals_tables
+    .resolve_expr_at_offset(y_decl)
+    .map(|(_, id)| id)
+    .expect("y declaration should resolve (tables)");
+  let y_value_sym_tables = locals_tables
+    .resolve_expr_at_offset(y_value)
+    .map(|(_, id)| id)
+    .expect("y value should resolve (tables)");
+
+  assert_eq!(y_decl_sym_mut, y_value_sym_mut);
+  assert_eq!(y_decl_sym_tables, y_value_sym_tables);
+  assert_eq!(y_decl_sym_mut, y_decl_sym_tables);
 }
 
 #[test]

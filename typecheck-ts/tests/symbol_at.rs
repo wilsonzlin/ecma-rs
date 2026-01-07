@@ -406,3 +406,38 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
     "should resolve to innermost binding"
   );
 }
+
+#[test]
+fn symbol_at_resolves_object_literal_members() {
+  let mut host = MemoryHost::default();
+  let source = "function f() { const x = 1; const y = 2; const obj = { x, a: y }; return obj; }";
+  let file = FileKey::new("file.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+
+  let xs = positions_of(source, "x");
+  assert!(
+    xs.len() >= 2,
+    "expected x declaration and shorthand occurrences"
+  );
+  let x_decl = xs[0];
+  let x_shorthand = xs[1];
+  let x_decl_symbol = program.symbol_at(file_id, x_decl).expect("x decl symbol");
+  let x_shorthand_symbol = program
+    .symbol_at(file_id, x_shorthand)
+    .expect("x shorthand symbol");
+  assert_eq!(x_decl_symbol, x_shorthand_symbol);
+
+  let ys = positions_of(source, "y");
+  assert!(
+    ys.len() >= 2,
+    "expected y declaration and value occurrences"
+  );
+  let y_decl = ys[0];
+  let y_value = ys[1];
+  let y_decl_symbol = program.symbol_at(file_id, y_decl).expect("y decl symbol");
+  let y_value_symbol = program.symbol_at(file_id, y_value).expect("y value symbol");
+  assert_eq!(y_decl_symbol, y_value_symbol);
+}
