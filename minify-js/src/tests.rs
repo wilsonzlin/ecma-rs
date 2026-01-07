@@ -717,10 +717,7 @@ fn rewrites_object_pattern_computed_string_keys_to_direct_keys() {
     TopLevelMode::Module,
     r#"const obj={"a-b":1};const {["a-b"]:x}=obj;console.log(x);"#,
   );
-  assert_eq!(
-    result,
-    r#"const a={"a-b":1},{"a-b":b}=a;console.log(b);"#
-  );
+  assert_eq!(result, r#"const a={"a-b":1},{"a-b":b}=a;console.log(b);"#);
 }
 
 #[test]
