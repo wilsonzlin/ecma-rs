@@ -1,6 +1,6 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{cooked_template_segment, emit_template_literal_segment};
-use crate::precedence::starts_with_optional_chaining;
+use crate::precedence::{child_min_prec_for_binary, starts_with_optional_chaining, Side};
 use crate::stmt::{emit_class_like, emit_decorators};
 use crate::ts_type::{emit_ts_type, emit_type_expr, emit_type_parameters};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -13,7 +13,7 @@ use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
 use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
-use parse_js::operator::{Associativity, OperatorName, OPERATORS};
+use parse_js::operator::{OperatorName, OPERATORS};
 use parse_js::token::TT;
 
 const PRIMARY_PRECEDENCE: u8 = 19;
@@ -165,13 +165,35 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
 }
 
 fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> EmitResult {
-  let op = OPERATORS
+  let _op = OPERATORS
     .get(&binary.stx.operator)
     .ok_or_else(|| EmitError::unsupported("unknown operator"))?;
   let op_txt = binary_operator_text(binary.stx.operator)?;
-  let prec = op.precedence;
+  let left_min_prec = child_min_prec_for_binary(binary.stx.operator, Side::Left).value();
+  let right_min_prec = child_min_prec_for_binary(binary.stx.operator, Side::Right).value();
 
-  emit_expr_with_min_prec(em, &binary.stx.left, prec, ctx)?;
+  let force_left_parens = binary.stx.operator == OperatorName::Exponentiation
+    && matches!(
+      binary.stx.left.stx.as_ref(),
+      Expr::Unary(_) | Expr::UnaryPostfix(_)
+    );
+  let force_left_parens = force_left_parens
+    || (binary.stx.operator == OperatorName::NullishCoalescing && is_logical_and_or(&binary.stx.left))
+    || ((binary.stx.operator == OperatorName::LogicalAnd
+      || binary.stx.operator == OperatorName::LogicalOr)
+      && is_nullish(&binary.stx.left));
+
+  let force_right_parens = (binary.stx.operator == OperatorName::NullishCoalescing
+    && is_logical_and_or(&binary.stx.right))
+    || ((binary.stx.operator == OperatorName::LogicalAnd
+      || binary.stx.operator == OperatorName::LogicalOr)
+      && is_nullish(&binary.stx.right));
+
+  if force_left_parens {
+    emit_wrapped(em, &binary.stx.left, ctx)?;
+  } else {
+    emit_expr_with_min_prec(em, &binary.stx.left, left_min_prec, ctx)?;
+  }
 
   match binary.stx.operator {
     OperatorName::In | OperatorName::Instanceof => em.write_keyword(op_txt),
@@ -218,8 +240,11 @@ fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> Emi
     _ => return Err(EmitError::unsupported("operator not supported")),
   }
 
-  let right_prec = prec + (op.associativity == Associativity::Left) as u8;
-  emit_expr_with_min_prec(em, &binary.stx.right, right_prec, ctx)
+  if force_right_parens {
+    emit_wrapped(em, &binary.stx.right, ctx)
+  } else {
+    emit_expr_with_min_prec(em, &binary.stx.right, right_min_prec, ctx)
+  }
 }
 
 fn emit_conditional(em: &mut Emitter, cond: &Node<CondExpr>, ctx: ExprCtx) -> EmitResult {
@@ -227,11 +252,18 @@ fn emit_conditional(em: &mut Emitter, cond: &Node<CondExpr>, ctx: ExprCtx) -> Em
     .get(&OperatorName::Conditional)
     .ok_or_else(|| EmitError::unsupported("unknown operator"))?
     .precedence;
-  emit_expr_with_min_prec(em, &cond.stx.test, prec, ctx)?;
+  emit_expr_with_min_prec(em, &cond.stx.test, prec + 1, ctx)?;
   em.write_punct("?");
   emit_expr_with_min_prec(em, &cond.stx.consequent, prec, ctx)?;
   em.write_punct(":");
   emit_expr_with_min_prec(em, &cond.stx.alternate, prec, ctx)
+}
+
+fn emit_wrapped(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> EmitResult {
+  em.write_punct("(");
+  emit_expr_with_min_prec(em, expr, 0, ctx)?;
+  em.write_punct(")");
+  Ok(())
 }
 
 fn emit_call(em: &mut Emitter, call: &Node<CallExpr>, ctx: ExprCtx) -> EmitResult {
@@ -1003,4 +1035,20 @@ fn expr_starts_with_brace(expr: &Node<Expr>) -> bool {
     Expr::Cond(cond) => expr_starts_with_brace(&cond.stx.test),
     _ => false,
   }
+}
+
+fn is_nullish(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(binary) if binary.stx.operator == OperatorName::NullishCoalescing
+  )
+}
+
+fn is_logical_and_or(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(binary)
+      if binary.stx.operator == OperatorName::LogicalAnd
+        || binary.stx.operator == OperatorName::LogicalOr
+  )
 }
