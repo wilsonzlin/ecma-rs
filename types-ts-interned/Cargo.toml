@@ -7,6 +7,7 @@ description = "Interned TypeScript type representation (imported from worker-10)
 [features]
 default = []
 fuzzing = []
+tracing = ["dep:tracing"]
 
 [dependencies]
 hir-js = { path = "../hir-js", features = ["serde"] }
@@ -20,6 +21,7 @@ ordered-float = { version = "3", features = ["serde"] }
 num-bigint = { version = "0.4", features = ["serde"] }
 unicode-ident = "1.0"
 smallvec = "1.15.1"
+tracing = { version = "0.1", optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1"

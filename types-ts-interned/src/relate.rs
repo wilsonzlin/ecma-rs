@@ -26,6 +26,16 @@ use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "tracing")]
+fn cache_stats_delta(before: CacheStats, after: CacheStats) -> CacheStats {
+  CacheStats {
+    hits: after.hits.saturating_sub(before.hits),
+    misses: after.misses.saturating_sub(before.misses),
+    insertions: after.insertions.saturating_sub(before.insertions),
+    evictions: after.evictions.saturating_sub(before.evictions),
+  }
+}
+
 #[cfg(test)]
 thread_local! {
   static NORMALIZE_CALLS: Cell<usize> = const { Cell::new(0) };
@@ -400,6 +410,36 @@ impl<'a> RelateCtx<'a> {
   }
 
   pub fn is_assignable(&self, src: TypeId, dst: TypeId) -> bool {
+    #[cfg(feature = "tracing")]
+    {
+      let span = tracing::info_span!(
+        "types_ts_interned::RelateCtx::is_assignable",
+        src = ?src,
+        dst = ?dst,
+        kind = ?RelationKind::Assignable,
+        mode = ?RelationMode::NONE,
+        step_limit = self.limits.step_limit as u64,
+        result = tracing::field::Empty,
+        cache_hit = false,
+        depth_limit_hit = false,
+        step_limit_hit = false,
+      );
+      let _enter = span.enter();
+      let result = self
+        .relate_internal(
+          src,
+          dst,
+          RelationKind::Assignable,
+          RelationMode::NONE,
+          false,
+          0,
+        )
+        .result;
+      span.record("result", &result);
+      result
+    }
+
+    #[cfg(not(feature = "tracing"))]
     self
       .relate_internal(
         src,
@@ -426,24 +466,101 @@ impl<'a> RelateCtx<'a> {
   }
 
   pub fn explain_assignable(&self, src: TypeId, dst: TypeId) -> RelationResult {
-    self.reset_reason_budget();
-    self.relate_internal(
-      src,
-      dst,
-      RelationKind::Assignable,
-      RelationMode::NONE,
-      true,
-      0,
-    )
+    #[cfg(feature = "tracing")]
+    {
+      let span = tracing::info_span!(
+        "types_ts_interned::RelateCtx::explain_assignable",
+        src = ?src,
+        dst = ?dst,
+        kind = ?RelationKind::Assignable,
+        mode = ?RelationMode::NONE,
+        step_limit = self.limits.step_limit as u64,
+        result = tracing::field::Empty,
+        cache_hit = false,
+        depth_limit_hit = false,
+        step_limit_hit = false,
+      );
+      let _enter = span.enter();
+      self.reset_reason_budget();
+      let result = self.relate_internal(
+        src,
+        dst,
+        RelationKind::Assignable,
+        RelationMode::NONE,
+        true,
+        0,
+      );
+      span.record("result", &result.result);
+      result
+    }
+
+    #[cfg(not(feature = "tracing"))]
+    {
+      self.reset_reason_budget();
+      self.relate_internal(src, dst, RelationKind::Assignable, RelationMode::NONE, true, 0)
+    }
   }
 
   pub fn is_comparable(&self, a: TypeId, b: TypeId) -> bool {
+    #[cfg(feature = "tracing")]
+    {
+      let span = tracing::info_span!(
+        "types_ts_interned::RelateCtx::is_comparable",
+        src = ?a,
+        dst = ?b,
+        kind = ?RelationKind::Comparable,
+        mode = ?RelationMode::NONE,
+        step_limit = self.limits.step_limit as u64,
+        result = tracing::field::Empty,
+        cache_hit = false,
+        depth_limit_hit = false,
+        step_limit_hit = false,
+      );
+      let _enter = span.enter();
+      let result = self
+        .relate_internal(a, b, RelationKind::Comparable, RelationMode::NONE, false, 0)
+        .result;
+      span.record("result", &result);
+      result
+    }
+
+    #[cfg(not(feature = "tracing"))]
     self
       .relate_internal(a, b, RelationKind::Comparable, RelationMode::NONE, false, 0)
       .result
   }
 
   pub fn is_strict_subtype(&self, src: TypeId, dst: TypeId) -> bool {
+    #[cfg(feature = "tracing")]
+    {
+      let span = tracing::info_span!(
+        "types_ts_interned::RelateCtx::is_strict_subtype",
+        src = ?src,
+        dst = ?dst,
+        kind = ?RelationKind::StrictSubtype,
+        mode = ?RelationMode::NONE,
+        step_limit = self.limits.step_limit as u64,
+        result = tracing::field::Empty,
+        cache_hit = false,
+        depth_limit_hit = false,
+        step_limit_hit = false,
+      );
+      let _enter = span.enter();
+      let result = self
+        .relate_internal(
+          src,
+          dst,
+          RelationKind::StrictSubtype,
+          RelationMode::NONE,
+          false,
+          0,
+        )
+        .result;
+      span.record("result", &result);
+      result
+    }
+
+    #[cfg(not(feature = "tracing"))]
     self
       .relate_internal(
         src,
@@ -476,6 +593,11 @@ impl<'a> RelateCtx<'a> {
       mode,
     };
     if depth >= self.limits.max_relation_depth {
+      #[cfg(feature = "tracing")]
+      {
+        let span = tracing::Span::current();
+        span.record("depth_limit_hit", &true);
+      }
       let record = record && self.take_reason_slot();
       return RelationResult {
         result: true,
@@ -490,6 +612,14 @@ impl<'a> RelateCtx<'a> {
       };
     }
     if let Some(hit) = self.cache.get(&key) {
+      #[cfg(feature = "tracing")]
+      {
+        if depth == 0 {
+          let span = tracing::Span::current();
+          span.record("cache_hit", &true);
+          span.record("result", &hit);
+        }
+      }
       let record = record && self.take_reason_slot();
       return RelationResult {
         result: hit,
@@ -509,6 +639,11 @@ impl<'a> RelateCtx<'a> {
     if self.limits.step_limit != RelationLimits::DEFAULT_STEP_LIMIT {
       let current_steps = self.steps.get();
       if current_steps >= self.limits.step_limit {
+        #[cfg(feature = "tracing")]
+        {
+          let span = tracing::Span::current();
+          span.record("step_limit_hit", &true);
+        }
         let record = record && self.take_reason_slot();
         return RelationResult {
           result: true,
@@ -2608,6 +2743,22 @@ impl<'a> RelateCtx<'a> {
     {
       NORMALIZE_CALLS.with(|counter| counter.set(counter.get() + 1));
     }
+
+    #[cfg(feature = "tracing")]
+    let before_stats = self.normalizer_caches.stats();
+    #[cfg(feature = "tracing")]
+    let span = tracing::trace_span!(
+      "types_ts_interned::RelateCtx::normalize_type",
+      ty = ?ty,
+      eval_cache_hits = tracing::field::Empty,
+      eval_cache_misses = tracing::field::Empty,
+      ref_cache_hits = tracing::field::Empty,
+      ref_cache_misses = tracing::field::Empty,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
     };
@@ -2615,7 +2766,21 @@ impl<'a> RelateCtx<'a> {
       TypeEvaluator::with_caches(self.store.clone(), &adapter, self.normalizer_caches.clone())
         .with_step_limit(self.limits.step_limit)
         .with_conditional_assignability(self);
-    evaluator.evaluate(ty)
+    let result = evaluator.evaluate(ty);
+
+    #[cfg(feature = "tracing")]
+    {
+      let after_stats = self.normalizer_caches.stats();
+      let eval_delta = cache_stats_delta(before_stats.eval, after_stats.eval);
+      let refs_delta = cache_stats_delta(before_stats.references, after_stats.references);
+      span.record("eval_cache_hits", &eval_delta.hits);
+      span.record("eval_cache_misses", &eval_delta.misses);
+      span.record("ref_cache_hits", &refs_delta.hits);
+      span.record("ref_cache_misses", &refs_delta.misses);
+      span.record("result", &tracing::field::debug(&result));
+    }
+
+    result
   }
 
   fn is_method_like(&self, data: &PropData) -> bool {

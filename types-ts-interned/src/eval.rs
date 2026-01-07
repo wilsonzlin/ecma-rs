@@ -12,6 +12,16 @@ use smallvec::SmallVec;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
+#[cfg(feature = "tracing")]
+fn cache_stats_delta(before: CacheStats, after: CacheStats) -> CacheStats {
+  CacheStats {
+    hits: after.hits.saturating_sub(before.hits),
+    misses: after.misses.saturating_sub(before.misses),
+    insertions: after.insertions.saturating_sub(before.insertions),
+    evictions: after.evictions.saturating_sub(before.evictions),
+  }
+}
+
 /// Expanded representation of a referenced type definition.
 ///
 /// The `params` field lists formal type parameters that should be
@@ -516,6 +526,35 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
   pub fn evaluate(&mut self, ty: TypeId) -> TypeId {
     self.steps = 0;
+    #[cfg(feature = "tracing")]
+    {
+      let before_stats = self.caches.stats();
+      let span = tracing::info_span!(
+        "types_ts_interned::TypeEvaluator::evaluate",
+        ty = ?ty,
+        step_limit = self.limits.step_limit as u64,
+        depth_limit = self.limits.depth_limit as u64,
+        max_template_strings = self.limits.max_template_strings as u64,
+        steps = tracing::field::Empty,
+        eval_cache_hits = tracing::field::Empty,
+        eval_cache_misses = tracing::field::Empty,
+        ref_cache_hits = tracing::field::Empty,
+        ref_cache_misses = tracing::field::Empty,
+      );
+      let _enter = span.enter();
+      let result = self.evaluate_with_subst(ty, &Substitution::empty(), 0);
+      let after_stats = self.caches.stats();
+      let eval_delta = cache_stats_delta(before_stats.eval, after_stats.eval);
+      let refs_delta = cache_stats_delta(before_stats.references, after_stats.references);
+      span.record("steps", &(self.steps as u64));
+      span.record("eval_cache_hits", &eval_delta.hits);
+      span.record("eval_cache_misses", &eval_delta.misses);
+      span.record("ref_cache_hits", &refs_delta.hits);
+      span.record("ref_cache_misses", &refs_delta.misses);
+      result
+    }
+
+    #[cfg(not(feature = "tracing"))]
     self.evaluate_with_subst(ty, &Substitution::empty(), 0)
   }
 
@@ -760,6 +799,20 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
+    #[cfg(feature = "tracing")]
+    let span = tracing::debug_span!(
+      "types_ts_interned::TypeEvaluator::evaluate_conditional",
+      check = ?check,
+      extends = ?extends,
+      distributive,
+      indeterminate = tracing::field::Empty,
+      deferred = tracing::field::Empty,
+      assignable = tracing::field::Empty,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let raw_check_param = match self.store.type_kind(check) {
       TypeKind::TypeParam(param) => Some(param),
       _ => None,
@@ -778,11 +831,23 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     // member substitution (e.g. `T -> member`) rather than once with the full
     // union binding.
     match self.store.type_kind(check_eval) {
-      TypeKind::Never if distributive => return self.store.primitive_ids().never,
+      TypeKind::Never if distributive => {
+        let result = self.store.primitive_ids().never;
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        return result;
+      }
       TypeKind::Any => {
         let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
         let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
-        return self.store.union(vec![true_eval, false_eval]);
+        let result = self.store.union(vec![true_eval, false_eval]);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        return result;
       }
       TypeKind::Union(members) if distributive => {
         let mut results = Vec::new();
@@ -802,7 +867,12 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             depth + 1,
           ));
         }
-        return self.store.union(results);
+        let result = self.store.union(results);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        return result;
       }
       _ => {}
     }
@@ -821,6 +891,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       || self.conditional_is_indeterminate_operand(check_eval, subst, depth + 1)
       || self.conditional_is_indeterminate_operand(extends_eval, subst, depth + 1);
     if indeterminate {
+      #[cfg(feature = "tracing")]
+      {
+        span.record("indeterminate", &true);
+      }
       // Some conditional types include `infer` placeholders in the `extends`
       // operand (e.g. `Awaited<T>`, `ReturnType<T>`). We cannot generally reduce
       // these without performing inference, but we *can* still pick the false
@@ -832,18 +906,33 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       // `Awaited<"ok">` should reduce to `"ok"` even though `Awaited` is written
       // in terms of `infer`.
       if self.conditional_definitely_not_assignable(check_eval, extends_eval, depth + 1) {
-        return self.evaluate_with_subst(false_ty, subst, depth + 1);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("deferred", &false);
+        }
+        let result = self.evaluate_with_subst(false_ty, subst, depth + 1);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        return result;
       }
 
       let true_eval = self.evaluate_with_subst(true_ty, subst, depth + 1);
       let false_eval = self.evaluate_with_subst(false_ty, subst, depth + 1);
-      return self.store.intern_type(TypeKind::Conditional {
+      let result = self.store.intern_type(TypeKind::Conditional {
         check: check_eval,
         extends: extends_eval,
         true_ty: true_eval,
         false_ty: false_eval,
         distributive,
       });
+      #[cfg(feature = "tracing")]
+      {
+        span.record("deferred", &true);
+        span.record("result", &tracing::field::debug(&result));
+      }
+      return result;
     }
 
     let assignable = match self.conditional_assignability {
@@ -860,9 +949,18 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           .is_assignable_for_conditional(check_eval, extends_eval)
       }
     };
+    #[cfg(feature = "tracing")]
+    {
+      span.record("assignable", &assignable);
+    }
 
     let branch = if assignable { true_ty } else { false_ty };
-    self.evaluate_with_subst(branch, subst, depth + 1)
+    let result = self.evaluate_with_subst(branch, subst, depth + 1);
+    #[cfg(feature = "tracing")]
+    {
+      span.record("result", &tracing::field::debug(&result));
+    }
+    result
   }
 
   /// Conservative fast path for conditional-type reduction in the presence of
@@ -1057,7 +1155,22 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   }
 
   fn evaluate_mapped(&mut self, mapped: MappedType, subst: &Substitution, depth: usize) -> TypeId {
+    #[cfg(feature = "tracing")]
+    let span = tracing::debug_span!(
+      "types_ts_interned::TypeEvaluator::evaluate_mapped",
+      source = ?mapped.source,
+      value = ?mapped.value,
+      entry_count = tracing::field::Empty,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let entries = self.mapped_entries(mapped.source, subst, depth + 1);
+    #[cfg(feature = "tracing")]
+    {
+      span.record("entry_count", &(entries.len() as u64));
+    }
 
     let mut properties = Vec::new();
     let mut indexers = Vec::new();
@@ -1145,13 +1258,23 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       && shape.call_signatures.is_empty()
       && shape.construct_signatures.is_empty()
     {
-      return self.store.intern_type(TypeKind::EmptyObject);
+      let result = self.store.intern_type(TypeKind::EmptyObject);
+      #[cfg(feature = "tracing")]
+      {
+        span.record("result", &tracing::field::debug(&result));
+      }
+      return result;
     }
     let shape_id = self.store.intern_shape(shape);
     let obj = self
       .store
       .intern_object(crate::ObjectType { shape: shape_id });
-    self.store.intern_type(TypeKind::Object(obj))
+    let result = self.store.intern_type(TypeKind::Object(obj));
+    #[cfg(feature = "tracing")]
+    {
+      span.record("result", &tracing::field::debug(&result));
+    }
+    result
   }
 
   fn remap_mapped_key(
@@ -1253,21 +1376,63 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
+    #[cfg(feature = "tracing")]
+    let span = tracing::debug_span!(
+      "types_ts_interned::TypeEvaluator::evaluate_template_literal",
+      head_len = tpl.head.len() as u64,
+      span_count = tpl.spans.len() as u64,
+      computed = tracing::field::Empty,
+      string_count = tracing::field::Empty,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let strings = self.compute_template_strings(&tpl, subst, depth + 1);
     match strings {
       TemplateStringComputation::Finite(strings) => {
+        #[cfg(feature = "tracing")]
+        {
+          span.record("computed", "finite");
+          span.record("string_count", &(strings.len() as u64));
+        }
         if strings.is_empty() {
-          return self.store.primitive_ids().never;
+          let result = self.store.primitive_ids().never;
+          #[cfg(feature = "tracing")]
+          {
+            span.record("result", &tracing::field::debug(&result));
+          }
+          return result;
         }
         let mut types = Vec::new();
         for s in strings {
           let name = self.store.intern_name(s);
           types.push(self.store.intern_type(TypeKind::StringLiteral(name)));
         }
-        self.store.union(types)
+        let result = self.store.union(types);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        result
       }
-      TemplateStringComputation::TooLarge => self.store.primitive_ids().string,
+      TemplateStringComputation::TooLarge => {
+        #[cfg(feature = "tracing")]
+        {
+          span.record("computed", "too_large");
+        }
+        let result = self.store.primitive_ids().string;
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        result
+      }
       TemplateStringComputation::Infinite => {
+        #[cfg(feature = "tracing")]
+        {
+          span.record("computed", "infinite");
+        }
         let evaluated_spans = tpl
           .spans
           .into_iter()
@@ -1276,12 +1441,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             ty: self.evaluate_with_subst(chunk.ty, subst, depth + 1),
           })
           .collect();
-        self
+        let result = self
           .store
           .intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
             head: tpl.head,
             spans: evaluated_spans,
-          }))
+          }));
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        result
       }
     }
   }
@@ -1395,6 +1565,16 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
+    #[cfg(feature = "tracing")]
+    let span = tracing::debug_span!(
+      "types_ts_interned::TypeEvaluator::evaluate_indexed_access",
+      obj = ?obj,
+      index = ?index,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let options = self.store.options();
     let obj_eval = self.evaluate_with_subst(obj, subst, depth + 1);
     let index_eval = self.evaluate_with_subst(index, subst, depth + 1);
@@ -1555,13 +1735,31 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         .union(vec![result, self.store.primitive_ids().undefined]);
     }
 
+    #[cfg(feature = "tracing")]
+    {
+      span.record("result", &tracing::field::debug(&result));
+    }
     result
   }
 
   fn evaluate_keyof(&mut self, inner: TypeId, subst: &Substitution, depth: usize) -> TypeId {
+    #[cfg(feature = "tracing")]
+    let span = tracing::debug_span!(
+      "types_ts_interned::TypeEvaluator::evaluate_keyof",
+      inner = ?inner,
+      key_count = tracing::field::Empty,
+      result = tracing::field::Empty,
+    );
+    #[cfg(feature = "tracing")]
+    let _enter = span.enter();
+
     let keyset = self.keys_from_type(inner, subst, depth + 1);
     match keyset {
       KeySet::Known(keys) => {
+        #[cfg(feature = "tracing")]
+        {
+          span.record("key_count", &(keys.len() as u64));
+        }
         let mut members = Vec::new();
         for key in keys {
           match key {
@@ -1581,13 +1779,29 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             Key::Symbol => members.push(self.store.primitive_ids().symbol),
           }
         }
-        self.store.union(members)
+        let result = self.store.union(members);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        result
       }
-      KeySet::Unknown => self.store.union(vec![
+      KeySet::Unknown => {
+        #[cfg(feature = "tracing")]
+        {
+          span.record("key_count", &0u64);
+        }
+        let result = self.store.union(vec![
         self.store.primitive_ids().string,
         self.store.primitive_ids().number,
         self.store.primitive_ids().symbol,
-      ]),
+        ]);
+        #[cfg(feature = "tracing")]
+        {
+          span.record("result", &tracing::field::debug(&result));
+        }
+        result
+      }
     }
   }
 
