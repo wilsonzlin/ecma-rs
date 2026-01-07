@@ -194,13 +194,13 @@ impl ProgramState {
                 Ok(Some(ty)) => type_id = Some(ty),
                 Ok(None) => {
                   if type_id.is_none() {
-                    type_id = self.def_types.get(&def).copied();
+                    type_id = self.interned_def_types.get(&def).copied();
                   }
                 }
                 Err(fatal) => {
                   self.diagnostics.push(fatal_to_diagnostic(fatal));
                   if type_id.is_none() {
-                    type_id = self.def_types.get(&def).copied();
+                    type_id = self.interned_def_types.get(&def).copied();
                   }
                 }
               }
@@ -281,13 +281,13 @@ impl ProgramState {
                 Ok(Some(ty)) => type_id = Some(ty),
                 Ok(None) => {
                   if type_id.is_none() {
-                    type_id = self.def_types.get(&def).copied();
+                    type_id = self.interned_def_types.get(&def).copied();
                   }
                 }
                 Err(fatal) => {
                   self.diagnostics.push(fatal_to_diagnostic(fatal));
                   if type_id.is_none() {
-                    type_id = self.def_types.get(&def).copied();
+                    type_id = self.interned_def_types.get(&def).copied();
                   }
                 }
               }

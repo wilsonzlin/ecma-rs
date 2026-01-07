@@ -3,9 +3,7 @@ use super::*;
 impl ProgramState {
   pub(in super::super) fn rebuild_interned_named_def_types(&mut self) {
     self.interned_named_def_types.clear();
-    let Some(store) = self.interned_store.as_ref() else {
-      return;
-    };
+    let store = self.store.as_ref();
     let def_sort_key =
       |def: DefId, data: &DefData| (data.file.0, data.span.start, data.span.end, def.0);
     let mut entries: Vec<(tti::TypeId, (u32, u32, u32, u64), DefId)> = Vec::new();

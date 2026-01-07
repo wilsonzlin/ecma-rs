@@ -2,10 +2,7 @@ use super::*;
 
 impl ProgramState {
   pub(in super::super) fn prefer_named_refs(&self, ty: TypeId) -> TypeId {
-    let Some(store) = self.interned_store.as_ref() else {
-      return ty;
-    };
-    self.prefer_named_refs_in_store(store, ty)
+    self.prefer_named_refs_in_store(&self.store, ty)
   }
 
   pub(in super::super) fn prefer_named_refs_in_store(

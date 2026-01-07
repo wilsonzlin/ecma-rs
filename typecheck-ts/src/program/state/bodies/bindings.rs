@@ -8,8 +8,8 @@ impl ProgramState {
     binding_defs: &mut HashMap<String, DefId>,
   ) -> Result<(), FatalError> {
     self.check_cancelled()?;
-    let unknown = self.interned_unknown();
-    let interned_store = self.interned_store.as_ref().cloned();
+    let store = Arc::clone(&self.store);
+    let unknown = store.primitive_ids().unknown;
     fn record_pat(
       state: &mut ProgramState,
       pat_id: HirPatId,
@@ -19,6 +19,7 @@ impl ProgramState {
       bindings: &mut HashMap<String, TypeId>,
       binding_defs: &mut HashMap<String, DefId>,
       file: FileId,
+      store: &Arc<tti::TypeStore>,
       unknown: TypeId,
       seen: &mut HashSet<String>,
     ) {
@@ -26,10 +27,8 @@ impl ProgramState {
         return;
       };
       let mut ty = result.pat_type(PatId(pat_id.0)).unwrap_or(unknown);
-      if let Some(store) = state.interned_store.as_ref() {
-        if !store.contains_type_id(ty) {
-          ty = store.primitive_ids().unknown;
-        }
+      if !store.contains_type_id(ty) {
+        ty = store.primitive_ids().unknown;
       }
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
@@ -68,49 +67,37 @@ impl ProgramState {
             // type over the (possibly literal-inferred) pattern type from the parent
             // body. This matches TypeScript's behavior for e.g.
             // `const x: string = ""` where `x` should be `string`, not `""`.
-            let should_prefer_declared = if let Some(store) = state.interned_store.as_ref() {
-              matches!(
-                store.type_kind(ty),
-                tti::TypeKind::Unknown
-                  | tti::TypeKind::StringLiteral(_)
-                  | tti::TypeKind::NumberLiteral(_)
-                  | tti::TypeKind::BooleanLiteral(_)
-                  | tti::TypeKind::BigIntLiteral(_)
-              )
-            } else {
-              ty == unknown
-            };
+            let should_prefer_declared = matches!(
+              store.type_kind(ty),
+              tti::TypeKind::Unknown
+                | tti::TypeKind::StringLiteral(_)
+                | tti::TypeKind::NumberLiteral(_)
+                | tti::TypeKind::BooleanLiteral(_)
+                | tti::TypeKind::BigIntLiteral(_)
+            );
             if should_prefer_declared {
               let declared = state.declared_type_for_span(file, pat.span);
               if let Some(declared) = declared {
-                if let Some(store) = state.interned_store.as_ref() {
-                  if store.contains_type_id(declared) {
-                    ty = store.canon(declared);
-                  }
-                } else {
-                  ty = declared;
+                if store.contains_type_id(declared) {
+                  ty = store.canon(declared);
                 }
               }
             }
             let replace = match bindings.get(&name) {
               None => true,
               Some(existing) => {
-                if let Some(store) = state.interned_store.as_ref() {
-                  if !store.contains_type_id(*existing)
-                    || matches!(store.type_kind(*existing), tti::TypeKind::Unknown)
-                  {
-                    true
-                  } else {
-                    matches!(
-                      (store.type_kind(*existing), store.type_kind(ty)),
-                      (tti::TypeKind::StringLiteral(_), tti::TypeKind::String)
-                        | (tti::TypeKind::NumberLiteral(_), tti::TypeKind::Number)
-                        | (tti::TypeKind::BooleanLiteral(_), tti::TypeKind::Boolean)
-                        | (tti::TypeKind::BigIntLiteral(_), tti::TypeKind::BigInt)
-                    )
-                  }
+                if !store.contains_type_id(*existing)
+                  || matches!(store.type_kind(*existing), tti::TypeKind::Unknown)
+                {
+                  true
                 } else {
-                  *existing == unknown
+                  matches!(
+                    (store.type_kind(*existing), store.type_kind(ty)),
+                    (tti::TypeKind::StringLiteral(_), tti::TypeKind::String)
+                      | (tti::TypeKind::NumberLiteral(_), tti::TypeKind::Number)
+                      | (tti::TypeKind::BooleanLiteral(_), tti::TypeKind::Boolean)
+                      | (tti::TypeKind::BigIntLiteral(_), tti::TypeKind::BigInt)
+                  )
                 }
               }
             };
@@ -130,6 +117,7 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              store,
               unknown,
               seen,
             );
@@ -144,6 +132,7 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              store,
               unknown,
               seen,
             );
@@ -160,6 +149,7 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              store,
               unknown,
               seen,
             );
@@ -174,6 +164,7 @@ impl ProgramState {
               bindings,
               binding_defs,
               file,
+              store,
               unknown,
               seen,
             );
@@ -189,6 +180,7 @@ impl ProgramState {
             bindings,
             binding_defs,
             file,
+            store,
             unknown,
             seen,
           );
@@ -203,6 +195,7 @@ impl ProgramState {
             bindings,
             binding_defs,
             file,
+            store,
             unknown,
             seen,
           );
@@ -269,6 +262,7 @@ impl ProgramState {
           bindings,
           binding_defs,
           meta.file,
+          &store,
           unknown,
           &mut seen_names,
         );
@@ -283,48 +277,25 @@ impl ProgramState {
             ..
           }) = self.def_data.get(&owner)
           {
-            if let Some(store) = interned_store.as_ref() {
-              let mut convert_cache = HashMap::new();
-              for param in func.params.iter() {
-                if param.name.starts_with("<pattern") {
-                  continue;
-                }
-                let mapped = if let Some(annot) = param.typ {
-                  store.canon(convert_type_for_display(
-                    annot,
-                    self,
-                    store,
-                    &mut convert_cache,
-                  ))
-                } else {
-                  store.primitive_ids().unknown
-                };
-                bindings
-                  .entry(param.name.clone())
-                  .and_modify(|existing| {
-                    let existing_unknown = !store.contains_type_id(*existing)
-                      || matches!(store.type_kind(*existing), tti::TypeKind::Unknown);
-                    if existing_unknown {
-                      *existing = mapped;
-                    }
-                  })
-                  .or_insert(mapped);
+            for param in func.params.iter() {
+              if param.name.starts_with("<pattern") {
+                continue;
               }
-            } else {
-              for param in func.params.iter() {
-                if param.name.starts_with("<pattern") {
-                  continue;
-                }
-                let ty = param.typ.unwrap_or(unknown);
-                bindings
-                  .entry(param.name.clone())
-                  .and_modify(|existing| {
-                    if *existing == unknown {
-                      *existing = ty;
-                    }
-                  })
-                  .or_insert(ty);
-              }
+              let mapped = param
+                .typ
+                .filter(|ty| store.contains_type_id(*ty))
+                .map(|ty| store.canon(ty))
+                .unwrap_or_else(|| store.primitive_ids().unknown);
+              bindings
+                .entry(param.name.clone())
+                .and_modify(|existing| {
+                  let existing_unknown = !store.contains_type_id(*existing)
+                    || matches!(store.type_kind(*existing), tti::TypeKind::Unknown);
+                  if existing_unknown {
+                    *existing = mapped;
+                  }
+                })
+                .or_insert(mapped);
             }
           }
         }

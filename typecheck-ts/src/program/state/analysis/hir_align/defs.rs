@@ -70,12 +70,6 @@ impl ProgramState {
       .filter(|(_, data)| data.file != file)
       .map(|(id, data)| (*id, data.clone()))
       .collect();
-    let mut new_def_types: HashMap<DefId, TypeId> = self
-      .def_types
-      .iter()
-      .filter(|(id, _)| !file_def_ids.contains(id))
-      .map(|(id, ty)| (*id, *ty))
-      .collect();
     let mut new_interned_def_types: HashMap<DefId, tti::TypeId> = self
       .interned_def_types
       .iter()
@@ -183,9 +177,6 @@ impl ProgramState {
           }
           _ => {}
         }
-        if let Some(ty) = self.def_types.get(&old_id).copied() {
-          new_def_types.insert(def.id, ty);
-        }
         if let Some(ty) = self.interned_def_types.get(&old_id).copied() {
           new_interned_def_types.insert(def.id, ty);
         }
@@ -260,10 +251,10 @@ impl ProgramState {
             declare: def.is_ambient,
           }),
           DefMatchKind::Interface => DefKind::Interface(InterfaceData {
-            typ: self.builtin.unknown,
+            typ: self.interned_unknown(),
           }),
           DefMatchKind::TypeAlias => DefKind::TypeAlias(TypeAliasData {
-            typ: self.builtin.unknown,
+            typ: self.interned_unknown(),
           }),
           _ => DefKind::Var(VarData {
             typ: None,
@@ -319,7 +310,7 @@ impl ProgramState {
           ExportEntry {
             symbol: data.symbol,
             def: Some(def_id),
-            type_id: new_def_types.get(&def_id).copied(),
+            type_id: new_interned_def_types.get(&def_id).copied(),
           },
         );
       }
@@ -331,9 +322,6 @@ impl ProgramState {
     for leftovers in by_name_kind.values_mut() {
       for (old_id, data) in leftovers.drain(..) {
         new_def_data.insert(old_id, data.clone());
-        if let Some(ty) = self.def_types.get(&old_id).copied() {
-          new_def_types.insert(old_id, ty);
-        }
         if let Some(ty) = self.interned_def_types.get(&old_id).copied() {
           new_interned_def_types.insert(old_id, ty);
         }
@@ -430,7 +418,6 @@ impl ProgramState {
     );
 
     self.def_data = new_def_data;
-    self.def_types = new_def_types;
     self.interned_def_types = new_interned_def_types;
     self.interned_type_params = new_interned_type_params;
     self.interned_type_param_decls = new_interned_type_param_decls;

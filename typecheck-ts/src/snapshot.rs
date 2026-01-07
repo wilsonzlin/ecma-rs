@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::api::TextRange;
 use crate::lib_support::{CompilerOptions, FileKind};
-use crate::program::{BodyCheckResult, BuiltinTypes, DefData, TypeStore};
+use crate::program::{BodyCheckResult, DefData};
 use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
 use crate::{BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
-  IntrinsicKind, TypeId, TypeId as InternedTypeId, TypeParamDecl, TypeParamId,
+  IntrinsicKind, TypeId, TypeParamDecl, TypeParamId,
   TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
@@ -23,7 +23,10 @@ use types_ts_interned::{
 /// Version 14 updates stored HIR identifiers (`DefId`, `BodyId`) to their 64-bit
 /// packed representation (file id + local hash), making cross-file collisions
 /// impossible.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 14;
+///
+/// Version 15 removes the legacy `program` type store; snapshots now persist
+/// only the `types-ts-interned` store and interned type tables.
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 15;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
@@ -119,8 +122,8 @@ pub struct ProgramSnapshot {
   pub files: Vec<FileSnapshot>,
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
-  pub def_types: Vec<(DefId, TypeId)>,
   pub canonical_defs: Vec<((FileId, String), DefId)>,
+  #[serde(default)]
   pub namespace_types: Vec<(DefId, TypeId)>,
   pub body_results: Vec<BodyCheckResult>,
   pub symbol_occurrences: Vec<(FileId, Vec<SymbolOccurrence>)>,
@@ -129,16 +132,15 @@ pub struct ProgramSnapshot {
   pub symbol_to_def: Vec<(semantic_js::SymbolId, DefId)>,
   pub global_bindings: Vec<(String, SymbolBinding)>,
   pub diagnostics: Vec<Diagnostic>,
-  pub type_store: TypeStore,
   pub interned_type_store: InternedTypeStoreSnapshot,
-  pub interned_def_types: Vec<(DefId, InternedTypeId)>,
-  pub enum_value_types: Vec<(DefId, InternedTypeId)>,
+  pub interned_def_types: Vec<(DefId, TypeId)>,
+  pub enum_value_types: Vec<(DefId, TypeId)>,
   pub interned_type_params: Vec<(DefId, Vec<TypeParamId>)>,
   #[serde(default)]
   pub interned_type_param_decls: Vec<(DefId, Vec<TypeParamDecl>)>,
   pub interned_intrinsics: Vec<(DefId, IntrinsicKind)>,
   pub value_def_map: Vec<(DefId, DefId)>,
-  pub builtin: BuiltinTypes,
   pub next_def: u64,
   pub next_body: u64,
 }
+

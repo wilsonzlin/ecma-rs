@@ -2,9 +2,8 @@ extern crate semantic_js as semantic_js_crate;
 
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
 use semantic_js_crate::ts as sem_ts;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
-use types_ts_interned as tti;
 
 /// Build [`ExportMap`] for a file using `semantic-js` binder output.
 pub(crate) fn exports_from_semantics(
@@ -149,7 +148,7 @@ fn map_export(
   let mut seen_defs = HashSet::new();
   for decl_id in semantics.symbol_decls(symbol_id, ns) {
     let decl = symbols.decl(*decl_id);
-    if let Some(def) = map_decl_to_program_def(state, decl, ns) {
+    if let Some(def) = state.map_decl_to_program_def(decl, ns) {
       if seen_defs.insert(def) {
         all_defs.push(def);
         if sem_file.map_or(false, |file| decl.file == file) {
@@ -207,13 +206,7 @@ fn map_export(
   let preferred_any = preferred_value.or(preferred);
   let mut type_id: Option<TypeId> = None;
   if ns.contains(sem_ts::Namespace::VALUE) && all_defs.len() > 1 {
-    let store = {
-      let entry = state
-        .interned_store
-        .get_or_insert_with(|| tti::TypeStore::with_options((&state.compiler_options).into()));
-      Arc::clone(entry)
-    };
-    let mut cache = HashMap::new();
+    let store = Arc::clone(&state.store);
     let callable_defs: Vec<_> = all_defs
       .iter()
       .copied()
@@ -223,8 +216,7 @@ fn map_export(
       })
       .collect();
     if callable_defs.len() > 1 {
-      if let Some(merged) = state.merged_overload_callable_type(&callable_defs, &store, &mut cache)
-      {
+      if let Some(merged) = state.merged_overload_callable_type(&callable_defs, &store) {
         for def in callable_defs.iter().copied() {
           state.interned_def_types.insert(def, merged);
         }
@@ -267,32 +259,4 @@ fn map_export(
   }
 
   Ok(entry)
-}
-
-fn map_decl_to_program_def(
-  state: &ProgramState,
-  decl: &sem_ts::DeclData,
-  ns: sem_ts::Namespace,
-) -> Option<DefId> {
-  let direct = DefId(decl.def_id.0);
-  if state.def_data.contains_key(&direct) {
-    return Some(direct);
-  }
-
-  let mut best: Option<(u8, DefId)> = None;
-  for (id, data) in state.def_data.iter() {
-    if data.file == FileId(decl.file.0) && data.name == decl.name {
-      let pri = state.def_priority(*id, ns);
-      best = best
-        .map(|(best_pri, best_id)| {
-          if pri < best_pri || (pri == best_pri && id < &best_id) {
-            (pri, *id)
-          } else {
-            (best_pri, best_id)
-          }
-        })
-        .or(Some((pri, *id)));
-    }
-  }
-  best.map(|(_, id)| id)
 }

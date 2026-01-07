@@ -12,7 +12,6 @@ impl ProgramState {
         .interned_def_types
         .get(&def_id)
         .copied()
-        .or_else(|| self.def_types.get(&def_id).copied())
     };
 
     let mut def = self

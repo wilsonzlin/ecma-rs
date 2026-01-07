@@ -14,9 +14,7 @@ impl ProgramState {
   }
 
   pub(in super::super) fn merge_namespace_value_types(&mut self) -> Result<(), FatalError> {
-    let Some(store) = self.interned_store.clone() else {
-      return Ok(());
-    };
+    let store = Arc::clone(&self.store);
     fn is_ident_char(byte: u8) -> bool {
       byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
     }
@@ -73,7 +71,7 @@ impl ProgramState {
       .map(|(k, v)| (k.clone(), *v))
       .collect();
     entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
-    for ((file, name), (ns_interned, ns_store)) in entries.into_iter() {
+    for ((file, name), ns_ty) in entries.into_iter() {
       let ns_def = self
         .def_data
         .iter()
@@ -164,69 +162,14 @@ impl ProgramState {
           continue;
         }
 
-        let mut val_interned = self
-          .def_types
-          .get(&val_def)
-          .copied()
-          .and_then(|val_store_ty| {
-            let mut cache = HashMap::new();
-            Some(store.canon(convert_type_for_display(
-              val_store_ty,
-              self,
-              &store,
-              &mut cache,
-            )))
-          })
-          .or_else(|| self.interned_def_types.get(&val_def).copied());
-        if val_interned
-          .map(|ty| {
-            matches!(
-              store.type_kind(ty),
-              tti::TypeKind::Any | tti::TypeKind::Unknown
-            )
-          })
-          .unwrap_or(false)
-        {
-          val_interned = self.interned_def_types.get(&val_def).copied();
-        }
-        if let Some(val_ty_interned) = val_interned {
-          let merged = store.intersection(vec![val_ty_interned, ns_interned]);
+        if let Some(val_ty) = self.interned_def_types.get(&val_def).copied() {
+          let merged = store.intersection(vec![val_ty, ns_ty]);
           self.interned_def_types.insert(ns_def, merged);
           self.interned_def_types.insert(val_def, merged);
-        }
-        if let Some(val_ty) = self.def_types.get(&val_def).copied() {
-          self.def_types.insert(ns_def, ns_store);
-          self.def_types.insert(val_def, val_ty);
         }
       }
     }
     Ok(())
   }
 
-  pub(in super::super) fn merge_namespace_store_types(
-    &mut self,
-    existing: TypeId,
-    incoming: TypeId,
-  ) -> TypeId {
-    match (
-      self.type_store.kind(existing).clone(),
-      self.type_store.kind(incoming).clone(),
-    ) {
-      (TypeKind::Object(mut a), TypeKind::Object(b)) => {
-        for (name, prop) in b.props.into_iter() {
-          a.props.insert(name, prop);
-        }
-        if a.string_index.is_none() {
-          a.string_index = b.string_index;
-        }
-        if a.number_index.is_none() {
-          a.number_index = b.number_index;
-        }
-        self.type_store.object(a)
-      }
-      _ => self
-        .type_store
-        .union(vec![existing, incoming], &self.builtin),
-    }
-  }
 }

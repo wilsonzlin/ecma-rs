@@ -103,92 +103,50 @@ impl ProgramState {
       Stmt::InterfaceDecl(interface) => {
         let span = loc_to_span(file, stmt.loc);
         let name = interface.stx.name.clone();
-        let mut object = self.object_type_from_members(&interface.stx.members);
-        for base in interface.stx.extends.iter() {
-          let base_ty = self.type_from_type_expr(base);
-          if let TypeKind::Object(base_obj) = self.type_store.kind(base_ty).clone() {
-            object = self.merge_object_types(object, base_obj);
-          }
-        }
-        let mut typ = self.type_store.object(object);
-        let existing_interface = bindings
-          .get(&name)
-          .and_then(|b| b.def)
-          .and_then(|id| self.def_data.get(&id).map(|d| (id, d.clone())))
-          .and_then(|(id, data)| match data.kind {
-            DefKind::Interface(existing) => Some((id, data.symbol, existing.typ)),
-            _ => None,
-          });
-        let (def_id, symbol) = if let Some((existing_id, symbol, existing_ty)) = existing_interface
-        {
-          typ = match (
-            self.type_store.kind(existing_ty).clone(),
-            self.type_store.kind(typ).clone(),
-          ) {
-            (TypeKind::Object(existing_obj), TypeKind::Object(obj)) => {
-              let merged = self.merge_object_types(existing_obj, obj);
-              self.type_store.object(merged)
-            }
-            _ => self.type_store.union(vec![existing_ty, typ], &self.builtin),
-          };
-          if let Some(def) = self.def_data.get_mut(&existing_id) {
-            def.kind = DefKind::Interface(InterfaceData { typ });
-            def.export = def.export || interface.stx.export;
-          }
-          (existing_id, symbol)
-        } else {
-          let symbol = self.alloc_symbol();
-          let def_id = self.alloc_def();
-          self.def_data.insert(
-            def_id,
-            DefData {
-              name: name.clone(),
-              file,
-              span: span.range,
-              symbol,
-              export: interface.stx.export,
-              kind: DefKind::Interface(InterfaceData { typ }),
-            },
-          );
-          self.record_def_symbol(def_id, symbol);
-          defs.push(def_id);
-          builder.add_decl(
-            def_id,
-            name.clone(),
-            sem_ts::DeclKind::Interface,
-            if interface.stx.export {
-              sem_ts::Exported::Named
-            } else {
-              sem_ts::Exported::No
-            },
-            span.range,
-          );
-          (def_id, symbol)
-        };
+        let symbol = self.alloc_symbol();
+        let def_id = self.alloc_def();
+        let typ = self.store.primitive_ids().unknown;
 
-        bindings
-          .entry(name.clone())
-          .and_modify(|binding| {
-            binding.symbol = symbol;
-            binding.def = Some(def_id);
-            binding.type_id = Some(typ);
-          })
-          .or_insert(SymbolBinding {
+        self.def_data.insert(
+          def_id,
+          DefData {
+            name: name.clone(),
+            file,
+            span: span.range,
+            symbol,
+            export: interface.stx.export,
+            kind: DefKind::Interface(InterfaceData { typ }),
+          },
+        );
+        self.record_def_symbol(def_id, symbol);
+        defs.push(def_id);
+        builder.add_decl(
+          def_id,
+          name.clone(),
+          sem_ts::DeclKind::Interface,
+          if interface.stx.export {
+            sem_ts::Exported::Named
+          } else {
+            sem_ts::Exported::No
+          },
+          span.range,
+        );
+
+        bindings.insert(
+          name.clone(),
+          SymbolBinding {
             symbol,
             def: Some(def_id),
             type_id: Some(typ),
-          });
+          },
+        );
 
-        self.def_types.insert(def_id, typ);
         self.record_symbol(file, span.range, symbol);
       }
       Stmt::TypeAliasDecl(alias) => {
         let span = loc_to_span(file, stmt.loc);
         let name = alias.stx.name.clone();
-        let mut ty = self.type_from_type_expr(&alias.stx.type_expr);
-        if ty == self.builtin.unknown {
-          ty = self.type_store.literal_string(name.clone());
-        }
+        let ty = self.type_from_type_expr(&alias.stx.type_expr);
         if let TypeExpr::TypeReference(reference) = alias.stx.type_expr.stx.as_ref() {
           if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
             if let Some(binding) = bindings.get(type_name) {
@@ -214,7 +172,6 @@ impl ProgramState {
           },
         );
         self.record_def_symbol(def_id, symbol);
-        self.def_types.insert(def_id, ty);
         bindings.insert(
           name.clone(),
           SymbolBinding {

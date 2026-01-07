@@ -101,16 +101,15 @@ impl ProgramState {
     &mut self,
     defs: &[DefId],
     store: &Arc<tti::TypeStore>,
-    cache: &mut HashMap<TypeId, tti::TypeId>,
   ) -> Option<tti::TypeId> {
     if defs.is_empty() {
       return None;
     }
     let has_overloads = defs.len() > 1;
-    let mut collect = |skip_bodies: bool,
-                       state: &mut ProgramState,
-                       overloads: &mut Vec<tti::SignatureId>,
-                       seen_sigs: &mut HashSet<tti::SignatureId>| {
+    let collect = |skip_bodies: bool,
+                   state: &mut ProgramState,
+                   overloads: &mut Vec<tti::SignatureId>,
+                   seen_sigs: &mut HashSet<tti::SignatureId>| {
       for def in defs.iter().copied() {
         if skip_bodies && has_overloads {
           if let Some(def_data) = state.def_data.get(&def) {
@@ -124,14 +123,7 @@ impl ProgramState {
         if !state.interned_def_types.contains_key(&def) {
           let _ = state.type_of_def(def);
         }
-        let ty = state.interned_def_types.get(&def).copied().or_else(|| {
-          state.def_types.get(&def).copied().map(|store_ty| {
-            let mapped = store.canon(convert_type_for_display(store_ty, state, store, cache));
-            state.interned_def_types.insert(def, mapped);
-            mapped
-          })
-        });
-        let Some(ty) = ty else {
+        let Some(ty) = state.interned_def_types.get(&def).copied() else {
           continue;
         };
         if let tti::TypeKind::Callable { overloads: sigs } = store.type_kind(ty) {
@@ -159,13 +151,12 @@ impl ProgramState {
     &mut self,
     def: DefId,
     store: &Arc<tti::TypeStore>,
-    cache: &mut HashMap<TypeId, tti::TypeId>,
   ) -> Option<tti::TypeId> {
     let defs = self.callable_overload_defs(def)?;
     if defs.len() < 2 {
       return None;
     }
-    let merged = self.merged_overload_callable_type(&defs, store, cache)?;
+    let merged = self.merged_overload_callable_type(&defs, store)?;
     for member in defs {
       self.interned_def_types.insert(member, merged);
     }
@@ -173,13 +164,10 @@ impl ProgramState {
   }
 
   pub(in super::super) fn merge_callable_overload_types(&mut self) {
-    let Some(store) = self.interned_store.clone() else {
-      return;
-    };
+    let store = Arc::clone(&self.store);
     if self.callable_overloads.is_empty() {
       self.rebuild_callable_overloads();
     }
-    let mut cache = HashMap::new();
     let mut keys: Vec<_> = self.callable_overloads.keys().cloned().collect();
     keys.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
     for key in keys.into_iter() {
@@ -189,7 +177,7 @@ impl ProgramState {
       if defs.len() < 2 {
         continue;
       }
-      if let Some(merged) = self.merged_overload_callable_type(&defs, &store, &mut cache) {
+      if let Some(merged) = self.merged_overload_callable_type(&defs, &store) {
         for def in defs.into_iter() {
           self.interned_def_types.insert(def, merged);
         }
@@ -198,10 +186,6 @@ impl ProgramState {
   }
 
   pub(in super::super) fn interned_unknown(&self) -> TypeId {
-    self
-      .interned_store
-      .as_ref()
-      .map(|s| s.primitive_ids().unknown)
-      .unwrap_or(self.builtin.unknown)
+    self.store.primitive_ids().unknown
   }
 }

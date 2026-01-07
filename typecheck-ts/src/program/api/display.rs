@@ -14,12 +14,13 @@ impl Program {
         .iter()
         .map(|(id, data)| (tti::DefId(id.0), data.name.clone()))
         .collect::<HashMap<_, _>>();
-      let (store, ty) = display_type_from_state(&state, ty);
-      let can_evaluate = state
-        .interned_store
-        .as_ref()
-        .map(|interned| Arc::ptr_eq(interned, &store))
-        .unwrap_or(false);
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
+      let can_evaluate = true;
       let ty = match store.type_kind(ty) {
         tti::TypeKind::Mapped(mapped) => {
           if !can_evaluate {

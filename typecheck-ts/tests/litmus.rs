@@ -166,12 +166,12 @@ fn run_fixture(path: &Path) {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let snap = program.snapshot();
     println!("interned_def_types len {}", snap.interned_def_types.len());
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("def {name}: {}", program.display_type(*ty));
       }
     }
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
         if data.data.file == FileId(0) {
           if let Some(name) = program.def_name(*def) {
@@ -235,8 +235,8 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("as_const") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let snap = program.snapshot();
-    println!("DEBUG as_const def_types {:?}", snap.def_types);
-    for (def, ty) in snap.def_types.iter() {
+    println!("DEBUG as_const def_types {:?}", snap.interned_def_types);
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         if name == "tuple" || name == "nested" || name == "readonlyTuple" {
           println!("DEBUG {} => {}", name, program.display_type(*ty));
@@ -291,7 +291,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("function_return_inference") {
     let snap = program.snapshot();
     println!("DEBUG function_return_inference def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -331,7 +331,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("imports_exports") {
     let snap = program.snapshot();
     println!("DEBUG imports_exports def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -361,7 +361,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("literal_widening") {
     let snap = program.snapshot();
     println!("DEBUG literal_widening def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -377,7 +377,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("mapped_type_annotation") {
     let snap = program.snapshot();
     println!("DEBUG mapped_type_annotation def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -395,7 +395,7 @@ fn run_fixture(path: &Path) {
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
       println!("DEBUG narrowing_patterns def types:");
-      for (def, ty) in snap.def_types.iter() {
+      for (def, ty) in snap.interned_def_types.iter() {
         if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
           if data.data.file == file
             && (data.data.name == "assertNumber" || data.data.name == "useAssert")
@@ -407,7 +407,7 @@ fn run_fixture(path: &Path) {
     }
     if let Some(err) = snap.def_data.iter().find(|d| d.data.name == "Error") {
       let ty = snap
-        .def_types
+        .interned_def_types
         .iter()
         .find(|(id, _)| *id == err.def)
         .map(|(_, ty)| *ty);
@@ -455,7 +455,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("satisfies") {
     let snap = program.snapshot();
     println!("DEBUG satisfies def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -464,7 +464,7 @@ fn run_fixture(path: &Path) {
   if trace && path.ends_with("contextual_callbacks") {
     let snap = program.snapshot();
     println!("DEBUG contextual_callbacks def types:");
-    for (def, ty) in snap.def_types.iter() {
+    for (def, ty) in snap.interned_def_types.iter() {
       if let Some(name) = program.def_name(*def) {
         println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
@@ -529,7 +529,7 @@ fn run_fixture(path: &Path) {
       .filter(|d| matches!(program.def_name(d.def).as_deref(), Some("ok") | Some("Tag")))
     {
       let def_ty = snap
-        .def_types
+        .interned_def_types
         .iter()
         .find(|(def, _)| def == &entry.def)
         .map(|(_, ty)| program.display_type(*ty).to_string());

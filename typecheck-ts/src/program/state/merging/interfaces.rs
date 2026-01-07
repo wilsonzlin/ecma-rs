@@ -5,9 +5,7 @@ impl ProgramState {
     &mut self,
     def: DefId,
   ) -> Result<(), FatalError> {
-    let Some(store) = self.interned_store.as_ref() else {
-      return Ok(());
-    };
+    let store = Arc::clone(&self.store);
     let Some(semantics) = self.semantics.as_ref() else {
       return Ok(());
     };
@@ -52,63 +50,34 @@ impl ProgramState {
     }
 
     let prim = store.primitive_ids();
-    let mut convert_cache = HashMap::new();
     let mut merged: Option<tti::TypeId> = None;
     for iface_def in interface_defs.iter().copied() {
-      let mut ty = self
+      if !self.interned_def_types.contains_key(&iface_def) {
+        let _ = self.type_of_def(iface_def);
+      }
+      let Some(ty) = self
         .interned_def_types
         .get(&iface_def)
         .copied()
-        .map(|ty| store.canon(ty));
-
-      if matches!(
-        ty.map(|ty| store.type_kind(ty)),
-        Some(tti::TypeKind::Unknown)
-      ) || ty.is_none()
-      {
-        ty = self
-          .def_data
-          .get(&iface_def)
-          .and_then(|data| match &data.kind {
-            DefKind::Interface(interface) => {
-              let interned =
-                convert_type_for_display(interface.typ, self, store, &mut convert_cache);
-              Some(store.canon(interned))
-            }
-            _ => None,
-          });
-      }
-
-      let Some(ty) = ty else {
+        .and_then(|ty| store.contains_type_id(ty).then_some(store.canon(ty)))
+      else {
         continue;
       };
       if matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
         continue;
       }
       merged = Some(match merged {
-        Some(existing) => ProgramState::merge_interned_decl_types(store, existing, ty),
+        Some(existing) => ProgramState::merge_interned_decl_types(&store, existing, ty),
         None => ty,
       });
     }
     let merged = store.canon(merged.unwrap_or(prim.unknown));
 
-    let imported = self.import_interned_type(merged);
-    let legacy = if merged == prim.unknown {
-      imported
-    } else if imported == self.builtin.unknown {
-      merged
-    } else {
-      imported
-    };
-
     for iface_def in interface_defs {
       self.interned_def_types.insert(iface_def, merged);
-      self.def_types.insert(iface_def, legacy);
       if let Some(data) = self.def_data.get_mut(&iface_def) {
         if let DefKind::Interface(existing) = &mut data.kind {
-          if imported != self.builtin.unknown {
-            existing.typ = imported;
-          }
+          existing.typ = merged;
         }
       }
     }
@@ -170,7 +139,6 @@ impl ProgramState {
     // Drop cached import types and recompute so downstream body checking sees
     // the merged surface.
     for def in import_defs.iter().copied() {
-      self.def_types.remove(&def);
       self.interned_def_types.remove(&def);
     }
     for def in import_defs.into_iter() {

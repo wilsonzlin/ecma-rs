@@ -13,14 +13,11 @@ impl ProgramState {
       .decl_types_fingerprint
       .unwrap_or_else(|| db::decl_types_fingerprint(&self.typecheck_db));
     let cache_options = self.compiler_options.cache.clone();
-    let store = self
-      .interned_store
-      .as_ref()
-      .expect("interned store initialized");
+    let store = Arc::clone(&self.store);
     if let Some(cached) = self.cached_body_context.as_ref() {
       if cached.decl_types_fingerprint == fingerprint
         && cached.cache_options == cache_options
-        && Arc::ptr_eq(&cached.context.store, store)
+        && Arc::ptr_eq(&cached.context.store, &store)
       {
         return Arc::clone(&cached.context);
       }
@@ -52,39 +49,27 @@ impl ProgramState {
   }
 
   fn build_body_check_context(&mut self) -> BodyCheckContext {
-    let store = self
-      .interned_store
-      .as_ref()
-      .expect("interned store initialized")
-      .clone();
-    if let Some(store) = self.interned_store.clone() {
-      let mut cache = HashMap::new();
-      let mut def_ids: Vec<_> = self.def_data.keys().copied().collect();
-      def_ids.sort_by_key(|def| def.0);
-      for def in def_ids.into_iter() {
-        let needs_type = match self.interned_def_types.get(&def).copied() {
-          Some(existing) => {
-            matches!(store.type_kind(existing), tti::TypeKind::Unknown)
-              || callable_return_is_unknown(&store, existing)
-          }
-          None => true,
-        };
-        if !needs_type {
-          continue;
+    let store = Arc::clone(&self.store);
+    let mut def_ids: Vec<_> = self.def_data.keys().copied().collect();
+    def_ids.sort_by_key(|def| def.0);
+    for def in def_ids.into_iter() {
+      let needs_type = match self.interned_def_types.get(&def).copied() {
+        Some(existing) => {
+          matches!(store.type_kind(existing), tti::TypeKind::Unknown)
+            || callable_return_is_unknown(&store, existing)
         }
-        if std::env::var("DEBUG_MEMBER").is_ok() {
-          if let Some(data) = self.def_data.get(&def) {
-            eprintln!("DEBUG_MEMBER recomputing def {} {:?}", data.name, def);
-          }
+        None => true,
+      };
+      if !needs_type {
+        continue;
+      }
+      if std::env::var("DEBUG_MEMBER").is_ok() {
+        if let Some(data) = self.def_data.get(&def) {
+          eprintln!("DEBUG_MEMBER recomputing def {} {:?}", data.name, def);
         }
-        if let Ok(ty) = self.type_of_def(def) {
-          let interned = if store.contains_type_id(ty) {
-            store.canon(ty)
-          } else {
-            store.canon(convert_type_for_display(ty, self, &store, &mut cache))
-          };
-          self.interned_def_types.insert(def, interned);
-        }
+      }
+      if let Ok(ty) = self.type_of_def(def) {
+        self.interned_def_types.insert(def, store.canon(ty));
       }
     }
     let mut body_info = HashMap::new();

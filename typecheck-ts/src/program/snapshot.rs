@@ -114,13 +114,6 @@ impl Program {
       }
     }
 
-    let mut def_types: Vec<_> = state
-      .def_types
-      .iter()
-      .map(|(def, ty)| (*def, *ty))
-      .collect();
-    def_types.sort_by_key(|(def, _)| def.0);
-
     let mut body_results: Vec<_> = state
       .body_results
       .iter()
@@ -165,14 +158,7 @@ impl Program {
       .collect();
     global_bindings.sort_by(|a, b| a.0.cmp(&b.0));
 
-    let interned_type_store = state
-      .interned_store
-      .as_ref()
-      .map(|s| s.snapshot())
-      .unwrap_or_else(|| {
-        let store = tti::TypeStore::with_options((&state.compiler_options).into());
-        store.snapshot()
-      });
+    let interned_type_store = state.store.snapshot();
     let mut interned_def_types: Vec<_> = state
       .interned_def_types
       .iter()
@@ -197,6 +183,8 @@ impl Program {
       .map(|(def, kind)| (*def, *kind))
       .collect();
     interned_intrinsics.sort_by_key(|(def, _)| def.0);
+    let mut value_def_map: Vec<_> = state.value_defs.iter().map(|(a, b)| (*a, *b)).collect();
+    value_def_map.sort_by_key(|(def, _)| def.0);
 
     let canonical_defs_map = match state.canonical_defs() {
       Ok(map) => map,
@@ -215,10 +203,8 @@ impl Program {
     let mut namespace_types: Vec<_> = state
       .namespace_object_types
       .iter()
-      .filter_map(|((file, name), (_, store_ty))| {
-        state
-          .find_namespace_def(*file, name)
-          .map(|def| (def, *store_ty))
+      .filter_map(|((file, name), store_ty)| {
+        state.find_namespace_def(*file, name).map(|def| (def, *store_ty))
       })
       .collect();
     namespace_types.sort_by_key(|(def, _)| def.0);
@@ -256,7 +242,6 @@ impl Program {
       files,
       file_states,
       def_data,
-      def_types,
       canonical_defs,
       namespace_types,
       body_results,
@@ -265,15 +250,13 @@ impl Program {
       symbol_to_def,
       global_bindings,
       diagnostics,
-      type_store: state.type_store.clone(),
       interned_type_store,
       interned_def_types,
       enum_value_types: Vec::new(),
       interned_type_params,
       interned_type_param_decls,
       interned_intrinsics,
-      value_def_map: Vec::new(),
-      builtin: state.builtin,
+      value_def_map,
       next_def: state.next_def,
       next_body: state.next_body,
     }
@@ -382,7 +365,6 @@ impl Program {
         .collect();
       state.body_map = HashMap::new();
       state.body_parents = HashMap::new();
-      state.def_types = snapshot.def_types.into_iter().collect();
       state.body_results = snapshot
         .body_results
         .into_iter()
@@ -416,15 +398,15 @@ impl Program {
       state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
       state.diagnostics = snapshot.diagnostics;
       state.diagnostics.extend(extra_diagnostics);
-      state.type_store = snapshot.type_store;
-      state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
-      let store_input = state.interned_store.as_ref().map(Arc::clone);
-      if let Some(store) = store_input {
-        state
-          .typecheck_db
-          .set_type_store(crate::db::types::SharedTypeStore(store));
-      }
+      state.store = tti::TypeStore::from_snapshot(snapshot.interned_type_store);
+      let store = Arc::clone(&state.store);
+      state
+        .typecheck_db
+        .set_type_store(crate::db::types::SharedTypeStore(store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
+      for (def, ty) in snapshot.enum_value_types.into_iter() {
+        state.interned_def_types.entry(def).or_insert(ty);
+      }
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
       state.interned_type_param_decls = snapshot
         .interned_type_param_decls
@@ -432,31 +414,20 @@ impl Program {
         .map(|(def, decls)| (def, Arc::from(decls.into_boxed_slice())))
         .collect();
       state.interned_intrinsics = snapshot.interned_intrinsics.into_iter().collect();
+      state.value_defs = snapshot.value_def_map.into_iter().collect();
       state.root_ids = snapshot.roots.clone();
       state.lib_diagnostics.clear();
-      if let Some(store) = state.interned_store.clone() {
-        for (def, store_ty) in snapshot.namespace_types.into_iter() {
-          state.def_types.entry(def).or_insert(store_ty);
-          let def_data = state.def_data.get(&def).cloned();
-          let interned = state
-            .interned_def_types
-            .get(&def)
-            .copied()
-            .unwrap_or_else(|| {
-              let mut cache = HashMap::new();
-              store.canon(convert_type_for_display(
-                store_ty, &state, &store, &mut cache,
-              ))
-            });
-          if let Some(data) = def_data {
-            state
-              .namespace_object_types
-              .insert((data.file, data.name.clone()), (interned, store_ty));
-          }
-          state.interned_def_types.entry(def).or_insert(interned);
-        }
+      state.namespace_object_types.clear();
+      for (def, ns_ty) in snapshot.namespace_types.into_iter() {
+        if let Some((file, name)) = state
+          .def_data
+          .get(&def)
+          .map(|data| (data.file, data.name.clone()))
+        {
+          state.namespace_object_types.insert((file, name), ns_ty);
+        };
+        state.interned_def_types.entry(def).or_insert(ns_ty);
       }
-      state.builtin = snapshot.builtin;
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
       state.sync_typecheck_roots();

@@ -21,13 +21,10 @@ use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::{ImportEqualsRhs, NamespaceBody};
-use parse_js::ast::type_expr::{
-  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
-};
+use parse_js::ast::type_expr::{TypeEntityName, TypeExpr, TypeMember};
 use parse_js::loc::Loc;
 use semantic_js_crate::ts as sem_ts;
 use std::cmp::Reverse;
-use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,12 +58,6 @@ mod query_span;
 
 use self::query_span::QuerySpan;
 
-#[path = "legacy_types.rs"]
-mod legacy_types;
-
-pub use legacy_types::{BuiltinTypes, TypeStore};
-pub(crate) use legacy_types::{ObjectProperty, ObjectType, TypeKind};
-
 #[path = "exports.rs"]
 mod exports;
 
@@ -90,9 +81,8 @@ use sem_hir_builder::{
 mod types;
 
 use types::{
-  callable_return_is_unknown, convert_type_for_display, display_type_from_state,
-  export_assignment_path_for_file, lookup_interned_property_type, DeclTypeResolver,
-  ProgramTypeExpander,
+  callable_return_is_unknown, export_assignment_path_for_file, lookup_interned_property_type,
+  DeclTypeResolver, ProgramTypeExpander,
 };
 pub use types::{ExplainTree, TypeDisplay};
 pub(crate) use types::{NamespaceMemberIndex, ProgramTypeResolver};
@@ -120,7 +110,6 @@ mod decl_types;
 mod diagnostics;
 mod inputs;
 mod interned;
-mod legacy_type_expr;
 mod merging;
 mod module_exports;
 mod queries;
@@ -166,7 +155,6 @@ struct ProgramState {
   local_semantics: HashMap<FileId, sem_ts::locals::TsLocalSemantics>,
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
-  def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   checking_bodies: HashSet<BodyId>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
@@ -179,7 +167,7 @@ struct ProgramState {
   lib_diagnostics: Vec<Diagnostic>,
   root_ids: Vec<FileId>,
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
-  namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
+  namespace_object_types: HashMap<(FileId, String), TypeId>,
   module_namespace_defs: HashMap<FileId, DefId>,
   module_namespace_types: HashMap<FileId, TypeId>,
   module_namespace_in_progress: HashSet<FileId>,
@@ -188,8 +176,7 @@ struct ProgramState {
   import_assignment_requires: Vec<ImportAssignmentRequireRecord>,
   diagnostics: Vec<Diagnostic>,
   implicit_any_reported: HashSet<Span>,
-  type_store: TypeStore,
-  interned_store: Option<Arc<tti::TypeStore>>,
+  store: Arc<tti::TypeStore>,
   interned_def_types: HashMap<DefId, tti::TypeId>,
   interned_named_def_types: HashMap<tti::TypeId, DefId>,
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
@@ -197,7 +184,6 @@ struct ProgramState {
   interned_intrinsics: HashMap<DefId, tti::IntrinsicKind>,
   interned_class_instances: HashMap<DefId, tti::TypeId>,
   value_defs: HashMap<DefId, DefId>,
-  builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
   current_file: Option<FileId>,
   next_def: u64,
@@ -241,10 +227,7 @@ impl GlobalBindingsDb for ProgramState {
   }
 
   fn primitive_ids(&self) -> Option<tti::PrimitiveIds> {
-    self
-      .interned_store
-      .as_ref()
-      .map(|store| store.primitive_ids())
+    Some(self.store.primitive_ids())
   }
 }
 
@@ -256,9 +239,10 @@ impl ProgramState {
     cancelled: Arc<AtomicBool>,
   ) -> ProgramState {
     let default_options = CompilerOptions::default();
-    let (type_store, builtin) = TypeStore::new();
+    let store = tti::TypeStore::with_options((&default_options).into());
     let mut typecheck_db = db::TypecheckDb::default();
     typecheck_db.set_profiler(query_stats.clone());
+    typecheck_db.set_type_store(crate::db::types::SharedTypeStore(Arc::clone(&store)));
     ProgramState {
       analyzed: false,
       snapshot_loaded: false,
@@ -284,7 +268,6 @@ impl ProgramState {
       local_semantics: HashMap::new(),
       semantics: None,
       qualified_def_members: Arc::new(HashMap::new()),
-      def_types: HashMap::new(),
       body_results: HashMap::new(),
       checking_bodies: HashSet::new(),
       symbol_to_def: HashMap::new(),
@@ -306,8 +289,7 @@ impl ProgramState {
       import_assignment_requires: Vec::new(),
       diagnostics: Vec::new(),
       implicit_any_reported: HashSet::new(),
-      type_store,
-      interned_store: None,
+      store,
       interned_def_types: HashMap::new(),
       interned_named_def_types: HashMap::new(),
       interned_type_params: HashMap::new(),
@@ -315,7 +297,6 @@ impl ProgramState {
       interned_intrinsics: HashMap::new(),
       interned_class_instances: HashMap::new(),
       value_defs: HashMap::new(),
-      builtin,
       query_stats,
       current_file: None,
       next_def: 0,
@@ -346,7 +327,6 @@ impl ProgramState {
     self.local_semantics.clear();
     self.semantics = None;
     self.qualified_def_members = Arc::new(HashMap::new());
-    self.def_types.clear();
     self.body_results.clear();
     self.checking_bodies.clear();
     self.symbol_to_def.clear();
@@ -380,12 +360,6 @@ impl ProgramState {
     self.next_body = 0;
     self.next_symbol = 0;
     self.type_stack.clear();
-
-    // Match the full-reset behaviour (previously provided by `ProgramState::new`)
-    // by clearing the legacy store and builtin identifiers.
-    let (type_store, builtin) = TypeStore::new();
-    self.type_store = type_store;
-    self.builtin = builtin;
   }
 
   fn check_cancelled(&self) -> Result<(), FatalError> {
@@ -528,6 +502,37 @@ impl ProgramState {
     let direct = DefId(decl.def_id.0);
     if self.def_data.contains_key(&direct) {
       return Some(direct);
+    }
+
+    // `semantic-js` declarations generally preserve `hir-js` `DefId`s, but some
+    // decls (notably certain synthetic export/import edges) may use a generated
+    // id instead. When that happens, prefer mapping by the declaration span so
+    // we do not accidentally select a different same-named declaration from the
+    // same file (e.g. a global `interface Foo` vs `declare module "m" { export
+    // interface Foo }`).
+    let decl_file = FileId(decl.file.0);
+    let decl_span = decl.span;
+    let mut best: Option<(u8, DefId)> = None;
+    for (id, data) in self.def_data.iter() {
+      if data.file != decl_file || data.span != decl_span {
+        continue;
+      }
+      let pri = self.def_priority(*id, ns);
+      if pri == u8::MAX {
+        continue;
+      }
+      best = best
+        .map(|(best_pri, best_id)| {
+          if pri < best_pri || (pri == best_pri && id < &best_id) {
+            (pri, *id)
+          } else {
+            (best_pri, best_id)
+          }
+        })
+        .or(Some((pri, *id)));
+    }
+    if let Some((_, id)) = best {
+      return Some(id);
     }
 
     let mut best: Option<(u8, DefId)> = None;
@@ -844,15 +849,6 @@ function onlyObjects(val: object | number) {
         );
       }
     }
-  }
-}
-
-fn type_member_name(key: &TypePropertyKey) -> Option<String> {
-  match key {
-    TypePropertyKey::Identifier(name) => Some(name.clone()),
-    TypePropertyKey::String(name) => Some(name.clone()),
-    TypePropertyKey::Number(name) => Some(name.clone()),
-    TypePropertyKey::Computed(_) => None,
   }
 }
 

@@ -29,8 +29,8 @@ use super::check::caches::{CheckerCacheStats, CheckerCaches};
 use super::check::relate_hooks;
 use super::fatal_to_diagnostic;
 use super::{
-  display_type_from_state, lookup_interned_property_type, DefKind, ExplainTree, ExportMap,
-  ProgramState, ProgramTypeExpander, TypeDisplay,
+  lookup_interned_property_type, DefKind, ExplainTree, ExportMap, ProgramState, ProgramTypeExpander,
+  TypeDisplay,
 };
 
 /// Environment provider for [`Program`].

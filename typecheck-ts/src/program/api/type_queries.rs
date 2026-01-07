@@ -8,11 +8,7 @@ impl Program {
       Err(fatal) => {
         self.record_fatal(fatal);
         let state = self.lock_state();
-        state
-          .interned_store
-          .as_ref()
-          .map(|s| s.primitive_ids().unknown)
-          .unwrap_or(TypeId(0))
+        state.store.primitive_ids().unknown
       }
     }
   }
@@ -29,22 +25,14 @@ impl Program {
       Err(fatal) => {
         self.record_fatal(fatal);
         let state = self.lock_state();
-        state
-          .interned_store
-          .as_ref()
-          .map(|s| s.primitive_ids().unknown)
-          .unwrap_or(TypeId(0))
+        state.store.primitive_ids().unknown
       }
     }
   }
 
   pub fn declared_type_of_def_interned_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
     self.with_interned_state(|state| {
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized")
-        .clone();
+      let store = Arc::clone(&state.store);
       let expanded = match state.interned_def_types.get(&def).copied() {
         Some(existing) if !matches!(store.type_kind(existing), tti::TypeKind::Unknown) => existing,
         _ => {
@@ -56,17 +44,13 @@ impl Program {
             .unwrap_or(store.primitive_ids().unknown)
         }
       };
-      Ok(expanded)
+      Ok(store.canon(expanded))
     })
   }
 
   pub fn type_of_def_interned_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
     self.with_interned_state(|state| {
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized")
-        .clone();
+      let store = Arc::clone(&state.store);
       let expanded = match state.interned_def_types.get(&def).copied() {
         Some(existing) if !matches!(store.type_kind(existing), tti::TypeKind::Unknown) => existing,
         _ => {
@@ -118,18 +102,19 @@ impl Program {
 
   pub fn type_kind_fallible(&self, ty: TypeId) -> Result<TypeKindSummary, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let result = queries.type_kind(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -151,11 +136,12 @@ impl Program {
 
   pub fn interned_type_kind_fallible(&self, ty: TypeId) -> Result<tti::TypeKind, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       Ok(store.type_kind(ty))
     })
   }
@@ -179,14 +165,17 @@ impl Program {
     dst: TypeId,
   ) -> Result<Option<ExplainTree>, FatalError> {
     self.with_interned_state(|state| {
-      let src = state.ensure_interned_type(src);
-      let dst = state.ensure_interned_type(dst);
-      let store = Arc::clone(
-        state
-          .interned_store
-          .as_ref()
-          .expect("interned store initialized"),
-      );
+      let store = Arc::clone(&state.store);
+      let src = if store.contains_type_id(src) {
+        store.canon(src)
+      } else {
+        store.primitive_ids().unknown
+      };
+      let dst = if store.contains_type_id(dst) {
+        store.canon(dst)
+      } else {
+        store.primitive_ids().unknown
+      };
       let caches = state.checker_caches.for_body();
       let expander = RefExpander::new(
         Arc::clone(&store),
@@ -245,18 +234,19 @@ impl Program {
 
   pub fn properties_of_fallible(&self, ty: TypeId) -> Result<Vec<PropertyInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let mut props = queries.properties_of(ty);
       for prop in props.iter_mut() {
         prop.ty = state.prefer_named_refs(prop.ty);
@@ -284,18 +274,19 @@ impl Program {
     key: PropertyKey,
   ) -> Result<Option<TypeId>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let prop = queries
         .property_type(ty, key)
         .map(|ty| state.prefer_named_refs(ty));
@@ -318,18 +309,19 @@ impl Program {
 
   pub fn call_signatures_fallible(&self, ty: TypeId) -> Result<Vec<SignatureInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let sigs = queries.call_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -353,18 +345,19 @@ impl Program {
     ty: TypeId,
   ) -> Result<Vec<SignatureInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.ensure_interned_type(ty);
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let sigs = queries.construct_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -385,17 +378,19 @@ impl Program {
 
   pub fn indexers_fallible(&self, ty: TypeId) -> Result<Vec<IndexerInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
+      let store = Arc::clone(&state.store);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.primitive_ids().unknown
+      };
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
         intrinsics: &state.interned_intrinsics,
       };
       let caches = state.checker_caches.for_body();
-      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let queries = TypeQueries::with_caches(Arc::clone(&store), &expander, caches.eval.clone());
       let indexers = queries.indexers(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());

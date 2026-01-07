@@ -21,7 +21,7 @@ impl Program {
       // returns `any` for type-only exports (interfaces/type aliases). Keep Rust
       // export type facts aligned with that behaviour without affecting the
       // internal export map used for type checking/import resolution.
-      let any = state.builtin.any;
+      let any = state.store.primitive_ids().any;
       if let Some(semantics) = state.semantics.as_ref() {
         if let Some(sem_exports) = semantics.exports_of_opt(sem_ts::FileId(file.0)) {
           let symbols = semantics.symbols();

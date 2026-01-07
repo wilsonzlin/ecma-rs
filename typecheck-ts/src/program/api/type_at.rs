@@ -35,6 +35,7 @@ impl Program {
     self.with_interned_state(|state| {
       const TYPE_AT_TRIVIA_LOOKAROUND: usize = 32;
 
+      let store = Arc::clone(&state.store);
       let mut offset = offset;
       let mut expr_at = state.expr_at(file, offset);
       let mut pat_at = state.pat_at(file, offset);
@@ -137,19 +138,16 @@ impl Program {
                   _ => {}
                 }
                 if contextual_ty.is_none() {
-                  if let Some(store) = state.interned_store.as_ref() {
-                    for (_idx, candidate) in hir_body.exprs.iter().enumerate() {
-                      if let HirExprKind::Call(call) = &candidate.kind {
-                        if let Some(arg_idx) = call.args.iter().position(|arg| arg.expr.0 == expr.0)
-                        {
-                          if let Some(callee_ty) = result.expr_type(call.callee) {
-                            let sigs = callable_signatures(store.as_ref(), callee_ty);
-                            if let Some(sig_id) = sigs.first() {
-                              let sig = store.signature(*sig_id);
-                              if let Some(param) = sig.params.get(arg_idx) {
-                                contextual_ty = Some(param.ty);
-                                break;
-                              }
+                  for (_idx, candidate) in hir_body.exprs.iter().enumerate() {
+                    if let HirExprKind::Call(call) = &candidate.kind {
+                      if let Some(arg_idx) = call.args.iter().position(|arg| arg.expr.0 == expr.0) {
+                        if let Some(callee_ty) = result.expr_type(call.callee) {
+                          let sigs = callable_signatures(store.as_ref(), callee_ty);
+                          if let Some(sig_id) = sigs.first() {
+                            let sig = store.signature(*sig_id);
+                            if let Some(param) = sig.params.get(arg_idx) {
+                              contextual_ty = Some(param.ty);
+                              break;
                             }
                           }
                         }
@@ -165,86 +163,62 @@ impl Program {
       if let Some(ctx) = contextual_ty {
         ty = ctx;
       }
-      let is_unknown = state
-        .interned_store
-        .as_ref()
-        .map(|store| {
-          store.contains_type_id(ty) && matches!(store.type_kind(ty), tti::TypeKind::Unknown)
-        })
-        .unwrap_or(ty == unknown);
+      let is_unknown = !store.contains_type_id(ty)
+        || matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown);
       let should_resolve_binding = is_unknown
-        || state
-          .interned_store
-          .as_ref()
-          .map(|store| {
-            if !store.contains_type_id(ty) {
-              return false;
-            }
-            matches!(
-              store.type_kind(ty),
-              tti::TypeKind::Ref { def, args }
-                if args.is_empty() && binding_def.map(|bd| bd.0 == def.0).unwrap_or(false)
-            )
-          })
-          .unwrap_or(false);
+        || (store.contains_type_id(ty)
+          && matches!(
+            store.type_kind(store.canon(ty)),
+            tti::TypeKind::Ref { def, args }
+              if args.is_empty() && binding_def.map(|bd| bd.0 == def.0).unwrap_or(false)
+          ));
       if should_resolve_binding {
         if let Some(def) = binding_def {
           match state.type_of_def(def) {
             Ok(def_ty) => {
-              ty = state.ensure_interned_type(def_ty);
+              ty = store.canon(def_ty);
             }
             Err(FatalError::Cancelled) => return Err(FatalError::Cancelled),
             Err(_) => {}
           }
         }
-        let still_unknown = state
-          .interned_store
-          .as_ref()
-          .map(|store| {
-            store.contains_type_id(ty) && matches!(store.type_kind(ty), tti::TypeKind::Unknown)
-          })
-          .unwrap_or(ty == unknown);
+        let still_unknown = !store.contains_type_id(ty)
+          || matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown);
         if still_unknown {
           if let Some(binding_ty) = binding_ty {
             ty = binding_ty;
           }
         }
       }
-      let member_fallback_allowed = state
-        .interned_store
-        .as_ref()
-        .map(|store| {
-          store.contains_type_id(ty) && matches!(store.type_kind(ty), tti::TypeKind::Unknown)
-        })
-        .unwrap_or(ty == unknown);
+      let member_fallback_allowed = !store.contains_type_id(ty)
+        || matches!(store.type_kind(store.canon(ty)), tti::TypeKind::Unknown);
       if member_fallback_allowed {
         if let Some((optional, base_ty, key)) = member_fallback {
-          if let Some(store) = state.interned_store.as_ref() {
-            let caches = state.checker_caches.for_body();
-            let expander = RefExpander::new(
-              Arc::clone(store),
-              &state.interned_def_types,
-              &state.interned_type_params,
-              &state.interned_type_param_decls,
-              &state.interned_intrinsics,
-              &state.interned_class_instances,
-              caches.eval.clone(),
-            );
-            let mut prop_ty = lookup_interned_property_type(store, Some(&expander), base_ty, &key);
-            if prop_ty.is_none() {
-              if let tti::TypeKind::Ref { def, .. } = store.type_kind(base_ty) {
-                if let Some(mapped) = state.interned_def_types.get(&DefId(def.0)).copied() {
-                  prop_ty = lookup_interned_property_type(store, None, mapped, &key);
-                }
+          let caches = state.checker_caches.for_body();
+          let expander = RefExpander::new(
+            Arc::clone(&store),
+            &state.interned_def_types,
+            &state.interned_type_params,
+            &state.interned_type_param_decls,
+            &state.interned_intrinsics,
+            &state.interned_class_instances,
+            caches.eval.clone(),
+          );
+          let mut prop_ty =
+            lookup_interned_property_type(store.as_ref(), Some(&expander), base_ty, &key);
+          if prop_ty.is_none() {
+            if let tti::TypeKind::Ref { def, .. } = store.type_kind(store.canon(base_ty)) {
+              if let Some(mapped) = state.interned_def_types.get(&DefId(def.0)).copied() {
+                prop_ty = lookup_interned_property_type(store.as_ref(), None, mapped, &key);
               }
             }
-            if let Some(prop_ty) = prop_ty {
-              ty = if optional {
-                store.union(vec![prop_ty, store.primitive_ids().undefined])
-              } else {
-                prop_ty
-              };
-            }
+          }
+          if let Some(prop_ty) = prop_ty {
+            ty = if optional {
+              store.union(vec![prop_ty, store.primitive_ids().undefined])
+            } else {
+              prop_ty
+            };
           }
         }
       }
@@ -271,7 +245,7 @@ impl Program {
         }
         eprintln!("  parent {:?}", state.body_parents.get(&body));
         if let Some(raw_ty) = result.expr_type(expr) {
-          if let Some(store) = state.interned_store.as_ref() {
+          if store.contains_type_id(raw_ty) {
             eprintln!("  raw type {:?}", store.type_kind(raw_ty));
           } else {
             eprintln!("  raw type {:?}", raw_ty);
@@ -282,7 +256,7 @@ impl Program {
             Ok(parent_res) => {
               eprintln!("  parent pat types {:?}", parent_res.pat_types());
               if let Some(first) = parent_res.pat_types().first() {
-                if let Some(store) = state.interned_store.as_ref() {
+                if store.contains_type_id(*first) {
                   eprintln!("  parent pat kind {:?}", store.type_kind(*first));
                 }
               }
@@ -305,11 +279,9 @@ impl Program {
         }
       }
       let is_number_literal = state
-        .interned_store
-        .as_ref()
-        .and_then(|store| store.contains_type_id(ty).then(|| store.type_kind(ty)))
-        .map(|kind| matches!(kind, tti::TypeKind::NumberLiteral(_)))
-        .unwrap_or(false);
+        .store
+        .contains_type_id(ty)
+        && matches!(store.type_kind(store.canon(ty)), tti::TypeKind::NumberLiteral(_));
       if is_number_literal {
         let is_literal = state
           .body_map
@@ -360,16 +332,8 @@ impl Program {
                       }
                       let len = span.len();
                       let bin_ty = result.expr_type(ExprId(idx as u32)).unwrap_or(ty);
-                      let is_number = state
-                        .interned_store
-                        .as_ref()
-                        .and_then(|store| {
-                          store
-                            .contains_type_id(bin_ty)
-                            .then(|| store.type_kind(bin_ty))
-                        })
-                        .map(|kind| matches!(kind, tti::TypeKind::Number))
-                        .unwrap_or(false);
+                      let is_number = store.contains_type_id(bin_ty)
+                        && matches!(store.type_kind(store.canon(bin_ty)), tti::TypeKind::Number);
                       if is_number {
                         let replace = best.map(|(l, _)| len < l).unwrap_or(true);
                         if replace {
@@ -387,7 +351,11 @@ impl Program {
           }
         }
       }
-      let ty = state.ensure_interned_type(ty);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        unknown
+      };
       Ok(Some(ty))
     })
   }

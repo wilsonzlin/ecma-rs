@@ -1437,7 +1437,11 @@ fn recursive_type_alias_produces_ref() {
   host.insert(key.clone(), "type Node = Node;");
 
   let program = Program::new(host, vec![key.clone()]);
-  let _ = program.check();
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&key).expect("file id");
   let def = program

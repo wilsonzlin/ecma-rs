@@ -148,6 +148,11 @@ export const name = Lib.version;
   let version_ty = program
     .property_type(lib_ty, PropertyKey::String("version".into()))
     .expect("merged Lib should expose namespace members");
+  let version_rendered = program.display_type(version_ty).to_string();
+  assert!(
+    version_rendered.contains("1.0.0") || version_rendered.contains("string"),
+    "Lib.version should be typed, got {version_rendered}"
+  );
 
   let result_ty = exports
     .get("result")

@@ -29,12 +29,46 @@ pub fn lower_decl_types(
   let mut decls = DeclTypes::default();
   let mut def_map = HashMap::new();
   let mut local_defs = HashMap::new();
+
+  // The `defs` map is keyed by `(file, name)` and intentionally describes the
+  // *module scope* definitions for a file. HIR includes many nested definitions
+  // (e.g. ambient module members, function locals). Mapping those nested defs
+  // purely by name can accidentally conflate distinct declarations that share a
+  // name in the same file (e.g. `interface Foo` vs `declare module "m" { export
+  // interface Foo }`), which then causes exported ambient types to appear as
+  // `unknown`.
+  //
+  // Only apply `(file, name)` canonicalization to top-level defs (and to `var`
+  // binding defs under top-level `VarDeclarator` containers).
+  let mut parents: HashMap<DefId, Option<DefId>> = HashMap::new();
+  let mut kinds: HashMap<DefId, HirDefKind> = HashMap::new();
+  for def in lowered.defs.iter() {
+    parents.insert(def.id, def.parent);
+    kinds.insert(def.id, def.path.kind);
+  }
+
+  let should_canonicalize = |def: &hir_js::DefData| -> bool {
+    match def.parent {
+      None => true,
+      Some(parent) => {
+        if def.path.kind != HirDefKind::Var {
+          return false;
+        }
+        match kinds.get(&parent).copied() {
+          Some(HirDefKind::VarDeclarator) => parents.get(&parent).copied().flatten().is_none(),
+          _ => false,
+        }
+      }
+    }
+  };
   for def in lowered.defs.iter() {
     if let Some(name) = lowered.names.resolve(def.name) {
       let name = name.to_string();
       local_defs.insert(name.clone(), def.id);
-      if let Some(mapped) = defs.get(&(file, name.clone())) {
-        def_map.insert(def.id, *mapped);
+      if should_canonicalize(def) {
+        if let Some(mapped) = defs.get(&(file, name.clone())) {
+          def_map.insert(def.id, *mapped);
+        }
       }
     }
   }
@@ -63,16 +97,20 @@ pub fn lower_decl_types(
     let Some(info) = def.type_info.as_ref() else {
       continue;
     };
-    let target_def = def_map
-      .get(&def.id)
-      .copied()
-      .or_else(|| {
-        lowered
-          .names
-          .resolve(def.name)
-          .and_then(|name| defs.get(&(file, name.to_string())).copied())
-      })
-      .unwrap_or(def.id);
+    let target_def = if should_canonicalize(def) {
+      def_map
+        .get(&def.id)
+        .copied()
+        .or_else(|| {
+          lowered
+            .names
+            .resolve(def.name)
+            .and_then(|name| defs.get(&(file, name.to_string())).copied())
+        })
+        .unwrap_or(def.id)
+    } else {
+      def.id
+    };
 
     if let hir_js::DefTypeInfo::TypeAlias { type_expr, .. } = info {
       if let Some(name) = lowered.names.resolve(def.name) {

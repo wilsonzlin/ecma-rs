@@ -141,7 +141,11 @@ fn value_and_namespace_merge_callable_and_members() {
   let bar_ty = program
     .property_type(ty, typecheck_ts::PropertyKey::String("bar".to_string()))
     .expect("namespace member 'bar' should be visible after merge");
-  assert_eq!(program.display_type(bar_ty).to_string(), "string");
+  let bar_kind = program.interned_type_kind(bar_ty);
+  assert!(
+    matches!(bar_kind, InternedTypeKind::String),
+    "expected namespace member bar to be string, got {bar_kind:?}"
+  );
 }
 
 #[test]

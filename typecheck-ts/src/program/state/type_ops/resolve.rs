@@ -5,9 +5,7 @@ impl ProgramState {
     &mut self,
     ty: TypeId,
   ) -> Result<TypeId, FatalError> {
-    let Some(store) = self.interned_store.clone() else {
-      return Ok(ty);
-    };
+    let store = Arc::clone(&self.store);
     if std::env::var("DEBUG_OVERLOAD").is_ok() {
       if store.contains_type_id(ty) {
         eprintln!(
@@ -54,7 +52,6 @@ impl ProgramState {
             }
           }
           let resolved = self.type_of_def(def_id)?;
-          let resolved = self.ensure_interned_type(resolved);
           if std::env::var("DEBUG_OVERLOAD").is_ok() {
             eprintln!(
               "DEBUG resolve_value_ref_type resolved kind {:?}",

@@ -58,7 +58,11 @@ impl Program {
       state.compiler_options_override = Some(options.clone());
       state.checker_caches = CheckerCaches::new(options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
-      state.interned_store = None;
+      state.store = tti::TypeStore::with_options((&options).into());
+      let store = Arc::clone(&state.store);
+      state
+        .typecheck_db
+        .set_type_store(crate::db::types::SharedTypeStore(store));
     }
     self.reset_state();
   }

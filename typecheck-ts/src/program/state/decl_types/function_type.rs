@@ -26,7 +26,7 @@ impl ProgramState {
       } else {
         let mut members = Vec::new();
         for ty in res.return_types.iter() {
-          let ty = store.canon(self.ensure_interned_type(*ty));
+          let ty = store.canon(*ty);
           let widened = check::widen::widen_literal(store.as_ref(), ty);
           members.push(widened);
         }
@@ -106,66 +106,59 @@ impl ProgramState {
 
   pub(super) fn function_type(&mut self, def: DefId, func: FuncData) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
+    let store = Arc::clone(&self.store);
+    let prim = store.primitive_ids();
     let param_types: Vec<TypeId> = func
       .params
       .iter()
-      .map(|p| p.typ.unwrap_or(self.builtin.any))
-      .collect();
+      .map(|p| p.typ.unwrap_or(prim.any))
+      .map(|ty| self.resolve_value_ref_type(ty))
+      .collect::<Result<Vec<_>, _>>()?;
     let inferred_from_body = func.return_ann.is_none() && func.body.is_some();
-    let ret = if let Some(ret) = func.return_ann {
-      ret
+    let mut ret = if let Some(ret) = func.return_ann {
+      self.resolve_value_ref_type(ret)?
     } else if let Some(body) = func.body {
       self.check_cancelled()?;
       if self.checking_bodies.contains(&body) {
-        self.builtin.unknown
+        prim.unknown
       } else {
         let res = self.check_body(body)?;
         if res.return_types.is_empty() {
-          self.builtin.void
+          prim.void
         } else {
           let mut widened = Vec::new();
           for ty in res.return_types.iter() {
-            let imported = self.import_interned_type(*ty);
-            widened.push(self.widen_literal(imported));
+            let ty = store.canon(*ty);
+            widened.push(check::widen::widen_literal(store.as_ref(), ty));
           }
-          self.type_store.union(widened, &self.builtin)
+          store.union(widened)
         }
       }
     } else {
-      self.builtin.unknown
+      prim.unknown
     };
-    let ty = self.type_store.function(param_types, ret);
-    if let Some(store) = self.interned_store.as_ref() {
-      let mut cache = HashMap::new();
-      let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
-      if inferred_from_body
-        && func
-          .body
-          .is_some_and(|body| self.body_is_async_function(body))
-      {
-        let prim = store.primitive_ids();
-        if let tti::TypeKind::Callable { overloads } = store.type_kind(interned) {
-          if overloads.len() == 1 {
-            let sig_id = overloads[0];
-            let mut sig = store.signature(sig_id);
-            if sig.ret != prim.unknown {
-              let wrapped = self
-                .promise_ref(store.as_ref(), sig.ret)
-                .unwrap_or(prim.unknown);
-              if wrapped != sig.ret {
-                sig.ret = wrapped;
-                let sig_id = store.intern_signature(sig);
-                interned = store.canon(store.intern_type(tti::TypeKind::Callable {
-                  overloads: vec![sig_id],
-                }));
-              }
-            }
-          }
-        }
+
+    if inferred_from_body && func.body.is_some_and(|body| self.body_is_async_function(body)) {
+      if ret != prim.unknown {
+        ret = self.promise_ref(store.as_ref(), ret).unwrap_or(prim.unknown);
       }
-      self.interned_def_types.insert(def, interned);
     }
-    self.def_types.insert(def, ty);
-    Ok(ty)
+
+    let params: Vec<tti::Param> = param_types
+      .into_iter()
+      .map(|ty| tti::Param {
+        name: None,
+        ty: store.canon(ty),
+        optional: false,
+        rest: false,
+      })
+      .collect();
+    let sig = tti::Signature::new(params, ret);
+    let sig_id = store.intern_signature(sig);
+    let callable_ty = store.canon(store.intern_type(tti::TypeKind::Callable {
+      overloads: vec![sig_id],
+    }));
+    self.interned_def_types.insert(def, callable_ty);
+    Ok(callable_ty)
   }
 }
