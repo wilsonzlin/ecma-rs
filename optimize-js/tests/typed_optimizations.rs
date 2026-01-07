@@ -295,3 +295,64 @@ fn typed_mode_is_noop_when_type_info_is_unavailable() {
 
   assert_eq!(emit(&typed_program), untyped_out);
 }
+
+#[test]
+fn typed_optimizations_work_with_nonzero_type_file_ids() {
+  let src = "let x = 1; console?.log(x);";
+  let expected_src = "let x = 1; console.log(x);";
+
+  let mut host = typecheck_ts::MemoryHost::new();
+  let dummy = typecheck_ts::FileKey::new("file0.ts");
+  let input = typecheck_ts::FileKey::new("file1.ts");
+  host.insert(dummy.clone(), "export {}");
+  host.insert(input.clone(), src);
+  let tc_program = Arc::new(typecheck_ts::Program::new(
+    host,
+    vec![dummy.clone(), input.clone()],
+  ));
+  let _ = tc_program.check();
+  let file_id = tc_program.file_id(&input).expect("typecheck file id");
+  assert_eq!(file_id, typecheck_ts::FileId(1));
+
+  let typed_program = optimize_js::compile_source_with_typecheck(
+    src,
+    TopLevelMode::Module,
+    false,
+    tc_program,
+    file_id,
+  )
+  .expect("compile with type info");
+  let expected_program = compile_source(expected_src, TopLevelMode::Module, false);
+
+  assert_eq!(emit(&typed_program), emit(&expected_program));
+}
+
+#[test]
+fn typed_info_is_disabled_when_source_text_mismatches_type_program_file() {
+  let type_src = "let x = 1; console?.log(x);";
+  // Same length as `console` so expression spans line up, but should not inherit
+  // types from the `type_src` program.
+  let src = "let x = 1; consule?.log(x);";
+
+  let untyped_program = compile_source(src, TopLevelMode::Module, false);
+  let untyped_out = emit(&untyped_program);
+
+  let mut host = typecheck_ts::MemoryHost::new();
+  let file = typecheck_ts::FileKey::new("file0.ts");
+  host.insert(file.clone(), type_src);
+  let tc_program = Arc::new(typecheck_ts::Program::new(host, vec![file.clone()]));
+  let _ = tc_program.check();
+  let file_id = tc_program.file_id(&file).expect("typecheck file id");
+  assert_eq!(file_id, typecheck_ts::FileId(0));
+
+  let typed_program = optimize_js::compile_source_with_typecheck(
+    src,
+    TopLevelMode::Module,
+    false,
+    tc_program,
+    file_id,
+  )
+  .expect("compile with mismatched type program");
+
+  assert_eq!(emit(&typed_program), untyped_out);
+}

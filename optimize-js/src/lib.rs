@@ -576,9 +576,17 @@ pub fn compile_source_with_typecheck(
   type_program: std::sync::Arc<typecheck_ts::Program>,
   type_file: typecheck_ts::FileId,
 ) -> OptimizeResult<Program> {
+  let disable_types = type_program
+    .file_text(type_file)
+    .map(|text| text.as_ref() != source)
+    .unwrap_or(false);
   let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
-  let lower = hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
-  let types = crate::types::TypeContext::from_typecheck_program(type_program, type_file, &lower);
+  let lower = hir_js::lower_file(type_file, HirFileKind::Ts, &top_level_node);
+  let types = if disable_types {
+    Default::default()
+  } else {
+    crate::types::TypeContext::from_typecheck_program(type_program, type_file, &lower)
+  };
   Program::compile_with_lower(top_level_node, lower, mode, debug, types)
 }
 

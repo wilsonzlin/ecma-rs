@@ -109,11 +109,13 @@ pub type TypeId = ();
 
 #[cfg(feature = "typed")]
 impl TypeContext {
-  /// Build a [`TypeContext`] from a `typecheck-ts` program by matching recorded
-  /// expression spans against the optimizer's HIR.
+  /// Build a [`TypeContext`] from a `typecheck-ts` program.
   ///
-  /// This intentionally uses spans rather than relying on `BodyId`/`ExprId`
-  /// equality between independently lowered programs.
+  /// When possible we prefer an ID-aligned mapping between `hir-js` bodies and
+  /// `typecheck-ts` [`typecheck_ts::BodyCheckResult`] side tables (matching on
+  /// `BodyId` and validating the expression counts). If that fails for a
+  /// particular body, we fall back to span-based matching as a conservative
+  /// best-effort.
   pub fn from_typecheck_program(
     program: std::sync::Arc<typecheck_ts::Program>,
     file: typecheck_ts::FileId,
@@ -122,11 +124,17 @@ impl TypeContext {
     use ahash::HashMapExt;
     use diagnostics::TextRange;
 
+    let mut checked_expr_types: ahash::HashMap<BodyId, Vec<Option<typecheck_ts::TypeId>>> =
+      ahash::HashMap::new();
     let mut span_to_ty: ahash::HashMap<TextRange, Option<typecheck_ts::TypeId>> =
       ahash::HashMap::new();
 
     for body_id in program.bodies_in_file(file) {
       let checked = program.check_body(body_id);
+      checked_expr_types.insert(
+        body_id,
+        checked.expr_types().iter().copied().map(Some).collect(),
+      );
       for (&span, &ty) in checked.expr_spans().iter().zip(checked.expr_types().iter()) {
         span_to_ty
           .entry(span)
@@ -142,6 +150,14 @@ impl TypeContext {
     let mut expr_types = ahash::HashMap::new();
     for (body_id, idx) in lower.body_index.iter() {
       let body = &lower.bodies[*idx];
+      if let Some(types) = checked_expr_types
+        .get(body_id)
+        .filter(|types| types.len() == body.exprs.len())
+      {
+        expr_types.insert(*body_id, types.clone());
+        continue;
+      }
+
       let mut body_types = Vec::with_capacity(body.exprs.len());
       for expr in body.exprs.iter() {
         let ty = span_to_ty.get(&expr.span).and_then(|ty| *ty);
