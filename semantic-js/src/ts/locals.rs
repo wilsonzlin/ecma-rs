@@ -406,7 +406,18 @@ impl SemanticsBuilder {
   }
 }
 
-fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
+/// Returns `true` if the parsed AST contains syntax that marks the file as an
+/// external module.
+///
+/// This matches TypeScript's module-vs-script rules:
+/// - Any top-level `import`/`export` statement (including `export {}`) makes the
+///   file a module.
+/// - Exported declarations (`export const`, `export function`, etc) make the
+///   file a module.
+/// - `import id = require("...")` and `export import id = ...` make the file a
+///   module.
+/// - The same checks apply within `declare global { ... }`.
+pub fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
   fn walk(stmts: &[Node<AstStmt>]) -> bool {
     for stmt in stmts.iter() {
       match stmt.stx.as_ref() {
@@ -431,12 +442,12 @@ fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
           }
         }
         AstStmt::FunctionDecl(func) => {
-          if func.stx.export {
+          if func.stx.export || func.stx.export_default {
             return true;
           }
         }
-        AstStmt::ClassDecl(class) => {
-          if class.stx.export {
+        AstStmt::ClassDecl(class_decl) => {
+          if class_decl.stx.export || class_decl.stx.export_default {
             return true;
           }
         }
@@ -3586,5 +3597,55 @@ mod tests {
     // Sanity check: we should only have one unique symbol for these occurrences.
     let uniq: HashSet<_> = [decl_symbol, jsx_symbol].into_iter().collect();
     assert_eq!(uniq.len(), 1);
+  }
+
+  #[test]
+  fn module_syntax_controls_annex_b_block_function_hoisting() {
+    let script_source = "function outer() { if (true) { function inner() {} } inner(); }";
+    let module_source =
+      "export {}; function outer() { if (true) { function inner() {} } inner(); }";
+
+    let mut script_ast = parse_with_options(
+      script_source,
+      ParseOptions {
+        dialect: Dialect::Ts,
+        // Parse both sources as modules so the only behaviour toggle is the
+        // `export {}` marker.
+        source_type: SourceType::Module,
+      },
+    )
+    .expect("parse script source");
+
+    let mut module_ast = parse_with_options(
+      module_source,
+      ParseOptions {
+        dialect: Dialect::Ts,
+        source_type: SourceType::Module,
+      },
+    )
+    .expect("parse module source");
+
+    let script_locals = bind_ts_locals(&mut script_ast, FileId(0));
+    let module_locals = bind_ts_locals(&mut module_ast, FileId(1));
+
+    let script_call_offset = script_source
+      .rfind("inner();")
+      .expect("inner() call present") as u32;
+    let module_call_offset = module_source
+      .rfind("inner();")
+      .expect("inner() call present") as u32;
+
+    assert!(
+      script_locals
+        .resolve_expr_at_offset(script_call_offset)
+        .is_some(),
+      "block-scoped function declarations should be hoisted in scripts"
+    );
+    assert!(
+      module_locals
+        .resolve_expr_at_offset(module_call_offset)
+        .is_none(),
+      "block-scoped function declarations should not be hoisted in modules"
+    );
   }
 }
