@@ -98,6 +98,21 @@ pub struct TupleElem {
   pub readonly: bool,
 }
 
+/// Target for a type predicate (`value is T` / `asserts value is T`).
+///
+/// TypeScript's type system is structural: parameter *names* do not contribute to
+/// type identity, but type predicates still need to identify which argument (or
+/// `this`) should be narrowed at call sites. Store the target positionally to
+/// avoid tying predicate semantics to signature parameter names that are
+/// canonicalized away while interning.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+pub enum PredicateParam {
+  /// Predicate applies to the receiver (`this is T`).
+  This,
+  /// Predicate applies to the Nth non-`this` parameter in the signature.
+  Param(u32),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeKind {
   Any,
@@ -141,7 +156,7 @@ pub enum TypeKind {
   TypeParam(TypeParamId),
   Predicate {
     /// Parameter being tested or asserted, when known.
-    parameter: Option<NameId>,
+    parameter: Option<PredicateParam>,
     /// Type asserted when the predicate succeeds. `None` indicates an unknown
     /// asserted type (treated as `boolean`).
     asserted: Option<TypeId>,

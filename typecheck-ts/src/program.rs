@@ -396,8 +396,14 @@ fn convert_type_for_display(
     } => {
       let param = if parameter.is_empty() {
         None
+      } else if parameter == "this" {
+        Some(tti::PredicateParam::This)
       } else {
-        Some(store.intern_name(parameter))
+        // `TypeKind::Function` in this compact display representation does not
+        // preserve parameter names, so a type predicate's target can only be
+        // approximated. Default to the first positional argument to keep the
+        // output deterministic.
+        Some(tti::PredicateParam::Param(0))
       };
       let asserted = asserted.map(|ty| convert_type_for_display(ty, state, store, cache));
       store.intern_type(tti::TypeKind::Predicate {
@@ -13203,7 +13209,10 @@ impl ProgramState {
         asserted,
         asserts,
       } => {
-        let param = parameter.map(|id| store.name(id)).unwrap_or_default();
+        let param = match parameter {
+          Some(tti::PredicateParam::This) => "this".to_string(),
+          _ => String::new(),
+        };
         let asserted = asserted.map(|ty| self.import_interned_type(ty));
         self.type_store.predicate(param, asserted, asserts)
       }

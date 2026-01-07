@@ -29,8 +29,8 @@ use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
   EvaluatorCaches, ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData,
-  PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander,
-  TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
+  PredicateParam, PropKey, RelateCtx, Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator,
+  TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -2910,25 +2910,19 @@ impl<'a> Checker<'a> {
             );
           }
           if let TypeKind::Predicate {
-            parameter: Some(param_name),
+            parameter,
             asserted: Some(asserted),
             asserts: true,
           } = self.store.type_kind(sig.ret)
           {
-            let target = sig
-              .params
-              .iter()
-              .enumerate()
-              .find(|(_, p)| p.name == Some(param_name))
-              .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
-            if let Some((param_idx, _)) = target {
-              if let Some(arg_idx) = param_index_map
-                .iter()
-                .position(|idx| *idx == Some(param_idx))
+            if let PredicateParam::Param(param_idx) = parameter.unwrap_or(PredicateParam::Param(0))
+            {
+              let param_idx = param_idx as usize;
+              if let Some(arg_idx) = param_index_map.iter().position(|idx| *idx == Some(param_idx))
               {
                 if let Some(arg) = call.stx.arguments.get(arg_idx) {
                   if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
-                    self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
+                    self.insert_binding(id.stx.name.clone(), asserted, Vec::new());
                   }
                 }
               }
@@ -9217,41 +9211,63 @@ impl<'a> FlowBodyChecker<'a> {
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {
-            let target_idx = parameter
-              .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
-              .unwrap_or(0);
-            if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
-              if let Some(binding) = self.ident_binding(arg_expr) {
-                let arg_ty = arg_bases
-                  .get(target_idx)
-                  .map(|arg| arg.ty)
-                  .unwrap_or(prim.unknown);
-                let (yes, no) =
-                  narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
-                if asserts {
-                  if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
-                    eprintln!(
-                      "DEBUG asserts narrowing arg {} to {} (no {}) in file {:?}",
-                      TypeDisplay::new(&self.store, arg_ty),
-                      TypeDisplay::new(&self.store, yes),
-                      TypeDisplay::new(&self.store, no),
-                      self.file
-                    );
+            match parameter.unwrap_or(PredicateParam::Param(0)) {
+              PredicateParam::Param(target_idx) => {
+                let target_idx = target_idx as usize;
+                if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
+                  if let Some(binding) = self.ident_binding(arg_expr) {
+                    let arg_ty = arg_bases
+                      .get(target_idx)
+                      .map(|arg| arg.ty)
+                      .unwrap_or(prim.unknown);
+                    let (yes, no) =
+                      narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
+                    if asserts {
+                      if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
+                        eprintln!(
+                          "DEBUG asserts narrowing arg {} to {} (no {}) in file {:?}",
+                          TypeDisplay::new(&self.store, arg_ty),
+                          TypeDisplay::new(&self.store, yes),
+                          TypeDisplay::new(&self.store, no),
+                          self.file
+                        );
+                      }
+                      env.set(binding, yes);
+                      out.assertions.insert(FlowKey::root(binding), yes);
+                    } else {
+                      let key = FlowKey::root(binding);
+                      out.truthy.insert(key.clone(), yes);
+                      out.falsy.insert(key, no);
+                      if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
+                        eprintln!(
+                          "DEBUG predicate narrowing arg {} to {} (no {}) in file {:?}",
+                          TypeDisplay::new(&self.store, arg_ty),
+                          TypeDisplay::new(&self.store, yes),
+                          TypeDisplay::new(&self.store, no),
+                          self.file
+                        );
+                      }
+                    }
                   }
-                  env.set(binding, yes);
-                  out.assertions.insert(FlowKey::root(binding), yes);
-                } else {
-                  let key = FlowKey::root(binding);
-                  out.truthy.insert(key.clone(), yes);
-                  out.falsy.insert(key, no);
-                  if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
-                    eprintln!(
-                      "DEBUG predicate narrowing arg {} to {} (no {}) in file {:?}",
-                      TypeDisplay::new(&self.store, arg_ty),
-                      TypeDisplay::new(&self.store, yes),
-                      TypeDisplay::new(&self.store, no),
-                      self.file
-                    );
+                }
+              }
+              PredicateParam::This => {
+                if let Some(this_expr) = match &self.body.exprs[call.callee.0 as usize].kind {
+                  ExprKind::Member(MemberExpr { object, .. }) => Some(*object),
+                  _ => None,
+                } {
+                  if let Some(binding) = self.ident_binding(this_expr) {
+                    let arg_ty = this_arg.unwrap_or(prim.unknown);
+                    let (yes, no) =
+                      narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
+                    if asserts {
+                      env.set(binding, yes);
+                      out.assertions.insert(FlowKey::root(binding), yes);
+                    } else {
+                      let key = FlowKey::root(binding);
+                      out.truthy.insert(key.clone(), yes);
+                      out.falsy.insert(key, no);
+                    }
                   }
                 }
               }

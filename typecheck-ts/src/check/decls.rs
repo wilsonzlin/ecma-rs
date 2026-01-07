@@ -12,9 +12,9 @@ use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use semantic_js::ts::{ModuleRef, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
-  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeParamVariance,
-  TypeStore,
+  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PredicateParam, PropData, PropKey,
+  Property, Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId,
+  TypeParamVariance, TypeStore,
 };
 
 /// Lower HIR type expressions and declarations into interned types.
@@ -726,7 +726,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .map(|ty| self.lower_type_expr(ty, names));
         let parameter = names
           .resolve(pred.parameter)
-          .map(|n| self.store.intern_name(n.to_string()));
+          .and_then(|name| (name == "this").then_some(PredicateParam::This));
         self.store.intern_type(TypeKind::Predicate {
           parameter,
           asserted,
@@ -797,7 +797,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let prev_names = self.type_param_names.clone();
     let type_params = self.lower_type_param_decls(&func.type_params, names);
     let (this_param, params) = self.lower_fn_params(&func.params, names);
-    let ret = self.lower_type_expr(func.ret, names);
+    let ret_kind = self
+      .arenas()
+      .type_exprs
+      .get(func.ret.0 as usize)
+      .map(|expr| expr.kind.clone());
+    let ret = match ret_kind {
+      Some(TypeExprKind::TypePredicate(pred)) => {
+        self.lower_type_predicate_in_signature(&pred, &params, names)
+      }
+      _ => self.lower_type_expr(func.ret, names),
+    };
     let sig = Signature {
       params,
       ret,
@@ -807,6 +817,32 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self.type_params = prev_params;
     self.type_param_names = prev_names;
     sig
+  }
+
+  fn lower_type_predicate_in_signature(
+    &mut self,
+    pred: &hir_js::TypePredicate,
+    params: &[Param],
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
+    let asserted = pred
+      .type_annotation
+      .map(|ty| self.lower_type_expr(ty, names));
+    let parameter = names.resolve(pred.parameter).and_then(|name| {
+      if name == "this" {
+        return Some(PredicateParam::This);
+      }
+      let name_id = self.store.intern_name(name.to_string());
+      params
+        .iter()
+        .position(|param| param.name == Some(name_id))
+        .map(|idx| PredicateParam::Param(idx as u32))
+    });
+    self.store.intern_type(TypeKind::Predicate {
+      parameter,
+      asserted,
+      asserts: pred.asserts,
+    })
   }
 
   fn map_modifier(&self, modifier: Option<hir_js::TypeMappedModifier>) -> MappedModifier {
@@ -1111,10 +1147,22 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let prev_names = self.type_param_names.clone();
     let type_params = self.lower_type_param_decls(&sig.type_params, names);
     let (this_param, sig_params) = self.lower_fn_params(&sig.params, names);
-    let ret = sig
-      .return_type
-      .map(|r| self.lower_type_expr(r, names))
-      .unwrap_or(self.store.primitive_ids().any);
+    let ret = match sig.return_type {
+      Some(ret_id) => {
+        let kind = self
+          .arenas()
+          .type_exprs
+          .get(ret_id.0 as usize)
+          .map(|expr| expr.kind.clone());
+        match kind {
+          Some(TypeExprKind::TypePredicate(pred)) => {
+            self.lower_type_predicate_in_signature(&pred, &sig_params, names)
+          }
+          _ => self.lower_type_expr(ret_id, names),
+        }
+      }
+      None => self.store.primitive_ids().any,
+    };
     let sig = Signature {
       params: sig_params,
       ret,

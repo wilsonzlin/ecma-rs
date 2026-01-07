@@ -11,9 +11,9 @@ use typecheck_ts::check::decls::HirDeclLowerer;
 use typecheck_ts::check::type_expr::{LoweredPredicate, TypeLowerer, TypeResolver};
 use typecheck_ts::Diagnostic;
 use types_ts_interned::{
-  DefId, ExpandedType, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property, Shape,
-  TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  DefId, ExpandedType, MappedModifier, MappedType, ObjectType, PredicateParam, PropData, PropKey,
+  Property, Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId,
+  TypeKind, TypeParamId, TypeStore,
 };
 
 fn parse_type_alias(source: &str) -> Node<TypeAliasDecl> {
@@ -248,10 +248,7 @@ fn captures_type_predicate_details() {
     panic!("expected predicate, got {:?}", store.type_kind(sig.ret));
   };
   assert!(!asserts);
-  assert_eq!(
-    parameter.map(|id| store.name(id)),
-    Some("value".to_string())
-  );
+  assert_eq!(parameter, Some(PredicateParam::Param(0)));
   let pred_ty = asserted.expect("predicate type");
   assert!(matches!(store.type_kind(pred_ty), TypeKind::String));
 

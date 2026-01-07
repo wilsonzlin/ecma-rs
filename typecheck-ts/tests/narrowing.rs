@@ -8,8 +8,8 @@ use hir_js::{
 };
 use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
 use types_ts_interned::{
-  DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
-  RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
+  DefId, NameId as TypeNameId, Param, PredicateParam, PropData, PropKey, Property, RelateCtx,
+  RelateHooks, RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
 };
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
@@ -54,7 +54,13 @@ fn predicate_callable(
   asserted: TypeId,
   asserts: bool,
 ) -> TypeId {
-  predicate_callable_with_params(store, &[(None, param_ty)], asserted, asserts, None)
+  predicate_callable_with_params(
+    store,
+    &[(None, param_ty)],
+    asserted,
+    asserts,
+    Some(PredicateParam::Param(0)),
+  )
 }
 
 fn predicate_callable_with_params(
@@ -62,7 +68,7 @@ fn predicate_callable_with_params(
   params: &[(Option<TypeNameId>, TypeId)],
   asserted: TypeId,
   asserts: bool,
-  predicate_param: Option<TypeNameId>,
+  predicate_param: Option<PredicateParam>,
 ) -> TypeId {
   let sig = Signature {
     params: params
@@ -2017,7 +2023,7 @@ function pick(val: string | number) {
     ],
     prim.string,
     false,
-    Some(candidate),
+    Some(PredicateParam::Param(1)),
   );
   initial.insert(name_id(lowered.names.as_ref(), "val"), val_ty);
   initial.insert(name_id(lowered.names.as_ref(), "isStr"), guard);
@@ -2475,7 +2481,7 @@ function f(x: string | number) {
       rest: false,
     }],
     ret: store.intern_type(TypeKind::Predicate {
-      parameter: Some(param_name),
+      parameter: Some(PredicateParam::Param(0)),
       asserted: Some(prim.string),
       asserts: false,
     }),
@@ -2490,7 +2496,7 @@ function f(x: string | number) {
       rest: false,
     }],
     ret: store.intern_type(TypeKind::Predicate {
-      parameter: Some(param_name),
+      parameter: Some(PredicateParam::Param(0)),
       asserted: Some(prim.number),
       asserts: false,
     }),
@@ -2559,7 +2565,7 @@ function useIt(val: string | number) {
     ],
     prim.string,
     true,
-    Some(candidate),
+    Some(PredicateParam::Param(1)),
   );
   initial.insert(name_id(lowered.names.as_ref(), "assertStr"), guard);
 

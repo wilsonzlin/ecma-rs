@@ -17,8 +17,8 @@ use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamDecl,
-  TypeParamId, TypeParamVariance, TypeStore,
+  PredicateParam, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind,
+  TypeParamDecl, TypeParamId, TypeParamVariance, TypeStore,
 };
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.
@@ -364,9 +364,13 @@ impl TypeLowerer {
       .map(|params| self.register_type_params(params))
       .unwrap_or_default();
     let (this_param, params) = self.lower_params(params);
-    let ret = return_type
-      .map(|t| self.lower_type_expr(t))
-      .unwrap_or(self.store.primitive_ids().unknown);
+    let ret = match return_type {
+      Some(ret) => match ret.stx.as_ref() {
+        TypeExpr::TypePredicate(pred) => self.lower_type_predicate_in_signature(pred, &params),
+        _ => self.lower_type_expr(ret),
+      },
+      None => self.store.primitive_ids().unknown,
+    };
     let sig = Signature {
       params,
       ret,
@@ -375,6 +379,25 @@ impl TypeLowerer {
     };
     self.pop_type_param_scope();
     self.store.intern_signature(sig)
+  }
+
+  fn resolve_predicate_param(&mut self, name: &str, params: &[Param]) -> Option<PredicateParam> {
+    if name.is_empty() {
+      return None;
+    }
+    if name == "this" {
+      return Some(PredicateParam::This);
+    }
+    let name_id = self.store.intern_name(name.to_string());
+    params
+      .iter()
+      .position(|param| param.name == Some(name_id))
+      .map(|idx| PredicateParam::Param(idx as u32))
+  }
+
+  fn lower_type_predicate_in_signature(&mut self, pred: &Node<TypePredicate>, params: &[Param]) -> TypeId {
+    let parameter = self.resolve_predicate_param(&pred.stx.parameter_name, params);
+    self.lower_type_predicate_with_param(pred, parameter)
   }
 
   pub(crate) fn lower_type_members(&mut self, members: &[Node<TypeMember>]) -> Shape {
@@ -780,17 +803,21 @@ impl TypeLowerer {
   }
 
   fn lower_type_predicate(&mut self, pred: &Node<TypePredicate>) -> TypeId {
+    let parameter = (pred.stx.parameter_name == "this").then_some(PredicateParam::This);
+    self.lower_type_predicate_with_param(pred, parameter)
+  }
+
+  fn lower_type_predicate_with_param(
+    &mut self,
+    pred: &Node<TypePredicate>,
+    parameter: Option<PredicateParam>,
+  ) -> TypeId {
     let asserted = pred
       .stx
       .type_annotation
       .as_ref()
       .map(|t| self.lower_type_expr(t));
     let span = self.span_for(pred.loc);
-    let parameter = if pred.stx.parameter_name.is_empty() {
-      None
-    } else {
-      Some(self.store.intern_name(pred.stx.parameter_name.clone()))
-    };
     let predicate = self.store.intern_type(TypeKind::Predicate {
       parameter,
       asserted,
