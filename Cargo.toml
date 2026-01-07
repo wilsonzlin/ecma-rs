@@ -48,7 +48,7 @@ assert_cmd = "2.0"
 axum = { version = "0.7.9", default-features = false }
 bitflags = "2"
 bumpalo = "3.14"
-clap = "4.5.17"
+clap = { version = "4.5.17", default-features = false, features = ["std", "help", "usage", "error-context"] }
 criterion = "0.7"
 dashmap = "6.1.0"
 derive_more = "1.0.0"
