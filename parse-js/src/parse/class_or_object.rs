@@ -1356,6 +1356,11 @@ impl<'a> Parser<'a> {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
+      // Async generator method with computed key: `async *[key]()` / `async *[key]`.
+      (TT::KeywordAsync, TT::Asterisk, TT::BracketOpen, _) if !b.preceded_by_line_terminator => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
       (TT::KeywordAsync, TT::BracketOpen, _, _) // Async method with computed property: async [key]()
         if !b.preceded_by_line_terminator =>
       {
