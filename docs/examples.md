@@ -4,6 +4,15 @@ The workspace ships a small set of compiled examples intended for copy/paste
 setups in downstream tools. They avoid filesystem I/O by using in-memory hosts
 and produce deterministic output (stable ordering of diagnostics and queries).
 
+## `diagnostics`
+
+```bash
+cargo run -p diagnostics --example basic
+```
+
+This example builds a `Diagnostic` and renders it with caret highlighting using
+`SimpleFiles`.
+
 ## `parse-js`
 
 ```bash
