@@ -26,6 +26,7 @@ tracing = { workspace = true }
 types-ts-interned = { workspace = true }
 ahash = { workspace = true }
 dashmap = { workspace = true }
+indexmap = { workspace = true }
 ordered-float = { workspace = true }
 num-bigint = { workspace = true }
 bumpalo = { workspace = true, features = ["collections"] }
