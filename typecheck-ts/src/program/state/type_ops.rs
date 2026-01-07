@@ -196,7 +196,11 @@ impl ProgramState {
     self.prefer_named_refs_in_store(store, ty)
   }
 
-  pub(super) fn prefer_named_refs_in_store(&self, store: &Arc<tti::TypeStore>, ty: TypeId) -> TypeId {
+  pub(super) fn prefer_named_refs_in_store(
+    &self,
+    store: &Arc<tti::TypeStore>,
+    ty: TypeId,
+  ) -> TypeId {
     let canonical = store.canon(ty);
     let kind = store.type_kind(canonical);
     let primitive_like = matches!(
@@ -284,7 +288,11 @@ impl ProgramState {
     canonical
   }
 
-  pub(super) fn prefer_named_class_refs_in_store(&self, store: &Arc<tti::TypeStore>, ty: TypeId) -> TypeId {
+  pub(super) fn prefer_named_class_refs_in_store(
+    &self,
+    store: &Arc<tti::TypeStore>,
+    ty: TypeId,
+  ) -> TypeId {
     let canonical = store.canon(ty);
     let kind = store.type_kind(canonical);
     let primitive_like = matches!(
@@ -621,5 +629,4 @@ impl ProgramState {
     let def_name = def_name.or_else(|| Some(def_data.name.as_str()));
     var_initializer_in_file(lowered, def, hir_def.span, def_name)
   }
-
 }

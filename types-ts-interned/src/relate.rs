@@ -23,6 +23,7 @@ use bitflags::bitflags;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashSet, VecDeque};
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 #[cfg(feature = "tracing")]
@@ -183,9 +184,16 @@ struct RelationKey {
   mode: RelationMode,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct GenRelationKey {
+  gen: u64,
+  key: RelationKey,
+}
+
 #[derive(Clone, Debug)]
 pub struct RelationCache {
-  inner: Arc<ShardedCache<RelationKey, bool>>,
+  generation: Arc<AtomicU64>,
+  inner: Arc<ShardedCache<GenRelationKey, bool>>,
 }
 
 impl Default for RelationCache {
@@ -197,8 +205,13 @@ impl Default for RelationCache {
 impl RelationCache {
   pub fn new(config: CacheConfig) -> Self {
     Self {
+      generation: Arc::new(AtomicU64::new(0)),
       inner: Arc::new(ShardedCache::new(config)),
     }
+  }
+
+  pub fn invalidate(&self) {
+    self.generation.fetch_add(1, Ordering::Relaxed);
   }
 
   pub fn stats(&self) -> CacheStats {
@@ -210,11 +223,14 @@ impl RelationCache {
   }
 
   fn get(&self, key: &RelationKey) -> Option<bool> {
-    self.inner.get(key)
+    let gen = self.generation.load(Ordering::Relaxed);
+    let key = GenRelationKey { gen, key: *key };
+    self.inner.get(&key)
   }
 
   fn insert(&self, key: RelationKey, value: bool) {
-    self.inner.insert(key, value);
+    let gen = self.generation.load(Ordering::Relaxed);
+    self.inner.insert(GenRelationKey { gen, key }, value);
   }
 
   pub fn clear(&self) {

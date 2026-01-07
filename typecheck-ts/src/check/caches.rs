@@ -46,6 +46,21 @@ impl CheckerCaches {
     }
   }
 
+  /// Invalidate any retained shared caches without eagerly clearing them.
+  ///
+  /// This is used when declaration-level types change: cached ref expansions and
+  /// relation results may become stale, but clearing large shared caches can be
+  /// expensive. Generational invalidation keeps caches bounded while avoiding
+  /// full clears.
+  pub fn invalidate_shared(&self) {
+    if let Some(cache) = &self.shared_relation {
+      cache.invalidate();
+    }
+    if let Some(caches) = &self.shared_eval {
+      caches.invalidate();
+    }
+  }
+
   /// Obtain caches for checking a single body.
   pub fn for_body(&self) -> BodyCaches {
     match self.options.mode {

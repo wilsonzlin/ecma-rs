@@ -40,9 +40,10 @@ impl ProgramState {
     }
     self.module_namespace_types.clear();
     self.module_namespace_in_progress.clear();
-    // The interned type tables are rebuilt as a batch; clear any shared caches
-    // that may have memoized partial ref expansions against the old tables.
-    self.checker_caches.clear_shared();
+    // The interned type tables are rebuilt as a batch; invalidate any shared
+    // caches that may have memoized partial ref expansions against the old
+    // tables.
+    self.checker_caches.invalidate_shared();
     self.interned_def_types.clear();
     self.interned_named_def_types.clear();
     self.interned_type_params.clear();

@@ -10,6 +10,7 @@ use ahash::{AHashMap, AHashSet};
 use ordered_float::OrderedFloat;
 use smallvec::SmallVec;
 use std::cmp::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc;
 
 #[cfg(feature = "tracing")]
@@ -80,12 +81,14 @@ impl Substitution {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EvalKey {
+  gen: u64,
   ty: TypeId,
   subst: Substitution,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RefKey {
+  gen: u64,
   def: DefId,
   args: SmallVec<[TypeId; 4]>,
 }
@@ -219,6 +222,7 @@ pub struct EvaluatorCacheStats {
 
 #[derive(Clone, Debug)]
 pub struct EvaluatorCaches {
+  generation: Arc<AtomicU64>,
   eval: Arc<ShardedCache<EvalKey, TypeId>>,
   refs: Arc<ShardedCache<RefKey, TypeId>>,
 }
@@ -249,9 +253,14 @@ impl Default for EvaluatorLimits {
 impl EvaluatorCaches {
   pub fn new(config: CacheConfig) -> Self {
     Self {
+      generation: Arc::new(AtomicU64::new(0)),
       eval: Arc::new(ShardedCache::new(config)),
       refs: Arc::new(ShardedCache::new(config)),
     }
+  }
+
+  pub fn invalidate(&self) {
+    self.generation.fetch_add(1, AtomicOrdering::Relaxed);
   }
 
   pub fn stats(&self) -> EvaluatorCacheStats {
@@ -263,6 +272,7 @@ impl EvaluatorCaches {
 
   pub fn get_ref(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     let key = RefKey {
+      gen: self.generation.load(AtomicOrdering::Relaxed),
       def,
       args: SmallVec::from_slice(args),
     };
@@ -271,6 +281,7 @@ impl EvaluatorCaches {
 
   pub fn insert_ref(&self, def: DefId, args: &[TypeId], value: TypeId) {
     let key = RefKey {
+      gen: self.generation.load(AtomicOrdering::Relaxed),
       def,
       args: SmallVec::from_slice(args),
     };
@@ -575,6 +586,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       return ty;
     }
     let key = EvalKey {
+      gen: self.caches.generation.load(AtomicOrdering::Relaxed),
       ty,
       subst: subst.clone(),
     };
@@ -734,6 +746,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       .map(|arg| self.evaluate_with_subst(arg, subst, depth + 1))
       .collect();
     let key = RefKey {
+      gen: self.caches.generation.load(AtomicOrdering::Relaxed),
       def,
       args: evaluated_args,
     };
