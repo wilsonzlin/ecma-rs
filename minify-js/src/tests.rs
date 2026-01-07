@@ -319,13 +319,19 @@ fn removes_unused_named_import_specifiers() {
 
 #[test]
 fn unused_default_import_becomes_side_effect_import() {
-  let result = minified(TopLevelMode::Module, r#"import foo from "x";console.log(1);"#);
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import foo from "x";console.log(1);"#,
+  );
   assert_eq!(result, r#"import"x";console.log(1);"#);
 }
 
 #[test]
 fn unused_namespace_import_becomes_side_effect_import() {
-  let result = minified(TopLevelMode::Module, r#"import * as ns from "x";console.log(1);"#);
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import * as ns from "x";console.log(1);"#,
+  );
   assert_eq!(result, r#"import"x";console.log(1);"#);
 }
 
@@ -551,7 +557,10 @@ fn dce_keeps_class_expr_static_blocks_with_side_effects() {
     TopLevelMode::Global,
     "function f(){let C=class{static{sideEffect()}};return 1;}f();",
   );
-  assert_eq!(result, "function f(){(class{static{sideEffect();}});return 1;}f();");
+  assert_eq!(
+    result,
+    "function f(){(class{static{sideEffect();}});return 1;}f();"
+  );
 }
 
 #[test]
@@ -627,7 +636,10 @@ fn dce_preserves_order_when_dropping_trailing_side_effectful_declarator() {
   match body[0].stx.as_ref() {
     Stmt::VarDecl(decl) => {
       assert_eq!(decl.stx.declarators.len(), 1);
-      let init = decl.stx.declarators[0].initializer.as_ref().expect("initializer");
+      let init = decl.stx.declarators[0]
+        .initializer
+        .as_ref()
+        .expect("initializer");
       assert!(matches!(init.stx.as_ref(), Expr::Call(_)));
     }
     other => panic!("expected var decl stmt, got {other:?}"),

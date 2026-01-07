@@ -47,9 +47,7 @@ use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::{FileOrigin, FileRegistry};
-use crate::profile::{
-  CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector,
-};
+use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
   DefSnapshot, FileSnapshot, FileStateSnapshot, LocalSymbolInfoSnapshot, ModuleResolutionSnapshot,
@@ -81,19 +79,19 @@ pub(crate) use legacy_types::{ObjectProperty, ObjectType, TypeKind};
 #[path = "exports.rs"]
 mod exports;
 
-pub use exports::{ExportEntry, ExportMap};
 use exports::{ExportAll, FileState, Reexport};
+pub use exports::{ExportEntry, ExportMap};
 
 #[path = "types.rs"]
 mod types;
 
-pub use types::{ExplainTree, TypeDisplay};
-pub(crate) use types::{NamespaceMemberIndex, ProgramTypeResolver};
 use types::{
   callable_return_is_unknown, convert_type_for_display, display_type_from_state,
   export_assignment_path_for_file, lookup_interned_property_type, DeclTypeResolver,
   ProgramTypeExpander,
 };
+pub use types::{ExplainTree, TypeDisplay};
+pub(crate) use types::{NamespaceMemberIndex, ProgramTypeResolver};
 
 use crate::lib_support::lib_env::{collect_libs, validate_libs};
 use crate::lib_support::{

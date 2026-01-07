@@ -44,4 +44,3 @@ pub(super) struct FileState {
   pub(super) reexports: Vec<Reexport>,
   pub(super) export_all: Vec<ExportAll>,
 }
-

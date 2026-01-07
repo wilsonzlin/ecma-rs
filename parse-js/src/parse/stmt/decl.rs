@@ -77,7 +77,8 @@ impl<'a> Parser<'a> {
         let pattern = p.pat_decl(ctx)?;
 
         // TypeScript: definite assignment assertion
-        let definite_assignment = !p.is_strict_ecmascript() && p.consume_if(TT::Exclamation).is_match();
+        let definite_assignment =
+          !p.is_strict_ecmascript() && p.consume_if(TT::Exclamation).is_match();
 
         // TypeScript: type annotation
         // Note: We use type_expr_or_predicate for error recovery - type predicates

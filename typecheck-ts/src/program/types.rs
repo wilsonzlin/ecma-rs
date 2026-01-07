@@ -78,7 +78,10 @@ impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
   }
 }
 
-pub(super) fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
+pub(super) fn display_type_from_state(
+  state: &ProgramState,
+  ty: TypeId,
+) -> (Arc<tti::TypeStore>, tti::TypeId) {
   if let Some(store) = state.interned_store.as_ref() {
     if store.contains_type_id(ty) {
       return (Arc::clone(store), store.canon(ty));
@@ -270,7 +273,6 @@ pub(super) fn callable_return_is_unknown(store: &Arc<tti::TypeStore>, ty: TypeId
   }
 }
 
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NamespaceMemberIndex {
   // (parent def, namespace bit) -> (member name -> candidate defs)
@@ -288,7 +290,12 @@ impl NamespaceMemberIndex {
       .push(def);
   }
 
-  pub(super) fn members(&self, parent: DefId, ns: sem_ts::Namespace, name: &str) -> Option<&[DefId]> {
+  pub(super) fn members(
+    &self,
+    parent: DefId,
+    ns: sem_ts::Namespace,
+    name: &str,
+  ) -> Option<&[DefId]> {
     self
       .by_parent
       .get(&(parent, ns))
@@ -1099,7 +1106,6 @@ impl TypeResolver for ProgramTypeResolver {
   }
 }
 
-
 pub(super) fn lookup_interned_property_type(
   store: &tti::TypeStore,
   expander: Option<&dyn tti::RelateTypeExpander>,
@@ -1161,7 +1167,6 @@ pub(super) fn lookup_interned_property_type(
     _ => None,
   }
 }
-
 
 #[derive(Clone)]
 pub(super) struct DeclTypeResolver {

@@ -194,31 +194,31 @@ impl<'a> Parser<'a> {
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)
       let next_token = p.peek().typ;
-       let is_unparenthesised_single_param = is_valid_pattern_identifier(
-         next_token,
-         ParsePatternRules {
-           await_allowed: false,
-           yield_allowed: ctx.rules.yield_allowed,
-         },
-       ) && {
-         // Need to peek further to see if there's => coming up
-         let peek2 = p.peek_n::<2>()[1].typ;
-         // Could be either:
-         // - identifier =>
-         // - identifier : type =>
-         peek2 == TT::EqualsChevronRight || (!p.is_strict_ecmascript() && peek2 == TT::Colon)
-       };
+      let is_unparenthesised_single_param = is_valid_pattern_identifier(
+        next_token,
+        ParsePatternRules {
+          await_allowed: false,
+          yield_allowed: ctx.rules.yield_allowed,
+        },
+      ) && {
+        // Need to peek further to see if there's => coming up
+        let peek2 = p.peek_n::<2>()[1].typ;
+        // Could be either:
+        // - identifier =>
+        // - identifier : type =>
+        peek2 == TT::EqualsChevronRight || (!p.is_strict_ecmascript() && peek2 == TT::Colon)
+      };
 
       let (type_parameters, parameters, return_type, arrow) = if is_unparenthesised_single_param {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
-         // TypeScript: return type annotation (after param, before =>) - may be type predicate.
-         let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
-           Some(p.type_expr_or_predicate(ctx)?)
-         } else {
-           None
-         };
+        // TypeScript: return type annotation (after param, before =>) - may be type predicate.
+        let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr_or_predicate(ctx)?)
+        } else {
+          None
+        };
         let arrow = p.require(TT::EqualsChevronRight)?;
         let pattern = Node::new(
           param_name,
@@ -247,22 +247,22 @@ impl<'a> Parser<'a> {
         );
         (None, vec![param], return_type, arrow)
       } else {
-         // TypeScript: generic type parameters
-         let type_parameters = if !p.is_strict_ecmascript()
-           && p.peek().typ == TT::ChevronLeft
-           && p.is_start_of_type_arguments()
-         {
-           Some(p.type_parameters(ctx)?)
-         } else {
-           None
-         };
-         let params = p.func_params(ctx)?;
-         // TypeScript: return type annotation (after params, before =>) - may be type predicate.
-         let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
-           Some(p.type_expr_or_predicate(ctx)?)
-         } else {
-           None
-         };
+        // TypeScript: generic type parameters
+        let type_parameters = if !p.is_strict_ecmascript()
+          && p.peek().typ == TT::ChevronLeft
+          && p.is_start_of_type_arguments()
+        {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
+        let params = p.func_params(ctx)?;
+        // TypeScript: return type annotation (after params, before =>) - may be type predicate.
+        let return_type = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr_or_predicate(ctx)?)
+        } else {
+          None
+        };
         let arrow = p.require(TT::EqualsChevronRight)?;
         (type_parameters, params, return_type, arrow)
       };

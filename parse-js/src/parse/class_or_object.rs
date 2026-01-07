@@ -308,12 +308,12 @@ impl<'a> Parser<'a> {
               let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
 
               // TypeScript: type annotation (: type)
-              let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match()
-              {
-                Some(p.type_expr(ctx)?)
-              } else {
-                None
-              };
+              let type_annotation =
+                if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
+                  Some(p.type_expr(ctx)?)
+                } else {
+                  None
+                };
 
               // Now check for method/getter/setter or property initializer
               let value = p.class_member_value(ctx, &key, abstract_)?;
@@ -360,12 +360,12 @@ impl<'a> Parser<'a> {
               let optional = !p.is_strict_ecmascript() && p.consume_if(TT::Question).is_match();
 
               // TypeScript: type annotation (: type)
-              let type_annotation = if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match()
-              {
-                Some(p.type_expr(ctx)?)
-              } else {
-                None
-              };
+              let type_annotation =
+                if !p.is_strict_ecmascript() && p.consume_if(TT::Colon).is_match() {
+                  Some(p.type_expr(ctx)?)
+                } else {
+                  None
+                };
 
               // Now check for method/getter/setter or property initializer
               let value = p.class_member_value(ctx, &key, abstract_)?;

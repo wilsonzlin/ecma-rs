@@ -6,13 +6,13 @@ use ahash::HashSet;
 use derive_visitor::{Drive, Visitor};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::expr::{BinaryExpr, Expr, UnaryExpr};
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::{BinaryExpr, Expr, UnaryExpr};
 use parse_js::ast::import_export::ExportName;
 use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::{Node, NodeAssocData};
-use parse_js::ast::stmt::ExprStmt;
 use parse_js::ast::stmt::decl::VarDeclMode;
+use parse_js::ast::stmt::ExprStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::{BlockStmt, ExportListStmt, ForBody, SwitchBranch, TryStmt};
 use parse_js::ast::stx::TopLevel;
@@ -200,7 +200,7 @@ fn dce_stmt_in_list(
 
       // If both `default` and `names` are now `None`, this is a side-effect-only
       // import (`import "mod";`). Keep it so module evaluation still happens.
-      new_node(loc, assoc, Stmt::Import(import_stmt))
+      vec![new_node(loc, assoc, Stmt::Import(import_stmt))]
     }
     Stmt::Block(mut block) => {
       let body = std::mem::take(&mut block.stx.body);
@@ -290,10 +290,7 @@ fn dce_stmt_in_list(
             VarDeclMode::Using | VarDeclMode::AwaitUsing => unreachable!(),
           };
           if apply_before_this {
-            let last = declarator
-              .initializer
-              .take()
-              .unwrap_or_else(undefined_expr);
+            let last = declarator.initializer.take().unwrap_or_else(undefined_expr);
             declarator.initializer = Some(comma_sequence(pending_effects, last));
             pending_effects = Vec::new();
           }
@@ -331,11 +328,7 @@ fn dce_single_stmt(
   }
 }
 
-fn can_remove_declarator(
-  pat: &Node<Pat>,
-  cx: &OptCtx,
-  used: &HashSet<SymbolId>,
-) -> bool {
+fn can_remove_declarator(pat: &Node<Pat>, cx: &OptCtx, used: &HashSet<SymbolId>) -> bool {
   let Pat::Id(id) = pat.stx.as_ref() else {
     return false;
   };
@@ -387,7 +380,13 @@ fn undefined_expr() -> Node<Expr> {
     Loc(0, 0),
     UnaryExpr {
       operator: OperatorName::Void,
-      argument: Node::new(Loc(0, 0), LitNumExpr { value: JsNumber(0.0) }).into_wrapped(),
+      argument: Node::new(
+        Loc(0, 0),
+        LitNumExpr {
+          value: JsNumber(0.0),
+        },
+      )
+      .into_wrapped(),
     },
   )
   .into_wrapped()
