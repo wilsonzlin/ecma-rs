@@ -63,6 +63,12 @@ export interface MinifyOptions {
    * `Object.defineProperty`.
    */
   tsUseDefineForClassFields?: boolean;
+
+  /**
+   * Preserve TypeScript `const enum` declarations at runtime instead of
+   * inlining/erasing them.
+   */
+  tsPreserveConstEnums?: boolean;
 }
 
 export function minify(

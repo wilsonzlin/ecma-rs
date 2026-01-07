@@ -22,6 +22,9 @@ Comparison with esbuild, run on [common libraries](../bench).
   runtime constructs (e.g. `enum`, runtime `namespace`, `import =`, `export =`,
   parameter properties) are lowered to JavaScript so the output is always valid
   JS.
+- TypeScript `const enum` declarations are inlined/erased by default (matching
+  `tsc`). Set `TsEraseOptions { preserve_const_enums: true, .. }` to keep runtime
+  enum lowering instead.
 - Builds lexical scopes and resolves identifiers via `semantic-js` (including
   hoisting/TDZ metadata and dynamic-scope hazard marking).
 - Deterministic identifier renaming (module exports preserved).

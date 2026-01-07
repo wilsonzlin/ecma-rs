@@ -24,6 +24,7 @@ fn parse_minify_options(
   dialect: Option<&str>,
   ts_lower_class_fields: Option<bool>,
   ts_use_define_for_class_fields: Option<bool>,
+  ts_preserve_const_enums: Option<bool>,
 ) -> Result<ParsedOptions, String> {
   let dialect = match dialect {
     None | Some("auto") => None,
@@ -45,6 +46,9 @@ fn parse_minify_options(
   }
   if let Some(value) = ts_use_define_for_class_fields {
     ts_erase_options.use_define_for_class_fields = value;
+  }
+  if let Some(value) = ts_preserve_const_enums {
+    ts_erase_options.preserve_const_enums = value;
   }
 
   Ok(ParsedOptions {
@@ -125,13 +129,14 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   };
 
   let options_arg = cx.argument_opt(2);
-  let (dialect_raw, ts_lower_class_fields, ts_use_define_for_class_fields): (
+  let (dialect_raw, ts_lower_class_fields, ts_use_define_for_class_fields, ts_preserve_const_enums): (
     Option<String>,
+    Option<bool>,
     Option<bool>,
     Option<bool>,
   ) = if let Some(options) = options_arg {
     if options.is_a::<JsUndefined, _>(&mut cx) || options.is_a::<JsNull, _>(&mut cx) {
-      (None, None, None)
+      (None, None, None, None)
     } else if let Ok(options) = options.downcast::<JsObject, _>(&mut cx) {
       let dialect_raw: Handle<JsValue> = options.get(&mut cx, "dialect")?;
       let dialect_raw =
@@ -167,22 +172,35 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         return cx.throw_type_error("options.tsUseDefineForClassFields must be a boolean");
       };
 
+      let ts_preserve_const_enums: Handle<JsValue> = options.get(&mut cx, "tsPreserveConstEnums")?;
+      let ts_preserve_const_enums = if ts_preserve_const_enums.is_a::<JsUndefined, _>(&mut cx)
+        || ts_preserve_const_enums.is_a::<JsNull, _>(&mut cx)
+      {
+        None
+      } else if let Ok(value) = ts_preserve_const_enums.downcast::<JsBoolean, _>(&mut cx) {
+        Some(value.value(&mut cx))
+      } else {
+        return cx.throw_type_error("options.tsPreserveConstEnums must be a boolean");
+      };
+
       (
         dialect_raw,
         ts_lower_class_fields,
         ts_use_define_for_class_fields,
+        ts_preserve_const_enums,
       )
     } else {
       return cx.throw_type_error("options must be an object");
     }
   } else {
-    (None, None, None)
+    (None, None, None, None)
   };
 
   let parsed_options = match parse_minify_options(
     dialect_raw.as_deref(),
     ts_lower_class_fields,
     ts_use_define_for_class_fields,
+    ts_preserve_const_enums,
   ) {
     Ok(parsed) => parsed,
     Err(err) => return cx.throw_type_error(err),
@@ -237,33 +255,35 @@ mod tests {
 
   #[test]
   fn parses_minify_options_defaults() {
-    let parsed = parse_minify_options(None, None, None).unwrap();
+    let parsed = parse_minify_options(None, None, None, None).unwrap();
     assert_eq!(parsed.dialect, None);
     assert!(!parsed.ts_erase_options.lower_class_fields);
     assert!(parsed.ts_erase_options.use_define_for_class_fields);
+    assert!(!parsed.ts_erase_options.preserve_const_enums);
   }
 
   #[test]
   fn parses_minify_options_dialect() {
-    let parsed = parse_minify_options(Some("auto"), None, None).unwrap();
+    let parsed = parse_minify_options(Some("auto"), None, None, None).unwrap();
     assert_eq!(parsed.dialect, None);
 
-    let parsed = parse_minify_options(Some("js"), None, None).unwrap();
+    let parsed = parse_minify_options(Some("js"), None, None, None).unwrap();
     assert_eq!(parsed.dialect, Some(Dialect::Js));
 
-    let parsed = parse_minify_options(Some("tsx"), None, None).unwrap();
+    let parsed = parse_minify_options(Some("tsx"), None, None, None).unwrap();
     assert_eq!(parsed.dialect, Some(Dialect::Tsx));
   }
 
   #[test]
   fn parses_minify_options_ts_erase_flags() {
-    let parsed = parse_minify_options(None, Some(true), Some(false)).unwrap();
+    let parsed = parse_minify_options(None, Some(true), Some(false), Some(true)).unwrap();
     assert!(parsed.ts_erase_options.lower_class_fields);
     assert!(!parsed.ts_erase_options.use_define_for_class_fields);
+    assert!(parsed.ts_erase_options.preserve_const_enums);
   }
 
   #[test]
   fn rejects_invalid_dialect() {
-    assert!(parse_minify_options(Some("wat"), None, None).is_err());
+    assert!(parse_minify_options(Some("wat"), None, None, None).is_err());
   }
 }

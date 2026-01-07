@@ -58,6 +58,10 @@ struct Cli {
     value_name = "true|false"
   )]
   ts_use_define_for_class_fields: bool,
+
+  /// Preserve `const enum` declarations at runtime instead of inlining/erasing them.
+  #[arg(long)]
+  ts_preserve_const_enums: bool,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -132,6 +136,7 @@ fn main() {
   let ts_erase_options = TsEraseOptions {
     lower_class_fields: args.ts_lower_class_fields,
     use_define_for_class_fields: args.ts_use_define_for_class_fields,
+    preserve_const_enums: args.ts_preserve_const_enums,
     ..TsEraseOptions::default()
   };
   let mut options = MinifyOptions::new(args.mode).with_ts_erase_options(ts_erase_options);

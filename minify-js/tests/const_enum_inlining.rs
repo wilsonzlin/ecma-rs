@@ -92,6 +92,55 @@ fn const_enum_numeric_member_reference_is_inlined() {
 }
 
 #[test]
+fn const_enum_auto_increment_is_inlined() {
+  let src = r#"const enum E { A, B } export const x = E.B;"#;
+  let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  assert_eq!(
+    parsed.stx.body.len(),
+    1,
+    "expected enum scaffolding to be erased"
+  );
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitNum(num) => assert_eq!(num.stx.value.0, 1.0),
+    other => panic!("expected numeric literal initializer, got {other:?}"),
+  }
+}
+
+#[test]
+fn const_enum_qualified_member_references_are_evaluated() {
+  let src = r#"const enum E { A = 1, B = E.A, C = E["A"] } export const x = E.C;"#;
+  let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitNum(num) => assert_eq!(num.stx.value.0, 1.0),
+    other => panic!("expected numeric literal initializer, got {other:?}"),
+  }
+}
+
+#[test]
+fn const_enum_unary_and_binary_expressions_are_evaluated() {
+  let src = r#"const enum E { A = 1, B = -A + 2, C = B - 1 } export const x = E.C;"#;
+  let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitNum(num) => assert_eq!(num.stx.value.0, 0.0),
+    other => panic!("expected numeric literal initializer, got {other:?}"),
+  }
+}
+
+#[test]
+fn const_enum_string_members_are_evaluated() {
+  let src = r#"const enum E { A = `a`, B = A } export const x = E.B;"#;
+  let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
+  let init = find_exported_const_init(&parsed, "x");
+  match init.stx.as_ref() {
+    Expr::LitStr(str) => assert_eq!(str.stx.value, "a"),
+    other => panic!("expected string literal initializer, got {other:?}"),
+  }
+}
+
+#[test]
 fn const_enum_bracket_access_is_inlined() {
   let src = r#"const enum E { A = 1 } export const x = E["A"];"#;
   let (_code, parsed) = minify_ts_module_with_ts_erase_options(src, TsEraseOptions::default());
