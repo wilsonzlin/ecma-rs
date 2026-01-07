@@ -337,6 +337,45 @@ impl Database {
     entries
   }
 
+  /// Remove module resolution inputs for `from` that are not needed anymore.
+  ///
+  /// This keeps the stored module graph consistent with the current set of
+  /// module specifiers for the file and prevents stale edges from leaking into
+  /// snapshots.
+  pub fn retain_module_resolutions_for_file<F>(&mut self, from: FileId, mut keep: F)
+  where
+    F: FnMut(&str) -> bool,
+  {
+    let mut removed_inputs = Vec::new();
+    let mut remove_outer = false;
+    if let Some(inner) = self.module_resolutions.get_mut(&from) {
+      let mut remove_keys: Vec<Arc<str>> = Vec::new();
+      for (specifier, input) in inner.iter() {
+        if keep(specifier.as_ref()) {
+          continue;
+        }
+        remove_keys.push(Arc::clone(specifier));
+        removed_inputs.push(*input);
+      }
+
+      for key in remove_keys {
+        inner.remove(key.as_ref());
+      }
+      remove_outer = inner.is_empty();
+    }
+
+    if remove_outer {
+      self.module_resolutions.remove(&from);
+    }
+
+    // Salsa does not support deleting inputs directly, but clearing the resolved
+    // field ensures any cached queries that still reference the input observe a
+    // revision change.
+    for input in removed_inputs {
+      input.set_resolved(self).to(None);
+    }
+  }
+
   /// Seed or update a module resolution edge.
   pub fn set_module_resolution(
     &mut self,

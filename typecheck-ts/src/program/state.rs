@@ -4382,6 +4382,7 @@ impl ProgramState {
       let text = self.load_text(file, host)?;
       self.check_cancelled()?;
       let directives = scan_triple_slash_directives(text.as_ref());
+      let mut triple_slash_types: Vec<&str> = Vec::new();
       for reference in directives.references.iter() {
         let value = reference.value(text.as_ref());
         if value.is_empty() {
@@ -4412,6 +4413,7 @@ impl ProgramState {
             }
           }
           TripleSlashReferenceKind::Types => {
+            triple_slash_types.push(value);
             if let Some(target) = record_type_package_resolution(self, file, value, host) {
               queue.push_back(target);
             } else {
@@ -4441,6 +4443,58 @@ impl ProgramState {
         span.finish(None);
       }
       self.check_cancelled()?;
+
+      // Keep the host module resolution edges in sync with the current set of
+      // module specifiers in the file. This avoids accumulating stale edges
+      // once program edits become incremental (without recreating the salsa DB)
+      // and keeps serialized snapshots consistent with the current module graph.
+      let current_specifiers = db::module_specifiers(&self.typecheck_db, file);
+      let is_root = self.root_ids.contains(&file);
+      let mut keep_specifiers: AHashSet<&str> = AHashSet::new();
+      for specifier in current_specifiers.iter() {
+        keep_specifiers.insert(specifier.as_ref());
+      }
+      if is_root {
+        for specifier in type_packages.iter() {
+          keep_specifiers.insert(specifier.as_str());
+        }
+      }
+      self
+        .typecheck_db
+        .retain_module_resolutions_for_file(file, |specifier| keep_specifiers.contains(specifier));
+
+      let mut type_package_specifiers: AHashSet<&str> = AHashSet::new();
+      for specifier in triple_slash_types.iter().copied() {
+        type_package_specifiers.insert(specifier);
+      }
+      if is_root {
+        for specifier in type_packages.iter() {
+          type_package_specifiers.insert(specifier.as_str());
+        }
+      }
+
+      for specifier in current_specifiers.iter() {
+        self.check_cancelled()?;
+        let specifier = specifier.as_ref();
+        let target = if type_package_specifiers.contains(specifier) {
+          record_type_package_resolution(self, file, specifier, host)
+        } else {
+          self.record_module_resolution(file, specifier, host)
+        };
+        if let Some(target) = target {
+          queue.push_back(target);
+        }
+      }
+      if is_root {
+        for specifier in type_packages.iter() {
+          self.check_cancelled()?;
+          if let Some(target) = record_type_package_resolution(self, file, specifier.as_str(), host)
+          {
+            queue.push_back(target);
+          }
+        }
+      }
+
       match parsed {
         Ok(ast) => {
           let (locals, _) = sem_ts::locals::bind_ts_locals_tables(ast.as_ref(), file);
