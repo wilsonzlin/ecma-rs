@@ -97,6 +97,10 @@ impl<'a> Parser<'a> {
     self.require(TT::BraceOpen)?;
     let mut members = Vec::new();
     let mut seen_constructor = false;
+    let mut private_names: std::collections::HashMap<
+      String,
+      (bool /*static*/, bool /*field_or_method*/, bool /*getter*/, bool /*setter*/),
+    > = std::collections::HashMap::new();
     loop {
       // Skip empty semicolons
       while self.consume_if(TT::Semicolon).is_match() {}
@@ -461,6 +465,59 @@ impl<'a> Parser<'a> {
       })?;
 
       if self.is_strict_ecmascript() {
+        if let ClassOrObjKey::Direct(key) = &member.stx.key {
+          if key.stx.tt == TT::PrivateMember {
+            use crate::ast::class_or_object::ClassOrObjVal;
+            let kind = match &member.stx.val {
+              ClassOrObjVal::Prop(_) => Some((true, false, false)), // field
+              ClassOrObjVal::Method(_) => Some((true, false, false)), // method
+              ClassOrObjVal::Getter(_) => Some((false, true, false)),
+              ClassOrObjVal::Setter(_) => Some((false, false, true)),
+              _ => None,
+            };
+
+            if let Some((field_or_method, getter, setter)) = kind {
+              let entry = private_names.entry(key.stx.key.clone()).or_insert((
+                member.stx.static_,
+                false, // field_or_method
+                false, // getter
+                false, // setter
+              ));
+
+              let (prev_static, prev_field_or_method, prev_getter, prev_setter) = *entry;
+              if prev_static != member.stx.static_ {
+                return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                  "private name already declared (static/private conflicts are not allowed)",
+                )));
+              }
+
+              if prev_field_or_method || (field_or_method && (prev_getter || prev_setter)) {
+                return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                  "private name already declared",
+                )));
+              }
+
+              if field_or_method {
+                entry.1 = true;
+              } else if getter {
+                if prev_getter {
+                  return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                    "private name already declared",
+                  )));
+                }
+                entry.2 = true;
+              } else if setter {
+                if prev_setter {
+                  return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                    "private name already declared",
+                  )));
+                }
+                entry.3 = true;
+              }
+            }
+          }
+        }
+
         let is_constructor_name = match &member.stx.key {
           ClassOrObjKey::Direct(key) => {
             key.stx.key == "constructor"
