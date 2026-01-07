@@ -132,6 +132,7 @@ fn main() {
   let ts_erase_options = TsEraseOptions {
     lower_class_fields: args.ts_lower_class_fields,
     use_define_for_class_fields: args.ts_use_define_for_class_fields,
+    ..TsEraseOptions::default()
   };
   let mut options = MinifyOptions::new(args.mode).with_ts_erase_options(ts_erase_options);
   if let Some(dialect) = match args.dialect {
