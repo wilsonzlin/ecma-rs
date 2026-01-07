@@ -35,27 +35,29 @@ fn export_const_object_literal_is_typed_in_virtual_paths() {
   let m_id = program.file_id(&m_key).expect("m.ts file id");
   let text = program.file_text(m_id).expect("m.ts text");
 
+  let exports = program.exports_of(m_id);
+  let v_entry = exports.get("v").expect("v export entry");
+  let v_def = v_entry.def.expect("v export should point at a local def");
+
   let defs = program.definitions_in_file(m_id);
-  let (v_def, init) = defs
-    .iter()
-    .copied()
-    .filter(|def| program.def_name(*def).as_deref() == Some("v"))
-    .filter_map(|def| program.var_initializer(def).map(|init| (def, init)))
-    .find(|(def, _)| {
-      let Some(span) = program.def_span(*def) else {
-        return false;
-      };
-      if span.file != m_id {
-        return false;
-      }
-      let start = span.range.start as usize;
-      let end = span.range.end as usize;
-      text
-        .get(start..end)
-        .map(|slice| slice == "v")
-        .unwrap_or(false)
-    })
-    .expect("v variable definition with initializer should be present in m.ts");
+  assert!(
+    defs.contains(&v_def),
+    "v definition should be listed in m.ts definitions"
+  );
+
+  let init = program
+    .var_initializer(v_def)
+    .expect("v variable definition should have initializer metadata");
+
+  let span = program.def_span(v_def).expect("v definition span");
+  assert_eq!(span.file, m_id);
+  let start = span.range.start as usize;
+  let end = span.range.end as usize;
+  let slice = text.get(start..end).unwrap_or_default();
+  assert!(
+    slice.starts_with('v'),
+    "expected def span to start at `v`, got {slice:?}"
+  );
 
   let init_ty = program.type_of_expr(init.body, init.expr);
   let init_ty_str = program.display_type(init_ty).to_string();
@@ -64,13 +66,6 @@ fn export_const_object_literal_is_typed_in_virtual_paths() {
     "initializer type should be inferred"
   );
 
-  let exports = program.exports_of(m_id);
-  let v_entry = exports.get("v").expect("v export entry");
-  assert_eq!(
-    v_entry.def,
-    Some(v_def),
-    "export should point at v definition"
-  );
   let export_ty = v_entry.type_id.expect("type for v export");
   let export_ty_str = program.display_type(export_ty).to_string();
   assert_eq!(export_ty_str, "{ x: number }");
