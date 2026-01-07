@@ -17,6 +17,9 @@ fn js_dialect_treats_ts_keywords_as_identifiers() {
     other => panic!("expected expression statement in JS mode, got {other:?}"),
   }
 
+  let ecma_opts = opts(Dialect::Ecma, SourceType::Script);
+  assert!(parse_with_options("type Foo = number;", ecma_opts).is_err());
+
   let ts_opts = opts(Dialect::Ts, SourceType::Script);
   let ts_ast =
     parse_with_options("type Foo = number;", ts_opts).expect("ts type alias should parse");

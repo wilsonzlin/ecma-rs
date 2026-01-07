@@ -630,54 +630,76 @@ impl<'a> Parser<'a> {
       return Ok(
         self
           .with_loc(|p| {
-            let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
-            let operator =
-              if operator.name == OperatorName::Yield && p.consume_if(TT::Asterisk).is_match() {
+            let op_tok = p.consume_with_mode(LexMode::SlashIsRegex);
+            let operator = match operator.name {
+              OperatorName::Yield if p.peek().typ == TT::Asterisk => {
+                if p.peek().preceded_by_line_terminator {
+                  return Err(op_tok.error(SyntaxErrorType::LineTerminatorAfterYield));
+                }
+                p.consume(); // *
                 &OPERATORS[&OperatorName::YieldDelegated]
-              } else {
-                *operator
-              };
+              }
+              _ => *operator,
+            };
             let next_min_prec =
               operator.precedence + (operator.associativity == Associativity::Left) as u8;
 
-            // For yield and await, the operand is optional. Check if there should be an operand.
             let next_token = p.peek();
-            let has_operand = if operator.name == OperatorName::Yield
-              || operator.name == OperatorName::Await
-              || operator.name == OperatorName::YieldDelegated
-            {
-              // No operand if:
-              // 1. Next token is preceded by line terminator
-              // 2. Next token is a terminator we're looking for
-              // 3. Next token is a closing bracket/paren/brace
-              // 4. Next token is semicolon or comma
-              // 5. Next token is EOF
-              !next_token.preceded_by_line_terminator
-                && next_token.typ != TT::EOF
-                && next_token.typ != TT::Semicolon
-                && next_token.typ != TT::Comma
-                && next_token.typ != TT::ParenthesisClose
-                && next_token.typ != TT::BracketClose
-                && next_token.typ != TT::BraceClose
-                && !terminators.contains(&next_token.typ)
-            } else if p.should_recover() {
-              // TypeScript: For other unary operators, allow missing operand for error recovery
-              // Accept semicolon, closing braces/brackets/parens as missing operand
-              next_token.typ != TT::Semicolon
-                && next_token.typ != TT::ParenthesisClose
-                && next_token.typ != TT::BracketClose
-                && next_token.typ != TT::BraceClose
-                && next_token.typ != TT::EOF
-                && !terminators.contains(&next_token.typ)
-            } else {
-              true
+            let has_operand = match operator.name {
+              // `yield` without an operand is valid. `yield` with an operand
+              // requires no line terminator.
+              OperatorName::Yield => {
+                !next_token.preceded_by_line_terminator
+                  && next_token.typ != TT::EOF
+                  && next_token.typ != TT::Semicolon
+                  && next_token.typ != TT::Comma
+                  && next_token.typ != TT::ParenthesisClose
+                  && next_token.typ != TT::BracketClose
+                  && next_token.typ != TT::BraceClose
+                  && !terminators.contains(&next_token.typ)
+              }
+              // `await` and `yield*` always require an operand. Line terminators are
+              // allowed between the operator and its operand (except between `yield`
+              // and `*`, checked above).
+              OperatorName::YieldDelegated | OperatorName::Await => {
+                next_token.typ != TT::EOF
+                  && next_token.typ != TT::Semicolon
+                  && next_token.typ != TT::Comma
+                  && next_token.typ != TT::ParenthesisClose
+                  && next_token.typ != TT::BracketClose
+                  && next_token.typ != TT::BraceClose
+                  && !terminators.contains(&next_token.typ)
+              }
+              _ => {
+                if p.should_recover() {
+                  // TypeScript-style recovery: allow missing operand for error recovery
+                  // Accept semicolon, closing braces/brackets/parens as missing operand
+                  next_token.typ != TT::Semicolon
+                    && next_token.typ != TT::ParenthesisClose
+                    && next_token.typ != TT::BracketClose
+                    && next_token.typ != TT::BraceClose
+                    && next_token.typ != TT::EOF
+                    && !terminators.contains(&next_token.typ)
+                } else {
+                  true
+                }
+              }
             };
 
             let operand = if has_operand {
               p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
             } else {
-              // For unary operators without operand, use `undefined` identifier for error recovery
-              p.create_synthetic_undefined(op_loc)
+              match operator.name {
+                OperatorName::Await | OperatorName::YieldDelegated if p.is_strict_ecmascript() => {
+                  return Err(
+                    next_token.error(SyntaxErrorType::ExpectedSyntax("expression operand")),
+                  );
+                }
+                _ => {
+                  // For unary operators without operand, use `undefined` identifier for error recovery
+                  p.create_synthetic_undefined(op_tok.loc)
+                }
+              }
             };
 
             return Ok(UnaryExpr {
@@ -707,42 +729,6 @@ impl<'a> Parser<'a> {
 
     // Check for other valid pattern identifiers.
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
-      // TypeScript-style recovery: `yield *` should be treated as a yield
-      // expression even when `yield` is currently allowed as an identifier.
-      if self.should_recover() && t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
-        return Ok(
-          self
-            .with_loc(|p| {
-              let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc; // consume 'yield'
-              p.consume(); // consume '*'
-              let operator = &OPERATORS[&OperatorName::YieldDelegated];
-
-              // Check if there's an operand
-              let next_token = p.peek();
-              let has_operand = !next_token.preceded_by_line_terminator
-                && next_token.typ != TT::EOF
-                && next_token.typ != TT::Semicolon
-                && next_token.typ != TT::Comma
-                && next_token.typ != TT::ParenthesisClose
-                && next_token.typ != TT::BracketClose
-                && next_token.typ != TT::BraceClose
-                && !terminators.contains(&next_token.typ);
-
-              let operand = if has_operand {
-                p.expr_with_min_prec(ctx, operator.precedence + 1, terminators, asi)?
-              } else {
-                p.create_synthetic_undefined(op_loc)
-              };
-
-              Ok(UnaryExpr {
-                operator: operator.name,
-                argument: operand,
-              })
-            })?
-            .into_wrapped(),
-        );
-      }
-
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         self.arrow_func_expr(ctx, terminators)?.into_wrapped()
