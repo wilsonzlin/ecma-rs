@@ -25,10 +25,6 @@ use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
-use parse_js::{
-  parse_with_options_cancellable as parse_js_with_options_cancellable, Dialect as ParseDialect,
-  ParseOptions as JsParseOptions, SourceType as JsSourceType,
-};
 use semantic_js_crate::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
@@ -5902,37 +5898,8 @@ impl ProgramState {
       }
       self.check_cancelled()?;
       match parsed {
-        Ok(mut ast) => {
-          let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
-            sem_ts::locals::bind_ts_locals(locals_ast, file)
-          } else {
-            let mut owned = match parse_js_with_options_cancellable(
-              text.as_ref(),
-              JsParseOptions {
-                dialect: match file_kind {
-                  FileKind::Js => ParseDialect::Js,
-                  FileKind::Jsx => ParseDialect::Jsx,
-                  FileKind::Ts => ParseDialect::Ts,
-                  FileKind::Tsx => ParseDialect::Tsx,
-                  FileKind::Dts => ParseDialect::Dts,
-                },
-                // `parse_via_salsa` always parses sources as modules to allow `import`/`export`
-                // syntax. Keep the reparse path consistent so JS/JSX files with ESM exports do
-                // not ICE when the cached AST is shared by salsa.
-                source_type: JsSourceType::Module,
-              },
-              Arc::clone(&self.cancelled),
-            ) {
-              Ok(ast) => ast,
-              Err(err) => {
-                if matches!(err.typ, parse_js::error::SyntaxErrorType::Cancelled) {
-                  return Err(FatalError::Cancelled);
-                }
-                panic!("reparse locals failed unexpectedly: {err}");
-              }
-            };
-            sem_ts::locals::bind_ts_locals(&mut owned, file)
-          };
+        Ok(ast) => {
+          let (locals, _) = sem_ts::locals::bind_ts_locals_tables(ast.as_ref(), file);
           self.local_semantics.insert(file, locals);
           self.asts.insert(file, Arc::clone(&ast));
           self.queue_type_imports_in_ast(file, ast.as_ref(), host, &mut queue);
@@ -7920,29 +7887,9 @@ impl ProgramState {
 
       let parsed = self.parse_via_salsa(file_id, FileKind::Dts, Arc::clone(&lib.text));
       match parsed {
-        Ok(mut ast) => {
+        Ok(ast) => {
           self.check_cancelled()?;
-          let locals = if let Some(locals_ast) = Arc::get_mut(&mut ast) {
-            sem_ts::locals::bind_ts_locals(locals_ast, file_id)
-          } else {
-            let mut owned = match parse_js_with_options_cancellable(
-              lib.text.as_ref(),
-              JsParseOptions {
-                dialect: ParseDialect::Dts,
-                source_type: JsSourceType::Module,
-              },
-              Arc::clone(&self.cancelled),
-            ) {
-              Ok(ast) => ast,
-              Err(err) => {
-                if matches!(err.typ, parse_js::error::SyntaxErrorType::Cancelled) {
-                  return Err(FatalError::Cancelled);
-                }
-                panic!("reparse lib locals failed unexpectedly: {err}");
-              }
-            };
-            sem_ts::locals::bind_ts_locals(&mut owned, file_id)
-          };
+          let (locals, _) = sem_ts::locals::bind_ts_locals_tables(ast.as_ref(), file_id);
           self.local_semantics.insert(file_id, locals);
           self.asts.insert(file_id, Arc::clone(&ast));
           self.queue_type_imports_in_ast(file_id, ast.as_ref(), host, queue);

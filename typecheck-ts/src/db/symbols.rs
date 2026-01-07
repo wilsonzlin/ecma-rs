@@ -35,10 +35,10 @@ impl SymbolIndex {
 /// single file.
 pub(crate) fn symbol_index_for_file(
   file: FileId,
-  mut ast: Node<TopLevel>,
+  ast: &Node<TopLevel>,
   semantics: Option<&sem_ts::TsProgramSemantics>,
 ) -> SymbolIndex {
-  let locals = locals::bind_ts_locals(&mut ast, file);
+  let (locals, _) = locals::bind_ts_locals_tables(ast, file);
 
   let mut occurrences = Vec::new();
   let mut locals_info: BTreeMap<semantic_js::SymbolId, LocalSymbolInfo> = BTreeMap::new();

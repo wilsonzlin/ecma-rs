@@ -1586,35 +1586,9 @@ fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
 fn symbol_index_for(db: &dyn Db, file: FileInput) -> SymbolIndex {
   panic_if_cancelled(db);
   let file_id = file.file_id(db);
-  let kind = file.kind(db);
   let parsed = parse_for(db, file);
-  if parsed.ast.is_none() {
+  let Some(ast) = parsed.ast.as_deref() else {
     return SymbolIndex::empty();
-  }
-  let source = file_text_for(db, file);
-  let dialect = match kind {
-    FileKind::Js => Dialect::Js,
-    FileKind::Ts => Dialect::Ts,
-    FileKind::Tsx => Dialect::Tsx,
-    FileKind::Jsx => Dialect::Jsx,
-    FileKind::Dts => Dialect::Dts,
-  };
-  let cancel = cancelled(db);
-  let ast = match parse_with_options_cancellable(
-    &source,
-    ParseOptions {
-      dialect,
-      source_type: SourceType::Module,
-    },
-    Arc::clone(&cancel),
-  ) {
-    Ok(ast) => ast,
-    Err(err) => {
-      if err.typ == SyntaxErrorType::Cancelled {
-        panic_any(crate::FatalError::Cancelled);
-      }
-      return SymbolIndex::empty();
-    }
   };
   let semantics = ts_semantics_for(db);
   symbols::symbol_index_for_file(file_id, ast, Some(semantics.semantics.as_ref()))

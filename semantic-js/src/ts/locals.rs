@@ -495,6 +495,10 @@ fn ast_has_module_syntax(ast: &Node<TopLevel>) -> bool {
 }
 
 /// Build deterministic TS local scopes and resolution tables for a parsed file.
+///
+/// This mutates `NodeAssocData` on the provided AST. Prefer
+/// [`bind_ts_locals_tables`] when the AST is shared (e.g. behind an `Arc`) or
+/// otherwise must remain immutable.
 pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId) -> TsLocalSemantics {
   let is_module = ast_has_module_syntax(top);
   let kind = if is_module {
@@ -516,8 +520,8 @@ pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId) -> TsLocalSemantic
   builder.into_semantics(expr_resolutions, type_resolutions)
 }
 
-/// Build deterministic TS locals while storing attachments in side tables instead
-/// of mutating [`NodeAssocData`].
+/// Preferred API: build deterministic TS locals while storing attachments in
+/// side tables instead of mutating [`NodeAssocData`].
 pub fn bind_ts_locals_tables(
   top: &Node<TopLevel>,
   file: FileId,
@@ -2817,7 +2821,7 @@ impl<'a> ResolveTablesPass<'a> {
 
   fn pop_scope_for_node<T: Drive + DriveMut>(&mut self, node: &Node<T>) {
     if let Some(id) = ts::scope_id_in_tables(&self.tables, node.loc) {
-      if self.scope_stack.last().copied() == Some(id) {
+      if self.scope_stack.last().copied() == Some(id) && self.scope_stack.len() > 1 {
         self.scope_stack.pop();
       }
     }
