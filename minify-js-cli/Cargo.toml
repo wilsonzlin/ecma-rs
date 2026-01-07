@@ -1,12 +1,12 @@
 [package]
 authors = ["Wilson Lin <code@wilsonl.in>"]
 description = "Extremely fast JS minifier"
-edition = "2021"
+edition.workspace = true
 name = "minify-js-cli"
 publish = false
 version = "0.6.0"
 
 [dependencies]
-clap = { version = "4.5.17", features = ["derive"] }
-diagnostics = { path = "../diagnostics" }
-minify-js = { path = "../minify-js" }
+clap = { workspace = true, features = ["derive"] }
+diagnostics = { workspace = true }
+minify-js = { workspace = true }

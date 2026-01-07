@@ -1,15 +1,17 @@
 [package]
 name = "parse-js-cli"
 version = "0.0.1"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-clap = { version = "4.1", features = ["derive"] }
-diagnostics = { path = "../diagnostics", features = ["serde"] }
-parse-js = { path = "../parse-js", features = ["diagnostics", "serde"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = { version = "1.0" }
+clap = { workspace = true, features = ["derive"] }
+diagnostics = { workspace = true, features = ["serde"] }
+parse-js = { workspace = true, features = ["diagnostics", "serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
-assert_cmd = "2.0"
-tempfile = "3.10"
+assert_cmd = { workspace = true }
+tempfile = { workspace = true }

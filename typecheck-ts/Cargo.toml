@@ -1,43 +1,45 @@
 [package]
 name = "typecheck-ts"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
 description = "Lightweight TypeScript type checking facade for ecma-rs"
-license = "Apache-2.0"
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = ["bundled-libs", "serde"]
 bundled-libs = []
 serde = ["dep:serde", "diagnostics/serde", "hir-js/serde", "types-ts-interned/serde"]
+serde-json = ["dep:serde_json"]
 fuzzing = ["hir-js/fuzzing", "types-ts-interned/fuzzing", "types-ts-interned/serde-json"]
-resolve = ["dep:serde_json"]
+resolve = ["serde-json"]
 
 [dependencies]
-diagnostics = { path = "../diagnostics" }
-hir-js = { path = "../hir-js" }
-parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
-semantic-js = { path = "../semantic-js" }
-serde = { version = "1.0", features = ["derive", "rc"], optional = true }
-serde_json = { version = "1.0", optional = true }
-thiserror = "1.0"
-tracing = "0.1"
-types-ts-interned = { path = "../types-ts-interned" }
-ahash = "0.8"
-dashmap = "6"
-ordered-float = "3"
-num-bigint = "0.4"
-bumpalo = { version = "3.14", features = ["collections"] }
-sha2 = "0.10"
-rayon = "1.10"
-smallvec = "1.15.1"
+diagnostics = { workspace = true }
+hir-js = { workspace = true }
+parse-js = { workspace = true, features = ["diagnostics"] }
+semantic-js = { workspace = true }
+serde = { workspace = true, features = ["rc"], optional = true }
+serde_json = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+types-ts-interned = { workspace = true }
+ahash = { workspace = true }
+dashmap = { workspace = true }
+ordered-float = { workspace = true }
+num-bigint = { workspace = true }
+bumpalo = { workspace = true, features = ["collections"] }
+sha2 = { workspace = true }
+rayon = { workspace = true }
+smallvec = { workspace = true }
 # salsa 0.18 provides the 2022 tracked/input APIs without the newer Rust 1.85 toolchain
 # requirement and uses clone-based snapshots instead of the removed ParallelDatabase trait.
-salsa = "0.18"
-derive-visitor = "0.4.0"
+salsa = { workspace = true }
+derive-visitor = { workspace = true }
 
 [dev-dependencies]
-diagnostics = { path = "../diagnostics" }
-semantic-js = { path = "../semantic-js" }
-serde_json = "1.0"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
-proptest = "1"
+diagnostics = { workspace = true }
+semantic-js = { workspace = true }
+serde_json = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+proptest = { workspace = true }

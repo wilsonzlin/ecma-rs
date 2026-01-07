@@ -2,8 +2,10 @@
 name = "minify-js-bench"
 publish = false
 version = "0.0.1"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-diagnostics = { path = "../../diagnostics" }
-minify-js = { path = "../../minify-js" }
+diagnostics = { workspace = true }
+minify-js = { workspace = true }

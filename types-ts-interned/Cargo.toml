@@ -1,7 +1,9 @@
 [package]
 name = "types-ts-interned"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Interned TypeScript type representation (imported from worker-10)"
 
 [features]
@@ -14,23 +16,23 @@ tracing = ["dep:tracing"]
 strict-determinism = []
 
 [dependencies]
-hir-js = { path = "../hir-js" }
-ahash = "0.8"
-dashmap = "6"
-bitflags = "2"
-parking_lot = "0.12"
-serde = { version = "1", features = ["derive"], optional = true }
-serde_json = { version = "1", optional = true }
-ordered-float = { version = "3" }
-num-bigint = { version = "0.4" }
-unicode-ident = "1.0"
-smallvec = "1.15.1"
-tracing = { version = "0.1", optional = true }
+hir-js = { workspace = true }
+ahash = { workspace = true }
+dashmap = { workspace = true }
+bitflags = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+ordered-float = { workspace = true }
+num-bigint = { workspace = true }
+unicode-ident = { workspace = true }
+smallvec = { workspace = true }
+tracing = { workspace = true, optional = true }
 
 [dev-dependencies]
-rand = "0.9"
-proptest = "1"
-criterion = { version = "0.7", features = ["html_reports"] }
+rand = { workspace = true }
+proptest = { workspace = true }
+criterion = { workspace = true, features = ["html_reports"] }
 
 [[bench]]
 name = "canonicalization"

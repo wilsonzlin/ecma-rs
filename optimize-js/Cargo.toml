@@ -1,7 +1,9 @@
 [package]
 name = "optimize-js"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []
@@ -15,25 +17,25 @@ serde = [
 ]
 
 [dependencies]
-ahash = { version = "0.8.6" }
-dashmap = { version = "6.1.0" }
-derive-visitor = "0.4.0"
-itertools = "0.13"
-num-bigint = { version = "0.4.6" }
-num-traits = "0.2.19"
-once_cell = "1.20.2"
-diagnostics = { path = "../diagnostics" }
-parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
-semantic-js = { path = "../semantic-js" }
-serde = { version = "1.0.216", features = ["derive"], optional = true }
-emit-js = { version = "0.1.0", path = "../emit-js" }
-hir-js = { path = "../hir-js" }
-typecheck-ts = { path = "../typecheck-ts", optional = true }
-types-ts-interned = { path = "../types-ts-interned", optional = true }
+ahash = { workspace = true }
+dashmap = { workspace = true }
+derive-visitor = { workspace = true }
+itertools = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+once_cell = { workspace = true }
+diagnostics = { workspace = true }
+parse-js = { workspace = true, features = ["diagnostics"] }
+semantic-js = { workspace = true }
+serde = { workspace = true, optional = true }
+emit-js = { workspace = true }
+hir-js = { workspace = true }
+typecheck-ts = { workspace = true, optional = true }
+types-ts-interned = { workspace = true, optional = true }
 
 [dev-dependencies]
-serde_json = { version = "1.0" }
-criterion = { version = "0.7", features = ["html_reports"] }
+serde_json = { workspace = true }
+criterion = { workspace = true, features = ["html_reports"] }
 
 [[bench]]
 name = "analysis"

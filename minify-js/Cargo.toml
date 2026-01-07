@@ -18,14 +18,14 @@ emit-minify = ["emit-js", "hir-js"]
 fuzzing = []
 
 [dependencies]
-ahash = "0.8.6"
-derive-visitor = "0.4.0"
-diagnostics = { path = "../diagnostics" }
-emit-js = { path = "../emit-js", optional = true }
-hir-js = { path = "../hir-js", optional = true }
-num-bigint = "0.4.4"
-parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
-semantic-js = { version = "0.1.0", path = "../semantic-js" }
+ahash = { workspace = true }
+derive-visitor = { workspace = true }
+diagnostics = { workspace = true }
+emit-js = { workspace = true, optional = true }
+hir-js = { workspace = true, optional = true }
+num-bigint = { workspace = true }
+parse-js = { workspace = true, features = ["diagnostics"] }
+semantic-js = { workspace = true }
 
 [dev-dependencies]
-proptest = "1"
+proptest = { workspace = true }

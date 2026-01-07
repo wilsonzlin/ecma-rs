@@ -1,19 +1,21 @@
 [package]
 name = "semantic-js"
 version = "0.1.0"
-edition = "2021"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [features]
 default = []
 fuzzing = []
 
 [dependencies]
-bitflags = "2"
-diagnostics = { path = "../diagnostics" }
-hir-js = { path = "../hir-js" }
-derive-visitor = "0.4.0"
-parse-js = { version = "0.24.1", path = "../parse-js" }
+bitflags = { workspace = true }
+diagnostics = { workspace = true }
+hir-js = { workspace = true }
+derive-visitor = { workspace = true }
+parse-js = { workspace = true }
 
 [dev-dependencies]
-maplit = "1"
-rand = "0.9"
+maplit = { workspace = true }
+rand = { workspace = true }
