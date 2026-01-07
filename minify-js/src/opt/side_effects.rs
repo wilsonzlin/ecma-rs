@@ -5,6 +5,146 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::ClassDecl;
 use parse_js::operator::OperatorName;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum BigIntKind {
+  BigInt,
+  NotBigInt,
+  Unknown,
+}
+
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum BigIntSign {
+  Negative,
+  Zero,
+  Positive,
+}
+
+fn expr_definitely_string(expr: &Node<Expr>) -> bool {
+  match expr.stx.as_ref() {
+    Expr::LitStr(_) | Expr::LitTemplate(_) => true,
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Addition => {
+      expr_definitely_string(&bin.stx.left) || expr_definitely_string(&bin.stx.right)
+    }
+    Expr::Cond(cond) => {
+      expr_definitely_string(&cond.stx.consequent) && expr_definitely_string(&cond.stx.alternate)
+    }
+    _ => false,
+  }
+}
+
+fn expr_bigint_kind(expr: &Node<Expr>) -> BigIntKind {
+  match expr.stx.as_ref() {
+    Expr::LitBigInt(_) => BigIntKind::BigInt,
+    Expr::LitNull(_) | Expr::LitBool(_) | Expr::LitNum(_) | Expr::LitStr(_) | Expr::LitTemplate(_) => {
+      BigIntKind::NotBigInt
+    }
+    Expr::LitRegex(_) => BigIntKind::NotBigInt,
+    Expr::ArrowFunc(_) | Expr::Func(_) | Expr::LitArr(_) | Expr::LitObj(_) | Expr::Class(_) => {
+      BigIntKind::NotBigInt
+    }
+    Expr::Unary(unary) => match unary.stx.operator {
+      OperatorName::UnaryNegation | OperatorName::BitwiseNot => expr_bigint_kind(&unary.stx.argument),
+      OperatorName::UnaryPlus => match expr_bigint_kind(&unary.stx.argument) {
+        // `+1n` throws, so treat it as unknown to avoid assuming it's safe.
+        BigIntKind::BigInt | BigIntKind::Unknown => BigIntKind::Unknown,
+        BigIntKind::NotBigInt => BigIntKind::NotBigInt,
+      },
+      OperatorName::LogicalNot | OperatorName::Void => BigIntKind::NotBigInt,
+      _ => BigIntKind::Unknown,
+    },
+    Expr::Binary(bin) => {
+      use OperatorName::*;
+      match bin.stx.operator {
+        Addition => {
+          if expr_definitely_string(&bin.stx.left) || expr_definitely_string(&bin.stx.right) {
+            return BigIntKind::NotBigInt;
+          }
+          let left = expr_bigint_kind(&bin.stx.left);
+          let right = expr_bigint_kind(&bin.stx.right);
+          if left == right {
+            left
+          } else {
+            BigIntKind::Unknown
+          }
+        }
+        Subtraction
+        | Multiplication
+        | Division
+        | Remainder
+        | Exponentiation
+        | BitwiseAnd
+        | BitwiseOr
+        | BitwiseXor
+        | BitwiseLeftShift
+        | BitwiseRightShift => {
+          let left = expr_bigint_kind(&bin.stx.left);
+          let right = expr_bigint_kind(&bin.stx.right);
+          if left == right {
+            left
+          } else {
+            BigIntKind::Unknown
+          }
+        }
+        BitwiseUnsignedRightShift => {
+          let left = expr_bigint_kind(&bin.stx.left);
+          let right = expr_bigint_kind(&bin.stx.right);
+          if left == BigIntKind::NotBigInt && right == BigIntKind::NotBigInt {
+            BigIntKind::NotBigInt
+          } else {
+            BigIntKind::Unknown
+          }
+        }
+        LessThan
+        | LessThanOrEqual
+        | GreaterThan
+        | GreaterThanOrEqual
+        | Equality
+        | Inequality
+        | StrictEquality
+        | StrictInequality => BigIntKind::NotBigInt,
+        LogicalAnd | LogicalOr | NullishCoalescing => {
+          let left = expr_bigint_kind(&bin.stx.left);
+          let right = expr_bigint_kind(&bin.stx.right);
+          if left == right {
+            left
+          } else {
+            BigIntKind::Unknown
+          }
+        }
+        _ => BigIntKind::Unknown,
+      }
+    }
+    Expr::Cond(cond) => {
+      let consequent = expr_bigint_kind(&cond.stx.consequent);
+      let alternate = expr_bigint_kind(&cond.stx.alternate);
+      if consequent == alternate {
+        consequent
+      } else {
+        BigIntKind::Unknown
+      }
+    }
+    _ => BigIntKind::Unknown,
+  }
+}
+
+fn expr_bigint_sign(expr: &Node<Expr>) -> Option<BigIntSign> {
+  match expr.stx.as_ref() {
+    Expr::LitBigInt(lit) => {
+      if lit.stx.value == "0" {
+        Some(BigIntSign::Zero)
+      } else {
+        Some(BigIntSign::Positive)
+      }
+    }
+    Expr::Unary(unary) if unary.stx.operator == OperatorName::UnaryNegation => match expr_bigint_sign(&unary.stx.argument)? {
+      BigIntSign::Negative => Some(BigIntSign::Positive),
+      BigIntSign::Positive => Some(BigIntSign::Negative),
+      BigIntSign::Zero => Some(BigIntSign::Zero),
+    },
+    _ => None,
+  }
+}
+
 pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
   match expr.stx.as_ref() {
     Expr::LitNull(_)
@@ -15,44 +155,89 @@ pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
     | Expr::LitRegex(_) => true,
     Expr::ArrowFunc(_) | Expr::Func(_) => true,
     Expr::Unary(unary) => match unary.stx.operator {
-      OperatorName::UnaryPlus
-      | OperatorName::UnaryNegation
+      OperatorName::UnaryPlus => {
+        is_side_effect_free_expr(&unary.stx.argument)
+          && expr_bigint_kind(&unary.stx.argument) == BigIntKind::NotBigInt
+      }
+      OperatorName::UnaryNegation
       | OperatorName::LogicalNot
       | OperatorName::BitwiseNot
       | OperatorName::Void => is_side_effect_free_expr(&unary.stx.argument),
       _ => false,
     },
     Expr::Binary(bin) => {
-      use OperatorName::*;
       if !is_side_effect_free_expr(&bin.stx.left) || !is_side_effect_free_expr(&bin.stx.right) {
         return false;
       }
-      matches!(
-        bin.stx.operator,
-        Addition
-          | Subtraction
-          | Multiplication
-          | Division
-          | Remainder
-          | Exponentiation
-          | BitwiseAnd
-          | BitwiseOr
-          | BitwiseXor
-          | BitwiseLeftShift
-          | BitwiseRightShift
-          | BitwiseUnsignedRightShift
-          | LessThan
-          | LessThanOrEqual
-          | GreaterThan
-          | GreaterThanOrEqual
-          | Equality
-          | Inequality
-          | StrictEquality
-          | StrictInequality
-          | LogicalAnd
-          | LogicalOr
-          | NullishCoalescing
-      )
+      use OperatorName::*;
+      match bin.stx.operator {
+        Addition => {
+          if expr_definitely_string(&bin.stx.left) || expr_definitely_string(&bin.stx.right) {
+            return true;
+          }
+          match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+            (BigIntKind::BigInt, BigIntKind::BigInt)
+            | (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+            _ => false,
+          }
+        }
+        Subtraction
+        | Multiplication
+        | BitwiseAnd
+        | BitwiseOr
+        | BitwiseXor => match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+          (BigIntKind::BigInt, BigIntKind::BigInt)
+          | (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+          _ => false,
+        },
+        Division | Remainder => match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+          (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+          (BigIntKind::BigInt, BigIntKind::BigInt) => match expr_bigint_sign(&bin.stx.right) {
+            Some(BigIntSign::Zero) => false,
+            Some(BigIntSign::Negative) | Some(BigIntSign::Positive) => true,
+            None => false,
+          },
+          _ => false,
+        },
+        Exponentiation => match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+          (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+          (BigIntKind::BigInt, BigIntKind::BigInt) => match expr_bigint_sign(&bin.stx.right) {
+            Some(BigIntSign::Negative) => false,
+            Some(BigIntSign::Zero) | Some(BigIntSign::Positive) => true,
+            None => false,
+          },
+          _ => false,
+        },
+        BitwiseLeftShift | BitwiseRightShift => {
+          match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+            (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+            (BigIntKind::BigInt, BigIntKind::BigInt) => match expr_bigint_sign(&bin.stx.right) {
+              Some(BigIntSign::Negative) => false,
+              Some(BigIntSign::Zero) | Some(BigIntSign::Positive) => true,
+              None => false,
+            },
+            _ => false,
+          }
+        }
+        BitwiseUnsignedRightShift => {
+          match (expr_bigint_kind(&bin.stx.left), expr_bigint_kind(&bin.stx.right)) {
+            (BigIntKind::NotBigInt, BigIntKind::NotBigInt) => true,
+            _ => false,
+          }
+        }
+        LessThan
+        | LessThanOrEqual
+        | GreaterThan
+        | GreaterThanOrEqual
+        | Equality
+        | Inequality
+        | StrictEquality
+        | StrictInequality
+        | LogicalAnd
+        | LogicalOr
+        | NullishCoalescing => true,
+        _ => false,
+      }
     }
     Expr::Cond(cond) => {
       is_side_effect_free_expr(&cond.stx.test)
