@@ -47,7 +47,9 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
   let file = FileId(1);
   db.set_files(Arc::new(vec![file]));
 
-  let defs: Vec<DefId> = (0..6).map(DefId).collect();
+  // `DefId` is a packed `(FileId, local)` identifier. Use the helper so the
+  // synthetic IDs in this test are scoped to the same file as the declarations.
+  let defs: Vec<DefId> = (0..6u32).map(|local| DefId::new(file, local)).collect();
   let primitives = store.primitive_ids();
 
   let mut decls = BTreeMap::new();
