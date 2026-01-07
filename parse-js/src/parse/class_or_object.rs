@@ -96,6 +96,7 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Vec<Node<ClassMember>>> {
     self.require(TT::BraceOpen)?;
     let mut members = Vec::new();
+    let mut seen_constructor = false;
     loop {
       // Skip empty semicolons
       while self.consume_if(TT::Semicolon).is_match() {}
@@ -458,6 +459,70 @@ impl<'a> Parser<'a> {
           val: value,
         })
       })?;
+
+      if self.is_strict_ecmascript() {
+        let is_constructor_name = match &member.stx.key {
+          ClassOrObjKey::Direct(key) => {
+            key.stx.key == "constructor"
+              || (key.stx.tt == TT::PrivateMember && key.stx.key == "#constructor")
+          }
+          _ => false,
+        };
+
+        if is_constructor_name {
+          let ClassOrObjKey::Direct(key) = &member.stx.key else {
+            unreachable!();
+          };
+
+          let is_private_constructor = key.stx.tt == TT::PrivateMember && key.stx.key == "#constructor";
+
+          match &member.stx.val {
+            ClassOrObjVal::Prop(_) => {
+              return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                "class fields named `constructor` are not allowed",
+              )));
+            }
+            ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) => {
+              if is_private_constructor {
+                return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                  "class constructor may not be a private method",
+                )));
+              }
+              if !member.stx.static_ {
+                return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                  "class constructor may not be an accessor",
+                )));
+              }
+            }
+            ClassOrObjVal::Method(method) => {
+              if is_private_constructor {
+                return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                  "class constructor may not be a private method",
+                )));
+              }
+              if !member.stx.static_ {
+                if seen_constructor {
+                  return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                    "a class may only have one constructor",
+                  )));
+                }
+                seen_constructor = true;
+                if method.stx.func.stx.async_ {
+                  return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                    "class constructor may not be an async method",
+                  )));
+                }
+                if method.stx.func.stx.generator {
+                  return Err(key.error(SyntaxErrorType::ExpectedSyntax(
+                    "class constructor may not be a generator",
+                  )));
+                }
+              }
+            }
+            _ => {}
+          }
+        }
+      }
       members.push(member);
     }
     self.require(TT::BraceClose)?;

@@ -110,6 +110,13 @@ fn strict_ecma_rejects_ts_only_syntax_and_recovery_paths() {
   assert_reject("class C { a b }");
   assert_reject("class C { a b(){} }");
   assert_reject("class C { a [foo](){} }");
+  assert_reject("class C { constructor = 1 }");
+  assert_reject("class C { 'constructor' = 1 }");
+  assert_reject("class C { #constructor = 1 }");
+  assert_reject("class C { get constructor(){} }");
+  assert_reject("class C { async constructor(){} }");
+  assert_reject("class C { *constructor(){} }");
+  assert_reject("class C { constructor(){} 'constructor'(){} }");
   // `get`/`set` remain accessor modifiers across LineTerminators; missing `()` must be a
   // syntax error (it must not be parsed as two adjacent class fields).
   assert_reject("class C { get\nfoo }");
@@ -244,6 +251,8 @@ fn strict_ecma_still_accepts_valid_js() {
   assert_accept("({ m() { super.foo; } });");
   assert_accept("class B {} class A extends B { constructor() { super(); } }");
   assert_accept("class B {} class A extends B { constructor() { (() => super())(); } }");
+  assert_accept("class C { constructor(){} ['constructor'](){} }");
+  assert_accept("class C { constructor(){} static get constructor(){ return 1 } }");
   assert_accept("class B {} class A extends B { x = super.foo; }");
   assert_accept("class A { x = super.foo; }");
   assert_accept("class B {} class A extends B { static { super.foo; } }");
