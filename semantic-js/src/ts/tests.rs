@@ -193,7 +193,7 @@ fn locals_resolve_object_literal_shorthand() {
 fn locals_resolve_template_literal_substitution() {
   let source = "const x = 1; const msg = `value=${x}`;";
   let mut ast = parse(source).expect("parse template literal");
-  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+  let locals = bind_ts_locals(&mut ast, FileId(0));
 
   let occs = positions(source, "x");
   assert!(

@@ -26,6 +26,15 @@ cargo run -p hir-js --example basic_lowering
 This example parses+lowers a small TypeScript snippet and shows how to use
 `SpanMap` for byte-offset lookups.
 
+## `semantic-js` (JS mode)
+
+```bash
+cargo run -p semantic-js --example js_mode_basic
+```
+
+This example binds+resolves a small JavaScript snippet in-memory and prints the
+top-level symbols plus identifier resolutions.
+
 ## `emit-js`
 
 ```bash
