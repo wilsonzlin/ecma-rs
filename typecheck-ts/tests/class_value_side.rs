@@ -1,8 +1,15 @@
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn class_value_static_property_type() {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let file = FileKey::new("a.ts");
   let src = r#"class C { static x: number = 1; }
 const y = C.x;

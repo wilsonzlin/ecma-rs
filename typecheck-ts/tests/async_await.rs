@@ -1,10 +1,33 @@
 use std::sync::Arc;
 
+mod common;
+
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileKey, MemoryHost, Program};
+
+fn promise_lib() -> LibFile {
+  LibFile {
+    key: FileKey::new("core_promise.d.ts"),
+    name: Arc::from("core_promise.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+interface Promise<T> {
+  then(onfulfilled: (value: T) => any): any;
+}
+"#,
+    ),
+  }
+}
 
 #[test]
 fn async_function_returns_promise_and_await_unwraps() {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
+  host.add_lib(promise_lib());
   let file = FileKey::new("a.ts");
   let source = r#"
 async function foo() { return 1; }
@@ -43,7 +66,12 @@ export const q = bar();
 
 #[test]
 fn async_return_annotation_checked_against_awaited() {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
+  host.add_lib(promise_lib());
   let file = FileKey::new("a.ts");
   let source = "export async function foo(): Promise<number> { return 1; }";
   host.insert(file.clone(), Arc::from(source.to_string()));

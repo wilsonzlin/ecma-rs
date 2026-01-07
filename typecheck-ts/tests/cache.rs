@@ -2,11 +2,13 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::thread;
 
+mod common;
+
 use ordered_float::OrderedFloat;
 use typecheck_ts::check::caches::{CheckerCacheStats, CheckerCaches};
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::db::expander::{DbTypeExpander, TypeExpanderDb};
-use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
+use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions, LibFile};
 use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryKind, QueryStatsCollector};
 use types_ts_interned::{
   CacheConfig, DefId, EvaluatorCaches, Param, RelateCtx, RelateTypeExpander, Signature,
@@ -372,13 +374,16 @@ fn cache_stats_are_recorded_for_profiling() {
 struct CacheHost {
   files: HashMap<FileKey, Arc<str>>,
   options: CompilerOptions,
+  libs: Vec<LibFile>,
 }
 
 impl CacheHost {
-  fn new(options: CompilerOptions) -> Self {
+  fn new(mut options: CompilerOptions) -> Self {
+    options.no_default_lib = true;
     Self {
       files: HashMap::new(),
       options,
+      libs: vec![common::core_globals_lib()],
     }
   }
 
@@ -402,6 +407,10 @@ impl Host for CacheHost {
 
   fn compiler_options(&self) -> CompilerOptions {
     self.options.clone()
+  }
+
+  fn lib_files(&self) -> Vec<LibFile> {
+    self.libs.clone()
   }
 }
 
@@ -508,13 +517,16 @@ fn program_cache_evictions_are_deterministic() {
 struct SingleFileHost {
   text: Arc<str>,
   options: CompilerOptions,
+  libs: Vec<LibFile>,
 }
 
 impl SingleFileHost {
-  fn new(text: impl Into<Arc<str>>, options: CompilerOptions) -> Self {
+  fn new(text: impl Into<Arc<str>>, mut options: CompilerOptions) -> Self {
+    options.no_default_lib = true;
     Self {
       text: text.into(),
       options,
+      libs: vec![common::core_globals_lib()],
     }
   }
 }
@@ -534,6 +546,10 @@ impl Host for SingleFileHost {
 
   fn compiler_options(&self) -> CompilerOptions {
     self.options.clone()
+  }
+
+  fn lib_files(&self) -> Vec<LibFile> {
+    self.libs.clone()
   }
 }
 

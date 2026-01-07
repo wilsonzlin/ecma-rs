@@ -12,7 +12,7 @@ hir-js = { workspace = true }
 parse-js = { workspace = true }
 semantic-js = { workspace = true }
 serde = { workspace = true }
-typecheck-ts = { workspace = true }
+typecheck-ts = { workspace = true, features = ["serde"] }
 types-ts-interned = { workspace = true }
 ordered-float = { workspace = true }
 

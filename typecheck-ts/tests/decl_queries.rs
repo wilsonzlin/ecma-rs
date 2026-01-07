@@ -83,6 +83,7 @@ fn interned_types_cross_file_imports() {
   );
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_preserves_interned_types() {
   let mut host = MemoryHost::new();

@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 fn def_by_name(program: &Program, file: FileKey, name: &str) -> typecheck_ts::DefId {
@@ -13,7 +16,11 @@ fn def_by_name(program: &Program, file: FileKey, name: &str) -> typecheck_ts::De
 
 #[test]
 fn construct_overload_resolution_uses_contextual_object_literal_types() {
-  let mut host = MemoryHost::default();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let source = r#"
 declare const C: {
   new (x: { kind: "a" }): 1;

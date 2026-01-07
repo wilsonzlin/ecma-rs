@@ -1,8 +1,15 @@
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn const_type_annotation_overrides_literal_initializer() {
-  let mut host = MemoryHost::default();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let file = FileKey::new("main.ts");
   let source = r#"
 const init: string = "";

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, ModuleKind};
+mod common;
+
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, ModuleKind};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
 #[derive(Default)]
@@ -9,6 +11,7 @@ struct ModuleHost {
   files: HashMap<FileKey, Arc<str>>,
   edges: HashMap<(FileKey, String), FileKey>,
   options: CompilerOptions,
+  libs: Vec<LibFile>,
 }
 
 impl ModuleHost {
@@ -17,6 +20,7 @@ impl ModuleHost {
       files: HashMap::new(),
       edges: HashMap::new(),
       options,
+      libs: vec![common::core_globals_lib()],
     }
   }
 
@@ -49,6 +53,10 @@ impl Host for ModuleHost {
     self.options.clone()
   }
 
+  fn lib_files(&self) -> Vec<LibFile> {
+    self.libs.clone()
+  }
+
   fn file_kind(&self, file: &FileKey) -> FileKind {
     if file.as_str().ends_with(".d.ts") {
       FileKind::Dts
@@ -60,9 +68,10 @@ impl Host for ModuleHost {
 
 #[test]
 fn ambient_module_exports_resolve_through_host_module_mapping() {
-  let options = CompilerOptions::default();
-  // Keep bundled libs enabled so primitives like `number` are available without
-  // requiring additional host-provided lib files.
+  let options = CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  };
 
   let entry = FileKey::new("main.ts");
   let ambient = FileKey::new("ambient_mod.d.ts");
@@ -111,10 +120,9 @@ fn import_equals_require_resolves_namespace_members_through_host_mapped_ambient_
 {
   let options = CompilerOptions {
     module: Some(ModuleKind::CommonJs),
+    no_default_lib: true,
     ..CompilerOptions::default()
   };
-  // Keep bundled libs enabled so primitives like `number` are available without
-  // requiring additional host-provided lib files.
 
   let entry = FileKey::new("main.ts");
   let ambient = FileKey::new("ambient_mod.d.ts");
@@ -168,10 +176,9 @@ export const z = y.x;
 fn import_equals_require_resolves_ambient_export_assignment_through_host_module_mapping() {
   let options = CompilerOptions {
     module: Some(ModuleKind::CommonJs),
+    no_default_lib: true,
     ..CompilerOptions::default()
   };
-  // Keep bundled libs enabled so primitives like literal types are available without
-  // requiring additional host-provided lib files.
 
   let entry = FileKey::new("main.ts");
   let ambient = FileKey::new("ambient_mod.d.ts");

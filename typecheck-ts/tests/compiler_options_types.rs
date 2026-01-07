@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
@@ -7,8 +9,10 @@ use typecheck_ts::{FileKey, MemoryHost, Program};
 fn compiler_options_types_includes_ambient_type_packages() {
   let mut options = CompilerOptions::default();
   options.types = vec!["example".to_string()];
+  options.no_default_lib = true;
 
   let mut host = MemoryHost::with_options(options);
+  host.add_lib(common::core_globals_lib());
   let entry = FileKey::new("entry.ts");
   let types = FileKey::new("example.d.ts");
 

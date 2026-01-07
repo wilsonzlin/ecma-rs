@@ -1,10 +1,24 @@
 use std::sync::Arc;
 
+mod common;
+
 use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey};
+
+fn new_host() -> MemoryHost {
+  if cfg!(feature = "bundled-libs") {
+    MemoryHost::default()
+  } else {
+    let mut options = typecheck_ts::lib_support::CompilerOptions::default();
+    options.no_default_lib = true;
+    let mut host = MemoryHost::with_options(options);
+    host.add_lib(common::core_globals_lib());
+    host
+  }
+}
 
 #[test]
 fn interfaces_merge_across_declarations() {
-  let mut host = MemoryHost::default();
+  let mut host = new_host();
   let file = FileKey::new("interfaces.ts");
   host.insert(
     file.clone(),
@@ -54,7 +68,7 @@ interface Foo { b: number; }
 
 #[test]
 fn namespaces_merge_members() {
-  let mut host = MemoryHost::default();
+  let mut host = new_host();
   let file = FileKey::new("namespaces.ts");
   host.insert(
     file.clone(),
@@ -112,7 +126,7 @@ export namespace Config { export const b = 2; }
 
 #[test]
 fn value_and_namespace_merge_callable_and_members() {
-  let mut host = MemoryHost::default();
+  let mut host = new_host();
   let file = FileKey::new("value_namespace.ts");
   host.insert(
     file.clone(),
@@ -191,7 +205,7 @@ export const name = Lib.version;
 
 #[test]
 fn value_and_namespace_merge_preserves_member_function_signature() {
-  let mut host = MemoryHost::default();
+  let mut host = new_host();
   let file = FileKey::new("merged_function_namespace.ts");
   host.insert(
     file.clone(),

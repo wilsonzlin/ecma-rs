@@ -6,12 +6,16 @@ use std::sync::Arc;
 mod common;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{
-  CompilerOptions, FileKind, LibFile, LibManager, LibName, ScriptTarget,
-};
-use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
+#[cfg(feature = "bundled-libs")]
+use typecheck_ts::lib_support::{LibManager, LibName, ScriptTarget};
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange};
+#[cfg(feature = "bundled-libs")]
+use typecheck_ts::TypeKindSummary;
 
+#[cfg(feature = "bundled-libs")]
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
+#[cfg(feature = "bundled-libs")]
 const ESNEXT_DISPOSABLE_TYPES: &str = include_str!("fixtures/esnext_disposable_types.ts");
 
 #[derive(Default)]
@@ -81,6 +85,7 @@ impl Host for TestHost {
   }
 }
 
+#[cfg(feature = "bundled-libs")]
 #[test]
 fn bundled_lib_manager_loads_official_ts_libs() {
   let manager = LibManager::new();
@@ -312,6 +317,7 @@ fn ambient_module_types_are_bound() {
     "unexpected diagnostics: {diagnostics:?}"
   );
   let entry_id = program.file_id(&entry).expect("entry id");
+  #[cfg(feature = "serde")]
   if std::env::var("DEBUG_AMBIENT").is_ok() {
     let snapshot = program.snapshot();
     let store = types_ts_interned::TypeStore::from_snapshot(snapshot.interned_type_store.clone());
@@ -408,6 +414,7 @@ fn module_resolution_can_target_lib_file_keys() {
   );
 }
 
+#[cfg(feature = "bundled-libs")]
 #[test]
 fn host_file_named_like_bundled_lib_has_distinct_text() {
   let mut options = CompilerOptions::default();
@@ -470,6 +477,7 @@ fn imported_type_alias_resolves_interned_type() {
   );
 }
 
+#[cfg(feature = "bundled-libs")]
 #[test]
 fn bundled_lib_types_expose_promise_and_array_shapes() {
   let mut options = CompilerOptions::default();
@@ -545,6 +553,7 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
   );
 }
 
+#[cfg(feature = "bundled-libs")]
 #[test]
 fn bundled_libs_esnext_include_disposable_protocol() {
   let mut options = CompilerOptions::default();

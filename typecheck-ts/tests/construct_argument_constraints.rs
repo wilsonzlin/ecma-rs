@@ -1,11 +1,18 @@
 use diagnostics::TextRange;
 use std::sync::Arc;
 
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{codes, FileKey, MemoryHost, Program};
 
 #[test]
 fn construct_argument_constraint_errors_on_argument_span() {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let file = FileKey::new("main.ts");
   let source = "declare const C: { new <T extends string>(x: T): T };\nnew C(1);\n";
   host.insert(file.clone(), Arc::from(source));

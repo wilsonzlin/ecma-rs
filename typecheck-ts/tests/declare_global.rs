@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+mod common;
+
 use diagnostics::FileId as HirFileId;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::FileKind as HirFileKind;
@@ -45,7 +47,15 @@ fn declare_global_from_dts_is_available_globally() {
 
 #[test]
 fn interfaces_merge_members_for_interned_types() {
-  let mut host = MemoryHost::default();
+  let mut host = if cfg!(feature = "bundled-libs") {
+    MemoryHost::default()
+  } else {
+    let mut options = typecheck_ts::lib_support::CompilerOptions::default();
+    options.no_default_lib = true;
+    let mut host = MemoryHost::with_options(options);
+    host.add_lib(common::core_globals_lib());
+    host
+  };
   let file = FileKey::new("input.d.ts");
   host.insert(
     file.clone(),

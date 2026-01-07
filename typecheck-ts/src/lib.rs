@@ -139,7 +139,7 @@
 //!   offline. Disable this if you want to supply your own lib files via
 //!   [`Host::lib_files`] (for example, to reduce binary size).
 //!
-//! - `serde` (default): enables serialization for identifiers, diagnostics, and
+//! - `serde`: enables serialization for identifiers, diagnostics, snapshots, and
 //!   [`TypeDisplay`] (which renders to a string for JSON outputs).
 //!
 //! The public API intentionally hides internal storage (arenas, caches, ASTs).

@@ -72,8 +72,11 @@ fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
 
   #[cfg(not(feature = "bundled-libs"))]
   {
-    let _ = lib_set;
-    Vec::new()
+    if lib_set.libs().is_empty() {
+      return Vec::new();
+    }
+
+    vec![fallback_core_globals_lib()]
   }
 }
 
@@ -87,6 +90,68 @@ pub fn bundled_lib_file(name: super::LibName) -> Option<LibFile> {
   {
     let _ = name;
     None
+  }
+}
+
+#[cfg(not(feature = "bundled-libs"))]
+const FALLBACK_CORE_GLOBAL_TYPES: &str = r#"
+interface Array<T> {}
+interface Boolean {}
+interface Function {}
+interface IArguments {}
+interface Number {}
+interface Object {}
+interface RegExp {}
+interface String {}
+interface Symbol {}
+interface SymbolConstructor {
+  readonly dispose: unique symbol;
+  readonly asyncDispose: unique symbol;
+}
+
+declare var Array: any;
+declare var Boolean: any;
+declare var Function: any;
+declare var Number: any;
+declare var Object: any;
+declare var RegExp: any;
+declare var String: any;
+declare var Symbol: SymbolConstructor;
+
+type Uppercase<S extends string> = intrinsic;
+type Lowercase<S extends string> = intrinsic;
+type Capitalize<S extends string> = intrinsic;
+type Uncapitalize<S extends string> = intrinsic;
+type NoInfer<T> = intrinsic;
+type BuiltinIteratorReturn = intrinsic;
+
+interface PromiseLike<T> {
+  then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | null,
+  ): PromiseLike<TResult1 | TResult2>;
+}
+
+interface Disposable {
+  [Symbol.dispose](): void;
+}
+
+interface AsyncDisposable {
+  [Symbol.asyncDispose](): PromiseLike<void>;
+}
+"#;
+
+#[cfg(not(feature = "bundled-libs"))]
+fn fallback_core_globals_lib() -> LibFile {
+  use std::sync::Arc;
+
+  use crate::FileKey;
+
+  LibFile {
+    key: FileKey::new("lib:core_globals.d.ts"),
+    name: Arc::from("core_globals.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(FALLBACK_CORE_GLOBAL_TYPES),
   }
 }
 

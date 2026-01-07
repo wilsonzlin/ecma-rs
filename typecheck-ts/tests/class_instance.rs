@@ -1,10 +1,17 @@
 use std::sync::Arc;
 
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, PatId, Program};
 
 #[test]
 fn class_instance_type_from_declaration() {
-  let mut host = MemoryHost::default();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let source = r#"class Greeter { greet(): string { return "hi"; } }
 let g: Greeter = new Greeter();
 const s = g.greet();

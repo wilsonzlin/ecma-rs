@@ -1,8 +1,15 @@
+mod common;
+
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn constructor_arguments_use_contextual_function_types() {
-  let mut host = MemoryHost::default();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    no_default_lib: true,
+    ..CompilerOptions::default()
+  });
+  host.add_lib(common::core_globals_lib());
   let file = FileKey::new("input.ts");
   host.insert(
     file.clone(),

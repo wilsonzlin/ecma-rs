@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["bundled-libs", "serde"]
+default = ["bundled-libs"]
 bundled-libs = []
 serde = ["dep:serde", "diagnostics/serde", "hir-js/serde", "types-ts-interned/serde"]
 serde-json = ["dep:serde_json"]
@@ -43,3 +43,7 @@ semantic-js = { workspace = true }
 serde_json = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt"] }
 proptest = { workspace = true }
+
+[[example]]
+name = "json_snapshot"
+required-features = ["serde"]

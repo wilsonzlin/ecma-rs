@@ -2,6 +2,7 @@
 
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_roundtrip_preserves_export_star_as_namespace() {
   let mut host = MemoryHost::new();
@@ -33,6 +34,7 @@ fn snapshot_roundtrip_preserves_export_star_as_namespace() {
   );
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_roundtrip_preserves_export_star_as_string_namespace() {
   let mut host = MemoryHost::new();
@@ -69,6 +71,7 @@ fn snapshot_roundtrip_preserves_export_star_as_string_namespace() {
   );
 }
 
+#[cfg(feature = "serde")]
 #[test]
 fn snapshot_roundtrip_preserves_export_star_as_default_namespace() {
   let mut host = MemoryHost::new();
