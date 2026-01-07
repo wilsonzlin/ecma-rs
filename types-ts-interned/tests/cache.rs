@@ -181,6 +181,54 @@ fn caches_can_be_cleared_and_reused() {
 }
 
 #[test]
+fn evaluator_caches_invalidate_by_generation() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let caches = EvaluatorCaches::new(CacheConfig {
+    max_entries: 8,
+    shard_count: 1,
+  });
+  let def = types_ts_interned::DefId(123);
+
+  caches.insert_ref(def, &[], primitives.number);
+  assert_eq!(caches.get_ref(def, &[]), Some(primitives.number));
+
+  caches.invalidate();
+  assert_eq!(
+    caches.get_ref(def, &[]),
+    None,
+    "invalidate should hide previously cached entries"
+  );
+}
+
+#[test]
+fn relation_cache_invalidate_by_generation() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let cache = RelationCache::default();
+  let ctx = RelateCtx::with_cache(store, default_options(), cache.clone());
+
+  assert!(ctx.is_assignable(primitives.number, primitives.number));
+  let after_first = cache.stats();
+
+  assert!(ctx.is_assignable(primitives.number, primitives.number));
+  let after_second = cache.stats();
+  assert!(
+    after_second.hits > after_first.hits,
+    "second call should hit relation cache"
+  );
+
+  cache.invalidate();
+  let misses_before = cache.stats().misses;
+  assert!(ctx.is_assignable(primitives.number, primitives.number));
+  let after_third = cache.stats();
+  assert!(
+    after_third.misses > misses_before,
+    "expected cache miss after invalidation"
+  );
+}
+
+#[test]
 fn relate_ctx_normalizer_caches_are_reused_across_relation_checks() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
