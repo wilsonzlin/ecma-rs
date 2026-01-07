@@ -2,6 +2,8 @@
 mod asi_and_keywords;
 #[path = "regressions/async_arrow_line_terminator.rs"]
 mod async_arrow_line_terminator;
+#[path = "regressions/async_arrow_type_params.rs"]
+mod async_arrow_type_params;
 #[path = "regressions/async_function_decl_line_terminator.rs"]
 mod async_function_decl_line_terminator;
 #[path = "regressions/async_identifier_disambiguation.rs"]

@@ -964,7 +964,7 @@ impl<'a> Parser<'a> {
       && !t1.preceded_by_line_terminator
     {
       return Ok(match t1.typ {
-        TT::ParenthesisOpen => {
+        TT::ParenthesisOpen | TT::ChevronLeft => {
           match self.rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
             Ok(expr) => Ok(Some(expr.into_wrapped())),
             Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => {
