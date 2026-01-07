@@ -696,12 +696,12 @@ pub fn fuzz_ts_binder(data: &[u8]) {
         Arc::new(ts::HirFile::module(id))
       }
     })
-    .0
   };
 
-  let sem1 = bind(hir.clone());
-  let sem2 = bind(hir);
+  let (sem1, diags1) = bind(hir.clone());
+  let (sem2, diags2) = bind(hir);
 
+  assert_eq!(diags1, diags2);
   assert_eq!(snapshot_ts_program(&sem1), snapshot_ts_program(&sem2));
   assert_eq!(sem1.symbols.symbols, sem2.symbols.symbols);
   assert_eq!(sem1.symbols.decls, sem2.symbols.decls);
