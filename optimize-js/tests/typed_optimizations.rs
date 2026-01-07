@@ -596,14 +596,19 @@ fn compile_file_with_typecheck_reports_non_zero_file_ids_in_diagnostics() {
   let _ = tc_program.check();
   let file_id = tc_program.file_id(&input).expect("typecheck file id");
 
-  assert_ne!(file_id.0, 0, "input file id should be non-zero for this test");
+  assert_ne!(
+    file_id.0, 0,
+    "input file id should be non-zero for this test"
+  );
 
   let err =
     optimize_js::compile_file_with_typecheck(tc_program, file_id, TopLevelMode::Global, false)
       .expect_err("with statements are unsupported");
 
   assert!(
-    err.iter().any(|diag| diag.code == "OPT0002" && diag.primary.file == file_id),
+    err
+      .iter()
+      .any(|diag| diag.code == "OPT0002" && diag.primary.file == file_id),
     "expected OPT0002 diagnostic for input file id {file_id:?}, got {err:?}"
   );
 }

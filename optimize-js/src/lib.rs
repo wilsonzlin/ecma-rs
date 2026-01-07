@@ -651,7 +651,8 @@ pub fn compile_file_with_typecheck(
     Program::compile_with_lower(top_level_node, lowered, mode, debug, types)
   } else {
     let lower = hir_js::lower_file(file, HirFileKind::Ts, &top_level_node);
-    let types = crate::types::TypeContext::from_typecheck_program(Arc::clone(&program), file, &lower);
+    let types =
+      crate::types::TypeContext::from_typecheck_program(Arc::clone(&program), file, &lower);
     Program::compile_with_lower(top_level_node, Arc::new(lower), mode, debug, types)
   }
 }
@@ -844,7 +845,11 @@ impl Program {
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
-    let lower = Arc::new(hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node));
+    let lower = Arc::new(hir_js::lower_file(
+      SOURCE_FILE,
+      HirFileKind::Ts,
+      &top_level_node,
+    ));
     Self::compile_with_lower(
       top_level_node,
       lower,

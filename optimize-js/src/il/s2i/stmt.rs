@@ -757,42 +757,39 @@ impl<'p> HirSourceToInst<'p> {
               )
             })?
         } else {
-          self
-            .break_stack
-            .last()
-            .copied()
-            .ok_or_else(|| unsupported_syntax_range(file, stmt.span, "break statement outside loop"))?
+          self.break_stack.last().copied().ok_or_else(|| {
+            unsupported_syntax_range(file, stmt.span, "break statement outside loop")
+          })?
         };
         self.out.push(Inst::goto(target));
         Ok(())
       }
       StmtKind::Continue(label) => {
-        let target =
-          if let Some(label) = label {
-            let entry = self
-              .label_stack
-              .iter()
-              .rev()
-              .find(|entry| entry.label == *label)
-              .ok_or_else(|| {
-                unsupported_syntax_range(
-                  file,
-                  stmt.span,
-                  format!("continue to unknown label {}", self.name_for(*label)),
-                )
-              })?;
-            entry.continue_target.ok_or_else(|| {
+        let target = if let Some(label) = label {
+          let entry = self
+            .label_stack
+            .iter()
+            .rev()
+            .find(|entry| entry.label == *label)
+            .ok_or_else(|| {
               unsupported_syntax_range(
                 file,
                 stmt.span,
-                format!("continue to non-loop label {}", self.name_for(*label)),
+                format!("continue to unknown label {}", self.name_for(*label)),
               )
-            })?
-          } else {
-            self.continue_stack.last().copied().ok_or_else(|| {
-              unsupported_syntax_range(file, stmt.span, "continue statement outside loop")
-            })?
-          };
+            })?;
+          entry.continue_target.ok_or_else(|| {
+            unsupported_syntax_range(
+              file,
+              stmt.span,
+              format!("continue to non-loop label {}", self.name_for(*label)),
+            )
+          })?
+        } else {
+          self.continue_stack.last().copied().ok_or_else(|| {
+            unsupported_syntax_range(file, stmt.span, "continue statement outside loop")
+          })?
+        };
         self.out.push(Inst::goto(target));
         Ok(())
       }
@@ -851,9 +848,9 @@ impl<'p> HirSourceToInst<'p> {
       }
       StmtKind::Throw(value) => {
         let _ = self.compile_expr(*value)?;
-        let target = self
-          .return_label
-          .ok_or_else(|| unsupported_syntax_range(file, stmt.span, "throw statement outside function"))?;
+        let target = self.return_label.ok_or_else(|| {
+          unsupported_syntax_range(file, stmt.span, "throw statement outside function")
+        })?;
         self.out.push(Inst::goto(target));
         Ok(())
       }

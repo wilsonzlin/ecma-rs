@@ -106,14 +106,13 @@ impl<'p> HirSourceToInst<'p> {
       hir_js::Literal::Null => Arg::Const(Const::Null),
       hir_js::Literal::Undefined => Arg::Const(Const::Undefined),
       hir_js::Literal::BigInt(v) => {
-        let value = BigInt::parse_bytes(v.as_bytes(), 10)
-          .ok_or_else(|| {
-            unsupported_syntax(
-              self.program.lower.hir.file,
-              span,
-              format!("invalid bigint literal {v:?}"),
-            )
-          })?;
+        let value = BigInt::parse_bytes(v.as_bytes(), 10).ok_or_else(|| {
+          unsupported_syntax(
+            self.program.lower.hir.file,
+            span,
+            format!("invalid bigint literal {v:?}"),
+          )
+        })?;
         Arg::Const(Const::BigInt(value))
       }
       hir_js::Literal::Regex(v) => {
@@ -431,16 +430,16 @@ impl<'p> HirSourceToInst<'p> {
               AssignOp::ShiftRightUnsignedAssign => BinOp::UShr,
               AssignOp::BitAndAssign => BinOp::BitAnd,
               AssignOp::BitOrAssign => BinOp::BitOr,
-                AssignOp::BitXorAssign => BinOp::BitXor,
-                AssignOp::ExponentAssign => BinOp::Exp,
-                _ => {
-                  return Err(unsupported_syntax(
-                    self.program.lower.hir.file,
-                    span,
-                    format!("unsupported assignment operator {operator:?}"),
-                  ))
-                }
-              };
+              AssignOp::BitXorAssign => BinOp::BitXor,
+              AssignOp::ExponentAssign => BinOp::Exp,
+              _ => {
+                return Err(unsupported_syntax(
+                  self.program.lower.hir.file,
+                  span,
+                  format!("unsupported assignment operator {operator:?}"),
+                ))
+              }
+            };
             let (obj, prop, _) = assign_inst.as_prop_assign();
             let left_tmp_var = self.c_temp.bump();
             self.out.push(Inst::bin(
