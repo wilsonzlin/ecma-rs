@@ -490,6 +490,9 @@ impl AstIndex {
           self.index_expr(&arg.stx.value, file, cancelled);
         }
       }
+      AstExpr::Instantiation(inst) => {
+        self.index_expr(&inst.stx.expression, file, cancelled);
+      }
       AstExpr::Member(mem) => {
         self.index_expr(&mem.stx.left, file, cancelled);
       }
@@ -524,9 +527,6 @@ impl AstIndex {
             parse_js::ast::expr::lit::LitTemplatePart::String(_) => {}
           }
         }
-      }
-      AstExpr::Instantiation(inst) => {
-        self.index_expr(&inst.stx.expression, file, cancelled);
       }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter() {

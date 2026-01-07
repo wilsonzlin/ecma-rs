@@ -1263,6 +1263,51 @@ impl<'a> Parser<'a> {
           .into_wrapped();
           continue;
         }
+        // TypeScript: Optional call with type arguments: fn?.<T>(x)
+        // Type arguments come after `?.` (unlike normal generic calls where they come after the callee).
+        TT::QuestionDot if self.is_typescript() => {
+          let next = self.peek();
+          // Match existing optional chaining call behavior (?.() token) by disallowing newlines here.
+          if next.typ == TT::ChevronLeft && !next.preceded_by_line_terminator {
+            if let Some((type_arguments, close_loc, arguments, end_loc)) = self.rewindable(|p| {
+              p.require(TT::ChevronLeft)?;
+              let (type_arguments, close_loc) = match p.ts_type_arguments_after_chevron_left(ctx) {
+                Ok(res) => res,
+                Err(_) => return Ok(None),
+              };
+
+              if p.peek().typ != TT::ParenthesisOpen {
+                return Ok(None);
+              }
+
+              p.consume(); // (
+              let arguments = p.call_args(ctx)?;
+              let end = p.require(TT::ParenthesisClose)?;
+
+              Ok(Some((type_arguments, close_loc, arguments, end.loc)))
+            })? {
+              let callee = Node::new(
+                left.loc + close_loc,
+                InstantiationExpr {
+                  expression: Box::new(left),
+                  type_arguments,
+                },
+              )
+              .into_wrapped();
+
+              left = Node::new(
+                callee.loc + end_loc,
+                CallExpr {
+                  optional_chaining: true,
+                  callee,
+                  arguments,
+                },
+              )
+              .into_wrapped();
+              continue;
+            }
+          }
+        }
         // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
         // e.g., Base<T> in extends clause or getBase()<T> in class extends
         // Only treat < as type arguments if left is an identifier, member expression, or call expression.

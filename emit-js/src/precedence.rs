@@ -111,6 +111,7 @@ pub fn expr_prec(expr: &Node<Expr>) -> Prec {
 
 pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
   match expr.stx.as_ref() {
+    Expr::Instantiation(inst) => starts_with_optional_chaining(&inst.stx.expression),
     Expr::Member(member) => {
       member.stx.optional_chaining || starts_with_optional_chaining(&member.stx.left)
     }
@@ -120,7 +121,6 @@ pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
     Expr::Call(call) => {
       call.stx.optional_chaining || starts_with_optional_chaining(&call.stx.callee)
     }
-    Expr::Instantiation(inst) => starts_with_optional_chaining(&inst.stx.expression),
     _ => false,
   }
 }

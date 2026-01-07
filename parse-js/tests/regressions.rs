@@ -38,5 +38,7 @@ mod strict_ecma_rejections;
 mod ts_instantiation_expr;
 #[path = "regressions/ts_module_blocks.rs"]
 mod ts_module_blocks;
+#[path = "regressions/ts_optional_call_type_args.rs"]
+mod ts_optional_call_type_args;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;
