@@ -19,7 +19,9 @@ fn parse_type_expr(src: &str) -> Node<TypeExpr> {
   let ctx = ParseCtx {
     rules: ParsePatternRules {
       await_allowed: !matches!(opts.source_type, SourceType::Module),
-      yield_allowed: true,
+      yield_allowed: !matches!(opts.source_type, SourceType::Module),
+      await_expr_allowed: matches!(opts.source_type, SourceType::Module),
+      yield_expr_allowed: false,
     },
     top_level: true,
     in_namespace: false,

@@ -57,7 +57,9 @@ pub(crate) fn is_module_binding_identifier_token(name: &str) -> bool {
     token.typ,
     ParsePatternRules {
       await_allowed: false,
-      yield_allowed: true,
+      yield_allowed: false,
+      await_expr_allowed: true,
+      yield_expr_allowed: false,
     },
   )
 }
