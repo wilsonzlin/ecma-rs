@@ -3,6 +3,17 @@
 //! This crate intentionally keeps the "JS engine" surface abstract via [`JsRuntime`], so it can be
 //! embedded on top of different runtimes (e.g. `vm-js`).
 
+mod error;
+mod idl;
+mod to_js;
+
+pub use error::{WebIdlError, WebIdlLimit};
+pub use idl::{ByteString, DomString, FrozenArray, IdlRecord, IdlString, IdlUndefined, UsvString};
+pub use to_js::{
+  dictionary_to_js, index_to_property_key, record_to_js_object, sequence_to_js_array, union_to_js,
+  ToJsPropertyKey, ToJsValue,
+};
+
 /// A stable identifier for a WebIDL interface.
 ///
 /// Bindings generators can assign unique IDs per interface and then use those IDs for fast runtime
@@ -46,6 +57,8 @@ pub struct WebIdlLimits {
   pub max_string_code_units: usize,
   /// Maximum length allowed for list/sequence conversions that allocate.
   pub max_sequence_length: usize,
+  /// Maximum number of entries allowed when converting WebIDL records to objects.
+  pub max_record_entries: usize,
 }
 
 impl Default for WebIdlLimits {
@@ -54,6 +67,7 @@ impl Default for WebIdlLimits {
       // Arbitrary but sane defaults for early scaffolding; embedders should set these explicitly.
       max_string_code_units: 1 << 20,
       max_sequence_length: 1 << 20,
+      max_record_entries: 1 << 20,
     }
   }
 }
@@ -82,13 +96,21 @@ pub trait JsRuntime {
   type String: Copy;
   type Object: Copy;
   type Symbol: Copy;
-  type Error;
+  type Error: std::error::Error + Send + Sync + 'static;
 
   /// Conversion limits configured by the embedding.
   fn limits(&self) -> WebIdlLimits;
 
   /// Embedding-provided hooks for platform objects.
   fn hooks(&self) -> &dyn WebIdlHooks<Self::Value>;
+
+  // ---- JS value construction (IDL → JS) ----
+  fn value_undefined(&self) -> Self::Value;
+  fn value_null(&self) -> Self::Value;
+  fn value_bool(&self, value: bool) -> Self::Value;
+  fn value_number(&self, value: f64) -> Self::Value;
+  fn value_string(&self, value: Self::String) -> Self::Value;
+  fn value_object(&self, value: Self::Object) -> Self::Value;
 
   // ---- Type checks ----
   fn is_undefined(&self, value: Self::Value) -> bool;
@@ -129,9 +151,35 @@ pub trait JsRuntime {
     object: Self::Object,
   ) -> Result<Vec<PropertyKey<Self::String, Self::Symbol>>, Self::Error>;
 
+  // ---- Object creation (IDL → JS) ----
+  fn alloc_string_from_code_units(&mut self, units: &[u16]) -> Result<Self::String, Self::Error>;
+  fn alloc_object(&mut self) -> Result<Self::Object, Self::Error>;
+  fn alloc_array(&mut self, len: usize) -> Result<Self::Object, Self::Error>;
+
+  fn create_data_property_or_throw(
+    &mut self,
+    object: Self::Object,
+    key: PropertyKey<Self::String, Self::Symbol>,
+    value: Self::Value,
+  ) -> Result<(), Self::Error>;
+
+  fn to_property_key_from_string(
+    &self,
+    s: Self::String,
+  ) -> PropertyKey<Self::String, Self::Symbol> {
+    PropertyKey::String(s)
+  }
+
+  fn set_integrity_level_frozen(&mut self, _object: Self::Object) -> Result<(), Self::Error> {
+    Ok(())
+  }
+
   // ---- Iterator protocol ----
   fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error>;
-  fn iterator_next(&mut self, iterator: Self::Object) -> Result<IteratorResult<Self::Value>, Self::Error>;
+  fn iterator_next(
+    &mut self,
+    iterator: Self::Object,
+  ) -> Result<IteratorResult<Self::Value>, Self::Error>;
 }
 
 pub mod conversions {
@@ -149,4 +197,3 @@ pub mod conversions {
     cx.to_string(value)
   }
 }
-

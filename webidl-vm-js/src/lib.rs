@@ -16,7 +16,11 @@ pub struct VmJsWebIdlCx<'a> {
 
 impl<'a> VmJsWebIdlCx<'a> {
   pub fn new(heap: &'a mut Heap, limits: WebIdlLimits, hooks: &'a dyn WebIdlHooks<Value>) -> Self {
-    Self { heap, limits, hooks }
+    Self {
+      heap,
+      limits,
+      hooks,
+    }
   }
 
   /// Convenience helper: `hooks.is_platform_object`.
@@ -45,6 +49,30 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
 
   fn hooks(&self) -> &dyn WebIdlHooks<Self::Value> {
     self.hooks
+  }
+
+  fn value_undefined(&self) -> Self::Value {
+    Value::Undefined
+  }
+
+  fn value_null(&self) -> Self::Value {
+    Value::Null
+  }
+
+  fn value_bool(&self, value: bool) -> Self::Value {
+    Value::Bool(value)
+  }
+
+  fn value_number(&self, value: f64) -> Self::Value {
+    Value::Number(value)
+  }
+
+  fn value_string(&self, value: Self::String) -> Self::Value {
+    Value::String(value)
+  }
+
+  fn value_object(&self, value: Self::Object) -> Self::Value {
+    Value::Object(value)
   }
 
   fn is_undefined(&self, value: Self::Value) -> bool {
@@ -153,13 +181,44 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     ))
   }
 
+  fn alloc_string_from_code_units(&mut self, units: &[u16]) -> Result<Self::String, Self::Error> {
+    let mut scope = self.heap.scope();
+    scope.alloc_string_from_code_units(units)
+  }
+
+  fn alloc_object(&mut self) -> Result<Self::Object, Self::Error> {
+    Err(VmError::Unimplemented(
+      "WebIDL object creation requires VM object allocation",
+    ))
+  }
+
+  fn alloc_array(&mut self, _len: usize) -> Result<Self::Object, Self::Error> {
+    Err(VmError::Unimplemented(
+      "WebIDL array creation requires VM array allocation",
+    ))
+  }
+
+  fn create_data_property_or_throw(
+    &mut self,
+    _object: Self::Object,
+    _key: PropertyKey<Self::String, Self::Symbol>,
+    _value: Self::Value,
+  ) -> Result<(), Self::Error> {
+    Err(VmError::Unimplemented(
+      "WebIDL CreateDataPropertyOrThrow requires a property definition model",
+    ))
+  }
+
   fn get_iterator(&mut self, _value: Self::Value) -> Result<Self::Object, Self::Error> {
     Err(VmError::Unimplemented(
       "WebIDL iterable conversions require iterator protocol (GetIterator, IteratorNext)",
     ))
   }
 
-  fn iterator_next(&mut self, _iterator: Self::Object) -> Result<IteratorResult<Self::Value>, Self::Error> {
+  fn iterator_next(
+    &mut self,
+    _iterator: Self::Object,
+  ) -> Result<IteratorResult<Self::Value>, Self::Error> {
     Err(VmError::Unimplemented(
       "WebIDL iterable conversions require iterator protocol (IteratorNext)",
     ))
@@ -207,4 +266,3 @@ mod tests {
     assert_eq!(out_units, units.as_slice());
   }
 }
-
