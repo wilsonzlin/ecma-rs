@@ -1,5 +1,5 @@
+use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::string::JsString;
-use crate::property::PropertyDescriptor;
 use crate::symbol::JsSymbol;
 use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
 use core::mem;
@@ -95,6 +95,25 @@ impl Heap {
     self.used_bytes
   }
 
+  #[cfg(debug_assertions)]
+  fn debug_recompute_used_bytes(&self) -> usize {
+    self
+      .slots
+      .iter()
+      .filter(|slot| slot.value.is_some())
+      .fold(0usize, |acc, slot| acc.saturating_add(slot.bytes))
+  }
+
+  #[cfg(debug_assertions)]
+  fn debug_assert_used_bytes_is_correct(&self) {
+    let recomputed = self.debug_recompute_used_bytes();
+    debug_assert_eq!(
+      self.used_bytes, recomputed,
+      "Heap::used_bytes mismatch: used_bytes={}, recomputed={}",
+      self.used_bytes, recomputed
+    );
+  }
+
   /// Total number of GC cycles that have run.
   pub fn gc_runs(&self) -> u64 {
     self.gc_runs
@@ -161,6 +180,9 @@ impl Heap {
       slot.generation = slot.generation.wrapping_add(1);
       self.free_list.push(idx as u32);
     }
+
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
   }
 
   /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
@@ -259,6 +281,82 @@ impl Heap {
     Ok(sym)
   }
 
+  fn define_property(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptor,
+  ) -> Result<(), VmError> {
+    let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
+
+    let (property_count, old_bytes, existing_idx) = {
+      let slot = &self.slots[idx];
+      let Some(obj) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      let HeapObject::Object(obj) = obj else {
+        return Err(VmError::InvalidHandle);
+      };
+
+      let existing_idx = obj
+        .properties
+        .iter()
+        .position(|entry| self.property_key_eq(&entry.key, &key));
+
+      (obj.properties.len(), slot.bytes, existing_idx)
+    };
+
+    match existing_idx {
+      Some(existing_idx) => {
+        // Replace in-place (no change to heap size).
+        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+          return Err(VmError::InvalidHandle);
+        };
+        obj.properties[existing_idx].desc = desc;
+        Ok(())
+      }
+      None => {
+        let new_property_count = property_count
+          .checked_add(1)
+          .ok_or(VmError::OutOfMemory)?;
+        let new_bytes = JsObject::heap_size_bytes_for_property_count(new_property_count);
+
+        // Before allocating, enforce heap limits based on the net growth of this object.
+        let grow_by = new_bytes.saturating_sub(old_bytes);
+        self.ensure_can_allocate(grow_by)?;
+
+        // Allocate the new property table fallibly so hostile inputs cannot abort the host process
+        // on allocator OOM.
+        let mut buf: Vec<PropertyEntry> = Vec::new();
+        buf
+          .try_reserve_exact(new_property_count)
+          .map_err(|_| VmError::OutOfMemory)?;
+
+        {
+          let slot = &self.slots[idx];
+          let Some(HeapObject::Object(obj)) = slot.value.as_ref() else {
+            return Err(VmError::InvalidHandle);
+          };
+          buf.extend_from_slice(&obj.properties);
+        }
+
+        buf.push(PropertyEntry { key, desc });
+        let properties = buf.into_boxed_slice();
+
+        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+          return Err(VmError::InvalidHandle);
+        };
+        obj.properties = properties;
+
+        self.update_slot_bytes(idx, new_bytes);
+
+        #[cfg(debug_assertions)]
+        self.debug_assert_used_bytes_is_correct();
+        Ok(())
+      }
+    }
+  }
+
   fn get_heap_object(&self, id: HeapId) -> Result<&HeapObject, VmError> {
     let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
     self.slots[idx]
@@ -292,6 +390,19 @@ impl Heap {
     Ok(())
   }
 
+  fn update_slot_bytes(&mut self, idx: usize, new_bytes: usize) {
+    let slot = &mut self.slots[idx];
+    let old_bytes = slot.bytes;
+
+    if new_bytes >= old_bytes {
+      self.used_bytes = self.used_bytes.saturating_add(new_bytes - old_bytes);
+    } else {
+      self.used_bytes = self.used_bytes.saturating_sub(old_bytes - new_bytes);
+    }
+
+    slot.bytes = new_bytes;
+  }
+
   fn alloc_unchecked(&mut self, obj: HeapObject, new_bytes: usize) -> HeapId {
     let idx = match self.free_list.pop() {
       Some(idx) => idx as usize,
@@ -310,7 +421,12 @@ impl Heap {
     slot.bytes = new_bytes;
     self.used_bytes = self.used_bytes.saturating_add(new_bytes);
 
-    HeapId::from_parts(idx as u32, slot.generation)
+    let id = HeapId::from_parts(idx as u32, slot.generation);
+
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+
+    id
   }
 
   fn debug_value_is_valid_or_primitive(&self, value: Value) -> bool {
@@ -452,23 +568,44 @@ impl<'a> Scope<'a> {
 
   /// Allocates an empty JavaScript object on the heap.
   pub fn alloc_object(&mut self) -> Result<GcObject, VmError> {
-    let new_bytes = JsObject::heap_size_bytes_for_descriptor_count(0);
+    let new_bytes = JsObject::heap_size_bytes_for_property_count(0);
     self.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Object(JsObject::new());
     Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 
-  /// Allocates a JavaScript object with the provided owned property descriptors.
-  pub fn alloc_object_with_descriptors(
+  /// Defines (adds or replaces) an own property on `obj`.
+  pub fn define_property(
     &mut self,
-    descriptors: &[PropertyDescriptor],
-  ) -> Result<GcObject, VmError> {
-    let new_bytes = JsObject::heap_size_bytes_for_descriptor_count(descriptors.len());
-    self.heap.ensure_can_allocate(new_bytes)?;
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptor,
+  ) -> Result<(), VmError> {
+    // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::Object(obj));
 
-    let obj = HeapObject::Object(JsObject::from_descriptor_slice(descriptors)?);
-    Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
+    match key {
+      PropertyKey::String(s) => {
+        scope.push_root(Value::String(s));
+      }
+      PropertyKey::Symbol(s) => {
+        scope.push_root(Value::Symbol(s));
+      }
+    }
+
+    match desc.kind {
+      PropertyKind::Data { value, .. } => {
+        scope.push_root(value);
+      }
+      PropertyKind::Accessor { get, set } => {
+        scope.push_root(get);
+        scope.push_root(set);
+      }
+    }
+
+    scope.heap.define_property(obj, key, desc)
   }
 }
 
@@ -522,44 +659,44 @@ impl Trace for JsSymbol {
 
 #[derive(Debug)]
 struct JsObject {
-  descriptors: Box<[PropertyDescriptor]>,
+  properties: Box<[PropertyEntry]>,
 }
 
 impl JsObject {
   fn new() -> Self {
     Self {
-      descriptors: Box::default(),
+      properties: Box::default(),
     }
   }
 
-  fn from_descriptor_slice(descriptors: &[PropertyDescriptor]) -> Result<Self, VmError> {
-    // Avoid process abort on allocator OOM: allocate the descriptor buffer fallibly.
-    let mut buf: Vec<PropertyDescriptor> = Vec::new();
-    buf
-      .try_reserve_exact(descriptors.len())
-      .map_err(|_| VmError::OutOfMemory)?;
-    buf.extend_from_slice(descriptors);
-
-    Ok(Self {
-      descriptors: buf.into_boxed_slice(),
-    })
-  }
-
-  fn heap_size_bytes_for_descriptor_count(count: usize) -> usize {
-    let desc_bytes = count
-      .checked_mul(mem::size_of::<PropertyDescriptor>())
+  fn heap_size_bytes_for_property_count(count: usize) -> usize {
+    let props_bytes = count
+      .checked_mul(mem::size_of::<PropertyEntry>())
       .unwrap_or(usize::MAX);
     mem::size_of::<Self>()
-      .checked_add(desc_bytes)
+      .checked_add(props_bytes)
       .unwrap_or(usize::MAX)
   }
 }
 
 impl Trace for JsObject {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    for desc in self.descriptors.iter() {
-      desc.trace(tracer);
+    for prop in self.properties.iter() {
+      prop.trace(tracer);
     }
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PropertyEntry {
+  key: PropertyKey,
+  desc: PropertyDescriptor,
+}
+
+impl Trace for PropertyEntry {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    self.key.trace(tracer);
+    self.desc.trace(tracer);
   }
 }
 

@@ -77,7 +77,9 @@ fn property_descriptor_tracing_keeps_referenced_objects_alive() -> Result<(), Vm
       },
     };
 
-    owner = scope.alloc_object_with_descriptors(&[desc])?;
+    owner = scope.alloc_object()?;
+    let key = PropertyKey::from_string(scope.alloc_string("x")?);
+    scope.define_property(owner, key, desc)?;
     scope.push_root(Value::Object(owner));
 
     scope.heap_mut().collect_garbage();
@@ -115,4 +117,3 @@ fn property_key_equality_uses_string_code_units_or_symbol_identity() -> Result<(
 
   Ok(())
 }
-

@@ -1,0 +1,124 @@
+use vm_js::{
+  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
+};
+
+#[test]
+fn used_bytes_increases_when_adding_property() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+
+  let key = PropertyKey::from_string(scope.alloc_string("x")?);
+  let desc = PropertyDescriptor {
+    enumerable: true,
+    configurable: true,
+    kind: PropertyKind::Data {
+      value: Value::Null,
+      writable: true,
+    },
+  };
+
+  let used_bytes_before = scope.heap().used_bytes();
+  scope.define_property(obj, key, desc)?;
+  let used_bytes_after = scope.heap().used_bytes();
+
+  assert!(
+    used_bytes_after > used_bytes_before,
+    "expected used_bytes to increase after adding a new property (before={used_bytes_before}, after={used_bytes_after})"
+  );
+  Ok(())
+}
+
+#[test]
+fn used_bytes_does_not_change_when_replacing_property() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+
+  let key = PropertyKey::from_string(scope.alloc_string("x")?);
+  scope.define_property(
+    obj,
+    key,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value: Value::Null,
+        writable: true,
+      },
+    },
+  )?;
+
+  let used_bytes_before = scope.heap().used_bytes();
+  scope.define_property(
+    obj,
+    key,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value: Value::Bool(true),
+        writable: true,
+      },
+    },
+  )?;
+  let used_bytes_after = scope.heap().used_bytes();
+
+  assert_eq!(
+    used_bytes_after, used_bytes_before,
+    "expected used_bytes unchanged when replacing an existing property"
+  );
+  Ok(())
+}
+
+#[test]
+fn oom_limit_respected_after_growth() -> Result<(), VmError> {
+  let max_bytes = 1024;
+  let mut heap = Heap::new(HeapLimits::new(max_bytes, max_bytes / 2));
+  let mut scope = heap.scope();
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+
+  let mut saw_oom = false;
+  for i in 0..10_000 {
+    let key = match scope.alloc_string(&format!("k{i}")) {
+      Ok(s) => PropertyKey::from_string(s),
+      Err(VmError::OutOfMemory) => {
+        saw_oom = true;
+        break;
+      }
+      Err(e) => return Err(e),
+    };
+
+    let desc = PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value: Value::Number(i as f64),
+        writable: true,
+      },
+    };
+
+    match scope.define_property(obj, key, desc) {
+      Ok(()) => {}
+      Err(VmError::OutOfMemory) => {
+        saw_oom = true;
+        break;
+      }
+      Err(e) => return Err(e),
+    }
+  }
+
+  assert!(saw_oom, "expected heap growth to eventually hit VmError::OutOfMemory");
+  assert!(
+    scope.heap().used_bytes() <= max_bytes,
+    "heap.used_bytes should never exceed the configured max_bytes"
+  );
+  Ok(())
+}
+
