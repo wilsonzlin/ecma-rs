@@ -2,7 +2,6 @@ use anyhow::{anyhow, bail, Context, Result};
 use globset::Glob;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 /// The expected outcome for a test case, as described in a manifest.
@@ -52,6 +51,17 @@ impl AppliedExpectation {
       ExpectationKind::Xfail | ExpectationKind::Flaky => mismatched,
     }
   }
+
+  pub fn covers_mismatch(&self) -> bool {
+    matches!(
+      self.expectation.kind,
+      ExpectationKind::Skip | ExpectationKind::Xfail | ExpectationKind::Flaky
+    )
+  }
+
+  pub fn is_flaky(&self) -> bool {
+    self.expectation.kind == ExpectationKind::Flaky
+  }
 }
 
 /// A parsed manifest of expectations.
@@ -71,8 +81,8 @@ impl Expectations {
   }
 
   pub fn from_path(path: &Path) -> Result<Self> {
-    let raw =
-      fs::read_to_string(path).with_context(|| format!("read manifest {}", path.display()))?;
+    let raw = std::fs::read_to_string(path)
+      .with_context(|| format!("read manifest {}", path.display()))?;
     Self::from_str(&raw).map_err(|err| anyhow!("{}: {err}", path.display()))
   }
 

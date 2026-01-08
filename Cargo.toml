@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "conformance-harness",
   "diagnostics",
   "conformance-harness",
   "bench/minify-js",
@@ -83,6 +84,7 @@ ryu = "1.0"
 salsa = "0.18"
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"
+serde_yaml = "0.9"
 similar = "2.1.0"
 smallvec = "1.15.1"
 tempfile = "3.12"

@@ -1,0 +1,14 @@
+# Minimal curated suite intended for quick local wiring checks.
+#
+# Test IDs are paths relative to `test/` in the tc39/test262 checkout.
+include = [
+  "language/expressions/addition/**/*.js",
+  "language/expressions/multiplication/**/*.js",
+]
+
+# Avoid module-only tests for now; the VM/harness integration will grow support
+# over time.
+exclude = [
+  "**/*.module.js",
+]
+

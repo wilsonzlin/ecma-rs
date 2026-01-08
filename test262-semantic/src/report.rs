@@ -1,5 +1,7 @@
+use crate::frontmatter::Frontmatter;
 use anyhow::{bail, Context, Result};
 use clap::Args;
+use conformance_harness::{ExpectationKind, FailOn};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -7,45 +9,35 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-#[derive(Args, Debug)]
-pub struct CompareArgs {
-  /// Path to the baseline JSON report.
-  #[arg(long, value_name = "PATH")]
-  pub baseline: PathBuf,
-
-  /// Path to the current JSON report.
-  #[arg(long, value_name = "PATH")]
-  pub current: PathBuf,
-
-  /// Exit with a non-zero code when regressions are detected.
-  #[arg(long)]
-  pub fail_on_regression: bool,
-}
-
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Report {
-  pub schema_version: u32,
-  pub summary: Summary,
-  pub results: Vec<TestResult>,
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Variant {
+  NonStrict,
+  Strict,
+  Module,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-pub struct Summary {
-  pub total: usize,
-  pub passed: usize,
-  pub failed: usize,
-  pub timed_out: usize,
-  pub skipped: usize,
+impl Variant {
+  fn as_str(self) -> &'static str {
+    match self {
+      Variant::NonStrict => "non_strict",
+      Variant::Strict => "strict",
+      Variant::Module => "module",
+    }
+  }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct TestResult {
-  pub id: String,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub variant: Option<String>,
-  pub outcome: TestOutcome,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ExpectedOutcome {
+  Pass,
+  Negative {
+    phase: String,
+    #[serde(rename = "type")]
+    typ: String,
+  },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -75,27 +67,117 @@ impl fmt::Display for TestOutcome {
   }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExpectationOutcome {
+  pub expectation: ExpectationKind,
+  #[serde(default)]
+  pub expected: bool,
+  #[serde(default)]
+  pub from_manifest: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reason: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tracking_issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct MismatchSummary {
+  pub expected: usize,
+  pub unexpected: usize,
+  pub flaky: usize,
+}
+
+impl MismatchSummary {
+  pub fn total(&self) -> usize {
+    self.expected + self.unexpected + self.flaky
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct Summary {
+  pub total: usize,
+  pub passed: usize,
+  pub failed: usize,
+  pub timed_out: usize,
+  pub skipped: usize,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub mismatches: Option<MismatchSummary>,
+}
+
+impl Summary {
+  pub fn should_fail(&self, fail_on: FailOn) -> bool {
+    let mismatches = self.mismatches.as_ref().map(|m| m.total()).unwrap_or(0);
+    let unexpected = self.mismatches.as_ref().map(|m| m.unexpected).unwrap_or(0);
+    fail_on.should_fail(unexpected, mismatches)
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TestResult {
+  pub id: String,
+  pub path: String,
+  pub variant: Variant,
+  pub expected: ExpectedOutcome,
+  pub outcome: TestOutcome,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub error: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub skip_reason: Option<String>,
+  pub expectation: ExpectationOutcome,
+  #[serde(default)]
+  pub metadata: Frontmatter,
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub mismatched: bool,
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub expected_mismatch: bool,
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub flaky: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+  !*value
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Report {
+  pub schema_version: u32,
+  pub summary: Summary,
+  pub results: Vec<TestResult>,
+}
+
+#[derive(Args, Debug)]
+pub struct CompareArgs {
+  /// Path to the baseline JSON report.
+  #[arg(long, value_name = "PATH")]
+  pub baseline: PathBuf,
+
+  /// Path to the current JSON report.
+  #[arg(long, value_name = "PATH")]
+  pub current: PathBuf,
+
+  /// Exit with a non-zero code when regressions are detected.
+  #[arg(long)]
+  pub fail_on_regression: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ResultKey {
   pub id: String,
-  pub variant: Option<String>,
+  pub variant: Variant,
 }
 
 impl ResultKey {
   fn from_result(result: &TestResult) -> Self {
     Self {
       id: result.id.clone(),
-      variant: result.variant.clone(),
+      variant: result.variant,
     }
   }
 }
 
 impl fmt::Display for ResultKey {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    match &self.variant {
-      Some(variant) => write!(f, "{}#{variant}", self.id),
-      None => f.write_str(&self.id),
-    }
+    write!(f, "{}#{}", self.id, self.variant.as_str())
   }
 }
 
@@ -134,15 +216,14 @@ pub fn compare_reports(baseline: &Report, current: &Report) -> Result<Comparison
   for key in all_keys {
     match (baseline_results.get(&key), current_results.get(&key)) {
       (Some(&baseline_outcome), Some(&current_outcome)) => {
-        if matches!(baseline_outcome, TestOutcome::Passed)
-          && current_outcome.is_fail_like()
-        {
+        if matches!(baseline_outcome, TestOutcome::Passed) && current_outcome.is_fail_like() {
           comparison.regressions.push(OutcomeChange {
             key,
             baseline: baseline_outcome,
             current: current_outcome,
           });
-        } else if baseline_outcome.is_fail_like() && matches!(current_outcome, TestOutcome::Passed)
+        } else if baseline_outcome.is_fail_like()
+          && matches!(current_outcome, TestOutcome::Passed)
         {
           comparison.improvements.push(OutcomeChange {
             key,
@@ -225,10 +306,7 @@ fn print_details(comparison: &Comparison) {
     println!();
     println!("Improvements:");
     for change in &comparison.improvements {
-      println!(
-        "  {}: {} -> {}",
-        change.key, change.baseline, change.current
-      );
+      println!("  {}: {} -> {}", change.key, change.baseline, change.current);
     }
   }
 
@@ -244,10 +322,7 @@ fn print_details(comparison: &Comparison) {
     eprintln!();
     eprintln!("Regressions:");
     for change in &comparison.regressions {
-      eprintln!(
-        "  {}: {} -> {}",
-        change.key, change.baseline, change.current
-      );
+      eprintln!("  {}: {} -> {}", change.key, change.baseline, change.current);
     }
   }
 }
@@ -255,6 +330,30 @@ fn print_details(comparison: &Comparison) {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::frontmatter::Frontmatter;
+
+  fn result(id: &str, variant: Variant, outcome: TestOutcome) -> TestResult {
+    TestResult {
+      id: id.to_string(),
+      path: format!("test/{id}"),
+      variant,
+      expected: ExpectedOutcome::Pass,
+      outcome,
+      error: None,
+      skip_reason: None,
+      expectation: ExpectationOutcome {
+        expectation: ExpectationKind::Pass,
+        expected: true,
+        from_manifest: false,
+        reason: None,
+        tracking_issue: None,
+      },
+      metadata: Frontmatter::default(),
+      mismatched: false,
+      expected_mismatch: false,
+      flaky: false,
+    }
+  }
 
   #[test]
   fn compare_reports_classifies_deltas_and_sorts() {
@@ -262,31 +361,11 @@ mod tests {
       schema_version: REPORT_SCHEMA_VERSION,
       summary: Summary::default(),
       results: vec![
-        TestResult {
-          id: "e".into(),
-          variant: None,
-          outcome: TestOutcome::Passed,
-        },
-        TestResult {
-          id: "b".into(),
-          variant: None,
-          outcome: TestOutcome::Failed,
-        },
-        TestResult {
-          id: "c".into(),
-          variant: Some("strict".into()),
-          outcome: TestOutcome::Passed,
-        },
-        TestResult {
-          id: "a".into(),
-          variant: None,
-          outcome: TestOutcome::Passed,
-        },
-        TestResult {
-          id: "c".into(),
-          variant: Some("nonstrict".into()),
-          outcome: TestOutcome::Passed,
-        },
+        result("e", Variant::NonStrict, TestOutcome::Passed),
+        result("b", Variant::NonStrict, TestOutcome::Failed),
+        result("c", Variant::Strict, TestOutcome::Passed),
+        result("a", Variant::NonStrict, TestOutcome::Passed),
+        result("c", Variant::NonStrict, TestOutcome::Passed),
       ],
     };
 
@@ -294,31 +373,11 @@ mod tests {
       schema_version: REPORT_SCHEMA_VERSION,
       summary: Summary::default(),
       results: vec![
-        TestResult {
-          id: "c".into(),
-          variant: Some("nonstrict".into()),
-          outcome: TestOutcome::Failed,
-        },
-        TestResult {
-          id: "d".into(),
-          variant: None,
-          outcome: TestOutcome::Passed,
-        },
-        TestResult {
-          id: "a".into(),
-          variant: None,
-          outcome: TestOutcome::Failed,
-        },
-        TestResult {
-          id: "b".into(),
-          variant: None,
-          outcome: TestOutcome::Passed,
-        },
-        TestResult {
-          id: "c".into(),
-          variant: Some("strict".into()),
-          outcome: TestOutcome::Passed,
-        },
+        result("c", Variant::NonStrict, TestOutcome::Failed),
+        result("d", Variant::NonStrict, TestOutcome::Passed),
+        result("a", Variant::NonStrict, TestOutcome::Failed),
+        result("b", Variant::NonStrict, TestOutcome::Passed),
+        result("c", Variant::Strict, TestOutcome::Passed),
       ],
     };
 
@@ -330,7 +389,7 @@ mod tests {
         OutcomeChange {
           key: ResultKey {
             id: "a".into(),
-            variant: None
+            variant: Variant::NonStrict
           },
           baseline: TestOutcome::Passed,
           current: TestOutcome::Failed,
@@ -338,7 +397,7 @@ mod tests {
         OutcomeChange {
           key: ResultKey {
             id: "c".into(),
-            variant: Some("nonstrict".into())
+            variant: Variant::NonStrict
           },
           baseline: TestOutcome::Passed,
           current: TestOutcome::Failed,
@@ -351,7 +410,7 @@ mod tests {
       vec![OutcomeChange {
         key: ResultKey {
           id: "b".into(),
-          variant: None
+          variant: Variant::NonStrict
         },
         baseline: TestOutcome::Failed,
         current: TestOutcome::Passed,
@@ -362,7 +421,7 @@ mod tests {
       comparison.new_tests,
       vec![ResultKey {
         id: "d".into(),
-        variant: None
+        variant: Variant::NonStrict
       }]
     );
 
@@ -370,7 +429,7 @@ mod tests {
       comparison.removed_tests,
       vec![ResultKey {
         id: "e".into(),
-        variant: None
+        variant: Variant::NonStrict
       }]
     );
   }
