@@ -8,14 +8,12 @@ repository.workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+conformance-harness = { workspace = true }
 diagnostics = { workspace = true }
-globset = { workspace = true }
 parse-js = { workspace = true, features = ["diagnostics"] }
 rayon = { workspace = true }
-regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-toml = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

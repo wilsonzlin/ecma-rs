@@ -4,6 +4,7 @@ members = [
   "diagnostics",
   "bench/minify-js",
   "bench/typecheck-ts",
+  "conformance-harness",
   "minify-js-cli",
   "minify-js-nodejs",
   "minify-js",
@@ -41,6 +42,7 @@ parse-js = { path = "parse-js", version = "0.24.1" }
 semantic-js = { path = "semantic-js", version = "0.1.0" }
 typecheck-ts = { path = "typecheck-ts", version = "0.1.0" }
 types-ts-interned = { path = "types-ts-interned", version = "0.1.0" }
+conformance-harness = { path = "conformance-harness", version = "0.1.0" }
 vm-js = { path = "vm-js", version = "0.1.0" }
 
 # Shared third-party dependencies.

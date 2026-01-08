@@ -1,20 +1,19 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
-use clap::ValueEnum;
+use conformance_harness::{
+  AppliedExpectation, ExpectationKind, Expectations, FailOn, Shard, TimeoutManager,
+};
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
-use globset::Glob;
 use parse_js::error::SyntaxErrorType;
 use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const REPORT_SCHEMA_VERSION: u32 = 2;
@@ -117,32 +116,6 @@ struct Cli {
   /// Timeout in seconds for each test case (best-effort cooperative cancellation).
   #[arg(long, default_value_t = 10)]
   timeout_secs: u64,
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
-pub enum FailOn {
-  /// Non-zero on any mismatch.
-  All,
-  /// Non-zero only for mismatches not covered by manifest (default).
-  New,
-  /// Always zero.
-  None,
-}
-
-impl Default for FailOn {
-  fn default() -> Self {
-    FailOn::New
-  }
-}
-
-impl FailOn {
-  pub fn should_fail(&self, unexpected_mismatches: usize, total_mismatches: usize) -> bool {
-    match self {
-      FailOn::All => total_mismatches > 0,
-      FailOn::New => unexpected_mismatches > 0,
-      FailOn::None => false,
-    }
-  }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
@@ -311,45 +284,6 @@ impl<'a> ReportRef<'a> {
       summary,
       results,
     }
-  }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct Shard {
-  index: usize,
-  total: usize,
-}
-
-impl Shard {
-  fn includes(&self, idx: usize) -> bool {
-    idx % self.total == self.index
-  }
-}
-
-impl std::str::FromStr for Shard {
-  type Err = String;
-
-  fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
-    let Some((index_raw, total_raw)) = raw.split_once('/') else {
-      return Err("shard must be in the form <index>/<total>".into());
-    };
-    let index: usize = index_raw
-      .parse()
-      .map_err(|err| format!("invalid shard index `{index_raw}`: {err}"))?;
-    let total: usize = total_raw
-      .parse()
-      .map_err(|err| format!("invalid shard total `{total_raw}`: {err}"))?;
-    if total == 0 {
-      return Err("shard total must be greater than zero".into());
-    }
-    if index >= total {
-      return Err(format!(
-        "shard index must be less than total ({} >= {})",
-        index, total
-      ));
-    }
-
-    Ok(Self { index, total })
   }
 }
 
@@ -694,130 +628,6 @@ fn print_unexpected_details(results: &[TestResult]) {
   }
 }
 
-struct TimeoutManager {
-  inner: Arc<TimeoutManagerInner>,
-  next_id: AtomicUsize,
-  thread: Mutex<Option<std::thread::JoinHandle<()>>>,
-}
-
-struct TimeoutManagerInner {
-  state: Mutex<TimeoutManagerState>,
-  cv: Condvar,
-}
-
-struct TimeoutManagerState {
-  active: HashMap<usize, TimeoutEntry>,
-  shutdown: bool,
-}
-
-struct TimeoutEntry {
-  deadline: Instant,
-  cancel: Arc<AtomicBool>,
-  cancelled: bool,
-}
-
-struct TimeoutGuard {
-  id: usize,
-  inner: Arc<TimeoutManagerInner>,
-}
-
-impl TimeoutManager {
-  fn new() -> Self {
-    let inner = Arc::new(TimeoutManagerInner {
-      state: Mutex::new(TimeoutManagerState {
-        active: HashMap::new(),
-        shutdown: false,
-      }),
-      cv: Condvar::new(),
-    });
-    let thread_inner = Arc::clone(&inner);
-    let handle = std::thread::spawn(move || timeout_thread(thread_inner));
-    Self {
-      inner,
-      next_id: AtomicUsize::new(1),
-      thread: Mutex::new(Some(handle)),
-    }
-  }
-
-  fn register(&self, deadline: Instant, cancel: Arc<AtomicBool>) -> TimeoutGuard {
-    let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
-    let mut state = self.inner.state.lock().unwrap();
-    state.active.insert(
-      id,
-      TimeoutEntry {
-        deadline,
-        cancel,
-        cancelled: false,
-      },
-    );
-    self.inner.cv.notify_one();
-    TimeoutGuard {
-      id,
-      inner: Arc::clone(&self.inner),
-    }
-  }
-}
-
-impl Drop for TimeoutManager {
-  fn drop(&mut self) {
-    {
-      let mut state = self.inner.state.lock().unwrap();
-      state.shutdown = true;
-      self.inner.cv.notify_one();
-    }
-
-    if let Some(handle) = self.thread.lock().unwrap().take() {
-      let _ = handle.join();
-    }
-  }
-}
-
-impl Drop for TimeoutGuard {
-  fn drop(&mut self) {
-    let mut state = self.inner.state.lock().unwrap();
-    state.active.remove(&self.id);
-    self.inner.cv.notify_one();
-  }
-}
-
-fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
-  let mut guard = inner.state.lock().unwrap();
-  loop {
-    if guard.shutdown {
-      return;
-    }
-
-    let now = Instant::now();
-    let mut next_deadline: Option<Instant> = None;
-
-    for entry in guard.active.values_mut() {
-      if entry.cancelled {
-        continue;
-      }
-      if now >= entry.deadline {
-        entry.cancelled = true;
-        entry.cancel.store(true, AtomicOrdering::Relaxed);
-        continue;
-      }
-
-      next_deadline = match next_deadline {
-        Some(existing) => Some(existing.min(entry.deadline)),
-        None => Some(entry.deadline),
-      };
-    }
-
-    if let Some(deadline) = next_deadline {
-      let wait_for = deadline
-        .checked_duration_since(now)
-        .unwrap_or_else(|| Duration::from_millis(0));
-      let (new_guard, _) = inner.cv.wait_timeout(guard, wait_for).unwrap();
-      guard = new_guard;
-    } else {
-      guard = inner.cv.wait(guard).unwrap();
-    }
-  }
-}
-
 struct SingleFileSource<'a> {
   file_name: &'a str,
   text: &'a str,
@@ -830,222 +640,6 @@ impl SourceProvider for SingleFileSource<'_> {
 
   fn file_text(&self, _file: FileId) -> Option<&str> {
     Some(self.text)
-  }
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ExpectationKind {
-  Pass,
-  Skip,
-  Xfail,
-  Flaky,
-}
-
-impl Default for ExpectationKind {
-  fn default() -> Self {
-    ExpectationKind::Pass
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-pub struct Expectation {
-  #[serde(default)]
-  pub kind: ExpectationKind,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub reason: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub tracking_issue: Option<String>,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct AppliedExpectation {
-  pub expectation: Expectation,
-  pub from_manifest: bool,
-}
-
-impl AppliedExpectation {
-  pub fn matches(&self, mismatched: bool) -> bool {
-    match self.expectation.kind {
-      ExpectationKind::Pass => !mismatched,
-      ExpectationKind::Skip => true,
-      ExpectationKind::Xfail | ExpectationKind::Flaky => mismatched,
-    }
-  }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct Expectations {
-  exact: Vec<Entry>,
-  globs: Vec<Entry>,
-  regexes: Vec<Entry>,
-}
-
-impl Expectations {
-  pub fn empty() -> Self {
-    Self::default()
-  }
-
-  pub fn from_path(path: &Path) -> Result<Self> {
-    let raw =
-      fs::read_to_string(path).with_context(|| format!("read manifest {}", path.display()))?;
-    Self::from_str(&raw).map_err(|err| anyhow!("{}: {err}", path.display()))
-  }
-
-  pub fn from_str(raw: &str) -> Result<Self> {
-    let manifest = match toml::from_str::<RawManifest>(raw) {
-      Ok(manifest) => manifest,
-      Err(toml_err) => serde_json::from_str::<RawManifest>(raw).map_err(|json_err| {
-        anyhow!("failed to parse manifest as TOML ({toml_err}) or JSON ({json_err})")
-      })?,
-    };
-
-    Self::from_manifest(manifest)
-  }
-
-  pub fn lookup(&self, id: &str) -> AppliedExpectation {
-    if let Some(found) = self.lookup_in(&self.exact, id) {
-      return found;
-    }
-
-    if let Some(found) = self.lookup_in(&self.globs, id) {
-      return found;
-    }
-
-    if let Some(found) = self.lookup_in(&self.regexes, id) {
-      return found;
-    }
-
-    AppliedExpectation::default()
-  }
-
-  fn lookup_in(&self, entries: &[Entry], id: &str) -> Option<AppliedExpectation> {
-    for entry in entries {
-      if entry.matches(id) {
-        return Some(AppliedExpectation {
-          expectation: entry.expectation.clone(),
-          from_manifest: true,
-        });
-      }
-    }
-
-    None
-  }
-
-  fn from_manifest(manifest: RawManifest) -> Result<Self> {
-    let mut expectations = Expectations::default();
-    for entry in manifest.expectations {
-      let matcher = entry.matcher()?;
-      let expectation = Expectation {
-        kind: entry
-          .status
-          .ok_or_else(|| anyhow!("manifest entry missing `status`"))?,
-        reason: entry.reason,
-        tracking_issue: entry.tracking_issue,
-      };
-
-      match matcher {
-        Matcher::Exact(pattern) => expectations.exact.push(Entry {
-          matcher: Matcher::Exact(pattern),
-          expectation,
-        }),
-        Matcher::Glob(pattern) => expectations.globs.push(Entry {
-          matcher: Matcher::Glob(pattern),
-          expectation,
-        }),
-        Matcher::Regex(pattern) => expectations.regexes.push(Entry {
-          matcher: Matcher::Regex(pattern),
-          expectation,
-        }),
-      }
-    }
-
-    Ok(expectations)
-  }
-}
-
-#[derive(Debug, Clone)]
-struct Entry {
-  matcher: Matcher,
-  expectation: Expectation,
-}
-
-impl Entry {
-  fn matches(&self, id: &str) -> bool {
-    self.matcher.matches(id)
-  }
-}
-
-#[derive(Debug, Clone)]
-enum Matcher {
-  Exact(String),
-  Glob(globset::GlobMatcher),
-  Regex(Regex),
-}
-
-impl Matcher {
-  fn matches(&self, id: &str) -> bool {
-    match self {
-      Matcher::Exact(pattern) => pattern == id,
-      Matcher::Glob(glob) => glob.is_match(id),
-      Matcher::Regex(re) => re.is_match(id),
-    }
-  }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawManifest {
-  #[serde(default)]
-  expectations: Vec<RawEntry>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct RawEntry {
-  id: Option<String>,
-  glob: Option<String>,
-  regex: Option<String>,
-  #[serde(alias = "expectation")]
-  status: Option<ExpectationKind>,
-  reason: Option<String>,
-  tracking_issue: Option<String>,
-}
-
-impl RawEntry {
-  fn matcher(&self) -> Result<Matcher> {
-    let mut seen = 0;
-    if self.id.is_some() {
-      seen += 1;
-    }
-    if self.glob.is_some() {
-      seen += 1;
-    }
-    if self.regex.is_some() {
-      seen += 1;
-    }
-
-    if seen == 0 {
-      bail!("manifest entry missing `id`/`glob`/`regex`");
-    }
-
-    if seen > 1 {
-      bail!("manifest entry must specify exactly one of `id`/`glob`/`regex`");
-    }
-
-    if let Some(id) = &self.id {
-      return Ok(Matcher::Exact(id.clone()));
-    }
-
-    if let Some(glob) = &self.glob {
-      let compiled = Glob::new(glob)
-        .map_err(|err| anyhow!("invalid glob '{glob}': {err}"))?
-        .compile_matcher();
-      return Ok(Matcher::Glob(compiled));
-    }
-
-    let regex = self.regex.as_ref().expect("validated regex presence");
-    let compiled = Regex::new(regex).map_err(|err| anyhow!("invalid regex '{regex}': {err}"))?;
-
-    Ok(Matcher::Regex(compiled))
   }
 }
 
