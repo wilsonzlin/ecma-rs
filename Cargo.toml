@@ -15,6 +15,8 @@ members = [
   "parse-js",
   "emit-js",
   "vm-js",
+  "webidl",
+  "webidl-vm-js",
   "types-ts-interned",
   "hir-js",
   "typecheck-ts",
@@ -46,6 +48,8 @@ semantic-js = { path = "semantic-js", version = "0.1.0" }
 typecheck-ts = { path = "typecheck-ts", version = "0.1.0" }
 types-ts-interned = { path = "types-ts-interned", version = "0.1.0" }
 vm-js = { path = "vm-js", version = "0.1.0" }
+webidl = { path = "webidl", version = "0.1.0" }
+webidl-vm-js = { path = "webidl-vm-js", version = "0.1.0" }
 
 # Shared third-party dependencies.
 ahash = "0.8.7"
