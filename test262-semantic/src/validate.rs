@@ -15,7 +15,7 @@ pub struct ValidateArgs {
   ///
   /// If `--test262-dir/test` exists, discovery is rooted at that directory.
   /// Otherwise, discovery is rooted at `--test262-dir`.
-  #[arg(long, value_name = "DIR", default_value = "test262/data")]
+  #[arg(long, value_name = "DIR", default_value = "test262-semantic/data")]
   pub test262_dir: PathBuf,
 
   /// Path to the suites config TOML file.
@@ -452,6 +452,36 @@ ids = ["language/ok.js", "language/missing.js"]
         .iter()
         .any(|msg| msg.contains("missing id") && msg.contains("language/missing.js")),
       "expected missing id error, got: {:#?}",
+      report.errors
+    );
+  }
+
+  #[test]
+  fn manifest_stale_exact_id_is_error() {
+    let dir = tempdir().unwrap();
+    let test_root = dir.path().join("test");
+    write_file(&test_root.join("language/ok.js"), "");
+
+    let manifest_path = dir.path().join("manifest.toml");
+    fs::write(
+      &manifest_path,
+      r#"
+[[expectations]]
+id = "language/missing.js"
+status = "xfail"
+"#,
+    )
+    .unwrap();
+
+    let discovered = discover_tests(dir.path()).unwrap();
+    let manifest = ManifestFile::from_path(&manifest_path).unwrap();
+    let report = validate_manifest(&manifest, &discovered, false);
+    assert!(
+      report
+        .errors
+        .iter()
+        .any(|msg| msg.contains("missing id") && msg.contains("language/missing.js")),
+      "expected missing manifest id error, got: {:#?}",
       report.errors
     );
   }
