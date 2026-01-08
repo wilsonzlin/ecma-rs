@@ -16,6 +16,7 @@ members = [
   "hir-js",
   "typecheck-ts",
   "test262",
+  "test262-semantic",
   "typecheck-ts-harness",
   "semantic-js",
   "typecheck-ts-cli",
