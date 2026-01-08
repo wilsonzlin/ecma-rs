@@ -57,6 +57,24 @@ pub struct LeadingZeroDecimalLiteral;
 #[derive(Clone, Copy, Debug)]
 pub struct LegacyOctalEscapeSequence(pub Loc);
 
+/// Marker attached to a string literal expression node recording the exact UTF-16
+/// code units produced by escape decoding.
+///
+/// ECMAScript strings are sequences of UTF-16 code units and may contain unpaired
+/// surrogates, which cannot be represented in Rust's `String`. `parse-js` keeps
+/// the existing `String`-typed AST field for compatibility (derived via
+/// `String::from_utf16_lossy`), while exposing the spec-correct code units via
+/// this association marker for downstream consumers (e.g. the VM).
+#[derive(Clone, Debug)]
+pub struct LiteralStringCodeUnits(pub Box<[u16]>);
+
+/// Returns the UTF-16 code units for a string literal expression, if present.
+pub fn literal_string_code_units(assoc: &NodeAssocData) -> Option<&[u16]> {
+  assoc
+    .get::<LiteralStringCodeUnits>()
+    .map(|data| data.0.as_ref())
+}
+
 /// Marker attached to an untagged template literal node when its raw source
 /// contains an escape sequence that is invalid in template strings (e.g.
 /// `` `\1` `` or `` `\8` ``).

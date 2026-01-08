@@ -615,7 +615,7 @@ impl<'a> Parser<'a> {
       let mut legacy_escape = None;
       let key = match tt {
         TT::LiteralString => {
-          let (_tok_loc, key, escape_loc) =
+          let (_tok_loc, key, escape_loc, _code_units) =
             self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
           legacy_escape = escape_loc;
           key

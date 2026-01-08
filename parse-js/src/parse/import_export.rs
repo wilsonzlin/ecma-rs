@@ -63,7 +63,8 @@ impl<'a> Parser<'a> {
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
       TT::LiteralString => {
-        let (_, name, escape_loc) = self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
+        let (_, name, escape_loc, _code_units) =
+          self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
         target_escape = escape_loc;
         (ModuleExportImportName::Str(name), true)
       },
@@ -79,7 +80,7 @@ impl<'a> Parser<'a> {
       if is_export && t_alias.typ == TT::LiteralString {
         // ES2022: arbitrary module namespace identifiers - allow string literals
         // for *exported* names.
-        let (loc, name, escape_loc) =
+        let (loc, name, escape_loc, _code_units) =
           self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
         let mut alias = Node::new(loc, IdPat { name });
         if let Some(escape_loc) = escape_loc {
@@ -269,7 +270,7 @@ impl<'a> Parser<'a> {
     if default.is_some() || names.is_some() {
       self.require(TT::KeywordFrom)?;
     }
-    let (_, module, module_escape) =
+    let (_, module, module_escape, _code_units) =
       self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
 
     // Import attributes / assertions:
@@ -429,7 +430,7 @@ impl<'a> Parser<'a> {
             })
           })?;
           let from = if p.consume_if(TT::KeywordFrom).is_match() {
-            let (_, from, escape_loc) =
+            let (_, from, escape_loc, _code_units) =
               p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
             from_escape = escape_loc;
             Some(from)
@@ -457,7 +458,7 @@ impl<'a> Parser<'a> {
             // ES2022: arbitrary module namespace identifiers - allow string literals
             let t = p.peek();
             if t.typ == TT::LiteralString {
-              let (loc, name, escape_loc) =
+              let (loc, name, escape_loc, _code_units) =
                 p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
               let mut alias = Node::new(loc, IdPat { name });
               if let Some(escape_loc) = escape_loc {
@@ -477,7 +478,7 @@ impl<'a> Parser<'a> {
             }
           })?;
           p.require(TT::KeywordFrom)?;
-          let (_, from, escape_loc) =
+          let (_, from, escape_loc, _code_units) =
             p.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
           from_escape = escape_loc;
           (ExportNames::All(alias), Some(from))

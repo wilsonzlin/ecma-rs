@@ -24,6 +24,7 @@ use crate::ast::node::InvalidTemplateEscapeSequence;
 use crate::ast::node::LeadingZeroDecimalLiteral;
 use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
+use crate::ast::node::LiteralStringCodeUnits;
 use crate::ast::node::Node;
 use crate::char::is_line_terminator;
 use crate::error::SyntaxError;
@@ -274,6 +275,161 @@ fn decode_escape_sequence(
   }
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Utf16Escape {
+  None,
+  One(u16),
+  Two(u16, u16),
+}
+
+fn decode_escape_sequence_utf16(
+  raw: &str,
+  escape_start: usize,
+) -> Result<(usize, Utf16Escape), LiteralError> {
+  let mut chars = raw.chars();
+  let Some(first) = chars.next() else {
+    return Err(LiteralError {
+      kind: LiteralErrorKind::UnexpectedEnd,
+      offset: escape_start,
+      len: 0,
+    });
+  };
+  match first {
+    '\r' => {
+      let mut consumed = first.len_utf8();
+      if raw[first.len_utf8()..].starts_with('\n') {
+        consumed += '\n'.len_utf8();
+      }
+      Ok((consumed, Utf16Escape::None))
+    }
+    '\n' | '\u{2028}' | '\u{2029}' => Ok((first.len_utf8(), Utf16Escape::None)),
+    'b' => Ok((1, Utf16Escape::One(0x08))),
+    'f' => Ok((1, Utf16Escape::One(0x0c))),
+    'n' => Ok((1, Utf16Escape::One(0x0a))),
+    'r' => Ok((1, Utf16Escape::One(0x0d))),
+    't' => Ok((1, Utf16Escape::One(0x09))),
+    'v' => Ok((1, Utf16Escape::One(0x0b))),
+    '0'..='7' => {
+      let mut consumed = first.len_utf8();
+      let mut value = first.to_digit(8).unwrap() as u16;
+      for ch in raw[consumed..].chars().take(2) {
+        if ('0'..='7').contains(&ch) {
+          consumed += ch.len_utf8();
+          value = (value << 3) + ch.to_digit(8).unwrap() as u16;
+        } else {
+          break;
+        }
+      }
+      Ok((consumed, Utf16Escape::One(value)))
+    }
+    'x' => {
+      let mut hex_iter = raw[first.len_utf8()..].chars();
+      let Some(h1) = hex_iter.next() else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::UnexpectedEnd,
+          offset: escape_start,
+          len: 0,
+        });
+      };
+      let Some(h2) = hex_iter.next() else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::UnexpectedEnd,
+          offset: escape_start,
+          len: 0,
+        });
+      };
+      if !h1.is_ascii_hexdigit() || !h2.is_ascii_hexdigit() {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        });
+      }
+      let value = u16::from_str_radix(&format!("{h1}{h2}"), 16).unwrap();
+      let consumed = first.len_utf8() + h1.len_utf8() + h2.len_utf8();
+      Ok((consumed, Utf16Escape::One(value)))
+    }
+    'u' => {
+      let after_u = &raw[first.len_utf8()..];
+      if after_u.starts_with('{') {
+        let Some(end) = after_u.find('}') else {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::UnexpectedEnd,
+            offset: escape_start,
+            len: 0,
+          });
+        };
+        let hex = &after_u[1..end];
+        if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          });
+        }
+        let value = u32::from_str_radix(hex, 16).ok().ok_or(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        })?;
+        if value > 0x10FFFF {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          });
+        }
+        let consumed = first.len_utf8() + end + 1;
+        Ok(if value <= 0xFFFF {
+          (consumed, Utf16Escape::One(value as u16))
+        } else {
+          let v = value - 0x10000;
+          let high = 0xD800 + ((v >> 10) as u16);
+          let low = 0xDC00 + ((v & 0x3FF) as u16);
+          (consumed, Utf16Escape::Two(high, low))
+        })
+      } else {
+        let mut hex = String::new();
+        let mut consumed = first.len_utf8();
+        for ch in after_u.chars().take(4) {
+          hex.push(ch);
+          consumed += ch.len_utf8();
+        }
+        if hex.len() < 4 {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::UnexpectedEnd,
+            offset: escape_start,
+            len: 0,
+          });
+        }
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          });
+        }
+        let value = u16::from_str_radix(&hex, 16).ok().ok_or(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        })?;
+        Ok((consumed, Utf16Escape::One(value)))
+      }
+    }
+    c => {
+      let mut buf = [0u16; 2];
+      let encoded = c.encode_utf16(&mut buf);
+      let addition = if encoded.len() == 1 {
+        Utf16Escape::One(encoded[0])
+      } else {
+        Utf16Escape::Two(encoded[0], encoded[1])
+      };
+      Ok((c.len_utf8(), addition))
+    }
+  }
+}
+
 fn decode_literal(raw: &str, allow_line_terminators: bool) -> Result<String, LiteralError> {
   let mut norm = String::new();
   let mut offset = 0;
@@ -300,6 +456,46 @@ fn decode_literal(raw: &str, allow_line_terminators: bool) -> Result<String, Lit
         });
       }
       norm.push(ch);
+      offset += ch.len_utf8();
+    }
+  }
+  Ok(norm)
+}
+
+fn decode_literal_utf16(raw: &str, allow_line_terminators: bool) -> Result<Vec<u16>, LiteralError> {
+  let mut norm = Vec::<u16>::new();
+  let mut offset = 0;
+  while offset < raw.len() {
+    let mut iter = raw[offset..].char_indices();
+    let (rel, ch) = iter.next().unwrap();
+    debug_assert_eq!(rel, 0);
+    if ch == '\\' {
+      let escape_start = offset;
+      let after_backslash = offset + ch.len_utf8();
+      let (consumed, addition) =
+        decode_escape_sequence_utf16(&raw[after_backslash..], escape_start)?;
+      match addition {
+        Utf16Escape::None => {}
+        Utf16Escape::One(v) => norm.push(v),
+        Utf16Escape::Two(a, b) => {
+          norm.push(a);
+          norm.push(b);
+        }
+      }
+      offset = after_backslash + consumed;
+    } else {
+      // ECMAScript 2019 permits U+2028/U+2029 (line/paragraph separators) in
+      // string literals; only CR/LF terminate literal lines.
+      if !allow_line_terminators && matches!(ch, '\n' | '\r') {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::LineTerminator,
+          offset,
+          len: ch.len_utf8(),
+        });
+      }
+      let mut buf = [0u16; 2];
+      let encoded = ch.encode_utf16(&mut buf);
+      norm.extend_from_slice(encoded);
       offset += ch.len_utf8();
     }
   }
@@ -850,7 +1046,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
-    let (loc, value, escape_loc) =
+    let (loc, value, escape_loc, code_units) =
       self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
     if self.is_strict_ecmascript() && self.is_strict_mode() {
       if let Some(escape_loc) = escape_loc {
@@ -861,6 +1057,9 @@ impl<'a> Parser<'a> {
       }
     }
     let mut node = Node::new(loc, LitStrExpr { value });
+    node
+      .assoc
+      .set(LiteralStringCodeUnits(code_units.into_boxed_slice()));
     if let Some(escape_loc) = escape_loc {
       node.assoc.set(LegacyOctalEscapeSequence(escape_loc));
     }
@@ -876,13 +1075,13 @@ impl<'a> Parser<'a> {
   pub fn lit_str_val_with_mode(&mut self, mode: LexMode) -> SyntaxResult<String> {
     self
       .lit_str_val_with_mode_and_legacy_escape(mode)
-      .map(|(_, value, _)| value)
+      .map(|(_, value, _, _)| value)
   }
 
   pub(crate) fn lit_str_val_with_mode_and_legacy_escape(
     &mut self,
     mode: LexMode,
-  ) -> SyntaxResult<(Loc, String, Option<Loc>)> {
+  ) -> SyntaxResult<(Loc, String, Option<Loc>, Vec<u16>)> {
     let peek = self.peek_with_mode(mode);
     let t = if matches!(peek.typ, TT::LiteralString | TT::Invalid)
       && self
@@ -915,9 +1114,10 @@ impl<'a> Parser<'a> {
           Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
         );
       }
-      return Ok((t.loc, body.to_string(), escape_loc));
+      let code_units = body.encode_utf16().collect();
+      return Ok((t.loc, body.to_string(), escape_loc, code_units));
     }
-    let decoded = decode_literal(body, false).map_err(|err| {
+    let code_units = decode_literal_utf16(body, false).map_err(|err| {
       literal_error_to_syntax(
         err,
         body_start,
@@ -925,12 +1125,13 @@ impl<'a> Parser<'a> {
         SyntaxErrorType::LineTerminatorInString,
       )
     })?;
+    let decoded = String::from_utf16_lossy(&code_units);
     if !has_closing {
       return Err(
         Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
       );
     }
-    Ok((t.loc, decoded, escape_loc))
+    Ok((t.loc, decoded, escape_loc, code_units))
   }
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {
