@@ -1,6 +1,8 @@
 use crate::string::JsString;
+use crate::symbol::JsSymbol;
 use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
 use core::mem;
+use std::collections::BTreeMap;
 
 /// Heap configuration and memory limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,10 +41,18 @@ pub struct Heap {
   marks: Vec<u8>,
   free_list: Vec<u32>,
 
+  next_symbol_id: u64,
+
   // Root sets.
   pub(crate) root_stack: Vec<Value>,
   persistent_roots: Vec<Option<Value>>,
   persistent_roots_free: Vec<u32>,
+
+  // Global symbol registry for `Symbol.for`-like behaviour.
+  //
+  // The registry is scanned during GC (as an additional root set) to keep
+  // interned symbols alive.
+  symbol_registry: BTreeMap<JsString, GcSymbol>,
 }
 
 impl Heap {
@@ -60,9 +70,11 @@ impl Heap {
       slots: Vec::new(),
       marks: Vec::new(),
       free_list: Vec::new(),
+      next_symbol_id: 1,
       root_stack: Vec::new(),
       persistent_roots: Vec::new(),
       persistent_roots_free: Vec::new(),
+      symbol_registry: BTreeMap::new(),
     }
   }
 
@@ -104,6 +116,9 @@ impl Heap {
       }
       for value in self.persistent_roots.iter().flatten() {
         tracer.trace_value(*value);
+      }
+      for sym in self.symbol_registry.values().copied() {
+        tracer.trace_value(Value::Symbol(sym));
       }
 
       while let Some(id) = tracer.pop_work() {
@@ -201,11 +216,46 @@ impl Heap {
   }
 
   /// Gets the (optional) description for `sym`.
-  pub fn get_symbol_description(&self, sym: GcSymbol) -> Result<Option<&str>, VmError> {
+  pub fn get_symbol_description(&self, sym: GcSymbol) -> Result<Option<GcString>, VmError> {
     match self.get_heap_object(sym.0)? {
       HeapObject::Symbol(sym) => Ok(sym.description()),
       _ => Err(VmError::InvalidHandle),
     }
+  }
+
+  /// Convenience: returns the (optional) description for `sym`, treating invalid handles as
+  /// "no description".
+  pub fn symbol_description(&self, sym: GcSymbol) -> Option<GcString> {
+    self.get_symbol_description(sym).ok().flatten()
+  }
+
+  /// Returns the debug/introspection id for `sym`.
+  pub fn get_symbol_id(&self, sym: GcSymbol) -> Result<u64, VmError> {
+    match self.get_heap_object(sym.0)? {
+      HeapObject::Symbol(sym) => Ok(sym.id()),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Implements `Symbol.for`-like behaviour using a deterministic global registry.
+  ///
+  /// The registry is scanned by the GC, so registered symbols remain live even if they are not
+  /// referenced from the stack or persistent roots.
+  pub fn symbol_for(&mut self, key: GcString) -> Result<GcSymbol, VmError> {
+    let key_contents = self.get_string(key)?.clone();
+    if let Some(sym) = self.symbol_registry.get(&key_contents).copied() {
+      return Ok(sym);
+    }
+
+    // Root `key` for the duration of allocation in case `ensure_can_allocate` triggers a GC.
+    let sym = {
+      let mut scope = self.scope();
+      scope.push_root(Value::String(key));
+      scope.new_symbol(Some(key))?
+    };
+
+    self.symbol_registry.insert(key_contents, sym);
+    Ok(sym)
   }
 
   fn get_heap_object(&self, id: HeapId) -> Result<&HeapObject, VmError> {
@@ -370,13 +420,33 @@ impl<'a> Scope<'a> {
   }
 
   /// Allocates a JavaScript symbol on the heap.
-  pub fn alloc_symbol(&mut self, description: Option<&str>) -> Result<GcSymbol, VmError> {
-    let desc_len = description.map_or(0, str::len);
-    let new_bytes = mem::size_of::<JsSymbol>() + desc_len;
-    self.heap.ensure_can_allocate(new_bytes)?;
+  pub fn new_symbol(&mut self, description: Option<GcString>) -> Result<GcSymbol, VmError> {
+    // Root the description string during allocation in case `ensure_can_allocate` triggers a GC.
+    //
+    // Note: `description` does not need to remain rooted after allocation; the symbol itself
+    // retains a handle and will trace it.
+    let mut scope = self.reborrow();
+    if let Some(desc) = description {
+      scope.push_root(Value::String(desc));
+    }
 
-    let obj = HeapObject::Symbol(JsSymbol::new(description));
-    Ok(GcSymbol(self.heap.alloc_unchecked(obj, new_bytes)))
+    let new_bytes = mem::size_of::<JsSymbol>();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let id = scope.heap.next_symbol_id;
+    scope.heap.next_symbol_id = scope.heap.next_symbol_id.wrapping_add(1);
+
+    let obj = HeapObject::Symbol(JsSymbol::new(id, description));
+    Ok(GcSymbol(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  /// Convenience allocation for `Symbol(description)` where `description` is UTF-8.
+  pub fn alloc_symbol(&mut self, description: Option<&str>) -> Result<GcSymbol, VmError> {
+    let description = match description {
+      Some(s) => Some(self.alloc_string(s)?),
+      None => None,
+    };
+    self.new_symbol(description)
   }
 
   /// Allocates an empty JavaScript object on the heap.
@@ -429,26 +499,11 @@ impl Trace for JsString {
   }
 }
 
-#[derive(Debug)]
-struct JsSymbol {
-  description: Option<Box<str>>,
-}
-
-impl JsSymbol {
-  fn new(description: Option<&str>) -> Self {
-    Self {
-      description: description.map(Into::into),
-    }
-  }
-
-  fn description(&self) -> Option<&str> {
-    self.description.as_deref()
-  }
-}
-
 impl Trace for JsSymbol {
-  fn trace(&self, _tracer: &mut Tracer<'_>) {
-    // Symbols have no outgoing GC references (description is stored inline).
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    if let Some(desc) = self.description() {
+      tracer.trace_heap_id(desc.0);
+    }
   }
 }
 

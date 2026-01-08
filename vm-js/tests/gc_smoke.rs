@@ -16,7 +16,11 @@ fn gc_collects_unreachable_objects() -> Result<(), VmError> {
 
     assert!(scope.heap().is_valid_object(obj));
     assert_eq!(scope.heap().get_string(s)?.to_utf8_lossy(), "hello");
-    assert_eq!(scope.heap().get_symbol_description(sym)?, Some("desc"));
+    let desc = scope
+      .heap()
+      .get_symbol_description(sym)?
+      .expect("allocated symbols should have descriptions");
+    assert_eq!(scope.heap().get_string(desc)?.to_utf8_lossy(), "desc");
 
     // Not rooted: everything allocated in this scope becomes unreachable once the scope ends.
     assert!(scope.heap().used_bytes() > 0);

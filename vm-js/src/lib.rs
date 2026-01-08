@@ -35,6 +35,7 @@ mod heap;
 mod interrupt;
 mod source;
 mod string;
+mod symbol;
 mod value;
 mod vm;
 
@@ -55,8 +56,8 @@ pub use crate::source::format_stack_trace;
 pub use crate::source::SourceText;
 pub use crate::source::StackFrame;
 pub use crate::string::JsString;
+pub use crate::symbol::JsSymbol;
 pub use crate::value::Value;
 pub use crate::vm::Budget;
 pub use crate::vm::Vm;
 pub use crate::vm::VmOptions;
-
