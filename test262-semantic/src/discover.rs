@@ -18,7 +18,8 @@ pub fn discover_tests(test262_dir: &Path) -> Result<Vec<DiscoveredTest>> {
   }
 
   let mut out = Vec::new();
-  for entry in WalkDir::new(&test_dir).into_iter().filter_map(|e| e.ok()) {
+  for entry in WalkDir::new(&test_dir).follow_links(false) {
+    let entry = entry.with_context(|| format!("walk {}", test_dir.display()))?;
     if !entry.file_type().is_file() {
       continue;
     }
@@ -75,4 +76,3 @@ mod tests {
     assert_eq!(ids, vec!["b.js", "nested/a.js"]);
   }
 }
-
