@@ -150,12 +150,21 @@ fn discover_tests(test262_dir: &Path) -> Result<DiscoveredTests> {
     }
   };
 
+  if !discovery_root.is_dir() {
+    bail!(
+      "test262 directory {} does not exist or is not a directory",
+      discovery_root.display()
+    );
+  }
+
   let mut ids = Vec::new();
-  for entry in WalkDir::new(&discovery_root)
-    .follow_links(false)
-    .into_iter()
-    .filter_map(|entry| entry.ok())
-  {
+  for entry in WalkDir::new(&discovery_root).follow_links(false) {
+    let entry = entry.with_context(|| {
+      format!(
+        "walk test262 directory {}",
+        discovery_root.display()
+      )
+    })?;
     if !entry.file_type().is_file() {
       continue;
     }
@@ -271,7 +280,11 @@ fn validate_suite(suite: &Suite, discovered: &DiscoveredTests, args: &ValidateAr
   }
 
   // Add explicit ids (after glob handling so the error reporting is independent).
-  selected.extend(suite.ids.iter().cloned());
+  for id in &suite.ids {
+    if discovered.id_set.contains(id) {
+      selected.insert(id.clone());
+    }
+  }
 
   for pattern in &suite.exclude {
     match glob_match_ids(pattern, &selected.iter().cloned().collect::<Vec<_>>()) {
