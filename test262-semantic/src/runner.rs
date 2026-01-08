@@ -1,12 +1,14 @@
 use crate::discover::{read_utf8_file, DiscoveredTest};
-use crate::executor::{ExecError, Executor};
+use crate::executor::{ExecError, Executor, JsError};
 use crate::frontmatter::{parse_test_source, Frontmatter};
 use crate::harness::assemble_source;
 use crate::report::{
   ExpectationOutcome, ExpectedOutcome, MismatchSummary, Summary, TestOutcome, TestResult, Variant,
 };
 use anyhow::{anyhow, bail, Context, Result};
-use conformance_harness::{AppliedExpectation, ExpectationKind, Expectations, Shard, TimeoutManager};
+use conformance_harness::{
+  AppliedExpectation, ExpectationKind, Expectations, Shard, TimeoutManager,
+};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -38,7 +40,9 @@ pub fn build_filter(pattern: Option<&str>) -> Result<Filter> {
       if let Ok(glob) = Glob::new(raw) {
         let mut builder = GlobSetBuilder::new();
         builder.add(glob);
-        let set = builder.build().map_err(|err| anyhow!("invalid glob: {err}"))?;
+        let set = builder
+          .build()
+          .map_err(|err| anyhow!("invalid glob: {err}"))?;
         return Ok(Filter::Glob(set));
       }
 
@@ -58,10 +62,7 @@ impl Filter {
   }
 }
 
-pub fn expand_cases(
-  selected: &[DiscoveredTest],
-  filter: &Filter,
-) -> Result<Vec<TestCase>> {
+pub fn expand_cases(selected: &[DiscoveredTest], filter: &Filter) -> Result<Vec<TestCase>> {
   let mut cases = Vec::new();
   for test in selected {
     if !filter.matches(&test.id) {
@@ -215,18 +216,35 @@ fn run_single_case(
 
   let executed = executor.execute(case, &source, &cancel);
 
-  let (outcome, error, skip_reason) = match executed {
-    Ok(()) => (TestOutcome::Passed, None, None),
+  let (outcome, mut error, skip_reason, js_error) = match executed {
+    Ok(()) => (TestOutcome::Passed, None, None, None),
     Err(ExecError::Cancelled) => (
       TestOutcome::TimedOut,
       Some(format!("timeout after {} seconds", timeout.as_secs())),
       None,
+      None,
     ),
-    Err(ExecError::Skipped(reason)) => (TestOutcome::Skipped, None, Some(reason)),
-    Err(ExecError::Error(msg)) => (TestOutcome::Failed, Some(msg), None),
+    Err(ExecError::Skipped(reason)) => (TestOutcome::Skipped, None, Some(reason), None),
+    Err(ExecError::Js(err)) => (
+      TestOutcome::Failed,
+      Some(err.to_report_string()),
+      None,
+      Some(err),
+    ),
   };
 
-  let mismatched = mismatched(&case.expected, outcome, expectation.expectation.kind);
+  let (mismatched, mismatch_error) = mismatched(
+    &case.expected,
+    outcome,
+    js_error.as_ref(),
+    expectation.expectation.kind,
+  );
+  if let Some(mismatch_error) = mismatch_error {
+    error = Some(match error {
+      Some(original) => format!("{mismatch_error}\n\n{original}"),
+      None => mismatch_error,
+    });
+  }
   let expectation_out = expectation_outcome(expectation.clone(), mismatched);
 
   TestResult {
@@ -245,14 +263,76 @@ fn run_single_case(
   }
 }
 
-fn mismatched(expected: &ExpectedOutcome, actual: TestOutcome, expectation: ExpectationKind) -> bool {
+fn mismatched(
+  expected: &ExpectedOutcome,
+  actual: TestOutcome,
+  js_error: Option<&JsError>,
+  expectation: ExpectationKind,
+) -> (bool, Option<String>) {
   if expectation == ExpectationKind::Skip && actual == TestOutcome::Skipped {
-    return false;
+    return (false, None);
   }
 
   match expected {
-    ExpectedOutcome::Pass => actual != TestOutcome::Passed,
-    ExpectedOutcome::Negative { .. } => actual != TestOutcome::Failed,
+    ExpectedOutcome::Pass => (actual != TestOutcome::Passed, None),
+    ExpectedOutcome::Negative {
+      phase: expected_phase,
+      typ: expected_typ,
+    } => {
+      // A negative test is only considered matched when it fails (not times out) with the expected
+      // phase and error type. Treat unknown error types as mismatches to avoid masking
+      // misclassifications in the executor/engine.
+      if actual != TestOutcome::Failed {
+        return (
+          true,
+          Some(format!(
+            "negative expectation mismatch: expected {expected_phase} {expected_typ}, got {actual}"
+          )),
+        );
+      }
+
+      let Some(js_error) = js_error else {
+        return (
+          true,
+          Some(format!(
+            "negative expectation mismatch: expected {expected_phase} {expected_typ}, got non-JS failure"
+          )),
+        );
+      };
+
+      if !expected_phase.eq_ignore_ascii_case(js_error.phase.as_str()) {
+        return (
+          true,
+          Some(format!(
+            "negative expectation mismatch: expected {expected_phase} {expected_typ}, got {} {}",
+            js_error.phase,
+            js_error.typ.as_deref().unwrap_or("<unknown error type>"),
+          )),
+        );
+      }
+
+      let Some(actual_typ) = js_error.typ.as_deref() else {
+        return (
+          true,
+          Some(format!(
+            "negative expectation mismatch: expected {expected_phase} {expected_typ}, got {} <unknown error type>",
+            js_error.phase
+          )),
+        );
+      };
+
+      if actual_typ != expected_typ {
+        return (
+          true,
+          Some(format!(
+            "negative expectation mismatch: expected {expected_phase} {expected_typ}, got {} {actual_typ}",
+            js_error.phase
+          )),
+        );
+      }
+
+      (false, None)
+    }
   }
 }
 
@@ -323,9 +403,12 @@ pub fn select_by_ids(discovered: &[DiscoveredTest], ids: &[String]) -> Result<Ve
 #[cfg(test)]
 mod tests {
   use super::*;
-  use conformance_harness::Expectations;
+  use crate::executor::ExecPhase;
+  use conformance_harness::{Expectations, TimeoutManager};
   use serde_json::Value;
   use std::fs;
+  use std::sync::atomic::Ordering;
+  use std::sync::Arc;
   use tempfile::tempdir;
 
   #[test]
@@ -406,5 +489,145 @@ status = "skip"
     let cases = expand_cases(&discovered, &Filter::All).unwrap();
     let variants: Vec<_> = cases.iter().map(|c| c.variant).collect();
     assert_eq!(variants, vec![Variant::NonStrict, Variant::Strict]);
+  }
+
+  #[derive(Debug, Clone)]
+  struct DummyExecutor {
+    result: crate::executor::ExecResult,
+  }
+
+  impl Executor for DummyExecutor {
+    fn execute(
+      &self,
+      _case: &TestCase,
+      _source: &str,
+      cancel: &Arc<std::sync::atomic::AtomicBool>,
+    ) -> crate::executor::ExecResult {
+      if cancel.load(Ordering::Relaxed) {
+        return Err(ExecError::Cancelled);
+      }
+      self.result.clone()
+    }
+  }
+
+  fn test262_fixture() -> tempfile::TempDir {
+    let temp = tempdir().unwrap();
+    fs::create_dir_all(temp.path().join("harness")).unwrap();
+    fs::write(temp.path().join("harness/assert.js"), "").unwrap();
+    fs::write(temp.path().join("harness/sta.js"), "").unwrap();
+    temp
+  }
+
+  fn run_negative_case(js_error: JsError, expected_phase: &str, expected_type: &str) -> TestResult {
+    let temp = test262_fixture();
+    let case = TestCase {
+      id: "language/negative.js".to_string(),
+      path: temp.path().join("test/language/negative.js"),
+      variant: Variant::NonStrict,
+      expected: ExpectedOutcome::Negative {
+        phase: expected_phase.to_string(),
+        typ: expected_type.to_string(),
+      },
+      metadata: Frontmatter::default(),
+      body: "/* body unused in dummy executor */\n".to_string(),
+    };
+
+    let executor = DummyExecutor {
+      result: Err(ExecError::Js(js_error)),
+    };
+    let expectations = Expectations::empty();
+    let expectation = expectations.lookup(&case.id);
+
+    let timeout_manager = TimeoutManager::new();
+    run_single_case(
+      temp.path(),
+      &case,
+      expectation,
+      &executor,
+      Duration::from_secs(1),
+      &timeout_manager,
+    )
+  }
+
+  #[test]
+  fn negative_parse_expectation_matches_parse_error() {
+    let result = run_negative_case(
+      JsError::new(
+        ExecPhase::Parse,
+        Some("SyntaxError".to_string()),
+        "unexpected token",
+      ),
+      "parse",
+      "SyntaxError",
+    );
+    assert_eq!(result.outcome, TestOutcome::Failed);
+    assert!(
+      !result.mismatched,
+      "expected matched negative, got {result:#?}"
+    );
+  }
+
+  #[test]
+  fn negative_parse_expectation_mismatches_runtime_error() {
+    let result = run_negative_case(
+      JsError::new(ExecPhase::Runtime, Some("TypeError".to_string()), "boom"),
+      "parse",
+      "SyntaxError",
+    );
+    assert_eq!(result.outcome, TestOutcome::Failed);
+    assert!(result.mismatched);
+    assert!(
+      result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("expected parse SyntaxError, got runtime TypeError"),
+      "error message should explain mismatch, got: {:#?}",
+      result.error
+    );
+  }
+
+  #[test]
+  fn negative_runtime_typeerror_expectation_mismatches_rangeerror() {
+    let result = run_negative_case(
+      JsError::new(
+        ExecPhase::Runtime,
+        Some("RangeError".to_string()),
+        "out of range",
+      ),
+      "runtime",
+      "TypeError",
+    );
+    assert_eq!(result.outcome, TestOutcome::Failed);
+    assert!(result.mismatched);
+    assert!(
+      result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("expected runtime TypeError, got runtime RangeError"),
+      "error message should explain mismatch, got: {:#?}",
+      result.error
+    );
+  }
+
+  #[test]
+  fn negative_runtime_typeerror_expectation_mismatches_unknown_error_type() {
+    let result = run_negative_case(
+      JsError::new(ExecPhase::Runtime, None, "unknown error"),
+      "runtime",
+      "TypeError",
+    );
+    assert_eq!(result.outcome, TestOutcome::Failed);
+    assert!(result.mismatched);
+    assert!(
+      result
+        .error
+        .as_deref()
+        .unwrap_or_default()
+        .contains("unknown error type"),
+      "error message should mention unknown type, got: {:#?}",
+      result.error
+    );
   }
 }

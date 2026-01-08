@@ -1,10 +1,66 @@
 use crate::runner::TestCase;
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecPhase {
+  Parse,
+  Resolution,
+  Runtime,
+}
+
+impl ExecPhase {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      ExecPhase::Parse => "parse",
+      ExecPhase::Resolution => "resolution",
+      ExecPhase::Runtime => "runtime",
+    }
+  }
+}
+
+impl fmt::Display for ExecPhase {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JsError {
+  pub phase: ExecPhase,
+  /// The JavaScript error "type" name when known (e.g. `SyntaxError`, `TypeError`).
+  pub typ: Option<String>,
+  pub message: String,
+  pub stack: Option<String>,
+}
+
+impl JsError {
+  pub fn new(phase: ExecPhase, typ: Option<String>, message: impl Into<String>) -> Self {
+    Self {
+      phase,
+      typ,
+      message: message.into(),
+      stack: None,
+    }
+  }
+
+  pub fn with_stack(mut self, stack: impl Into<String>) -> Self {
+    self.stack = Some(stack.into());
+    self
+  }
+
+  pub fn to_report_string(&self) -> String {
+    match &self.stack {
+      Some(stack) if !stack.is_empty() => format!("{}\n\n{}", self.message, stack),
+      _ => self.message.clone(),
+    }
+  }
+}
+
 #[derive(Debug, Clone)]
 pub enum ExecError {
-  Error(String),
+  Js(JsError),
   Cancelled,
   Skipped(String),
 }
@@ -42,4 +98,3 @@ pub fn default_executor() -> Box<dyn Executor> {
     );
   }
 }
-
