@@ -5,3 +5,8 @@
 	path = parse-js/tests/TypeScript
 	url = https://github.com/microsoft/TypeScript.git
 	shallow = true
+[submodule "test262-semantic/data"]
+	path = test262-semantic/data
+	url = https://github.com/tc39/test262.git
+	shallow = true
+	ignore = untracked
