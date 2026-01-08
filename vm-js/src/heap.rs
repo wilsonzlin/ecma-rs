@@ -1,4 +1,4 @@
-use crate::function::{JsFunction, NativeConstructId, NativeFunctionId};
+use crate::function::{CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId};
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
@@ -246,7 +246,7 @@ impl Heap {
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
       self.get_heap_object(obj.0),
-      Ok(HeapObject::Object(_)) | Ok(HeapObject::Function(_))
+      Ok(HeapObject::Object(_) | HeapObject::Function(_))
     )
   }
 
@@ -567,6 +567,28 @@ impl Heap {
       Value::String(s) => self.is_valid_string(s),
       Value::Symbol(s) => self.is_valid_symbol(s),
       Value::Object(o) => self.is_valid_object(o),
+    }
+  }
+
+  pub(crate) fn get_function_call_id(&self, func: GcObject) -> Result<NativeFunctionId, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => match f.call {
+        CallHandler::Native(id) => Ok(id),
+      },
+      _ => Err(VmError::NotCallable),
+    }
+  }
+
+  pub(crate) fn get_function_construct_id(
+    &self,
+    func: GcObject,
+  ) -> Result<Option<NativeConstructId>, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => match f.construct {
+        Some(ConstructHandler::Native(id)) => Ok(Some(id)),
+        None => Ok(None),
+      },
+      _ => Err(VmError::NotConstructable),
     }
   }
 }

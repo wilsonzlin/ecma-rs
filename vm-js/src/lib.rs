@@ -87,6 +87,8 @@ pub use crate::source::StackFrame;
 pub use crate::string::JsString;
 pub use crate::symbol::JsSymbol;
 pub use crate::value::Value;
+pub use crate::vm::NativeCall;
+pub use crate::vm::NativeConstruct;
 pub use crate::vm::Budget;
 pub use crate::vm::Vm;
 pub use crate::vm::VmOptions;

@@ -31,6 +31,14 @@ pub enum VmError {
   #[error("property is not a data property")]
   PropertyNotData,
 
+  /// Attempted to call a non-callable value.
+  #[error("value is not callable")]
+  NotCallable,
+
+  /// Attempted to construct a non-constructable value.
+  #[error("value is not a constructor")]
+  NotConstructable,
+
   /// A JavaScript `throw` value. This is catchable from JS.
   #[error("uncaught exception")]
   Throw(Value),
