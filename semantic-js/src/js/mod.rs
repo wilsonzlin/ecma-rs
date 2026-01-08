@@ -335,5 +335,29 @@ pub fn bind_js(
   (sem, diagnostics)
 }
 
+/// Binds a JS AST for use by an executing runtime / VM.
+///
+/// This is a minimal wrapper around [`declare::declare_with_diagnostics`] and
+/// [`resolve`], designed to return only "true early errors" while still
+/// attaching [`crate::assoc::js::ResolvedSymbol`] metadata to identifier nodes.
+///
+/// Unlike [`bind_js`], this entry point intentionally **suppresses TDZ
+/// diagnostics** (`BIND0003`). Temporal dead zone violations are runtime
+/// `ReferenceError`s that depend on which code paths are executed; a VM must be
+/// able to bind and run the program, raising TDZ errors only when a violating
+/// access actually executes.
+pub fn bind_js_for_runtime(
+  top_level: &mut Node<TopLevel>,
+  mode: TopLevelMode,
+  file: FileId,
+) -> (JsSemantics, Vec<Diagnostic>) {
+  let (sem, mut diagnostics) = declare::declare_with_diagnostics(top_level, mode, file);
+  // Attach `ResolvedSymbol { symbol, in_tdz }` to identifier nodes without
+  // reporting diagnostics. TDZ violations are runtime errors.
+  resolve::resolve(top_level, &sem);
+  diagnostics::sort_diagnostics(&mut diagnostics);
+  (sem, diagnostics)
+}
+
 #[cfg(test)]
 mod tests;

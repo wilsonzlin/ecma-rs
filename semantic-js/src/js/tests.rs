@@ -1,5 +1,7 @@
 use crate::assoc::js::{declared_symbol, resolved_symbol, resolved_symbol_info, ResolvedSymbol};
-use crate::js::{bind_js, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode};
+use crate::js::{
+  bind_js, bind_js_for_runtime, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode,
+};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use diagnostics::Diagnostic;
@@ -1452,6 +1454,63 @@ fn reports_tdz_errors_and_sorts_deterministically() {
   assert_eq!(slice_range(source, &diagnostics[0]), "a");
   assert_eq!(slice_range(source, &diagnostics[1]), "a");
   assert!(diagnostics[0].primary.range.start < diagnostics[1].primary.range.start);
+}
+
+#[test]
+fn runtime_binding_suppresses_tdz_diagnostics() {
+  let source = "function f(){ x; let x = 1; }";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Module, FileId(130));
+  assert!(
+    diagnostics.iter().all(|d| d.code.as_str() != "BIND0003"),
+    "unexpected TDZ diagnostics: {diagnostics:?}"
+  );
+
+  // TDZ state is still computed and attached for runtime checks.
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let x_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "x")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("expected `x` identifier reference");
+  assert!(x_use.in_tdz);
+}
+
+#[test]
+fn runtime_binding_still_reports_true_early_errors() {
+  let source = "let x; let x;";
+  let mut ast = parse(source).unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Module, FileId(131));
+  assert_eq!(diagnostics.len(), 1);
+  assert_eq!(diagnostics[0].code.as_str(), "BIND0001");
+  assert_eq!(slice_range(source, &diagnostics[0]), "x");
+}
+
+#[test]
+fn runtime_binding_attaches_resolved_symbols() {
+  let mut ast = parse("let x = 1; x;").unwrap();
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Module, FileId(132));
+  assert!(diagnostics.is_empty());
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+
+  let decl_symbol = collect
+    .id_pats
+    .iter()
+    .find(|(name, _, is_decl)| name == "x" && *is_decl)
+    .and_then(|(_, sym, _)| *sym)
+    .expect("expected `x` declaration symbol");
+  let use_symbol = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "x")
+    .and_then(|(_, sym)| *sym)
+    .expect("expected `x` to resolve");
+
+  assert_eq!(use_symbol, decl_symbol);
 }
 
 #[test]
