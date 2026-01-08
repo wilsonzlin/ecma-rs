@@ -23,6 +23,14 @@ pub enum VmError {
   #[error("invalid property descriptor patch: cannot mix data and accessor fields")]
   InvalidPropertyDescriptorPatch,
 
+  /// Object property lookup failed.
+  #[error("property not found")]
+  PropertyNotFound,
+
+  /// An operation expected a data property, but an accessor property was encountered instead.
+  #[error("property is not a data property")]
+  PropertyNotData,
+
   /// A JavaScript `throw` value. This is catchable from JS.
   #[error("uncaught exception")]
   Throw(Value),

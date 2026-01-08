@@ -290,6 +290,100 @@ impl Heap {
     }
   }
 
+  fn get_object(&self, obj: GcObject) -> Result<&JsObject, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Object(o) => Ok(o),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  fn get_object_mut(&mut self, obj: GcObject) -> Result<&mut JsObject, VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Object(o) => Ok(o),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Gets an object's `[[Prototype]]`.
+  pub fn object_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
+    Ok(self.get_object(obj)?.prototype)
+  }
+
+  /// Sets an object's `[[Prototype]]`.
+  pub fn object_set_prototype(
+    &mut self,
+    obj: GcObject,
+    prototype: Option<GcObject>,
+  ) -> Result<(), VmError> {
+    self.get_object_mut(obj)?.prototype = prototype;
+    Ok(())
+  }
+
+  /// Gets an own property descriptor from an object.
+  pub fn object_get_own_property(
+    &self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<Option<PropertyDescriptor>, VmError> {
+    let obj = self.get_object(obj)?;
+    for prop in obj.properties.iter() {
+      if self.property_key_eq(&prop.key, key) {
+        return Ok(Some(prop.desc));
+      }
+    }
+    Ok(None)
+  }
+
+  /// Convenience: returns the value of an own data property, if present.
+  pub fn object_get_own_data_property_value(
+    &self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<Option<Value>, VmError> {
+    let Some(desc) = self.object_get_own_property(obj, key)? else {
+      return Ok(None);
+    };
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(Some(value)),
+      PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+    }
+  }
+
+  /// Updates the `value` of an existing own data property.
+  pub fn object_set_existing_data_property_value(
+    &mut self,
+    obj: GcObject,
+    key: &PropertyKey,
+    value: Value,
+  ) -> Result<(), VmError> {
+    // Two-phase borrow to avoid holding `&mut JsObject` while calling back into `&self` for string
+    // comparisons in `property_key_eq`.
+    let idx = {
+      let obj = self.get_object(obj)?;
+      obj
+        .properties
+        .iter()
+        .position(|prop| self.property_key_eq(&prop.key, key))
+    };
+
+    let Some(idx) = idx else {
+      return Err(VmError::PropertyNotFound);
+    };
+
+    let obj = self.get_object_mut(obj)?;
+    let prop = obj
+      .properties
+      .get_mut(idx)
+      .expect("idx came from iterating properties");
+    match &mut prop.desc.kind {
+      PropertyKind::Data { value: slot, .. } => {
+        *slot = value;
+        Ok(())
+      }
+      PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+    }
+  }
+
   /// Implements `Symbol.for`-like behaviour using a deterministic global registry.
   ///
   /// The registry is scanned by the GC, so registered symbols remain live even if they are not
@@ -392,6 +486,14 @@ impl Heap {
     self.slots[idx]
       .value
       .as_ref()
+      .ok_or(VmError::InvalidHandle)
+  }
+
+  fn get_heap_object_mut(&mut self, id: HeapId) -> Result<&mut HeapObject, VmError> {
+    let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
+    self.slots[idx]
+      .value
+      .as_mut()
       .ok_or(VmError::InvalidHandle)
   }
 
@@ -711,12 +813,14 @@ impl Trace for JsSymbol {
 
 #[derive(Debug)]
 struct JsObject {
+  prototype: Option<GcObject>,
   properties: Box<[PropertyEntry]>,
 }
 
 impl JsObject {
   fn new() -> Self {
     Self {
+      prototype: None,
       properties: Box::default(),
     }
   }
@@ -733,6 +837,9 @@ impl JsObject {
 
 impl Trace for JsObject {
   fn trace(&self, tracer: &mut Tracer<'_>) {
+    if let Some(proto) = self.prototype {
+      tracer.trace_value(Value::Object(proto));
+    }
     for prop in self.properties.iter() {
       prop.trace(tracer);
     }
