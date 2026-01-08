@@ -4,6 +4,8 @@ use crate::error::VmError;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -14,6 +16,11 @@ pub struct VmOptions {
   pub default_fuel: Option<u64>,
   pub default_deadline: Option<Duration>,
   pub check_time_every: u32,
+  /// Optional shared interrupt flag to observe for cooperative cancellation.
+  ///
+  /// If provided, the VM will use this flag for its interrupt token so hosts can cancel execution
+  /// by setting the flag to `true`.
+  pub interrupt_flag: Option<Arc<AtomicBool>>,
 }
 
 impl Default for VmOptions {
@@ -23,6 +30,7 @@ impl Default for VmOptions {
       default_fuel: None,
       default_deadline: None,
       check_time_every: 100,
+      interrupt_flag: None,
     }
   }
 }
@@ -69,7 +77,10 @@ pub struct Vm {
 
 impl Vm {
   pub fn new(options: VmOptions) -> Self {
-    let (interrupt, interrupt_handle) = InterruptToken::new();
+    let (interrupt, interrupt_handle) = match &options.interrupt_flag {
+      Some(flag) => InterruptToken::from_shared_flag(flag.clone()),
+      None => InterruptToken::new(),
+    };
     let deadline = options
       .default_deadline
       .and_then(|duration| Instant::now().checked_add(duration));
@@ -141,4 +152,3 @@ impl Vm {
     Ok(())
   }
 }
-

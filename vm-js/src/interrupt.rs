@@ -20,6 +20,20 @@ impl InterruptToken {
     )
   }
 
+  /// Create an interrupt token + handle pair that shares an externally-owned flag.
+  ///
+  /// This is useful for integrating with cancellation/timeout infrastructure that already uses an
+  /// `Arc<AtomicBool>` token, allowing the VM to observe the same flag without additional polling
+  /// glue.
+  pub fn from_shared_flag(interrupted: Arc<AtomicBool>) -> (Self, InterruptHandle) {
+    (
+      Self {
+        interrupted: interrupted.clone(),
+      },
+      InterruptHandle { interrupted },
+    )
+  }
+
   pub fn is_interrupted(&self) -> bool {
     self.interrupted.load(Ordering::Relaxed)
   }
@@ -37,4 +51,3 @@ impl InterruptHandle {
     self.interrupted.store(true, Ordering::Relaxed);
   }
 }
-

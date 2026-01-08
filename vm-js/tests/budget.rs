@@ -1,3 +1,6 @@
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use vm_js::Budget;
@@ -13,6 +16,7 @@ fn fuel_exhaustion_triggers_out_of_fuel_after_exact_tick_count() {
     default_fuel: None,
     default_deadline: None,
     check_time_every: 1,
+    interrupt_flag: None,
   });
 
   vm.set_budget(Budget {
@@ -39,6 +43,7 @@ fn deadline_exhaustion_triggers_deadline_exceeded() {
     default_fuel: None,
     default_deadline: None,
     check_time_every: 1,
+    interrupt_flag: None,
   });
 
   vm.set_budget(Budget {
@@ -61,6 +66,7 @@ fn interrupt_token_triggers_interrupted() {
     default_fuel: None,
     default_deadline: None,
     check_time_every: 1,
+    interrupt_flag: None,
   });
   vm.set_budget(Budget::unlimited(1));
 
@@ -74,3 +80,38 @@ fn interrupt_token_triggers_interrupted() {
   }
 }
 
+#[test]
+fn shared_interrupt_flag_triggers_interrupted() {
+  let flag = Arc::new(AtomicBool::new(false));
+  let mut vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: None,
+    check_time_every: 1,
+    interrupt_flag: Some(flag.clone()),
+  });
+  vm.set_budget(Budget::unlimited(1));
+
+  flag.store(true, Ordering::Relaxed);
+
+  let err = vm.tick().unwrap_err();
+  match err {
+    VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::Interrupted),
+    other => panic!("expected termination, got {other:?}"),
+  }
+}
+
+#[test]
+fn shared_interrupt_flag_is_toggled_by_vm_interrupt_handle() {
+  let flag = Arc::new(AtomicBool::new(false));
+  let vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: None,
+    check_time_every: 1,
+    interrupt_flag: Some(flag.clone()),
+  });
+
+  vm.interrupt_handle().interrupt();
+  assert!(flag.load(Ordering::Relaxed));
+}
