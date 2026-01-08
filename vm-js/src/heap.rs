@@ -322,7 +322,13 @@ impl<'a> Scope<'a> {
     let new_bytes = JsString::heap_size_bytes_for_len(units_len);
     self.heap.ensure_can_allocate(new_bytes)?;
 
-    let units: Vec<u16> = s.encode_utf16().collect();
+    // Allocate the backing buffer fallibly so hostile input cannot abort the
+    // host process on allocator OOM.
+    let mut units: Vec<u16> = Vec::new();
+    units
+      .try_reserve_exact(units_len)
+      .map_err(|_| VmError::OutOfMemory)?;
+    units.extend(s.encode_utf16());
     let js = JsString::from_u16_vec(units);
     debug_assert_eq!(new_bytes, js.heap_size_bytes());
     let obj = HeapObject::String(js);
@@ -334,7 +340,14 @@ impl<'a> Scope<'a> {
     let new_bytes = JsString::heap_size_bytes_for_len(units.len());
     self.heap.ensure_can_allocate(new_bytes)?;
 
-    let js = JsString::from_code_units(units);
+    // Fallible allocation for the backing buffer (avoid process abort on OOM).
+    let mut buf: Vec<u16> = Vec::new();
+    buf
+      .try_reserve_exact(units.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    buf.extend_from_slice(units);
+
+    let js = JsString::from_u16_vec(buf);
     debug_assert_eq!(new_bytes, js.heap_size_bytes());
     let obj = HeapObject::String(js);
     Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))

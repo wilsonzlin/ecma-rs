@@ -49,7 +49,13 @@ impl JsString {
   }
 
   pub(crate) fn heap_size_bytes_for_len(units_len: usize) -> usize {
-    std::mem::size_of::<Self>() + (units_len * 2)
+    // Use checked arithmetic to avoid debug-build panics on hostile (very large)
+    // inputs. If the size overflows `usize`, clamp to `usize::MAX` so the caller
+    // will treat the allocation as impossible (OOM).
+    let units_bytes = units_len.checked_mul(2).unwrap_or(usize::MAX);
+    std::mem::size_of::<Self>()
+      .checked_add(units_bytes)
+      .unwrap_or(usize::MAX)
   }
 }
 
