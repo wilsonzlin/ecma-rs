@@ -45,6 +45,7 @@ Quick sanity check (from `engines/ecma-rs/`):
 
 ```bash
 cargo run -p test262-semantic -- list
+# (or: cargo run -p test262-semantic -- --list)
 ```
 
 Alternatively, you can clone `test262` anywhere and pass `--test262-dir`:

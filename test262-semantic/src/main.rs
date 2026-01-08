@@ -73,6 +73,13 @@ struct RunArgs {
   #[arg(long, value_name = "PATH", default_value = DEFAULT_TEST262_DIR)]
   test262_dir: PathBuf,
 
+  /// Discover tests in the test262 corpus and print how many were found.
+  ///
+  /// This is a cheap corpus-availability check (it does not parse frontmatter
+  /// or expand strict-mode variants).
+  #[arg(long)]
+  list: bool,
+
   /// Built-in curated suite name (e.g. `smoke`); can be passed multiple times.
   #[arg(long, value_name = "NAME")]
   suite: Vec<String>,
@@ -143,14 +150,23 @@ fn try_main() -> Result<ExitCode> {
 fn run_cli(cli: RunArgs) -> Result<ExitCode> {
   let _ = cli.jobs;
 
+  let discovered = discover_tests(&cli.test262_dir)?;
+  let selected = select_tests_from_cli(&discovered, &cli)?;
+  let filter = build_filter(cli.filter.as_deref())?;
+
+  if cli.list {
+    let count = selected
+      .iter()
+      .filter(|test| filter.matches(&test.id))
+      .count();
+    println!("{count}");
+    return Ok(ExitCode::SUCCESS);
+  }
+
   let expectations = match &cli.manifest {
     Some(path) => Expectations::from_path(path)?,
     None => Expectations::empty(),
   };
-
-  let discovered = discover_tests(&cli.test262_dir)?;
-  let selected = select_tests_from_cli(&discovered, &cli)?;
-  let filter = build_filter(cli.filter.as_deref())?;
 
   let mut cases = expand_cases(&selected, &filter)?;
   let total_cases = cases.len();
