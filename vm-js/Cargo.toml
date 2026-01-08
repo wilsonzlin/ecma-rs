@@ -8,3 +8,4 @@ repository.workspace = true
 [dependencies]
 diagnostics = { workspace = true }
 thiserror = { workspace = true }
+parse-js = { workspace = true, features = ["diagnostics"] }

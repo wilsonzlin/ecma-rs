@@ -30,6 +30,7 @@
 //!   embeddings.
 
 mod error;
+mod exec;
 mod function;
 mod handle;
 mod heap;
@@ -47,6 +48,8 @@ mod vm;
 pub use crate::error::Termination;
 pub use crate::error::TerminationReason;
 pub use crate::error::VmError;
+pub use crate::exec::Completion;
+pub use crate::exec::JsRuntime;
 pub use crate::function::NativeConstructId;
 pub use crate::function::NativeFunctionId;
 pub use crate::handle::GcObject;

@@ -203,6 +203,32 @@ impl Heap {
     RootId(idx as u32)
   }
 
+  /// Returns the current value of a persistent root.
+  pub fn get_root(&self, id: RootId) -> Option<Value> {
+    self
+      .persistent_roots
+      .get(id.0 as usize)
+      .and_then(|slot| *slot)
+  }
+
+  /// Updates a persistent root's value.
+  ///
+  /// Panics only in debug builds if `id` is invalid.
+  pub fn set_root(&mut self, id: RootId, value: Value) {
+    // Root sets should not contain stale handles; detect issues early in debug builds.
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+
+    let idx = id.0 as usize;
+    debug_assert!(idx < self.persistent_roots.len(), "invalid RootId");
+    if idx >= self.persistent_roots.len() {
+      return;
+    }
+    debug_assert!(self.persistent_roots[idx].is_some(), "RootId already removed");
+    if self.persistent_roots[idx].is_some() {
+      self.persistent_roots[idx] = Some(value);
+    }
+  }
+
   /// Removes a persistent root previously created by [`Heap::add_root`].
   pub fn remove_root(&mut self, id: RootId) {
     let idx = id.0 as usize;
