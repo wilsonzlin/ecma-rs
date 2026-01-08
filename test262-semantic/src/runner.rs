@@ -1,7 +1,7 @@
 use crate::discover::{read_utf8_file, DiscoveredTest};
 use crate::executor::{ExecError, Executor, JsError};
 use crate::frontmatter::{parse_test_source, Frontmatter};
-use crate::harness::assemble_source;
+use crate::harness::{assemble_source_with_mode, HarnessMode};
 use crate::report::{
   ExpectationOutcome, ExpectedOutcome, MismatchSummary, Summary, TestOutcome, TestResult, Variant,
 };
@@ -141,6 +141,7 @@ pub fn apply_shard(cases: Vec<TestCase>, shard: Option<Shard>) -> Result<Vec<Tes
 
 pub fn run_cases(
   test262_dir: &Path,
+  harness_mode: HarnessMode,
   cases: &[TestCase],
   expectations: &Expectations,
   executor: &dyn Executor,
@@ -153,6 +154,7 @@ pub fn run_cases(
       let expectation = expectations.lookup(&case.id);
       run_single_case(
         test262_dir,
+        harness_mode,
         case,
         expectation,
         executor,
@@ -165,6 +167,7 @@ pub fn run_cases(
 
 fn run_single_case(
   test262_dir: &Path,
+  harness_mode: HarnessMode,
   case: &TestCase,
   expectation: AppliedExpectation,
   executor: &dyn Executor,
@@ -188,7 +191,13 @@ fn run_single_case(
     };
   }
 
-  let source = match assemble_source(test262_dir, &case.metadata, case.variant, &case.body) {
+  let source = match assemble_source_with_mode(
+    test262_dir,
+    &case.metadata,
+    case.variant,
+    &case.body,
+    harness_mode,
+  ) {
     Ok(src) => src,
     Err(err) => {
       let mismatched = true;

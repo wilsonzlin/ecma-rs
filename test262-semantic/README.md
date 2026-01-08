@@ -112,6 +112,28 @@ unless `flags` contains `onlyStrict` or `noStrict`.
 
 If `flags` contains `module`, the test runs as a single `module` case.
 
+## Harness composition (`--harness`)
+
+By default, the runner assembles each test as:
+
+- `harness/assert.js`
+- `harness/sta.js`
+- any explicit `includes: [...]` from the test262 YAML frontmatter
+
+all **deduplicated** (for example if a test explicitly lists `assert.js`).
+
+If you are executing tests in a JS VM/host that provides the harness builtins
+itself, pass:
+
+```bash
+cargo run -p test262-semantic -- --harness host
+```
+
+In `host` mode the runner does **not** automatically prepend `assert.js`/`sta.js`
+(but it still inlines any explicit `includes` from YAML frontmatter). The
+executor/host is expected to provide `assert`, `Test262Error`, and any other
+globals normally defined by the default harness.
+
 ## JSON reports
 
 Use `--json` to write the versioned report to stdout, and `--report-path` to
