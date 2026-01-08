@@ -59,6 +59,8 @@ pub use crate::interrupt::InterruptHandle;
 pub use crate::interrupt::InterruptToken;
 pub use crate::job_queue::JobQueue;
 pub use crate::job_queue::MicrotaskJob;
+pub use crate::job_queue::PromiseHandle;
+pub use crate::job_queue::PromiseRejectionOperation;
 pub use crate::property::PropertyDescriptor;
 pub use crate::property::PropertyDescriptorPatch;
 pub use crate::property::PropertyKey;
