@@ -319,6 +319,19 @@ impl Heap {
     Ok(())
   }
 
+  pub(crate) fn object_is_extensible(&self, obj: GcObject) -> Result<bool, VmError> {
+    Ok(self.get_object(obj)?.extensible)
+  }
+
+  pub(crate) fn object_set_extensible(
+    &mut self,
+    obj: GcObject,
+    extensible: bool,
+  ) -> Result<(), VmError> {
+    self.get_object_mut(obj)?.extensible = extensible;
+    Ok(())
+  }
+
   /// Gets an own property descriptor from an object.
   pub fn object_get_own_property(
     &self,
@@ -332,6 +345,86 @@ impl Heap {
       }
     }
     Ok(None)
+  }
+
+  pub(crate) fn object_keys_in_insertion_order(
+    &self,
+    obj: GcObject,
+  ) -> Result<Vec<PropertyKey>, VmError> {
+    let obj = self.get_object(obj)?;
+    Ok(obj.properties.iter().map(|p| p.key).collect())
+  }
+
+  pub(crate) fn object_delete_own_property(
+    &mut self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<bool, VmError> {
+    let slot_idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
+
+    // Two-phase borrow to avoid holding `&mut JsObject` while calling back into `&self` for string
+    // comparisons in `property_key_eq`.
+    let idx = {
+      let obj = self.get_object(obj)?;
+      obj
+        .properties
+        .iter()
+        .position(|prop| self.property_key_eq(&prop.key, key))
+    };
+
+    let Some(idx) = idx else {
+      return Ok(false);
+    };
+
+    let property_count = {
+      let slot = &self.slots[slot_idx];
+      let Some(obj) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      let HeapObject::Object(obj) = obj else {
+        return Err(VmError::InvalidHandle);
+      };
+      obj.properties.len()
+    };
+
+    debug_assert_eq!(
+      property_count,
+      self.get_object(obj)?.properties.len(),
+      "property count should be stable across the two-phase borrow"
+    );
+
+    let new_property_count = property_count.saturating_sub(1);
+    let new_bytes = JsObject::heap_size_bytes_for_property_count(new_property_count);
+
+    // Allocate the new property table fallibly so hostile inputs cannot abort the host process
+    // on allocator OOM (even though this is a net-shrinking operation).
+    let mut buf: Vec<PropertyEntry> = Vec::new();
+    buf
+      .try_reserve_exact(new_property_count)
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    {
+      let slot = &self.slots[slot_idx];
+      let Some(HeapObject::Object(obj)) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      buf.extend_from_slice(&obj.properties[..idx]);
+      buf.extend_from_slice(&obj.properties[idx + 1..]);
+    }
+
+    let properties = buf.into_boxed_slice();
+    let Some(HeapObject::Object(obj)) = self.slots[slot_idx].value.as_mut() else {
+      return Err(VmError::InvalidHandle);
+    };
+    obj.properties = properties;
+
+    // This is a net-shrinking operation, so no `ensure_can_allocate` call is needed.
+    self.update_slot_bytes(slot_idx, new_bytes);
+
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+
+    Ok(true)
   }
 
   /// Convenience: returns the value of an own data property, if present.
@@ -932,6 +1025,7 @@ impl Trace for JsSymbol {
 #[derive(Debug)]
 struct JsObject {
   prototype: Option<GcObject>,
+  extensible: bool,
   properties: Box<[PropertyEntry]>,
 }
 
@@ -939,6 +1033,7 @@ impl JsObject {
   fn new() -> Self {
     Self {
       prototype: None,
+      extensible: true,
       properties: Box::default(),
     }
   }

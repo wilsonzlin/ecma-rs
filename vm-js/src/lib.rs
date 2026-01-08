@@ -37,6 +37,7 @@ mod handle;
 mod heap;
 mod intrinsics;
 mod interrupt;
+mod object_ops;
 mod jobs;
 mod job_queue;
 mod native;

@@ -37,6 +37,16 @@ pub struct PropertyDescriptor {
   pub kind: PropertyKind,
 }
 
+impl PropertyDescriptor {
+  pub fn is_data_descriptor(&self) -> bool {
+    matches!(self.kind, PropertyKind::Data { .. })
+  }
+
+  pub fn is_accessor_descriptor(&self) -> bool {
+    matches!(self.kind, PropertyKind::Accessor { .. })
+  }
+}
+
 impl Trace for PropertyDescriptor {
   fn trace(&self, tracer: &mut Tracer<'_>) {
     self.kind.trace(tracer);
@@ -74,6 +84,27 @@ pub struct PropertyDescriptorPatch {
 }
 
 impl PropertyDescriptorPatch {
+  pub fn is_empty(&self) -> bool {
+    self.enumerable.is_none()
+      && self.configurable.is_none()
+      && self.value.is_none()
+      && self.writable.is_none()
+      && self.get.is_none()
+      && self.set.is_none()
+  }
+
+  pub fn is_data_descriptor(&self) -> bool {
+    self.value.is_some() || self.writable.is_some()
+  }
+
+  pub fn is_accessor_descriptor(&self) -> bool {
+    self.get.is_some() || self.set.is_some()
+  }
+
+  pub fn is_generic_descriptor(&self) -> bool {
+    !self.is_data_descriptor() && !self.is_accessor_descriptor()
+  }
+
   /// Validates that this patch does not mix data and accessor descriptor fields.
   ///
   /// Per ECMAScript, a descriptor cannot be both a Data Descriptor and an Accessor Descriptor.
