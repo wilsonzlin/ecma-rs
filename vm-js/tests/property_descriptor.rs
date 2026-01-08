@@ -68,6 +68,10 @@ fn property_descriptor_tracing_keeps_referenced_objects_alive() -> Result<(), Vm
     // An unrelated object that should be collected.
     dead = scope.alloc_object()?;
 
+    // Property key that should be kept alive by object tracing.
+    let key_str = scope.alloc_string("x")?;
+    let key = PropertyKey::from_string(key_str);
+
     let desc = PropertyDescriptor {
       enumerable: true,
       configurable: true,
@@ -77,14 +81,13 @@ fn property_descriptor_tracing_keeps_referenced_objects_alive() -> Result<(), Vm
       },
     };
 
-    owner = scope.alloc_object()?;
-    let key = PropertyKey::from_string(scope.alloc_string("x")?);
-    scope.define_property(owner, key, desc)?;
+    owner = scope.alloc_object_with_properties(None, &[(key, desc)])?;
     scope.push_root(Value::Object(owner));
 
     scope.heap_mut().collect_garbage();
 
     assert!(scope.heap().is_valid_object(owner));
+    assert!(scope.heap().is_valid_string(key_str));
     assert!(
       scope.heap().is_valid_object(child),
       "child should survive via descriptor"

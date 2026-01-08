@@ -939,6 +939,48 @@ impl<'a> Scope<'a> {
     Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 
+  /// Allocates an ordinary object with the provided `[[Prototype]]` and own properties.
+  pub fn alloc_object_with_properties(
+    &mut self,
+    proto: Option<GcObject>,
+    props: &[(PropertyKey, PropertyDescriptor)],
+  ) -> Result<GcObject, VmError> {
+    // Root the prototype and all keys/values during allocation in case `ensure_can_allocate`
+    // triggers a GC cycle.
+    //
+    // Note: these roots are temporary; once the object is allocated, it will retain handles and
+    // trace them.
+    let mut scope = self.reborrow();
+    if let Some(proto) = proto {
+      scope.push_root(Value::Object(proto));
+    }
+    for (key, desc) in props {
+      match key {
+        PropertyKey::String(s) => {
+          scope.push_root(Value::String(*s));
+        }
+        PropertyKey::Symbol(s) => {
+          scope.push_root(Value::Symbol(*s));
+        }
+      }
+      match desc.kind {
+        PropertyKind::Data { value, .. } => {
+          scope.push_root(value);
+        }
+        PropertyKind::Accessor { get, set } => {
+          scope.push_root(get);
+          scope.push_root(set);
+        }
+      }
+    }
+
+    let new_bytes = JsObject::heap_size_bytes_for_property_count(props.len());
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Object(JsObject::from_property_slice(proto, props)?);
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
   /// Defines (adds or replaces) an own property on `obj`.
   pub fn define_property(
     &mut self,
@@ -1068,6 +1110,27 @@ impl JsObject {
       extensible: true,
       properties: Box::default(),
     }
+  }
+
+  fn from_property_slice(
+    prototype: Option<GcObject>,
+    props: &[(PropertyKey, PropertyDescriptor)],
+  ) -> Result<Self, VmError> {
+    // Avoid process abort on allocator OOM: allocate the property buffer fallibly.
+    let mut buf: Vec<PropertyEntry> = Vec::new();
+    buf
+      .try_reserve_exact(props.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    buf.extend(props.iter().map(|(key, desc)| PropertyEntry {
+      key: *key,
+      desc: *desc,
+    }));
+
+    Ok(Self {
+      prototype,
+      extensible: true,
+      properties: buf.into_boxed_slice(),
+    })
   }
 
   fn heap_size_bytes_for_property_count(count: usize) -> usize {
