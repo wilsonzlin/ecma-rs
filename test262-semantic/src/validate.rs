@@ -553,4 +553,42 @@ status = "xfail"
       report.errors
     );
   }
+
+  #[test]
+  fn manifest_entries_with_reason_fields_parse_and_count_matches() {
+    let (dir, discovered, discovered_ids) = discovered_fixture();
+    let manifest_path = dir.path().join("manifest.toml");
+    fs::write(
+      &manifest_path,
+      r#"
+[[expectations]]
+glob = "language/*.js"
+status = "xfail"
+reason = "example"
+tracking_issue = "https://example.invalid/issue/1"
+"#,
+    )
+    .unwrap();
+
+    let manifest = RawManifest::from_path(&manifest_path).expect("manifest parsed");
+    let report = validate_manifest(&manifest, &discovered, &discovered_ids, true);
+    assert!(
+      report.errors.is_empty(),
+      "expected no errors, got: {:#?}",
+      report.errors
+    );
+    assert!(
+      report.warnings.is_empty(),
+      "expected no warnings, got: {:#?}",
+      report.warnings
+    );
+    assert!(
+      report
+        .notes
+        .iter()
+        .any(|note| note.contains("matched 2")),
+      "expected match count note, got: {:#?}",
+      report.notes
+    );
+  }
 }
