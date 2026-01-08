@@ -141,6 +141,36 @@ impl Vm {
     NativeConstructId(idx)
   }
 
+  fn dispatch_native_call(
+    &mut self,
+    call_id: NativeFunctionId,
+    scope: &mut Scope<'_>,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let f = self
+      .native_calls
+      .get(call_id.0 as usize)
+      .copied()
+      .ok_or(VmError::Unimplemented("unknown native function id"))?;
+    f(self, scope, this, args)
+  }
+
+  fn dispatch_native_construct(
+    &mut self,
+    construct_id: NativeConstructId,
+    scope: &mut Scope<'_>,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let construct = self
+      .native_constructs
+      .get(construct_id.0 as usize)
+      .copied()
+      .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
+    construct(self, scope, args, new_target)
+  }
+
   pub fn push_frame(&mut self, frame: StackFrame) -> Result<(), VmError> {
     if self.stack.len() >= self.options.max_stack_depth {
       return Err(self.terminate(TerminationReason::StackOverflow));
@@ -204,25 +234,37 @@ impl Vm {
     args: &[Value],
   ) -> Result<Value, VmError> {
     let mut scope = scope.reborrow();
-    scope.push_root(callee);
-    scope.push_root(this);
-    for arg in args {
-      scope.push_root(*arg);
+    let callee = scope.push_root(callee);
+    let this = scope.push_root(this);
+    for &arg in args {
+      scope.push_root(arg);
     }
 
     let callee_obj = match callee {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotCallable),
     };
-    let call_id = { scope.heap().get_function_call_id(callee_obj)? };
-    let f = self
-      .native_calls
-      .get(call_id.0 as usize)
-      .copied()
-      .ok_or(VmError::Unimplemented("unknown native function id"))?;
 
-    let result = f(self, &mut scope, this, args)?;
-    Ok(result)
+    let call_id = scope.heap().get_function_call_id(callee_obj)?;
+    let function_name = {
+      let name = scope
+        .heap()
+        .get_string(scope.heap().get_function_name(callee_obj)?)?
+        .to_utf8_lossy();
+      Some(Arc::<str>::from(name))
+    };
+    let frame = StackFrame {
+      function: function_name,
+      source: Arc::<str>::from("<native>"),
+      line: 0,
+      col: 0,
+    };
+
+    self.push_frame(frame)?;
+    let _guard = FrameGuard::new(self);
+    self.tick()?;
+
+    self.dispatch_native_call(call_id, &mut scope, this, args)
   }
 
   /// Constructs `callee` with the provided arguments and `new_target`.
@@ -243,25 +285,54 @@ impl Vm {
     new_target: Value,
   ) -> Result<Value, VmError> {
     let mut scope = scope.reborrow();
-    scope.push_root(callee);
-    scope.push_root(new_target);
-    for arg in args {
-      scope.push_root(*arg);
+    let callee = scope.push_root(callee);
+    let new_target = scope.push_root(new_target);
+    for &arg in args {
+      scope.push_root(arg);
     }
 
     let callee_obj = match callee {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotConstructable),
     };
-    let construct_id = { scope.heap().get_function_construct_id(callee_obj)? }
-      .ok_or(VmError::NotConstructable)?;
-    let construct = self
-      .native_constructs
-      .get(construct_id.0 as usize)
-      .copied()
-      .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
 
-    let result = construct(self, &mut scope, args, new_target)?;
-    Ok(result)
+    let Some(construct_id) = scope.heap().get_function_construct_id(callee_obj)? else {
+      return Err(VmError::NotConstructable);
+    };
+    let function_name = {
+      let name = scope
+        .heap()
+        .get_string(scope.heap().get_function_name(callee_obj)?)?
+        .to_utf8_lossy();
+      Some(Arc::<str>::from(name))
+    };
+    let frame = StackFrame {
+      function: function_name,
+      source: Arc::<str>::from("<native>"),
+      line: 0,
+      col: 0,
+    };
+
+    self.push_frame(frame)?;
+    let _guard = FrameGuard::new(self);
+    self.tick()?;
+
+    self.dispatch_native_construct(construct_id, &mut scope, args, new_target)
+  }
+}
+
+struct FrameGuard {
+  vm: *mut Vm,
+}
+
+impl FrameGuard {
+  fn new(vm: &mut Vm) -> Self {
+    Self { vm: vm as *mut Vm }
+  }
+}
+
+impl Drop for FrameGuard {
+  fn drop(&mut self) {
+    unsafe { (&mut *self.vm).pop_frame() };
   }
 }

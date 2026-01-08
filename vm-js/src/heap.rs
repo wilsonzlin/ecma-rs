@@ -260,6 +260,29 @@ impl Heap {
     matches!(self.get_heap_object(sym.0), Ok(HeapObject::Symbol(_)))
   }
 
+  /// Returns `true` if `value` is callable (i.e. has an ECMAScript `[[Call]]` internal method).
+  pub fn is_callable(&self, value: Value) -> Result<bool, VmError> {
+    match value {
+      Value::Object(obj) => match self.get_heap_object(obj.0)? {
+        HeapObject::Function(_) => Ok(true),
+        _ => Ok(false),
+      },
+      _ => Ok(false),
+    }
+  }
+
+  /// Returns `true` if `value` is a constructor (i.e. has an ECMAScript `[[Construct]]` internal
+  /// method).
+  pub fn is_constructor(&self, value: Value) -> Result<bool, VmError> {
+    match value {
+      Value::Object(obj) => match self.get_heap_object(obj.0)? {
+        HeapObject::Function(f) => Ok(f.construct.is_some()),
+        _ => Ok(false),
+      },
+      _ => Ok(false),
+    }
+  }
+
   /// Gets the string contents for `s`.
   pub fn get_string(&self, s: GcString) -> Result<&JsString, VmError> {
     match self.get_heap_object(s.0)? {
@@ -752,8 +775,16 @@ impl Heap {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => match f.call {
         CallHandler::Native(id) => Ok(id),
+        CallHandler::EcmaScript => Err(VmError::Unimplemented("ECMAScript [[Call]]")),
       },
       _ => Err(VmError::NotCallable),
+    }
+  }
+
+  pub(crate) fn get_function_name(&self, func: GcObject) -> Result<GcString, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.name),
+      _ => Err(VmError::InvalidHandle),
     }
   }
 
@@ -764,6 +795,7 @@ impl Heap {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => match f.construct {
         Some(ConstructHandler::Native(id)) => Ok(Some(id)),
+        Some(ConstructHandler::EcmaScript) => Err(VmError::Unimplemented("ECMAScript [[Construct]]")),
         None => Ok(None),
       },
       _ => Err(VmError::NotConstructable),

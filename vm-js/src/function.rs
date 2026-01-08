@@ -19,11 +19,15 @@ pub struct NativeConstructId(pub u32);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CallHandler {
   Native(NativeFunctionId),
+  #[allow(dead_code)]
+  EcmaScript,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConstructHandler {
   Native(NativeConstructId),
+  #[allow(dead_code)]
+  EcmaScript,
 }
 
 /// A JavaScript function object.
