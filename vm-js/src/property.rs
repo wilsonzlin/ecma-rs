@@ -168,13 +168,56 @@ impl Heap {
     }
   }
 
-  /// Placeholder for ECMAScript `ToString`.
+  /// Minimal ECMAScript `ToString`.
   ///
-  /// Full `ToString` / `ToPropertyKey` semantics will be implemented once the interpreter and
-  /// built-ins exist.
-  pub fn to_string(&mut self, _value: Value) -> Result<GcString, VmError> {
-    Err(VmError::Unimplemented(
-      "ToString / ToPropertyKey requires interpreter + built-ins",
-    ))
+  /// This is intentionally small (sufficient for early interpreter scaffolding):
+  /// - Objects stringify to `"[object Object]"` (no `ToPrimitive` / user `toString` invocation yet).
+  pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
+    // Fast path: no allocation.
+    if let Value::String(s) = value {
+      return Ok(s);
+    }
+
+    // Allocate via a scope so we can root `value` across a GC triggered by the string allocation.
+    let mut scope = self.scope();
+    scope.push_root(value);
+
+    match value {
+      Value::Undefined => scope.alloc_string("undefined"),
+      Value::Null => scope.alloc_string("null"),
+      Value::Bool(true) => scope.alloc_string("true"),
+      Value::Bool(false) => scope.alloc_string("false"),
+      Value::Number(n) => {
+        if n.is_nan() {
+          scope.alloc_string("NaN")
+        } else if n.is_infinite() {
+          if n.is_sign_negative() {
+            scope.alloc_string("-Infinity")
+          } else {
+            scope.alloc_string("Infinity")
+          }
+        } else if n == 0.0 {
+          // `ToString(-0)` is `"0"` in ECMAScript.
+          scope.alloc_string("0")
+        } else {
+          let mut buf = ryu::Buffer::new();
+          scope.alloc_string(buf.format(n))
+        }
+      }
+      Value::String(_) => unreachable!(),
+      Value::Symbol(_) => Err(VmError::Unimplemented("ToString(Symbol) requires Symbol.prototype")),
+      Value::Object(_) => scope.alloc_string("[object Object]"),
+    }
+  }
+
+  /// Minimal ECMAScript `ToBoolean`.
+  pub fn to_boolean(&self, value: Value) -> Result<bool, VmError> {
+    Ok(match value {
+      Value::Undefined | Value::Null => false,
+      Value::Bool(b) => b,
+      Value::Number(n) => n != 0.0 && !n.is_nan(),
+      Value::String(s) => !self.get_string(s)?.as_code_units().is_empty(),
+      Value::Symbol(_) | Value::Object(_) => true,
+    })
   }
 }

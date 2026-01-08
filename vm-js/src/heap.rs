@@ -740,7 +740,6 @@ impl Heap {
     let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
     self.slots[idx].value.as_mut().ok_or(VmError::InvalidHandle)
   }
-
   fn validate(&self, id: HeapId) -> Option<usize> {
     let idx = id.index() as usize;
     let slot = self.slots.get(idx)?;
@@ -980,7 +979,7 @@ impl<'a> Scope<'a> {
     let new_bytes = JsObject::heap_size_bytes_for_property_count(0);
     self.heap.ensure_can_allocate(new_bytes)?;
 
-    let obj = HeapObject::Object(JsObject::new());
+    let obj = HeapObject::Object(JsObject::new(None));
     Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 
@@ -1024,6 +1023,14 @@ impl<'a> Scope<'a> {
 
     let obj = HeapObject::Object(JsObject::from_property_slice(proto, props)?);
     Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  /// Allocates an empty JavaScript object on the heap with an explicit internal prototype.
+  pub fn alloc_object_with_prototype(
+    &mut self,
+    prototype: Option<GcObject>,
+  ) -> Result<GcObject, VmError> {
+    self.alloc_object_with_properties(prototype, &[])
   }
 
   /// Defines (adds or replaces) an own property on `obj`.
@@ -1154,9 +1161,9 @@ struct JsObject {
 }
 
 impl JsObject {
-  fn new() -> Self {
+  fn new(prototype: Option<GcObject>) -> Self {
     Self {
-      prototype: None,
+      prototype,
       extensible: true,
       properties: Box::default(),
     }

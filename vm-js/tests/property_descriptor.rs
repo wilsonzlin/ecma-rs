@@ -53,7 +53,7 @@ fn property_descriptor_patch_validation_accepts_data_or_accessor_only() {
 }
 
 #[test]
-fn property_descriptor_tracing_keeps_referenced_objects_alive() -> Result<(), VmError> {
+fn object_property_tracing_keeps_referenced_objects_alive() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
   let child;
@@ -90,7 +90,7 @@ fn property_descriptor_tracing_keeps_referenced_objects_alive() -> Result<(), Vm
     assert!(scope.heap().is_valid_string(key_str));
     assert!(
       scope.heap().is_valid_object(child),
-      "child should survive via descriptor"
+      "child should survive via property"
     );
     assert!(!scope.heap().is_valid_object(dead), "dead should be collected");
   }
