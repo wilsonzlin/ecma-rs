@@ -30,6 +30,7 @@
 //!   embeddings.
 
 mod error;
+mod function;
 mod handle;
 mod heap;
 mod intrinsics;
@@ -46,6 +47,8 @@ mod vm;
 pub use crate::error::Termination;
 pub use crate::error::TerminationReason;
 pub use crate::error::VmError;
+pub use crate::function::NativeConstructId;
+pub use crate::function::NativeFunctionId;
 pub use crate::handle::GcObject;
 pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;

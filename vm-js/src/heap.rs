@@ -1,3 +1,4 @@
+use crate::function::{JsFunction, NativeConstructId, NativeFunctionId};
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
@@ -217,7 +218,10 @@ impl Heap {
 
   /// Returns `true` if `obj` currently points to a live object allocation.
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
-    matches!(self.get_heap_object(obj.0), Ok(HeapObject::Object(_)))
+    matches!(
+      self.get_heap_object(obj.0),
+      Ok(HeapObject::Object(_)) | Ok(HeapObject::Function(_))
+    )
   }
 
   /// Returns `true` if `s` currently points to a live string allocation.
@@ -607,6 +611,26 @@ impl<'a> Scope<'a> {
 
     scope.heap.define_property(obj, key, desc)
   }
+
+  /// Allocates a native JavaScript function object on the heap.
+  pub fn alloc_native_function(
+    &mut self,
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::String(name));
+
+    let func = JsFunction::new_native(call, construct, name, length);
+    let new_bytes = func.heap_size_bytes();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Function(func);
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
 }
 
 #[derive(Debug)]
@@ -631,6 +655,7 @@ enum HeapObject {
   String(JsString),
   Symbol(JsSymbol),
   Object(JsObject),
+  Function(JsFunction),
 }
 
 impl Trace for HeapObject {
@@ -639,6 +664,7 @@ impl Trace for HeapObject {
       HeapObject::String(s) => s.trace(tracer),
       HeapObject::Symbol(s) => s.trace(tracer),
       HeapObject::Object(o) => o.trace(tracer),
+      HeapObject::Function(f) => f.trace(tracer),
     }
   }
 }
