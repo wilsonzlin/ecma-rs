@@ -1,5 +1,23 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, RootId, Scope, Value, VmError};
+use crate::{GcObject, GcSymbol, RootId, Scope, Value, VmError};
+
+/// ECMAScript well-known symbols (ECMA-262 "Well-known Symbols" table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct WellKnownSymbols {
+  pub async_iterator: GcSymbol,
+  pub has_instance: GcSymbol,
+  pub is_concat_spreadable: GcSymbol,
+  pub iterator: GcSymbol,
+  pub match_: GcSymbol,
+  pub match_all: GcSymbol,
+  pub replace: GcSymbol,
+  pub search: GcSymbol,
+  pub species: GcSymbol,
+  pub split: GcSymbol,
+  pub to_primitive: GcSymbol,
+  pub to_string_tag: GcSymbol,
+  pub unscopables: GcSymbol,
+}
 
 /// The set of ECMAScript intrinsics for a realm.
 ///
@@ -8,6 +26,7 @@ use crate::{GcObject, RootId, Scope, Value, VmError};
 /// graph.
 #[derive(Debug, Clone, Copy)]
 pub struct Intrinsics {
+  well_known_symbols: WellKnownSymbols,
   object_prototype: GcObject,
   function_prototype: GcObject,
   array_prototype: GcObject,
@@ -50,6 +69,17 @@ fn alloc_rooted_object(scope: &mut Scope<'_>, roots: &mut Vec<RootId>) -> Result
   let obj = scope.alloc_object()?;
   roots.push(scope.heap_mut().add_root(Value::Object(obj)));
   Ok(obj)
+}
+
+fn alloc_rooted_symbol(
+  scope: &mut Scope<'_>,
+  roots: &mut Vec<RootId>,
+  description: &str,
+) -> Result<GcSymbol, VmError> {
+  let desc_string = scope.alloc_string(description)?;
+  let sym = scope.new_symbol(Some(desc_string))?;
+  roots.push(scope.heap_mut().add_root(Value::Symbol(sym)));
+  Ok(sym)
 }
 
 fn init_native_error(
@@ -113,6 +143,8 @@ fn init_native_error(
 
 impl Intrinsics {
   pub(crate) fn init(scope: &mut Scope<'_>, roots: &mut Vec<RootId>) -> Result<Self, VmError> {
+    let well_known_symbols = WellKnownSymbols::init(scope, roots)?;
+
     // --- Base prototypes ---
     let object_prototype = alloc_rooted_object(scope, roots)?;
 
@@ -226,8 +258,8 @@ impl Intrinsics {
       "AggregateError",
       2.0,
     )?;
-
     Ok(Self {
+      well_known_symbols,
       object_prototype,
       function_prototype,
       array_prototype,
@@ -250,6 +282,9 @@ impl Intrinsics {
     })
   }
 
+  pub fn well_known_symbols(&self) -> &WellKnownSymbols {
+    &self.well_known_symbols
+  }
   pub fn object_prototype(&self) -> GcObject {
     self.object_prototype
   }
@@ -327,3 +362,22 @@ impl Intrinsics {
   }
 }
 
+impl WellKnownSymbols {
+  fn init(scope: &mut Scope<'_>, roots: &mut Vec<RootId>) -> Result<Self, VmError> {
+    Ok(Self {
+      async_iterator: alloc_rooted_symbol(scope, roots, "Symbol.asyncIterator")?,
+      has_instance: alloc_rooted_symbol(scope, roots, "Symbol.hasInstance")?,
+      is_concat_spreadable: alloc_rooted_symbol(scope, roots, "Symbol.isConcatSpreadable")?,
+      iterator: alloc_rooted_symbol(scope, roots, "Symbol.iterator")?,
+      match_: alloc_rooted_symbol(scope, roots, "Symbol.match")?,
+      match_all: alloc_rooted_symbol(scope, roots, "Symbol.matchAll")?,
+      replace: alloc_rooted_symbol(scope, roots, "Symbol.replace")?,
+      search: alloc_rooted_symbol(scope, roots, "Symbol.search")?,
+      species: alloc_rooted_symbol(scope, roots, "Symbol.species")?,
+      split: alloc_rooted_symbol(scope, roots, "Symbol.split")?,
+      to_primitive: alloc_rooted_symbol(scope, roots, "Symbol.toPrimitive")?,
+      to_string_tag: alloc_rooted_symbol(scope, roots, "Symbol.toStringTag")?,
+      unscopables: alloc_rooted_symbol(scope, roots, "Symbol.unscopables")?,
+    })
+  }
+}

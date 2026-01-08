@@ -63,6 +63,7 @@ pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
 pub use crate::heap::Scope;
 pub use crate::intrinsics::Intrinsics;
+pub use crate::intrinsics::WellKnownSymbols;
 pub use crate::interrupt::InterruptHandle;
 pub use crate::interrupt::InterruptToken;
 pub use crate::jobs::Job;

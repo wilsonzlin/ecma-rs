@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Heap, Intrinsics, RootId, Value, VmError};
+use crate::{GcObject, Heap, Intrinsics, RootId, Value, VmError, WellKnownSymbols};
 
 /// An ECMAScript realm: global object + intrinsics.
 ///
@@ -33,6 +33,7 @@ impl Realm {
 
     let mut scope = heap.scope();
     let global_object = scope.alloc_object()?;
+    scope.push_root(Value::Object(global_object));
     roots.push(scope.heap_mut().add_root(Value::Object(global_object)));
 
     let intrinsics = match Intrinsics::init(&mut scope, &mut roots) {
@@ -140,6 +141,10 @@ impl Realm {
     &self.intrinsics
   }
 
+  pub fn well_known_symbols(&self) -> &WellKnownSymbols {
+    self.intrinsics.well_known_symbols()
+  }
+
   /// Unregisters all realm roots from the heap.
   ///
   /// # Safety contract
@@ -158,6 +163,11 @@ impl Realm {
       heap.remove_root(root);
     }
   }
+
+  /// Alias for [`Realm::teardown`].
+  pub fn remove_roots(&mut self, heap: &mut Heap) {
+    self.teardown(heap);
+  }
 }
 
 impl Drop for Realm {
@@ -168,4 +178,3 @@ impl Drop for Realm {
     );
   }
 }
-
