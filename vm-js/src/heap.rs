@@ -405,6 +405,67 @@ impl Heap {
     Ok(sym)
   }
 
+  /// Gets an object's own property descriptor.
+  ///
+  /// This does not currently walk the prototype chain.
+  pub fn get_own_property(
+    &self,
+    obj: GcObject,
+    key: PropertyKey,
+  ) -> Result<Option<PropertyDescriptor>, VmError> {
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Object(obj) => {
+        for prop in obj.properties.iter() {
+          if self.property_key_eq(&prop.key, &key) {
+            return Ok(Some(prop.desc));
+          }
+        }
+        Ok(None)
+      }
+      HeapObject::Function(func) => {
+        for prop in func.properties.iter() {
+          if self.property_key_eq(&prop.key, &key) {
+            return Ok(Some(prop.desc));
+          }
+        }
+        Ok(None)
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_name_metadata(
+    &mut self,
+    func: GcObject,
+    name: GcString,
+  ) -> Result<(), VmError> {
+    let idx = self.validate(func.0).ok_or(VmError::InvalidHandle)?;
+    let Some(obj) = self.slots[idx].value.as_mut() else {
+      return Err(VmError::InvalidHandle);
+    };
+    let HeapObject::Function(func) = obj else {
+      return Err(VmError::InvalidHandle);
+    };
+    func.name = name;
+    Ok(())
+  }
+
+  pub(crate) fn set_function_length_metadata(
+    &mut self,
+    func: GcObject,
+    length: u32,
+  ) -> Result<(), VmError> {
+    let idx = self.validate(func.0).ok_or(VmError::InvalidHandle)?;
+    let Some(obj) = self.slots[idx].value.as_mut() else {
+      return Err(VmError::InvalidHandle);
+    };
+    let HeapObject::Function(func) = obj else {
+      return Err(VmError::InvalidHandle);
+    };
+    func.length = length;
+    Ok(())
+  }
+
   fn define_property(
     &mut self,
     obj: GcObject,
@@ -413,37 +474,56 @@ impl Heap {
   ) -> Result<(), VmError> {
     let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
 
-    let (property_count, old_bytes, existing_idx) = {
+    let (is_function, bound_args_len, property_count, old_bytes, existing_idx) = {
       let slot = &self.slots[idx];
       let Some(obj) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
       };
-      let HeapObject::Object(obj) = obj else {
-        return Err(VmError::InvalidHandle);
-      };
-
-      let existing_idx = obj
-        .properties
-        .iter()
-        .position(|entry| self.property_key_eq(&entry.key, &key));
-
-      (obj.properties.len(), slot.bytes, existing_idx)
+      match obj {
+        HeapObject::Object(obj) => {
+          let existing_idx = obj
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          (false, 0usize, obj.properties.len(), slot.bytes, existing_idx)
+        }
+        HeapObject::Function(func) => {
+          let existing_idx = func
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
+          (true, bound_args_len, func.properties.len(), slot.bytes, existing_idx)
+        }
+        _ => return Err(VmError::InvalidHandle),
+      }
     };
 
     match existing_idx {
       Some(existing_idx) => {
         // Replace in-place (no change to heap size).
-        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+        let Some(obj) = self.slots[idx].value.as_mut() else {
           return Err(VmError::InvalidHandle);
         };
-        obj.properties[existing_idx].desc = desc;
+        match obj {
+          HeapObject::Object(obj) => obj.properties[existing_idx].desc = desc,
+          HeapObject::Function(func) => func.properties[existing_idx].desc = desc,
+          _ => return Err(VmError::InvalidHandle),
+        }
         Ok(())
       }
       None => {
         let new_property_count = property_count
           .checked_add(1)
           .ok_or(VmError::OutOfMemory)?;
-        let new_bytes = JsObject::heap_size_bytes_for_property_count(new_property_count);
+        let new_bytes = if is_function {
+          JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
+            bound_args_len,
+            new_property_count,
+          )
+        } else {
+          JsObject::heap_size_bytes_for_property_count(new_property_count)
+        };
 
         // Before allocating, enforce heap limits based on the net growth of this object.
         let grow_by = new_bytes.saturating_sub(old_bytes);
@@ -458,19 +538,24 @@ impl Heap {
 
         {
           let slot = &self.slots[idx];
-          let Some(HeapObject::Object(obj)) = slot.value.as_ref() else {
-            return Err(VmError::InvalidHandle);
-          };
-          buf.extend_from_slice(&obj.properties);
+          match slot.value.as_ref() {
+            Some(HeapObject::Object(obj)) => buf.extend_from_slice(&obj.properties),
+            Some(HeapObject::Function(func)) => buf.extend_from_slice(&func.properties),
+            _ => return Err(VmError::InvalidHandle),
+          }
         }
 
         buf.push(PropertyEntry { key, desc });
         let properties = buf.into_boxed_slice();
 
-        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+        let Some(obj) = self.slots[idx].value.as_mut() else {
           return Err(VmError::InvalidHandle);
         };
-        obj.properties = properties;
+        match obj {
+          HeapObject::Object(obj) => obj.properties = properties,
+          HeapObject::Function(func) => func.properties = properties,
+          _ => return Err(VmError::InvalidHandle),
+        }
 
         self.update_slot_bytes(idx, new_bytes);
 
@@ -779,7 +864,18 @@ impl<'a> Scope<'a> {
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Function(func);
-    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes));
+
+    // Define standard function properties.
+    crate::function_properties::set_function_name(&mut scope, func, PropertyKey::String(name), None)?;
+    crate::function_properties::set_function_length(&mut scope, func, length)?;
+
+    // Constructors get a `.prototype` object.
+    if construct.is_some() {
+      crate::function_properties::make_constructor(&mut scope, func)?;
+    }
+
+    Ok(func)
   }
 }
 
@@ -869,7 +965,7 @@ impl Trace for JsObject {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct PropertyEntry {
+pub(crate) struct PropertyEntry {
   key: PropertyKey,
   desc: PropertyDescriptor,
 }

@@ -1,4 +1,4 @@
-use crate::heap::{Trace, Tracer};
+use crate::heap::{PropertyEntry, Trace, Tracer};
 use crate::{GcObject, GcString, Value};
 use core::mem;
 
@@ -44,6 +44,9 @@ pub(crate) struct JsFunction {
   /// Function `length` metadata (used by `Function.prototype.length`).
   pub(crate) length: u32,
 
+  /// Own properties (functions are ordinary objects).
+  pub(crate) properties: Box<[PropertyEntry]>,
+
   // Forward-compat internal slots (currently unused but spec-aligned).
   pub(crate) bound_target: Option<GcObject>,
   pub(crate) bound_this: Option<Value>,
@@ -64,6 +67,7 @@ impl JsFunction {
       construct: construct.map(ConstructHandler::Native),
       name,
       length,
+      properties: Box::default(),
       bound_target: None,
       bound_this: None,
       bound_args: None,
@@ -74,15 +78,22 @@ impl JsFunction {
 
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
-    Self::heap_size_bytes_for_bound_args_len(bound_args_len)
+    Self::heap_size_bytes_for_bound_args_len_and_property_count(bound_args_len, self.properties.len())
   }
 
-  pub(crate) fn heap_size_bytes_for_bound_args_len(bound_args_len: usize) -> usize {
+  pub(crate) fn heap_size_bytes_for_bound_args_len_and_property_count(
+    bound_args_len: usize,
+    property_count: usize,
+  ) -> usize {
     let bound_args_bytes = bound_args_len
       .checked_mul(mem::size_of::<Value>())
       .unwrap_or(usize::MAX);
+    let props_bytes = property_count
+      .checked_mul(mem::size_of::<PropertyEntry>())
+      .unwrap_or(usize::MAX);
     mem::size_of::<Self>()
       .checked_add(bound_args_bytes)
+      .and_then(|size| size.checked_add(props_bytes))
       .unwrap_or(usize::MAX)
   }
 }
@@ -90,6 +101,9 @@ impl JsFunction {
 impl Trace for JsFunction {
   fn trace(&self, tracer: &mut Tracer<'_>) {
     tracer.trace_value(Value::String(self.name));
+    for prop in self.properties.iter() {
+      prop.trace(tracer);
+    }
 
     if let Some(target) = self.bound_target {
       tracer.trace_value(Value::Object(target));

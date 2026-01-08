@@ -32,6 +32,7 @@
 mod error;
 mod exec;
 mod function;
+mod function_properties;
 mod handle;
 mod heap;
 mod intrinsics;
@@ -54,6 +55,9 @@ pub use crate::exec::Completion;
 pub use crate::exec::JsRuntime;
 pub use crate::function::NativeConstructId;
 pub use crate::function::NativeFunctionId;
+pub use crate::function_properties::make_constructor;
+pub use crate::function_properties::set_function_length;
+pub use crate::function_properties::set_function_name;
 pub use crate::handle::GcObject;
 pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;
