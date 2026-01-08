@@ -5,7 +5,7 @@
 //! via `VmError::Unimplemented`.
 
 use vm_js::{GcObject, GcString, GcSymbol, Heap, Value, VmError};
-use webidl::{InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits};
+use webidl::{InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits, WellKnownSymbol};
 
 /// `webidl` conversion context backed by `vm-js`.
 pub struct VmJsWebIdlCx<'a> {
@@ -103,6 +103,11 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     matches!(value, Value::Object(_))
   }
 
+  fn is_string_object(&self, _value: Self::Value) -> bool {
+    // `vm-js` does not yet model boxed String objects.
+    false
+  }
+
   fn as_string(&self, value: Self::Value) -> Option<Self::String> {
     match value {
       Value::String(s) => Some(s),
@@ -150,6 +155,10 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
         "ToNumber requires interpreter + built-ins (numeric conversion)",
       )),
     }
+  }
+
+  fn type_error(&mut self, message: &'static str) -> Self::Error {
+    VmError::Unimplemented(message)
   }
 
   fn get(
@@ -209,9 +218,25 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     ))
   }
 
+  fn well_known_symbol(&mut self, _sym: WellKnownSymbol) -> Result<Self::Symbol, Self::Error> {
+    Err(VmError::Unimplemented(
+      "Well-known symbols require Symbol built-ins",
+    ))
+  }
+
   fn get_iterator(&mut self, _value: Self::Value) -> Result<Self::Object, Self::Error> {
     Err(VmError::Unimplemented(
       "WebIDL iterable conversions require iterator protocol (GetIterator, IteratorNext)",
+    ))
+  }
+
+  fn get_iterator_from_method(
+    &mut self,
+    _object: Self::Object,
+    _method: Self::Value,
+  ) -> Result<Self::Object, Self::Error> {
+    Err(VmError::Unimplemented(
+      "WebIDL iterable conversions require iterator protocol (GetIteratorFromMethod)",
     ))
   }
 
@@ -221,6 +246,12 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
   ) -> Result<IteratorResult<Self::Value>, Self::Error> {
     Err(VmError::Unimplemented(
       "WebIDL iterable conversions require iterator protocol (IteratorNext)",
+    ))
+  }
+
+  fn set_integrity_level_frozen(&mut self, _object: Self::Object) -> Result<(), Self::Error> {
+    Err(VmError::Unimplemented(
+      "WebIDL FrozenArray requires SetIntegrityLevel('frozen')",
     ))
   }
 }

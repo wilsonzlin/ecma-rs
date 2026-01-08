@@ -86,6 +86,13 @@ pub struct IteratorResult<V> {
   pub done: bool,
 }
 
+/// Well-known symbols needed by WebIDL conversions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WellKnownSymbol {
+  Iterator,
+  AsyncIterator,
+}
+
 /// Abstraction over a JS runtime sufficient for WebIDL conversions.
 ///
 /// This is intentionally a narrow interface: it models only the operations used by WebIDL
@@ -121,6 +128,12 @@ pub trait JsRuntime {
   fn is_symbol(&self, value: Self::Value) -> bool;
   fn is_object(&self, value: Self::Value) -> bool;
 
+  /// Returns whether `value` is a string object (i.e. has `[[StringData]]`).
+  ///
+  /// This is needed for the async-sequence vs string special-case in union conversion and overload
+  /// resolution (distinguishability requirement "(d)" in the spec).
+  fn is_string_object(&self, value: Self::Value) -> bool;
+
   /// Returns the underlying JS string handle if `value` is a string.
   fn as_string(&self, value: Self::Value) -> Option<Self::String>;
   /// Returns the underlying JS object handle if `value` is an object.
@@ -132,6 +145,9 @@ pub trait JsRuntime {
   fn to_boolean(&mut self, value: Self::Value) -> Result<bool, Self::Error>;
   fn to_string(&mut self, value: Self::Value) -> Result<Self::String, Self::Error>;
   fn to_number(&mut self, value: Self::Value) -> Result<f64, Self::Error>;
+
+  // ---- Errors ----
+  fn type_error(&mut self, message: &'static str) -> Self::Error;
 
   // ---- Object operations ----
   fn get(
@@ -174,12 +190,29 @@ pub trait JsRuntime {
     Ok(())
   }
 
+  // ---- Well-known symbols ----
+  fn well_known_symbol(&mut self, sym: WellKnownSymbol) -> Result<Self::Symbol, Self::Error>;
+
   // ---- Iterator protocol ----
   fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error>;
+  fn get_iterator_from_method(
+    &mut self,
+    object: Self::Object,
+    method: Self::Value,
+  ) -> Result<Self::Object, Self::Error>;
   fn iterator_next(
     &mut self,
     iterator: Self::Object,
   ) -> Result<IteratorResult<Self::Value>, Self::Error>;
+
+  #[inline]
+  fn iterator_step_value(
+    &mut self,
+    iterator: Self::Object,
+  ) -> Result<Option<Self::Value>, Self::Error> {
+    let step = self.iterator_next(iterator)?;
+    Ok(if step.done { None } else { Some(step.value) })
+  }
 }
 
 pub mod conversions {
@@ -197,3 +230,12 @@ pub mod conversions {
     cx.to_string(value)
   }
 }
+
+mod types;
+pub use types::{AsyncSequence, AsyncSequenceKind, IdlType, IdlValue, UnionValue};
+
+mod convert;
+pub use convert::{convert_idl_to_js, convert_js_to_idl};
+
+mod overload;
+pub use overload::{resolve_overload, Optionality, Overload, OverloadArg, OverloadResult};

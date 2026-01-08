@@ -36,7 +36,7 @@ fn sequence_converts_to_array_with_numeric_keys_and_values() {
   };
 
   let data = rt.object(obj);
-  assert_eq!(data.kind, ToyObjectKind::Array { len: 3 });
+  assert_eq!(&data.kind, &ToyObjectKind::Array { len: 3 });
 
   let keys = data
     .props
@@ -77,7 +77,7 @@ fn record_converts_to_object_with_own_enumerable_properties() {
   };
 
   let data = rt.object(obj);
-  assert_eq!(data.kind, ToyObjectKind::Ordinary);
+  assert_eq!(&data.kind, &ToyObjectKind::Ordinary);
 
   let keys = data
     .props

@@ -1,16 +1,22 @@
+#![allow(dead_code)]
+
 use std::fmt;
 
-use webidl::{InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits};
+use webidl::{
+  InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits, WellKnownSymbol,
+};
 
 #[derive(Debug)]
 pub enum ToyError {
   Unimplemented(&'static str),
+  TypeError(&'static str),
 }
 
 impl fmt::Display for ToyError {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match self {
       ToyError::Unimplemented(msg) => write!(f, "unimplemented: {msg}"),
+      ToyError::TypeError(msg) => write!(f, "TypeError: {msg}"),
     }
   }
 }
@@ -38,10 +44,17 @@ pub enum ToyValue {
   Symbol(ToySymbol),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ToyObjectKind {
   Ordinary,
   Array { len: usize },
+  StringObject { string: ToyString },
+  Iterator {
+    values: Vec<ToyValue>,
+    index: usize,
+  },
+  IteratorMethod { values: Vec<ToyValue> },
+  AsyncIteratorMethod { values: Vec<ToyValue> },
 }
 
 impl Default for ToyObjectKind {
@@ -61,6 +74,7 @@ pub struct ToyRuntime {
   pub limits: WebIdlLimits,
   pub strings: Vec<Vec<u16>>,
   pub objects: Vec<ToyObjectData>,
+  pub get_method_calls: usize,
 }
 
 impl Default for ToyRuntime {
@@ -69,13 +83,128 @@ impl Default for ToyRuntime {
       limits: WebIdlLimits::default(),
       strings: Vec::new(),
       objects: Vec::new(),
+      get_method_calls: 0,
     }
   }
 }
 
 impl ToyRuntime {
+  fn alloc_string(&mut self, s: &str) -> ToyString {
+    let idx = self.strings.len();
+    self.strings.push(s.encode_utf16().collect());
+    ToyString(idx)
+  }
+
+  fn alloc_object_with_kind(&mut self, kind: ToyObjectKind) -> ToyObject {
+    let idx = self.objects.len();
+    self.objects.push(ToyObjectData {
+      kind,
+      ..ToyObjectData::default()
+    });
+    ToyObject(idx)
+  }
+
+  /// Allocates a JS string primitive value.
+  pub fn string(&mut self, s: &str) -> ToyValue {
+    ToyValue::String(self.alloc_string(s))
+  }
+
+  /// Allocates a boxed string object (i.e. has `[[StringData]]`).
+  pub fn string_object(&mut self, s: &str) -> ToyValue {
+    let str_handle = self.alloc_string(s);
+    let obj = self.alloc_object_with_kind(ToyObjectKind::StringObject { string: str_handle });
+    ToyValue::Object(obj)
+  }
+
+  pub fn make_iterable(&mut self, elements: Vec<ToyValue>, async_: bool) -> ToyValue {
+    let obj = ToyValue::Object(self.alloc_object_with_kind(ToyObjectKind::Ordinary));
+    self.add_iterable_methods(obj, elements, async_);
+    obj
+  }
+
+  pub fn add_iterable_methods(&mut self, obj: ToyValue, elements: Vec<ToyValue>, async_: bool) {
+    let ToyValue::Object(obj) = obj else {
+      panic!("add_iterable_methods expected object");
+    };
+
+    let sync_method_obj = self.alloc_object_with_kind(ToyObjectKind::IteratorMethod {
+      values: elements.clone(),
+    });
+
+    let iterator_sym = ToySymbol(0);
+    self
+      .objects[obj.0]
+      .props
+      .push((PropertyKey::Symbol(iterator_sym), ToyValue::Object(sync_method_obj)));
+
+    if async_ {
+      let async_method_obj = self.alloc_object_with_kind(ToyObjectKind::AsyncIteratorMethod {
+        values: elements,
+      });
+      let async_iter_sym = ToySymbol(1);
+      self.objects[obj.0].props.push((
+        PropertyKey::Symbol(async_iter_sym),
+        ToyValue::Object(async_method_obj),
+      ));
+    }
+  }
+
+  pub fn is_frozen(&self, v: ToyValue) -> bool {
+    let ToyValue::Object(o) = v else {
+      return false;
+    };
+    self.objects[o.0].frozen
+  }
+
+  pub fn array_elements(&self, v: ToyValue) -> Option<Vec<ToyValue>> {
+    let ToyValue::Object(o) = v else {
+      return None;
+    };
+    let ToyObjectData {
+      kind: ToyObjectKind::Array { len },
+      props,
+      ..
+    } = &self.objects[o.0]
+    else {
+      return None;
+    };
+
+    fn parse_index(units: &[u16]) -> Option<usize> {
+      let mut n: usize = 0;
+      if units.is_empty() {
+        return None;
+      }
+      for &u in units {
+        if !(b'0' as u16..=b'9' as u16).contains(&u) {
+          return None;
+        }
+        n = n.checked_mul(10)?;
+        n = n.checked_add((u - (b'0' as u16)) as usize)?;
+      }
+      Some(n)
+    }
+
+    let mut out = vec![ToyValue::Undefined; *len];
+    for (k, v) in props.iter() {
+      let PropertyKey::String(s) = k else {
+        continue;
+      };
+      let Some(idx) = parse_index(self.string_code_units(*s)) else {
+        continue;
+      };
+      if idx < out.len() {
+        out[idx] = *v;
+      }
+    }
+    Some(out)
+  }
+
   pub fn string_code_units(&self, s: ToyString) -> &[u16] {
     &self.strings[s.0]
+  }
+
+  pub fn string_contents(&self, s: ToyString) -> String {
+    String::from_utf16_lossy(self.string_code_units(s))
   }
 
   pub fn object(&self, o: ToyObject) -> &ToyObjectData {
@@ -164,6 +293,13 @@ impl JsRuntime for ToyRuntime {
     matches!(value, ToyValue::Object(_))
   }
 
+  fn is_string_object(&self, value: Self::Value) -> bool {
+    let ToyValue::Object(o) = value else {
+      return false;
+    };
+    matches!(&self.objects[o.0].kind, ToyObjectKind::StringObject { .. })
+  }
+
   fn as_string(&self, value: Self::Value) -> Option<Self::String> {
     match value {
       ToyValue::String(s) => Some(s),
@@ -214,9 +350,12 @@ impl JsRuntime for ToyRuntime {
         let txt = n.to_string();
         self.alloc_string_from_code_units(&txt.encode_utf16().collect::<Vec<_>>())
       }
-      ToyValue::Object(_) => {
-        self.alloc_string_from_code_units(&"[object Object]".encode_utf16().collect::<Vec<_>>())
-      }
+      ToyValue::Object(o) => match &self.objects[o.0].kind {
+        ToyObjectKind::StringObject { string } => Ok(*string),
+        _ => self.alloc_string_from_code_units(
+          &"[object Object]".encode_utf16().collect::<Vec<_>>(),
+        ),
+      },
       ToyValue::Symbol(_) => Err(ToyError::Unimplemented("ToString(Symbol)")),
     }
   }
@@ -230,6 +369,10 @@ impl JsRuntime for ToyRuntime {
       ToyValue::Undefined => Ok(f64::NAN),
       _ => Err(ToyError::Unimplemented("ToNumber for non-primitive")),
     }
+  }
+
+  fn type_error(&mut self, message: &'static str) -> Self::Error {
+    ToyError::TypeError(message)
   }
 
   fn get(
@@ -249,11 +392,17 @@ impl JsRuntime for ToyRuntime {
     object: Self::Object,
     key: PropertyKey<Self::String, Self::Symbol>,
   ) -> Result<Option<Self::Value>, Self::Error> {
+    self.get_method_calls += 1;
     let v = self.get(object, key)?;
-    if matches!(v, ToyValue::Undefined) {
-      Ok(None)
-    } else {
-      Ok(Some(v))
+    match v {
+      ToyValue::Undefined | ToyValue::Null => Ok(None),
+      ToyValue::Object(o) => match &self.objects[o.0].kind {
+        ToyObjectKind::IteratorMethod { .. } | ToyObjectKind::AsyncIteratorMethod { .. } => {
+          Ok(Some(v))
+        }
+        _ => Err(ToyError::TypeError("property is not callable")),
+      },
+      _ => Err(ToyError::TypeError("property is not callable")),
     }
   }
 
@@ -314,14 +463,53 @@ impl JsRuntime for ToyRuntime {
     Ok(())
   }
 
-  fn get_iterator(&mut self, _value: Self::Value) -> Result<Self::Object, Self::Error> {
-    Err(ToyError::Unimplemented("iterator protocol"))
+  fn well_known_symbol(&mut self, sym: WellKnownSymbol) -> Result<Self::Symbol, Self::Error> {
+    Ok(match sym {
+      WellKnownSymbol::Iterator => ToySymbol(0),
+      WellKnownSymbol::AsyncIterator => ToySymbol(1),
+    })
   }
 
-  fn iterator_next(
+  fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error> {
+    let ToyValue::Object(obj) = value else {
+      return Err(ToyError::TypeError("GetIterator expected object"));
+    };
+    let iter_sym = self.well_known_symbol(WellKnownSymbol::Iterator)?;
+    let method = self
+      .get_method(obj, PropertyKey::Symbol(iter_sym))?
+      .ok_or(ToyError::TypeError("GetIterator: value is not iterable"))?;
+    self.get_iterator_from_method(obj, method)
+  }
+
+  fn get_iterator_from_method(
     &mut self,
-    _iterator: Self::Object,
-  ) -> Result<IteratorResult<Self::Value>, Self::Error> {
-    Err(ToyError::Unimplemented("iterator protocol"))
+    _object: Self::Object,
+    method: Self::Value,
+  ) -> Result<Self::Object, Self::Error> {
+    let ToyValue::Object(method_obj) = method else {
+      return Err(ToyError::TypeError("GetIteratorFromMethod expected object method"));
+    };
+    let values = match &self.objects[method_obj.0].kind {
+      ToyObjectKind::IteratorMethod { values } | ToyObjectKind::AsyncIteratorMethod { values } => {
+        values.clone()
+      }
+      _ => return Err(ToyError::TypeError("GetIteratorFromMethod: method is not iterable")),
+    };
+    Ok(self.alloc_object_with_kind(ToyObjectKind::Iterator { values, index: 0 }))
+  }
+
+  fn iterator_next(&mut self, iterator: Self::Object) -> Result<IteratorResult<Self::Value>, Self::Error> {
+    let ToyObjectKind::Iterator { values, index } = &mut self.objects[iterator.0].kind else {
+      return Err(ToyError::TypeError("IteratorNext expected iterator object"));
+    };
+    if *index >= values.len() {
+      return Ok(IteratorResult {
+        value: ToyValue::Undefined,
+        done: true,
+      });
+    }
+    let v = values[*index];
+    *index += 1;
+    Ok(IteratorResult { value: v, done: false })
   }
 }
