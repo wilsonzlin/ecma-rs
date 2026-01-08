@@ -28,6 +28,12 @@
 //!   dropped, all stack roots created within it are popped.
 //! - **Persistent roots**: managed by [`Heap::add_root`] / [`Heap::remove_root`], intended for host
 //!   embeddings.
+//!
+//! # WebIDL / host objects
+//!
+//! If you are embedding `vm-js` in a browser-style host and need to expose Web APIs (constructors,
+//! `prototype` objects, native methods/attributes, wrapper identity caches), see
+//! [`docs::webidl_host_objects`](crate::docs::webidl_host_objects).
 
 mod error;
 mod exec;
@@ -107,3 +113,10 @@ pub use crate::vm::NativeConstruct;
 pub use crate::vm::Budget;
 pub use crate::vm::Vm;
 pub use crate::vm::VmOptions;
+
+/// Long-form guides and embedding documentation.
+pub mod docs {
+  /// WebIDL binding initialization patterns (constructors, prototypes, host objects).
+  #[doc = include_str!("../docs/webidl_host_objects.md")]
+  pub mod webidl_host_objects {}
+}

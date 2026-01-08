@@ -70,30 +70,54 @@ impl GcObject {
 
 /// A weak, generation-checked handle to a GC-managed JavaScript object.
 ///
-/// This is intended for host-side wrapper identity maps (e.g. DOM/WebIDL bindings):
-/// a host can store `WeakGcObject` values in a `HashMap<NodeId, WeakGcObject>` without
-/// accidentally keeping wrappers alive. On lookup, call [`WeakGcObject::upgrade`] to
-/// check whether the wrapper is still alive; if not, create a new wrapper and
-/// overwrite the entry.
+/// This is intended for host-side wrapper identity maps (e.g. DOM/WebIDL bindings): a host can
+/// store `WeakGcObject` values in a `HashMap<NodeId, WeakGcObject>` without accidentally keeping
+/// wrappers alive. On lookup, call [`WeakGcObject::upgrade`] to check whether the wrapper is still
+/// alive; if not, create a new wrapper and overwrite the entry.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
 pub struct WeakGcObject(HeapId);
 
 impl WeakGcObject {
+  /// Creates a weak handle pointing at `obj`.
+  #[inline]
+  pub fn new(obj: GcObject) -> Self {
+    Self(obj.id())
+  }
+
   /// Attempts to upgrade this weak handle to a strong [`GcObject`].
   ///
-  /// Returns `Some(GcObject)` only if the handle still points to a currently-live
-  /// object allocation.
+  /// Returns `Some(GcObject)` only if the handle still points to a currently-live object
+  /// allocation.
   #[inline]
   pub fn upgrade(self, heap: &Heap) -> Option<GcObject> {
     let obj = GcObject(self.0);
     heap.is_valid_object(obj).then_some(obj)
+  }
+
+  /// The underlying [`HeapId`].
+  #[inline]
+  pub fn id(self) -> HeapId {
+    self.0
+  }
+
+  /// The slot index within the heap.
+  #[inline]
+  pub fn index(self) -> u32 {
+    self.0.index()
+  }
+
+  /// The slot generation within the heap.
+  #[inline]
+  pub fn generation(self) -> u32 {
+    self.0.generation()
   }
 }
 
 impl From<GcObject> for WeakGcObject {
   #[inline]
   fn from(obj: GcObject) -> Self {
-    Self(obj.id())
+    Self::new(obj)
   }
 }
 
