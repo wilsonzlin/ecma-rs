@@ -125,12 +125,7 @@ pub fn apply_shard(cases: Vec<TestCase>, shard: Option<Shard>) -> Result<Vec<Tes
   };
 
   let total = cases.len();
-  let filtered: Vec<_> = cases
-    .into_iter()
-    .enumerate()
-    .filter(|(idx, _)| shard.includes(*idx))
-    .map(|(_, case)| case)
-    .collect();
+  let filtered = conformance_harness::apply_shard(cases, shard);
 
   if filtered.is_empty() {
     bail!(

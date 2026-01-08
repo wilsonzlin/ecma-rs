@@ -1,9 +1,9 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use conformance_harness::{FailOn, Expectations, Shard, TimeoutManager};
+use conformance_harness::{
+  write_json_report, write_json_report_to_stdout, FailOn, Expectations, Shard, TimeoutManager,
+};
 use std::collections::BTreeSet;
-use std::fs;
-use std::io::{self, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -188,15 +188,12 @@ fn run_cli(cli: RunArgs) -> Result<ExitCode> {
   };
 
   if let Some(path) = &cli.report_path {
-    write_report(path, &report_json)?;
+    write_json_report(path, &report_json)?;
     eprintln!("Wrote test262 semantic report to {}", path.display());
   }
 
   if cli.json {
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-    serde_json::to_writer_pretty(&mut handle, &report_json).context("write JSON report to stdout")?;
-    writeln!(handle).ok();
+    write_json_report_to_stdout(&report_json).context("write JSON report to stdout")?;
   } else {
     print_human_summary(&summary);
   }
@@ -206,19 +203,6 @@ fn run_cli(cli: RunArgs) -> Result<ExitCode> {
   } else {
     ExitCode::SUCCESS
   })
-}
-
-fn write_report(path: &std::path::Path, report: &test262_semantic::report::Report) -> Result<()> {
-  if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-  }
-
-  let file = fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
-  let mut writer = BufWriter::new(file);
-  serde_json::to_writer_pretty(&mut writer, report)
-    .with_context(|| format!("write report to {}", path.display()))?;
-  writer.flush().ok();
-  Ok(())
 }
 
 fn print_human_summary(summary: &test262_semantic::report::Summary) {
@@ -263,4 +247,3 @@ fn select_tests_from_cli(
   let ids: Vec<String> = ids.into_iter().collect();
   test262_semantic::runner::select_by_ids(discovered, &ids)
 }
-

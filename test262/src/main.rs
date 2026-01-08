@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use clap::Parser;
 use conformance_harness::{
-  AppliedExpectation, ExpectationKind, Expectations, FailOn, Shard, TimeoutManager,
+  apply_shard, write_json_report, write_json_report_to_stdout, AppliedExpectation, ExpectationKind,
+  Expectations, FailOn, ReportRef, Shard, TimeoutManager,
 };
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
@@ -10,7 +11,6 @@ use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType
 use rayon::prelude::*;
 use serde::Serialize;
 use std::fs;
-use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -61,18 +61,15 @@ fn try_main() -> Result<()> {
   results.sort_by(|a, b| a.id.cmp(&b.id));
 
   let summary = summarize(&results);
-  let report = ReportRef::new(&summary, &results);
+  let report = ReportRef::new(REPORT_SCHEMA_VERSION, &summary, &results);
 
   if let Some(path) = &cli.report_path {
-    write_report(path, &report)?;
+    write_json_report(path, &report)?;
     eprintln!("Wrote test262 parser report to {}", path.display());
   }
 
   if cli.json {
-    let stdout = io::stdout();
-    let mut handle = stdout.lock();
-    serde_json::to_writer_pretty(&mut handle, &report).context("write JSON report to stdout")?;
-    writeln!(handle).ok();
+    write_json_report_to_stdout(&report).context("write JSON report to stdout")?;
   } else {
     print_human_summary(&summary);
   }
@@ -270,23 +267,6 @@ impl Summary {
   }
 }
 
-#[derive(Debug, Serialize)]
-struct ReportRef<'a> {
-  schema_version: u32,
-  summary: &'a Summary,
-  results: &'a [TestResult],
-}
-
-impl<'a> ReportRef<'a> {
-  fn new(summary: &'a Summary, results: &'a [TestResult]) -> Self {
-    Self {
-      schema_version: REPORT_SCHEMA_VERSION,
-      summary,
-      results,
-    }
-  }
-}
-
 fn discover_cases(data_dir: &Path) -> Result<Vec<TestCase>> {
   if !data_dir.exists() {
     bail!(
@@ -369,15 +349,6 @@ fn normalize_path(path: impl AsRef<Path>) -> String {
     normalized = normalized.replace('\\', "/");
   }
   normalized
-}
-
-fn apply_shard(cases: Vec<TestCase>, shard: Shard) -> Vec<TestCase> {
-  cases
-    .into_iter()
-    .enumerate()
-    .filter(|(idx, _)| shard.includes(*idx))
-    .map(|(_, case)| case)
-    .collect()
 }
 
 fn run_cases(
@@ -546,20 +517,6 @@ fn summarize(results: &[TestResult]) -> Summary {
   summary
 }
 
-fn write_report(path: &Path, report: &ReportRef<'_>) -> Result<()> {
-  if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-  }
-
-  let file = fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
-  let mut writer = BufWriter::new(file);
-  serde_json::to_writer_pretty(&mut writer, report)
-    .with_context(|| format!("write report to {}", path.display()))?;
-  writer.flush().ok();
-
-  Ok(())
-}
-
 fn print_human_summary(summary: &Summary) {
   println!(
     "test262 parser tests: total={}, passed={}, failed={}, timed_out={}, skipped={}",
@@ -724,7 +681,7 @@ status = "skip"
     );
     results.sort_by(|a, b| a.id.cmp(&b.id));
     let summary = summarize(&results);
-    let report = ReportRef::new(&summary, &results);
+    let report = ReportRef::new(REPORT_SCHEMA_VERSION, &summary, &results);
     let json = serde_json::to_string(&report).expect("serialize report");
 
     assert!(json.contains("\"diagnostic\""));
