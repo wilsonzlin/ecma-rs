@@ -1,32 +1,36 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, ValueEnum};
+use conformance_harness::ExpectationKind;
 use globset::Glob;
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use walkdir::WalkDir;
+use test262_semantic::discover::{discover_tests, DiscoveredTest};
+use test262_semantic::suite::{load_builtin_suite, load_suite_from_path, Suite};
+
+const DEFAULT_TEST262_DIR: &str = "test262-semantic/data";
 
 #[derive(Args, Debug)]
 pub struct ValidateArgs {
   /// Path to a local checkout of the tc39/test262 repository.
-  ///
-  /// If `--test262-dir/test` exists, discovery is rooted at that directory.
-  /// Otherwise, discovery is rooted at `--test262-dir`.
-  #[arg(long, value_name = "DIR", default_value = "test262-semantic/data")]
+  #[arg(long, value_name = "DIR", default_value = DEFAULT_TEST262_DIR)]
   pub test262_dir: PathBuf,
 
-  /// Path to the suites config TOML file.
-  #[arg(long, value_name = "PATH")]
-  pub suites: PathBuf,
-
-  /// Suite name to validate. If omitted, validates all suites in the config file.
+  /// Built-in curated suite name to validate (e.g. `smoke`); can be passed multiple times.
+  ///
+  /// If no suites are provided, `validate` defaults to validating every suite file under
+  /// `test262-semantic/suites`.
   #[arg(long, value_name = "NAME")]
-  pub suite: Option<String>,
+  pub suite: Vec<String>,
 
-  /// Optional expectations/xfail manifest TOML file.
+  /// Path to a suite file (TOML/JSON); can be passed multiple times.
+  #[arg(long, value_name = "PATH")]
+  pub suite_path: Vec<PathBuf>,
+
+  /// Optional expectations manifest file (TOML/JSON).
   #[arg(long, value_name = "PATH")]
   pub manifest: Option<PathBuf>,
 
@@ -81,36 +85,35 @@ impl ValidationReport {
 
 pub fn run_cli(args: ValidateArgs) -> Result<ExitCode> {
   let discovered = discover_tests(&args.test262_dir)?;
+  let discovered_ids = discovered
+    .iter()
+    .map(|test| test.id.clone())
+    .collect::<BTreeSet<_>>();
 
-  let suites = SuitesFile::from_path(&args.suites)?;
-  if suites.suites.is_empty() {
-    bail!(
-      "suite config {} contains no [[suites]] entries",
-      args.suites.display()
-    );
+  let suites = load_suites(&args)?;
+  if suites.is_empty() {
+    bail!("no suite files selected");
   }
-
-  let suites_to_validate: Vec<&Suite> = match &args.suite {
-    Some(name) => {
-      let suite = suites
-        .suites
-        .iter()
-        .find(|suite| suite.name == *name)
-        .with_context(|| format!("suite {name:?} not found in {}", args.suites.display()))?;
-      vec![suite]
-    }
-    None => suites.suites.iter().collect(),
-  };
 
   let mut report = ValidationReport::default();
 
-  for suite in suites_to_validate {
-    report.extend(validate_suite(suite, &discovered, &args));
+  for suite in suites {
+    report.extend(validate_suite(
+      &suite,
+      &discovered,
+      &discovered_ids,
+      &args,
+    ));
   }
 
   if let Some(manifest_path) = &args.manifest {
-    let manifest = ManifestFile::from_path(manifest_path)?;
-    report.extend(validate_manifest(&manifest, &discovered, args.manifest_counts));
+    let manifest = RawManifest::from_path(manifest_path)?;
+    report.extend(validate_manifest(
+      &manifest,
+      &discovered,
+      &discovered_ids,
+      args.manifest_counts,
+    ));
   }
 
   report.sort_deterministic();
@@ -133,241 +136,188 @@ pub fn run_cli(args: ValidateArgs) -> Result<ExitCode> {
 }
 
 #[derive(Debug)]
-struct DiscoveredTests {
-  /// All discovered test ids, sorted.
-  ids: Vec<String>,
-  /// For fast membership tests.
-  id_set: BTreeSet<String>,
+struct SuiteSpec {
+  label: String,
+  suite: Suite,
 }
 
-fn discover_tests(test262_dir: &Path) -> Result<DiscoveredTests> {
-  let discovery_root = {
-    let candidate = test262_dir.join("test");
-    if candidate.is_dir() {
-      candidate
-    } else {
-      test262_dir.to_path_buf()
-    }
-  };
+fn load_suites(args: &ValidateArgs) -> Result<Vec<SuiteSpec>> {
+  let mut out = Vec::new();
 
-  if !discovery_root.is_dir() {
-    bail!(
-      "test262 directory {} does not exist or is not a directory",
-      discovery_root.display()
-    );
+  for name in &args.suite {
+    let suite = load_builtin_suite(name)?;
+    out.push(SuiteSpec {
+      label: format!("suite {name:?}"),
+      suite,
+    });
   }
 
-  let mut ids = Vec::new();
-  for entry in WalkDir::new(&discovery_root).follow_links(false) {
-    let entry = entry.with_context(|| {
-      format!(
-        "walk test262 directory {}",
-        discovery_root.display()
-      )
-    })?;
-    if !entry.file_type().is_file() {
+  for path in &args.suite_path {
+    let suite = load_suite_from_path(path)?;
+    out.push(SuiteSpec {
+      label: format!("suite {}", path.display()),
+      suite,
+    });
+  }
+
+  if !out.is_empty() {
+    return Ok(out);
+  }
+
+  // No suites were explicitly passed; validate all built-in suites.
+  let suite_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("suites");
+  let entries = fs::read_dir(&suite_dir)
+    .with_context(|| format!("read built-in suite directory {}", suite_dir.display()))?;
+
+  let mut names = Vec::new();
+  for entry in entries {
+    let entry = entry?;
+    if !entry.file_type()?.is_file() {
       continue;
     }
     let path = entry.path();
-    if path.extension().and_then(|ext| ext.to_str()) != Some("js") {
+    if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
       continue;
     }
-    let id = path_to_id(&discovery_root, path)?;
-    ids.push(id);
-  }
-
-  ids.sort();
-  ids.dedup();
-
-  if ids.is_empty() {
-    bail!(
-      "discovered 0 .js tests under {} (resolved discovery root: {}). Is the tc39/test262 corpus checked out?",
-      test262_dir.display(),
-      discovery_root.display()
-    );
-  }
-
-  let id_set = ids.iter().cloned().collect::<BTreeSet<_>>();
-
-  Ok(DiscoveredTests {
-    ids,
-    id_set,
-  })
-}
-
-fn path_to_id(root: &Path, path: &Path) -> Result<String> {
-  let rel = path
-    .strip_prefix(root)
-    .with_context(|| format!("path {} was not under {}", path.display(), root.display()))?;
-  let mut out = String::new();
-  for (i, component) in rel.components().enumerate() {
-    if i > 0 {
-      out.push('/');
+    if let Some(name) = path.file_stem().and_then(|stem| stem.to_str()) {
+      names.push(name.to_string());
     }
-    out.push_str(
-      component
-        .as_os_str()
-        .to_str()
-        .context("non-utf8 path component in discovered test path")?,
-    );
   }
+
+  names.sort();
+  names.dedup();
+
+  for name in names {
+    let suite = load_builtin_suite(&name)?;
+    out.push(SuiteSpec {
+      label: format!("suite {name:?}"),
+      suite,
+    });
+  }
+
   Ok(out)
 }
 
-#[derive(Debug, Deserialize)]
-struct SuitesFile {
-  #[serde(default)]
-  suites: Vec<Suite>,
-}
-
-impl SuitesFile {
-  fn from_path(path: &Path) -> Result<Self> {
-    let raw = fs::read_to_string(path)
-      .with_context(|| format!("read suite config {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("parse suite config {}", path.display()))
-  }
-}
-
-#[derive(Debug, Deserialize)]
-struct Suite {
-  name: String,
-
-  /// Explicit test ids to include.
-  #[serde(default)]
-  ids: Vec<String>,
-
-  /// Globs that add matching tests to the suite.
-  #[serde(default)]
-  include: Vec<String>,
-
-  /// Globs that remove matching tests from the suite.
-  #[serde(default)]
-  exclude: Vec<String>,
-}
-
-fn validate_suite(suite: &Suite, discovered: &DiscoveredTests, args: &ValidateArgs) -> ValidationReport {
+fn validate_suite(
+  suite: &SuiteSpec,
+  discovered: &[DiscoveredTest],
+  discovered_ids: &BTreeSet<String>,
+  args: &ValidateArgs,
+) -> ValidationReport {
   let mut report = ValidationReport::default();
 
-  // Validate explicit ids.
-  let mut missing_ids = Vec::new();
-  for id in &suite.ids {
-    if !discovered.id_set.contains(id) {
+  let include_matchers = compile_globs(&suite.label, "include", &suite.suite.include, &mut report);
+  let exclude_matchers = compile_globs(&suite.label, "exclude", &suite.suite.exclude, &mut report);
+
+  // Per-glob match counts (to catch stale patterns that match 0 tests).
+  for (pattern, matcher) in &include_matchers {
+    let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
+    if count == 0 {
+      report.push_issue(
+        args.include_glob_zero,
+        format!("{} include glob {pattern:?} matched 0 tests", suite.label),
+      );
+    }
+  }
+  for (pattern, matcher) in &exclude_matchers {
+    let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
+    if count == 0 {
+      report.push_issue(
+        args.exclude_glob_zero,
+        format!("{} exclude glob {pattern:?} matched 0 tests", suite.label),
+      );
+    }
+  }
+
+  // Validate explicit ids and compute selected set.
+  let mut selected = BTreeSet::<String>::new();
+  let mut missing_ids = Vec::<String>::new();
+  for id in &suite.suite.tests {
+    if discovered_ids.contains(id) {
+      selected.insert(id.clone());
+    } else {
       missing_ids.push(id.clone());
     }
   }
   missing_ids.sort();
+  missing_ids.dedup();
   for id in missing_ids {
     report
       .errors
-      .push(format!("suite {:?} references missing id {id:?}", suite.name));
+      .push(format!("{} references missing test id {id:?}", suite.label));
   }
 
-  // Select tests.
-  let mut selected = BTreeSet::<String>::new();
-
-  // If no include globs and no explicit ids are specified, default to "all tests".
-  if suite.include.is_empty() && suite.ids.is_empty() {
-    selected.extend(discovered.ids.iter().cloned());
-  }
-
-  for pattern in &suite.include {
-    match glob_match_ids(pattern, &discovered.ids) {
-      Ok(matches) => {
-        if matches.is_empty() {
-          report.push_issue(
-            args.include_glob_zero,
-            format!("suite {:?} include glob {pattern:?} matched 0 tests", suite.name),
-          );
-        }
-        selected.extend(matches);
+  if !include_matchers.is_empty() {
+    for test in discovered {
+      if include_matchers.iter().any(|(_, matcher)| matcher.is_match(&test.id)) {
+        selected.insert(test.id.clone());
       }
-      Err(err) => report
-        .errors
-        .push(format!("suite {:?} include glob {pattern:?} is invalid: {err}", suite.name)),
     }
   }
 
-  // Add explicit ids (after glob handling so the error reporting is independent).
-  for id in &suite.ids {
-    if discovered.id_set.contains(id) {
-      selected.insert(id.clone());
-    }
-  }
-
-  for pattern in &suite.exclude {
-    match glob_match_ids(pattern, &selected.iter().cloned().collect::<Vec<_>>()) {
-      Ok(matches) => {
-        if matches.is_empty() {
-          report.push_issue(
-            args.exclude_glob_zero,
-            format!("suite {:?} exclude glob {pattern:?} matched 0 tests", suite.name),
-          );
-        }
-        for id in matches {
-          selected.remove(&id);
-        }
-      }
-      Err(err) => report
-        .errors
-        .push(format!("suite {:?} exclude glob {pattern:?} is invalid: {err}", suite.name)),
-    }
+  if !exclude_matchers.is_empty() {
+    selected.retain(|id| !exclude_matchers.iter().any(|(_, matcher)| matcher.is_match(id)));
   }
 
   if selected.is_empty() {
-    report
-      .errors
-      .push(format!("suite {:?} selected 0 tests", suite.name));
+    report.errors.push(format!("{} selected 0 tests", suite.label));
   }
 
   report
 }
 
-fn glob_match_ids(pattern: &str, ids: &[String]) -> Result<Vec<String>> {
-  let matcher = Glob::new(pattern)
-    .with_context(|| format!("invalid glob pattern {pattern:?}"))?
-    .compile_matcher();
+fn compile_globs(
+  suite_label: &str,
+  label: &str,
+  patterns: &[String],
+  report: &mut ValidationReport,
+) -> Vec<(String, globset::GlobMatcher)> {
   let mut out = Vec::new();
-  for id in ids {
-    if matcher.is_match(id) {
-      out.push(id.clone());
+  for pattern in patterns {
+    match Glob::new(pattern) {
+      Ok(glob) => out.push((pattern.clone(), glob.compile_matcher())),
+      Err(err) => report.errors.push(format!(
+        "{suite_label} has invalid {label} glob {pattern:?}: {err}"
+      )),
     }
   }
-  out.sort();
-  out.dedup();
-  Ok(out)
+  out
 }
 
 #[derive(Debug, Deserialize)]
-struct ManifestFile {
+struct RawManifest {
   #[serde(default)]
-  expectations: Vec<ManifestEntry>,
+  expectations: Vec<RawEntry>,
 }
 
-impl ManifestFile {
+impl RawManifest {
   fn from_path(path: &Path) -> Result<Self> {
-    let raw = fs::read_to_string(path)
-      .with_context(|| format!("read manifest {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("parse manifest {}", path.display()))
+    let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    match toml::from_str::<RawManifest>(&raw) {
+      Ok(manifest) => Ok(manifest),
+      Err(toml_err) => serde_json::from_str::<RawManifest>(&raw).map_err(|json_err| {
+        anyhow!(
+          "{}: failed to parse manifest as TOML ({toml_err}) or JSON ({json_err})",
+          path.display()
+        )
+      }),
+    }
   }
 }
 
 #[derive(Debug, Deserialize)]
-struct ManifestEntry {
-  #[serde(default)]
+struct RawEntry {
   id: Option<String>,
-  #[serde(default)]
   glob: Option<String>,
-  #[serde(default)]
   regex: Option<String>,
-
-  // Additional fields (status, reason, etc.) are ignored by validation.
-  #[serde(flatten)]
-  _rest: BTreeMap<String, toml::Value>,
+  #[serde(alias = "expectation")]
+  status: Option<ExpectationKind>,
 }
 
 fn validate_manifest(
-  manifest: &ManifestFile,
-  discovered: &DiscoveredTests,
+  manifest: &RawManifest,
+  discovered: &[DiscoveredTest],
+  discovered_ids: &BTreeSet<String>,
   report_counts: bool,
 ) -> ValidationReport {
   let mut report = ValidationReport::default();
@@ -375,20 +325,55 @@ fn validate_manifest(
   for (idx, entry) in manifest.expectations.iter().enumerate() {
     let prefix = format!("manifest entry #{idx}");
 
-    match (&entry.id, &entry.glob, &entry.regex) {
-      (Some(id), None, None) => {
-        if !discovered.id_set.contains(id) {
-          report
-            .errors
-            .push(format!("{prefix} references missing id {id:?}"));
-        }
+    if entry.status.is_none() {
+      report
+        .errors
+        .push(format!("{prefix} missing `status`/`expectation`"));
+    }
+
+    let mut seen = 0;
+    if entry.id.is_some() {
+      seen += 1;
+    }
+    if entry.glob.is_some() {
+      seen += 1;
+    }
+    if entry.regex.is_some() {
+      seen += 1;
+    }
+    if seen == 0 {
+      report
+        .errors
+        .push(format!("{prefix} missing `id`/`glob`/`regex`"));
+      continue;
+    }
+    if seen > 1 {
+      report
+        .errors
+        .push(format!("{prefix} must specify exactly one of `id`/`glob`/`regex`"));
+      continue;
+    }
+
+    if let Some(id) = &entry.id {
+      if !discovered_ids.contains(id) {
+        report
+          .errors
+          .push(format!("{prefix} references missing id {id:?}"));
       }
-      (None, Some(glob), None) => match glob_match_ids(glob, &discovered.ids) {
-        Ok(matches) => {
+      continue;
+    }
+
+    if let Some(glob) = &entry.glob {
+      match Glob::new(glob) {
+        Ok(glob) => {
+          let matcher = glob.compile_matcher();
+          let count = discovered.iter().filter(|t| matcher.is_match(&t.id)).count();
           if report_counts {
-            report.notes.push(format!("{prefix} glob {glob:?} matched {}", matches.len()));
+            report
+              .notes
+              .push(format!("{prefix} glob {glob:?} matched {count}"));
           }
-          if matches.is_empty() {
+          if count == 0 {
             report
               .warnings
               .push(format!("{prefix} glob {glob:?} matched 0 tests"));
@@ -397,28 +382,28 @@ fn validate_manifest(
         Err(err) => report
           .errors
           .push(format!("{prefix} glob {glob:?} is invalid: {err}")),
-      },
-      (None, None, Some(regex)) => match Regex::new(regex) {
-        Ok(re) => {
-          let count = discovered.ids.iter().filter(|id| re.is_match(id)).count();
-          if report_counts {
-            report
-              .notes
-              .push(format!("{prefix} regex {regex:?} matched {count}"));
-          }
-          if count == 0 {
-            report
-              .warnings
-              .push(format!("{prefix} regex {regex:?} matched 0 tests"));
-          }
+      }
+      continue;
+    }
+
+    let regex = entry.regex.as_ref().expect("validated presence");
+    match Regex::new(regex) {
+      Ok(re) => {
+        let count = discovered.iter().filter(|t| re.is_match(&t.id)).count();
+        if report_counts {
+          report
+            .notes
+            .push(format!("{prefix} regex {regex:?} matched {count}"));
         }
-        Err(err) => report
-          .errors
-          .push(format!("{prefix} regex {regex:?} is invalid: {err}")),
-      },
-      _ => report.errors.push(format!(
-        "{prefix} must contain exactly one of `id`, `glob`, or `regex`"
-      )),
+        if count == 0 {
+          report
+            .warnings
+            .push(format!("{prefix} regex {regex:?} matched 0 tests"));
+        }
+      }
+      Err(err) => report
+        .errors
+        .push(format!("{prefix} regex {regex:?} is invalid: {err}")),
     }
   }
 
@@ -435,110 +420,74 @@ mod tests {
     fs::write(path, contents).unwrap();
   }
 
-  #[test]
-  fn stale_exact_id_is_error() {
+  fn discovered_fixture() -> (tempfile::TempDir, Vec<DiscoveredTest>, BTreeSet<String>) {
     let dir = tempdir().unwrap();
     let test_root = dir.path().join("test");
-    write_file(&test_root.join("language/ok.js"), "");
-
-    let suites_path = dir.path().join("suites.toml");
-    fs::write(
-      &suites_path,
-      r#"
-[[suites]]
-name = "smoke"
-ids = ["language/ok.js", "language/missing.js"]
-"#,
-    )
-    .unwrap();
+    write_file(&test_root.join("language/a.js"), "");
+    write_file(&test_root.join("language/b.js"), "");
 
     let discovered = discover_tests(dir.path()).unwrap();
-    let suites = SuitesFile::from_path(&suites_path).unwrap();
-    let suite = &suites.suites[0];
+    let discovered_ids = discovered
+      .iter()
+      .map(|t| t.id.clone())
+      .collect::<BTreeSet<_>>();
+    (dir, discovered, discovered_ids)
+  }
+
+  #[test]
+  fn stale_exact_id_is_error() {
+    let (_dir, discovered, discovered_ids) = discovered_fixture();
+    let suite = SuiteSpec {
+      label: "suite \"smoke\"".to_string(),
+      suite: Suite {
+        tests: vec!["language/a.js".to_string(), "language/missing.js".to_string()],
+        ..Suite::default()
+      },
+    };
 
     let args = ValidateArgs {
-      test262_dir: dir.path().to_path_buf(),
-      suites: suites_path,
-      suite: Some("smoke".to_string()),
+      test262_dir: PathBuf::new(),
+      suite: vec![],
+      suite_path: vec![],
       manifest: None,
       include_glob_zero: ZeroMatchBehavior::Error,
       exclude_glob_zero: ZeroMatchBehavior::Warn,
       manifest_counts: false,
     };
 
-    let report = validate_suite(suite, &discovered, &args);
+    let report = validate_suite(&suite, &discovered, &discovered_ids, &args);
     assert!(
       report
         .errors
         .iter()
-        .any(|msg| msg.contains("missing id") && msg.contains("language/missing.js")),
+        .any(|msg| msg.contains("missing test id") && msg.contains("language/missing.js")),
       "expected missing id error, got: {:#?}",
       report.errors
     );
   }
 
   #[test]
-  fn manifest_stale_exact_id_is_error() {
-    let dir = tempdir().unwrap();
-    let test_root = dir.path().join("test");
-    write_file(&test_root.join("language/ok.js"), "");
-
-    let manifest_path = dir.path().join("manifest.toml");
-    fs::write(
-      &manifest_path,
-      r#"
-[[expectations]]
-id = "language/missing.js"
-status = "xfail"
-"#,
-    )
-    .unwrap();
-
-    let discovered = discover_tests(dir.path()).unwrap();
-    let manifest = ManifestFile::from_path(&manifest_path).unwrap();
-    let report = validate_manifest(&manifest, &discovered, false);
-    assert!(
-      report
-        .errors
-        .iter()
-        .any(|msg| msg.contains("missing id") && msg.contains("language/missing.js")),
-      "expected missing manifest id error, got: {:#?}",
-      report.errors
-    );
-  }
-
-  #[test]
   fn include_glob_matching_nothing_is_error_by_default() {
-    let dir = tempdir().unwrap();
-    let test_root = dir.path().join("test");
-    write_file(&test_root.join("language/ok.js"), "");
-
-    let suites_path = dir.path().join("suites.toml");
-    fs::write(
-      &suites_path,
-      r#"
-[[suites]]
-name = "smoke"
-include = ["does/not/exist/**/*.js"]
-"#,
-    )
-    .unwrap();
-
-    let discovered = discover_tests(dir.path()).unwrap();
-    let suites = SuitesFile::from_path(&suites_path).unwrap();
-    let suite = &suites.suites[0];
+    let (_dir, discovered, discovered_ids) = discovered_fixture();
+    let suite = SuiteSpec {
+      label: "suite \"smoke\"".to_string(),
+      suite: Suite {
+        include: vec!["does/not/exist/**/*.js".to_string()],
+        ..Suite::default()
+      },
+    };
 
     let args = ValidateArgs {
-      test262_dir: dir.path().to_path_buf(),
-      suites: suites_path,
-      suite: Some("smoke".to_string()),
+      test262_dir: PathBuf::new(),
+      suite: vec![],
+      suite_path: vec![],
       manifest: None,
       include_glob_zero: ZeroMatchBehavior::Error,
       exclude_glob_zero: ZeroMatchBehavior::Warn,
       manifest_counts: false,
     };
 
-    let report = validate_suite(suite, &discovered, &args);
+    let report = validate_suite(&suite, &discovered, &discovered_ids, &args);
     assert!(
       report
         .errors
@@ -551,44 +500,56 @@ include = ["does/not/exist/**/*.js"]
 
   #[test]
   fn suite_selecting_zero_tests_is_error() {
-    let dir = tempdir().unwrap();
-    let test_root = dir.path().join("test");
-    write_file(&test_root.join("language/a.js"), "");
-    write_file(&test_root.join("language/b.js"), "");
-
-    let suites_path = dir.path().join("suites.toml");
-    fs::write(
-      &suites_path,
-      r#"
-[[suites]]
-name = "smoke"
-include = ["language/*.js"]
-exclude = ["language/*"]
-"#,
-    )
-    .unwrap();
-
-    let discovered = discover_tests(dir.path()).unwrap();
-    let suites = SuitesFile::from_path(&suites_path).unwrap();
-    let suite = &suites.suites[0];
+    let (_dir, discovered, discovered_ids) = discovered_fixture();
+    let suite = SuiteSpec {
+      label: "suite \"smoke\"".to_string(),
+      suite: Suite {
+        include: vec!["language/*.js".to_string()],
+        exclude: vec!["language/*".to_string()],
+        ..Suite::default()
+      },
+    };
 
     let args = ValidateArgs {
-      test262_dir: dir.path().to_path_buf(),
-      suites: suites_path,
-      suite: Some("smoke".to_string()),
+      test262_dir: PathBuf::new(),
+      suite: vec![],
+      suite_path: vec![],
       manifest: None,
       include_glob_zero: ZeroMatchBehavior::Error,
       exclude_glob_zero: ZeroMatchBehavior::Warn,
       manifest_counts: false,
     };
 
-    let report = validate_suite(suite, &discovered, &args);
+    let report = validate_suite(&suite, &discovered, &discovered_ids, &args);
+    assert!(
+      report.errors.iter().any(|msg| msg.contains("selected 0 tests")),
+      "expected suite-empty error, got: {:#?}",
+      report.errors
+    );
+  }
+
+  #[test]
+  fn manifest_stale_exact_id_is_error() {
+    let (dir, discovered, discovered_ids) = discovered_fixture();
+    let manifest_path = dir.path().join("manifest.toml");
+    fs::write(
+      &manifest_path,
+      r#"
+[[expectations]]
+id = "language/missing.js"
+status = "xfail"
+"#,
+    )
+    .unwrap();
+
+    let manifest = RawManifest::from_path(&manifest_path).unwrap();
+    let report = validate_manifest(&manifest, &discovered, &discovered_ids, false);
     assert!(
       report
         .errors
         .iter()
-        .any(|msg| msg.contains("selected 0 tests")),
-      "expected suite-empty error, got: {:#?}",
+        .any(|msg| msg.contains("missing id") && msg.contains("language/missing.js")),
+      "expected missing manifest id error, got: {:#?}",
       report.errors
     );
   }
