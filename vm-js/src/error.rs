@@ -15,6 +15,14 @@ pub enum VmError {
   #[error("invalid handle")]
   InvalidHandle,
 
+  /// A stubbed/unfinished codepath.
+  #[error("unimplemented: {0}")]
+  Unimplemented(&'static str),
+
+  /// The provided property descriptor patch is invalid.
+  #[error("invalid property descriptor patch: cannot mix data and accessor fields")]
+  InvalidPropertyDescriptorPatch,
+
   /// A JavaScript `throw` value. This is catchable from JS.
   #[error("uncaught exception")]
   Throw(Value),
@@ -69,4 +77,3 @@ impl Display for TerminationReason {
     }
   }
 }
-

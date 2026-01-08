@@ -1,4 +1,5 @@
 use crate::string::JsString;
+use crate::property::PropertyDescriptor;
 use crate::symbol::JsSymbol;
 use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
 use core::mem;
@@ -451,10 +452,22 @@ impl<'a> Scope<'a> {
 
   /// Allocates an empty JavaScript object on the heap.
   pub fn alloc_object(&mut self) -> Result<GcObject, VmError> {
-    let new_bytes = mem::size_of::<JsObject>();
+    let new_bytes = JsObject::heap_size_bytes_for_descriptor_count(0);
     self.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Object(JsObject::new());
+    Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  /// Allocates a JavaScript object with the provided owned property descriptors.
+  pub fn alloc_object_with_descriptors(
+    &mut self,
+    descriptors: &[PropertyDescriptor],
+  ) -> Result<GcObject, VmError> {
+    let new_bytes = JsObject::heap_size_bytes_for_descriptor_count(descriptors.len());
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Object(JsObject::from_descriptor_slice(descriptors)?);
     Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 }
@@ -509,27 +522,52 @@ impl Trace for JsSymbol {
 
 #[derive(Debug)]
 struct JsObject {
-  // Placeholder for future object layout (kept non-zero-sized for accounting sanity).
-  _private: u8,
+  descriptors: Box<[PropertyDescriptor]>,
 }
 
 impl JsObject {
   fn new() -> Self {
-    Self { _private: 0 }
+    Self {
+      descriptors: Box::default(),
+    }
+  }
+
+  fn from_descriptor_slice(descriptors: &[PropertyDescriptor]) -> Result<Self, VmError> {
+    // Avoid process abort on allocator OOM: allocate the descriptor buffer fallibly.
+    let mut buf: Vec<PropertyDescriptor> = Vec::new();
+    buf
+      .try_reserve_exact(descriptors.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    buf.extend_from_slice(descriptors);
+
+    Ok(Self {
+      descriptors: buf.into_boxed_slice(),
+    })
+  }
+
+  fn heap_size_bytes_for_descriptor_count(count: usize) -> usize {
+    let desc_bytes = count
+      .checked_mul(mem::size_of::<PropertyDescriptor>())
+      .unwrap_or(usize::MAX);
+    mem::size_of::<Self>()
+      .checked_add(desc_bytes)
+      .unwrap_or(usize::MAX)
   }
 }
 
 impl Trace for JsObject {
-  fn trace(&self, _tracer: &mut Tracer<'_>) {
-    // Placeholder: objects have no outgoing references yet.
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    for desc in self.descriptors.iter() {
+      desc.trace(tracer);
+    }
   }
 }
 
-trait Trace {
+pub(crate) trait Trace {
   fn trace(&self, tracer: &mut Tracer<'_>);
 }
 
-struct Tracer<'a> {
+pub(crate) struct Tracer<'a> {
   slots: &'a [Slot],
   marks: &'a mut [u8],
   worklist: Vec<HeapId>,
@@ -548,7 +586,7 @@ impl<'a> Tracer<'a> {
     self.worklist.pop()
   }
 
-  fn trace_value(&mut self, value: Value) {
+  pub(crate) fn trace_value(&mut self, value: Value) {
     match value {
       Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => {}
       Value::String(s) => self.trace_heap_id(s.0),

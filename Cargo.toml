@@ -23,6 +23,7 @@ members = [
   "typecheck-ts-harness",
   "semantic-js",
   "typecheck-ts-cli",
+  "vm-js",
 ]
 exclude = ["fuzz"]
 
