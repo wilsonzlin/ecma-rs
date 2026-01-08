@@ -1,17 +1,42 @@
-use crate::heap::GcString;
+use crate::{GcObject, GcString, GcSymbol};
 
-/// Opaque object handle for later GC integration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ObjectId(pub(crate) u64);
-
-/// JavaScript value placeholder.
-#[derive(Debug, Clone, PartialEq)]
+/// A JavaScript value.
+///
+/// This is the VM's canonical value representation. Heap-allocated values are represented using
+/// GC-managed handles (e.g. [`GcString`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Value {
+  /// The JavaScript `undefined` value.
   Undefined,
+  /// The JavaScript `null` value.
   Null,
+  /// A JavaScript boolean.
   Bool(bool),
+  /// A JavaScript number (IEEE-754 double).
   Number(f64),
+  /// A GC-managed JavaScript string.
   String(GcString),
-  Object(ObjectId),
+  /// A GC-managed JavaScript symbol.
+  Symbol(GcSymbol),
+  /// A GC-managed JavaScript object.
+  Object(GcObject),
+}
+
+impl From<GcString> for Value {
+  fn from(value: GcString) -> Self {
+    Self::String(value)
+  }
+}
+
+impl From<GcSymbol> for Value {
+  fn from(value: GcSymbol) -> Self {
+    Self::Symbol(value)
+  }
+}
+
+impl From<GcObject> for Value {
+  fn from(value: GcObject) -> Self {
+    Self::Object(value)
+  }
 }
 

@@ -13,6 +13,7 @@ members = [
   "parse-js-cli",
   "parse-js",
   "emit-js",
+  "vm-js",
   "types-ts-interned",
   "hir-js",
   "typecheck-ts",
@@ -21,7 +22,6 @@ members = [
   "typecheck-ts-harness",
   "semantic-js",
   "typecheck-ts-cli",
-  "vm-js",
 ]
 exclude = ["fuzz"]
 

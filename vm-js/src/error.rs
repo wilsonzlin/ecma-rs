@@ -3,16 +3,27 @@ use crate::value::Value;
 use diagnostics::Diagnostic;
 use std::fmt::Display;
 
-/// Errors produced by the VM.
+/// Errors produced by the VM and runtime.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum VmError {
+  /// The heap has exceeded its configured memory limit.
+  #[error("out of memory")]
+  OutOfMemory,
+
+  /// A GC handle was used after the underlying allocation was freed (or the handle is otherwise
+  /// malformed).
+  #[error("invalid handle")]
+  InvalidHandle,
+
   /// A JavaScript `throw` value. This is catchable from JS.
   #[error("uncaught exception")]
   Throw(Value),
-  /// A non-catchable termination condition (fuel exhausted, deadline exceeded,
-  /// host interrupt, etc).
+
+  /// A non-catchable termination condition (fuel exhausted, deadline exceeded, host interrupt,
+  /// etc).
   #[error("{0}")]
   Termination(Termination),
+
   /// Early (syntax/binding) errors produced before execution begins.
   #[error("syntax error")]
   Syntax(Vec<Diagnostic>),

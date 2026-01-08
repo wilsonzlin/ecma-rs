@@ -1,8 +1,6 @@
 use std::cmp::Ordering;
 use std::fmt;
 
-use crate::gc::{Trace, Tracer};
-
 /// A JavaScript String value.
 ///
 /// Per ECMAScript, strings are sequences of UTF-16 code units and may contain
@@ -55,12 +53,6 @@ impl JsString {
   }
 }
 
-impl Trace for JsString {
-  fn trace(&self, _tracer: &mut Tracer) {
-    // Strings have no outgoing GC edges.
-  }
-}
-
 impl PartialEq for JsString {
   fn eq(&self, other: &Self) -> bool {
     self.units == other.units
@@ -105,4 +97,3 @@ fn stable_hash64(units: &[u16]) -> u64 {
   }
   hash
 }
-

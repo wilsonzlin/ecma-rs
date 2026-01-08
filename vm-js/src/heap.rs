@@ -1,81 +1,515 @@
-use crate::error::Termination;
-use crate::error::TerminationReason;
-use crate::error::VmError;
-use crate::gc::{Trace, Tracer};
 use crate::string::JsString;
+use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
+use core::mem;
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub struct GcString(pub(crate) usize);
-
-pub enum HeapObject {
-  String(JsString),
+/// Heap configuration and memory limits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeapLimits {
+  /// Hard memory limit for live heap allocations, in bytes.
+  pub max_bytes: usize,
+  /// When an allocation would cause `used_bytes` to exceed this threshold, the heap will trigger a
+  /// GC cycle before attempting the allocation.
+  pub gc_threshold: usize,
 }
 
-impl Trace for HeapObject {
-  fn trace(&self, tracer: &mut Tracer) {
-    match self {
-      HeapObject::String(s) => s.trace(tracer),
+impl HeapLimits {
+  /// Creates a new set of heap limits.
+  pub fn new(max_bytes: usize, gc_threshold: usize) -> Self {
+    Self {
+      max_bytes,
+      gc_threshold,
     }
   }
 }
 
+/// A non-moving mark/sweep GC heap.
+///
+/// The heap stores objects in a `Vec` of slots. GC handles store the slot `index` and a
+/// per-slot `generation`, which makes handles stable across `Vec` reallocations and allows
+/// detection of stale handles when slots are reused.
 pub struct Heap {
-  max_bytes: usize,
+  limits: HeapLimits,
+
+  /// Bytes used by live allocations.
   used_bytes: usize,
-  objects: Vec<HeapObject>,
+  gc_runs: u64,
+
+  // GC-managed allocations.
+  slots: Vec<Slot>,
+  marks: Vec<u8>,
+  free_list: Vec<u32>,
+
+  // Root sets.
+  pub(crate) root_stack: Vec<Value>,
+  persistent_roots: Vec<Option<Value>>,
+  persistent_roots_free: Vec<u32>,
 }
 
 impl Heap {
-  pub fn new(max_bytes: usize) -> Self {
+  /// Creates a new heap with the provided memory limits.
+  pub fn new(limits: HeapLimits) -> Self {
+    debug_assert!(
+      limits.gc_threshold <= limits.max_bytes,
+      "gc_threshold should be <= max_bytes"
+    );
+
     Self {
-      max_bytes,
+      limits,
       used_bytes: 0,
-      objects: Vec::new(),
+      gc_runs: 0,
+      slots: Vec::new(),
+      marks: Vec::new(),
+      free_list: Vec::new(),
+      root_stack: Vec::new(),
+      persistent_roots: Vec::new(),
+      persistent_roots_free: Vec::new(),
     }
   }
 
-  pub fn max_bytes(&self) -> usize {
-    self.max_bytes
+  /// Enters a stack-rooting scope.
+  ///
+  /// Stack roots pushed via [`Scope::push_root`] are removed when the returned `Scope` is dropped.
+  pub fn scope(&mut self) -> Scope<'_> {
+    let root_stack_len_at_entry = self.root_stack.len();
+    Scope {
+      heap: self,
+      root_stack_len_at_entry,
+    }
   }
 
+  /// Bytes currently used by live heap allocations.
   pub fn used_bytes(&self) -> usize {
     self.used_bytes
   }
 
-  pub(crate) fn try_alloc_bytes(&self, bytes: usize) -> Result<(), VmError> {
-    match self.max_bytes.checked_sub(self.used_bytes) {
-      Some(remaining) if bytes <= remaining => Ok(()),
-      _ => Err(VmError::Termination(Termination::new(
-        TerminationReason::OutOfMemory,
-        Vec::new(),
-      ))),
+  /// Total number of GC cycles that have run.
+  pub fn gc_runs(&self) -> u64 {
+    self.gc_runs
+  }
+
+  /// Explicitly runs a GC cycle.
+  pub fn collect_garbage(&mut self) {
+    self.gc_runs += 1;
+
+    // Mark.
+    {
+      debug_assert_eq!(self.slots.len(), self.marks.len());
+
+      let slots = &self.slots;
+      let marks = &mut self.marks[..];
+
+      let mut tracer = Tracer::new(slots, marks);
+      for value in &self.root_stack {
+        tracer.trace_value(*value);
+      }
+      for value in self.persistent_roots.iter().flatten() {
+        tracer.trace_value(*value);
+      }
+
+      while let Some(id) = tracer.pop_work() {
+        let Some(idx) = tracer.validate(id) else {
+          continue;
+        };
+        if tracer.marks[idx] != 0 {
+          continue;
+        }
+        tracer.marks[idx] = 1;
+
+        let Some(obj) = tracer.slots[idx].value.as_ref() else {
+          debug_assert!(false, "validated heap id points to a free slot: {id:?}");
+          continue;
+        };
+        obj.trace(&mut tracer);
+      }
+    }
+
+    // Sweep.
+    for (idx, slot) in self.slots.iter_mut().enumerate() {
+      let marked = self.marks[idx] != 0;
+      // Reset mark bits for next cycle.
+      self.marks[idx] = 0;
+
+      if slot.value.is_none() {
+        debug_assert!(!marked);
+        continue;
+      }
+
+      if marked {
+        continue;
+      }
+
+      // Unreachable: drop the object and free the slot.
+      self.used_bytes = self.used_bytes.saturating_sub(slot.bytes);
+      slot.value = None;
+      slot.bytes = 0;
+      slot.generation = slot.generation.wrapping_add(1);
+      self.free_list.push(idx as u32);
     }
   }
 
-  pub fn alloc_string(&mut self, string: JsString) -> Result<GcString, VmError> {
-    let bytes = string.heap_size_bytes();
-    self.try_alloc_bytes(bytes)?;
-    let idx = self.objects.len();
-    self.objects.push(HeapObject::String(string));
-    self.used_bytes += bytes;
-    Ok(GcString(idx))
+  /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
+  pub fn add_root(&mut self, value: Value) -> RootId {
+    // Root sets should not contain stale handles; detect issues early in debug builds.
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+
+    let idx = match self.persistent_roots_free.pop() {
+      Some(idx) => idx as usize,
+      None => {
+        self.persistent_roots.push(None);
+        self.persistent_roots.len() - 1
+      }
+    };
+    debug_assert!(self.persistent_roots[idx].is_none());
+    self.persistent_roots[idx] = Some(value);
+    RootId(idx as u32)
   }
 
+  /// Removes a persistent root previously created by [`Heap::add_root`].
+  pub fn remove_root(&mut self, id: RootId) {
+    let idx = id.0 as usize;
+    debug_assert!(idx < self.persistent_roots.len(), "invalid RootId");
+    if idx >= self.persistent_roots.len() {
+      return;
+    }
+    debug_assert!(self.persistent_roots[idx].is_some(), "RootId already removed");
+    if self.persistent_roots[idx].take().is_some() {
+      self.persistent_roots_free.push(id.0);
+    }
+  }
+
+  /// Returns `true` if `obj` currently points to a live object allocation.
+  pub fn is_valid_object(&self, obj: GcObject) -> bool {
+    matches!(self.get_heap_object(obj.0), Ok(HeapObject::Object(_)))
+  }
+
+  /// Returns `true` if `s` currently points to a live string allocation.
+  pub fn is_valid_string(&self, s: GcString) -> bool {
+    matches!(self.get_heap_object(s.0), Ok(HeapObject::String(_)))
+  }
+
+  /// Returns `true` if `sym` currently points to a live symbol allocation.
+  pub fn is_valid_symbol(&self, sym: GcSymbol) -> bool {
+    matches!(self.get_heap_object(sym.0), Ok(HeapObject::Symbol(_)))
+  }
+
+  /// Gets the string contents for `s`.
+  pub fn get_string(&self, s: GcString) -> Result<&JsString, VmError> {
+    match self.get_heap_object(s.0)? {
+      HeapObject::String(s) => Ok(s),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Gets the (optional) description for `sym`.
+  pub fn get_symbol_description(&self, sym: GcSymbol) -> Result<Option<&str>, VmError> {
+    match self.get_heap_object(sym.0)? {
+      HeapObject::Symbol(sym) => Ok(sym.description()),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  fn get_heap_object(&self, id: HeapId) -> Result<&HeapObject, VmError> {
+    let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
+    self.slots[idx]
+      .value
+      .as_ref()
+      .ok_or(VmError::InvalidHandle)
+  }
+
+  fn validate(&self, id: HeapId) -> Option<usize> {
+    let idx = id.index() as usize;
+    let slot = self.slots.get(idx)?;
+    if slot.generation != id.generation() {
+      return None;
+    }
+    if slot.value.is_none() {
+      return None;
+    }
+    Some(idx)
+  }
+
+  fn ensure_can_allocate(&mut self, new_bytes: usize) -> Result<(), VmError> {
+    let after = self.used_bytes.saturating_add(new_bytes);
+    if after > self.limits.gc_threshold {
+      self.collect_garbage();
+    }
+
+    let after = self.used_bytes.saturating_add(new_bytes);
+    if after > self.limits.max_bytes {
+      return Err(VmError::OutOfMemory);
+    }
+    Ok(())
+  }
+
+  fn alloc_unchecked(&mut self, obj: HeapObject, new_bytes: usize) -> HeapId {
+    let idx = match self.free_list.pop() {
+      Some(idx) => idx as usize,
+      None => {
+        let idx = self.slots.len();
+        self.slots.push(Slot::new());
+        self.marks.push(0);
+        idx
+      }
+    };
+
+    let slot = &mut self.slots[idx];
+    debug_assert!(slot.value.is_none(), "free list returned an occupied slot");
+
+    slot.value = Some(obj);
+    slot.bytes = new_bytes;
+    self.used_bytes = self.used_bytes.saturating_add(new_bytes);
+
+    HeapId::from_parts(idx as u32, slot.generation)
+  }
+
+  fn debug_value_is_valid_or_primitive(&self, value: Value) -> bool {
+    match value {
+      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => true,
+      Value::String(s) => self.is_valid_string(s),
+      Value::Symbol(s) => self.is_valid_symbol(s),
+      Value::Object(o) => self.is_valid_object(o),
+    }
+  }
+}
+
+/// A stack-rooting scope.
+///
+/// All stack roots pushed via [`Scope::push_root`] are removed when the scope is dropped.
+pub struct Scope<'a> {
+  heap: &'a mut Heap,
+  root_stack_len_at_entry: usize,
+}
+
+impl Drop for Scope<'_> {
+  fn drop(&mut self) {
+    self.heap.root_stack.truncate(self.root_stack_len_at_entry);
+  }
+}
+
+impl<'a> Scope<'a> {
+  /// Pushes a stack root.
+  ///
+  /// The returned `Value` is the same as the input, allowing call sites to write
+  /// `let v = scope.push_root(v);` if desired.
+  pub fn push_root(&mut self, value: Value) -> Value {
+    debug_assert!(self.heap.debug_value_is_valid_or_primitive(value));
+    self.heap.root_stack.push(value);
+    value
+  }
+
+  /// Creates a nested child scope that borrows the same heap.
+  pub fn reborrow(&mut self) -> Scope<'_> {
+    let root_stack_len_at_entry = self.heap.root_stack.len();
+    Scope {
+      heap: &mut *self.heap,
+      root_stack_len_at_entry,
+    }
+  }
+
+  /// Borrows the underlying heap immutably.
+  pub fn heap(&self) -> &Heap {
+    &*self.heap
+  }
+
+  /// Borrows the underlying heap mutably.
+  pub fn heap_mut(&mut self) -> &mut Heap {
+    &mut *self.heap
+  }
+
+  /// Allocates a JavaScript string on the heap from UTF-8.
+  pub fn alloc_string_from_utf8(&mut self, s: &str) -> Result<GcString, VmError> {
+    let units_len = s.encode_utf16().count();
+    let new_bytes = JsString::heap_size_bytes_for_len(units_len);
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let js = JsString::from_u16_vec(units);
+    debug_assert_eq!(new_bytes, js.heap_size_bytes());
+    let obj = HeapObject::String(js);
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  /// Allocates a JavaScript string on the heap from UTF-16 code units.
   pub fn alloc_string_from_code_units(&mut self, units: &[u16]) -> Result<GcString, VmError> {
-    let bytes = JsString::heap_size_bytes_for_len(units.len());
-    self.try_alloc_bytes(bytes)?;
-    self.alloc_string(JsString::from_code_units(units))
+    let new_bytes = JsString::heap_size_bytes_for_len(units.len());
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let js = JsString::from_code_units(units);
+    debug_assert_eq!(new_bytes, js.heap_size_bytes());
+    let obj = HeapObject::String(js);
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 
+  /// Allocates a JavaScript string on the heap from a UTF-16 code unit buffer.
   pub fn alloc_string_from_u16_vec(&mut self, units: Vec<u16>) -> Result<GcString, VmError> {
-    let bytes = JsString::heap_size_bytes_for_len(units.len());
-    self.try_alloc_bytes(bytes)?;
-    self.alloc_string(JsString::from_u16_vec(units))
+    let new_bytes = JsString::heap_size_bytes_for_len(units.len());
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let js = JsString::from_u16_vec(units);
+    debug_assert_eq!(new_bytes, js.heap_size_bytes());
+    let obj = HeapObject::String(js);
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
   }
 
-  pub fn get_string(&self, s: GcString) -> &JsString {
-    match &self.objects[s.0] {
-      HeapObject::String(s) => s,
+  /// Convenience alias for [`Scope::alloc_string_from_utf8`].
+  pub fn alloc_string(&mut self, s: &str) -> Result<GcString, VmError> {
+    self.alloc_string_from_utf8(s)
+  }
+
+  /// Allocates a JavaScript symbol on the heap.
+  pub fn alloc_symbol(&mut self, description: Option<&str>) -> Result<GcSymbol, VmError> {
+    let desc_len = description.map_or(0, str::len);
+    let new_bytes = mem::size_of::<JsSymbol>() + desc_len;
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Symbol(JsSymbol::new(description));
+    Ok(GcSymbol(self.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  /// Allocates an empty JavaScript object on the heap.
+  pub fn alloc_object(&mut self) -> Result<GcObject, VmError> {
+    let new_bytes = mem::size_of::<JsObject>();
+    self.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Object(JsObject::new());
+    Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
+  }
+}
+
+#[derive(Debug)]
+struct Slot {
+  generation: u32,
+  value: Option<HeapObject>,
+  bytes: usize,
+}
+
+impl Slot {
+  fn new() -> Self {
+    Self {
+      generation: 0,
+      value: None,
+      bytes: 0,
     }
+  }
+}
+
+#[derive(Debug)]
+enum HeapObject {
+  String(JsString),
+  Symbol(JsSymbol),
+  Object(JsObject),
+}
+
+impl Trace for HeapObject {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    match self {
+      HeapObject::String(s) => s.trace(tracer),
+      HeapObject::Symbol(s) => s.trace(tracer),
+      HeapObject::Object(o) => o.trace(tracer),
+    }
+  }
+}
+
+impl Trace for JsString {
+  fn trace(&self, _tracer: &mut Tracer<'_>) {
+    // Strings have no outgoing GC references.
+  }
+}
+
+#[derive(Debug)]
+struct JsSymbol {
+  description: Option<Box<str>>,
+}
+
+impl JsSymbol {
+  fn new(description: Option<&str>) -> Self {
+    Self {
+      description: description.map(Into::into),
+    }
+  }
+
+  fn description(&self) -> Option<&str> {
+    self.description.as_deref()
+  }
+}
+
+impl Trace for JsSymbol {
+  fn trace(&self, _tracer: &mut Tracer<'_>) {
+    // Symbols have no outgoing GC references (description is stored inline).
+  }
+}
+
+#[derive(Debug)]
+struct JsObject {
+  // Placeholder for future object layout (kept non-zero-sized for accounting sanity).
+  _private: u8,
+}
+
+impl JsObject {
+  fn new() -> Self {
+    Self { _private: 0 }
+  }
+}
+
+impl Trace for JsObject {
+  fn trace(&self, _tracer: &mut Tracer<'_>) {
+    // Placeholder: objects have no outgoing references yet.
+  }
+}
+
+trait Trace {
+  fn trace(&self, tracer: &mut Tracer<'_>);
+}
+
+struct Tracer<'a> {
+  slots: &'a [Slot],
+  marks: &'a mut [u8],
+  worklist: Vec<HeapId>,
+}
+
+impl<'a> Tracer<'a> {
+  fn new(slots: &'a [Slot], marks: &'a mut [u8]) -> Self {
+    Self {
+      slots,
+      marks,
+      worklist: Vec::new(),
+    }
+  }
+
+  fn pop_work(&mut self) -> Option<HeapId> {
+    self.worklist.pop()
+  }
+
+  fn trace_value(&mut self, value: Value) {
+    match value {
+      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => {}
+      Value::String(s) => self.trace_heap_id(s.0),
+      Value::Symbol(s) => self.trace_heap_id(s.0),
+      Value::Object(o) => self.trace_heap_id(o.0),
+    }
+  }
+
+  fn trace_heap_id(&mut self, id: HeapId) {
+    let Some(idx) = self.validate(id) else {
+      return;
+    };
+    if self.marks[idx] != 0 {
+      return;
+    }
+    self.worklist.push(id);
+  }
+
+  fn validate(&self, id: HeapId) -> Option<usize> {
+    let idx = id.index() as usize;
+    let slot = self.slots.get(idx)?;
+    if slot.generation != id.generation() {
+      debug_assert!(false, "stale handle during GC: {id:?}");
+      return None;
+    }
+    if slot.value.is_none() {
+      debug_assert!(false, "handle points at a free slot during GC: {id:?}");
+      return None;
+    }
+    Some(idx)
   }
 }
