@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use crate::heap::GcString;
 
 /// Opaque object handle for later GC integration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -11,6 +11,7 @@ pub enum Value {
   Null,
   Bool(bool),
   Number(f64),
-  String(Arc<str>),
+  String(GcString),
   Object(ObjectId),
 }
+
