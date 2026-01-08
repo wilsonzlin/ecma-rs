@@ -1,7 +1,21 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+
+/// A cooperative cancellation token that can be toggled by [`TimeoutManager`].
+///
+/// The token is intentionally minimal: it only needs to support being cancelled
+/// once a timeout deadline is reached.
+pub trait CancellationToken: Send + Sync + 'static {
+  fn cancel(&self);
+}
+
+impl CancellationToken for Arc<AtomicBool> {
+  fn cancel(&self) {
+    self.store(true, AtomicOrdering::Relaxed);
+  }
+}
 
 pub struct TimeoutManager {
   inner: Arc<TimeoutManagerInner>,
@@ -21,7 +35,7 @@ struct TimeoutManagerState {
 
 struct TimeoutEntry {
   deadline: Instant,
-  cancel: Arc<AtomicBool>,
+  cancel: Box<dyn CancellationToken>,
   cancelled: bool,
 }
 
@@ -39,8 +53,10 @@ impl TimeoutManager {
       }),
       cv: Condvar::new(),
     });
+
     let thread_inner = Arc::clone(&inner);
     let handle = std::thread::spawn(move || timeout_thread(thread_inner));
+
     Self {
       inner,
       next_id: AtomicUsize::new(1),
@@ -48,14 +64,14 @@ impl TimeoutManager {
     }
   }
 
-  pub fn register(&self, deadline: Instant, cancel: Arc<AtomicBool>) -> TimeoutGuard {
-    let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+  pub fn register<T: CancellationToken>(&self, deadline: Instant, cancel: T) -> TimeoutGuard {
+    let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
     let mut state = self.inner.state.lock().unwrap();
     state.active.insert(
       id,
       TimeoutEntry {
         deadline,
-        cancel,
+        cancel: Box::new(cancel),
         cancelled: false,
       },
     );
@@ -64,6 +80,12 @@ impl TimeoutManager {
       id,
       inner: Arc::clone(&self.inner),
     }
+  }
+}
+
+impl Default for TimeoutManager {
+  fn default() -> Self {
+    Self::new()
   }
 }
 
@@ -105,7 +127,7 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
       }
       if now >= entry.deadline {
         entry.cancelled = true;
-        entry.cancel.store(true, Ordering::Relaxed);
+        entry.cancel.cancel();
         continue;
       }
 
@@ -124,5 +146,22 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
     } else {
       guard = inner.cv.wait(guard).unwrap();
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn timeout_cancels_token() {
+    let manager = TimeoutManager::new();
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let deadline = Instant::now() + Duration::from_millis(10);
+    let _guard = manager.register(deadline, Arc::clone(&cancelled));
+
+    // Wait a bit longer than the deadline.
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(cancelled.load(AtomicOrdering::Relaxed));
   }
 }

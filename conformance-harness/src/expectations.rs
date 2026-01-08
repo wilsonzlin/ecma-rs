@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+/// The expected outcome for a test case, as described in a manifest.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExpectationKind {
@@ -20,6 +21,7 @@ impl Default for ExpectationKind {
   }
 }
 
+/// An expectation entry (status + optional metadata).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Expectation {
   #[serde(default)]
@@ -30,13 +32,19 @@ pub struct Expectation {
   pub tracking_issue: Option<String>,
 }
 
-#[derive(Debug, Clone, Default)]
+/// The expectation after applying a manifest lookup.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AppliedExpectation {
   pub expectation: Expectation,
   pub from_manifest: bool,
 }
 
 impl AppliedExpectation {
+  /// Returns whether a test with the given `mismatched` status was expected.
+  ///
+  /// - `pass`: expected when there is no mismatch
+  /// - `skip`: always expected
+  /// - `xfail`/`flaky`: expected when there is a mismatch
   pub fn matches(&self, mismatched: bool) -> bool {
     match self.expectation.kind {
       ExpectationKind::Pass => !mismatched,
@@ -46,6 +54,10 @@ impl AppliedExpectation {
   }
 }
 
+/// A parsed manifest of expectations.
+///
+/// Precedence is deterministic and intentionally ignores manifest entry order:
+/// `id` (exact) > `glob` > `regex`.
 #[derive(Debug, Clone, Default)]
 pub struct Expectations {
   exact: Vec<Entry>,
@@ -218,5 +230,45 @@ impl RawEntry {
     let compiled = Regex::new(regex).map_err(|err| anyhow!("invalid regex '{regex}': {err}"))?;
 
     Ok(Matcher::Regex(compiled))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn manifest_prefers_exact_then_glob_then_regex() {
+    let manifest = r#"
+[[expectations]]
+glob = "a/**"
+status = "xfail"
+
+[[expectations]]
+regex = "a/.*"
+status = "flaky"
+
+[[expectations]]
+id = "a/b/c.js"
+status = "skip"
+    "#;
+
+    let expectations = Expectations::from_str(manifest).expect("manifest parsed");
+    let applied = expectations.lookup("a/b/c.js");
+    assert_eq!(applied.expectation.kind, ExpectationKind::Skip);
+  }
+
+  #[test]
+  fn manifest_supports_json() {
+    let manifest = r#"
+{
+  "expectations": [
+    { "glob": "a/**", "status": "xfail" }
+  ]
+}
+    "#;
+    let expectations = Expectations::from_str(manifest).expect("manifest parsed");
+    let applied = expectations.lookup("a/b/c.js");
+    assert_eq!(applied.expectation.kind, ExpectationKind::Xfail);
   }
 }
