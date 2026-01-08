@@ -179,6 +179,14 @@ fn discover_tests(test262_dir: &Path) -> Result<DiscoveredTests> {
   ids.sort();
   ids.dedup();
 
+  if ids.is_empty() {
+    bail!(
+      "discovered 0 .js tests under {} (resolved discovery root: {}). Is the tc39/test262 corpus checked out?",
+      test262_dir.display(),
+      discovery_root.display()
+    );
+  }
+
   let id_set = ids.iter().cloned().collect::<BTreeSet<_>>();
 
   Ok(DiscoveredTests {
