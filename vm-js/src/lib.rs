@@ -51,6 +51,7 @@ pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;
 pub use crate::handle::HeapId;
 pub use crate::handle::RootId;
+pub use crate::handle::WeakGcObject;
 pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
 pub use crate::heap::Scope;

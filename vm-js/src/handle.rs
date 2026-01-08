@@ -1,5 +1,7 @@
 use core::fmt;
 
+use crate::Heap;
+
 /// A stable identifier for an allocation in the [`Heap`](crate::Heap).
 ///
 /// This is a packed `{ index: u32, generation: u32 }`.
@@ -63,6 +65,35 @@ impl GcObject {
   #[inline]
   pub fn generation(self) -> u32 {
     self.0.generation()
+  }
+}
+
+/// A weak, generation-checked handle to a GC-managed JavaScript object.
+///
+/// This is intended for host-side wrapper identity maps (e.g. DOM/WebIDL bindings):
+/// a host can store `WeakGcObject` values in a `HashMap<NodeId, WeakGcObject>` without
+/// accidentally keeping wrappers alive. On lookup, call [`WeakGcObject::upgrade`] to
+/// check whether the wrapper is still alive; if not, create a new wrapper and
+/// overwrite the entry.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct WeakGcObject(HeapId);
+
+impl WeakGcObject {
+  /// Attempts to upgrade this weak handle to a strong [`GcObject`].
+  ///
+  /// Returns `Some(GcObject)` only if the handle still points to a currently-live
+  /// object allocation.
+  #[inline]
+  pub fn upgrade(self, heap: &Heap) -> Option<GcObject> {
+    let obj = GcObject(self.0);
+    heap.is_valid_object(obj).then_some(obj)
+  }
+}
+
+impl From<GcObject> for WeakGcObject {
+  #[inline]
+  fn from(obj: GcObject) -> Self {
+    Self(obj.id())
   }
 }
 
