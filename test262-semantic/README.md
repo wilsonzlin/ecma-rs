@@ -38,6 +38,15 @@ When running inside the `ecma-rs` repo directly:
 git submodule update --init --recursive test262-semantic/data
 ```
 
+The runner defaults `--test262-dir` to `test262-semantic/data`, so running from
+the `ecma-rs` repo root requires no extra flags.
+
+Quick sanity check (from `engines/ecma-rs/`):
+
+```bash
+cargo run -p test262-semantic -- list
+```
+
 Alternatively, you can clone `test262` anywhere and pass `--test262-dir`:
 
 ```bash
@@ -120,4 +129,3 @@ which makes the runner compile and provides a placeholder executor.
 
 Once the VM lands, a follow-up change can implement the internal `Executor`
 trait against it.
-
