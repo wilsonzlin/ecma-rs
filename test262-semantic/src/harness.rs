@@ -31,6 +31,12 @@ pub fn assemble_source(
   }
 
   let mut out = String::new();
+  // Ensure strict-mode variants actually run in strict mode: the directive must
+  // appear before any other statements (including harness includes), otherwise
+  // the directive prologue is already terminated.
+  if variant == Variant::Strict {
+    out.push_str("'use strict';\n\n");
+  }
   for include in includes {
     let path = harness_dir.join(&include);
     let content =
@@ -42,10 +48,53 @@ pub fn assemble_source(
     out.push('\n');
   }
 
-  if variant == Variant::Strict {
-    out.push_str("'use strict';\n\n");
-  }
-
   out.push_str(body);
   Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::fs;
+  use tempfile::tempdir;
+
+  #[test]
+  fn strict_variant_begins_with_use_strict_directive() {
+    let dir = tempdir().unwrap();
+    let harness_dir = dir.path().join("harness");
+    fs::create_dir_all(&harness_dir).unwrap();
+
+    // Intentionally include non-directive statements so the directive prologue
+    // would be terminated if we appended 'use strict' after includes.
+    fs::write(harness_dir.join("assert.js"), "var ASSERT_LOADED = true;").unwrap();
+    fs::write(harness_dir.join("sta.js"), "var STA_LOADED = true;").unwrap();
+
+    let src =
+      assemble_source(dir.path(), &Frontmatter::default(), Variant::Strict, "body();").unwrap();
+    assert!(
+      src.starts_with("'use strict';\n\n"),
+      "strict source should begin with directive, got: {src:?}"
+    );
+  }
+
+  #[test]
+  fn non_strict_variant_does_not_begin_with_use_strict_directive() {
+    let dir = tempdir().unwrap();
+    let harness_dir = dir.path().join("harness");
+    fs::create_dir_all(&harness_dir).unwrap();
+    fs::write(harness_dir.join("assert.js"), "var ASSERT_LOADED = true;").unwrap();
+    fs::write(harness_dir.join("sta.js"), "var STA_LOADED = true;").unwrap();
+
+    let src = assemble_source(
+      dir.path(),
+      &Frontmatter::default(),
+      Variant::NonStrict,
+      "body();",
+    )
+    .unwrap();
+    assert!(
+      !src.starts_with("'use strict';"),
+      "non-strict source should not begin with directive, got: {src:?}"
+    );
+  }
 }
