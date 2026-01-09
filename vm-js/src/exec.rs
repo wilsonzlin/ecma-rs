@@ -4,13 +4,13 @@ use crate::{
 };
 use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
-use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, MemberExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
+use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, MemberExpr};
 use parse_js::ast::node::{literal_string_code_units, Node};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
-  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForTripleStmt, IfStmt, ReturnStmt, Stmt,
-  ThrowStmt, TryStmt, WhileStmt,
+  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForTripleStmt, IfStmt, LabelStmt,
+  ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
 };
 use parse_js::operator::OperatorName;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
@@ -204,9 +204,13 @@ impl RuntimeEnv {
             .object_set_existing_data_property_value(global_object, &key, value)?;
           return Ok(());
         }
-        PropertyKind::Data { writable: false, .. } => {
+        PropertyKind::Data {
+          writable: false, ..
+        } => {
           // TODO: Should throw a TypeError in strict mode; sloppy-mode is a no-op.
-          return Err(VmError::Unimplemented("assignment to non-writable global property"));
+          return Err(VmError::Unimplemented(
+            "assignment to non-writable global property",
+          ));
         }
         PropertyKind::Accessor { .. } => {
           return Err(VmError::Unimplemented("accessor properties"));
@@ -245,8 +249,12 @@ impl RuntimeEnv {
             .object_set_existing_data_property_value(global_object, &key, value)?;
           return Ok(());
         }
-        PropertyKind::Data { writable: false, .. } => {
-          return Err(VmError::Unimplemented("assignment to non-writable global property"));
+        PropertyKind::Data {
+          writable: false, ..
+        } => {
+          return Err(VmError::Unimplemented(
+            "assignment to non-writable global property",
+          ));
         }
         PropertyKind::Accessor { .. } => {
           return Err(VmError::Unimplemented("accessor properties"));
@@ -353,7 +361,11 @@ impl<'a> Evaluator<'a> {
     self.vm.tick()
   }
 
-  fn hoist_var_decls(&mut self, scope: &mut Scope<'_>, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
+  fn hoist_var_decls(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
     let mut names = HashSet::<String>::new();
     for stmt in stmts {
       self.collect_var_names(&stmt.stx, &mut names)?;
@@ -448,6 +460,16 @@ impl<'a> Evaluator<'a> {
           self.collect_var_names(&s.stx, out)?;
         }
       }
+      Stmt::Label(stmt) => {
+        self.collect_var_names(&stmt.stx.statement.stx, out)?;
+      }
+      Stmt::Switch(stmt) => {
+        for branch in &stmt.stx.branches {
+          for s in &branch.stx.body {
+            self.collect_var_names(&s.stx, out)?;
+          }
+        }
+      }
       // Skip nested function declarations: their `var` bindings are not hoisted into the current
       // scope.
       Stmt::FunctionDecl(_) => {}
@@ -534,32 +556,32 @@ impl<'a> Evaluator<'a> {
       Stmt::Throw(stmt) => self.eval_throw(scope, &stmt.stx),
       Stmt::Try(stmt) => self.eval_try(scope, &stmt.stx),
       Stmt::Return(stmt) => self.eval_return(scope, &stmt.stx),
-      Stmt::While(stmt) => self.eval_while(scope, &stmt.stx),
-      Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx),
-      Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx),
-      Stmt::Break(stmt) => {
-        if stmt.stx.label.is_some() {
-          return Err(VmError::Unimplemented("labelled break"));
-        }
-        Ok(Completion::Break(None, None))
-      }
-      Stmt::Continue(stmt) => {
-        if stmt.stx.label.is_some() {
-          return Err(VmError::Unimplemented("labelled continue"));
-        }
-        Ok(Completion::Continue(None, None))
-      }
+      Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, None),
+      Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx, None),
+      Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, None),
+      Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
+      Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx),
+      Stmt::Break(stmt) => Ok(Completion::Break(stmt.stx.label.clone(), None)),
+      Stmt::Continue(stmt) => Ok(Completion::Continue(stmt.stx.label.clone(), None)),
 
       _ => Err(VmError::Unimplemented("statement type")),
     }
   }
 
-  fn eval_expr_stmt(&mut self, scope: &mut Scope<'_>, stmt: &ExprStmt) -> Result<Completion, VmError> {
+  fn eval_expr_stmt(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ExprStmt,
+  ) -> Result<Completion, VmError> {
     let value = self.eval_expr(scope, &stmt.expr)?;
     Ok(Completion::normal(value))
   }
 
-  fn eval_var_decl(&mut self, scope: &mut Scope<'_>, decl: &VarDecl) -> Result<Completion, VmError> {
+  fn eval_var_decl(
+    &mut self,
+    scope: &mut Scope<'_>,
+    decl: &VarDecl,
+  ) -> Result<Completion, VmError> {
     match decl.mode {
       VarDeclMode::Var => {
         // `var` bindings are hoisted to `undefined` at function/script entry.
@@ -711,7 +733,11 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn eval_return(&mut self, scope: &mut Scope<'_>, stmt: &ReturnStmt) -> Result<Completion, VmError> {
+  fn eval_return(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ReturnStmt,
+  ) -> Result<Completion, VmError> {
     let value = match &stmt.value {
       Some(expr) => self.eval_expr(scope, expr)?,
       None => Value::Undefined,
@@ -719,7 +745,12 @@ impl<'a> Evaluator<'a> {
     Ok(Completion::Return(value))
   }
 
-  fn eval_while(&mut self, scope: &mut Scope<'_>, stmt: &WhileStmt) -> Result<Completion, VmError> {
+  fn eval_while(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &WhileStmt,
+    active_label: Option<&str>,
+  ) -> Result<Completion, VmError> {
     loop {
       let test = self.eval_expr(scope, &stmt.condition)?;
       if !to_boolean(scope.heap(), test)? {
@@ -729,7 +760,9 @@ impl<'a> Evaluator<'a> {
       match self.eval_stmt(scope, &stmt.body)? {
         Completion::Normal(_) => {}
         Completion::Continue(None, _) => continue,
+        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => continue,
         Completion::Break(None, _) => break,
+        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
         other => return Ok(other),
       }
     }
@@ -740,12 +773,15 @@ impl<'a> Evaluator<'a> {
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &DoWhileStmt,
+    active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     loop {
       match self.eval_stmt(scope, &stmt.body)? {
         Completion::Normal(_) => {}
         Completion::Continue(None, _) => {}
+        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
         Completion::Break(None, _) => break,
+        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
         other => return Ok(other),
       }
 
@@ -761,6 +797,7 @@ impl<'a> Evaluator<'a> {
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &ForTripleStmt,
+    active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     // Note: this is intentionally minimal and does not implement per-iteration lexical
     // environments for `let`/`const`.
@@ -798,7 +835,9 @@ impl<'a> Evaluator<'a> {
       match self.eval_for_body(scope, &stmt.body.stx)? {
         Completion::Normal(_) => {}
         Completion::Continue(None, _) => {}
+        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
         Completion::Break(None, _) => break,
+        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
         other => return Ok(other),
       }
 
@@ -810,8 +849,134 @@ impl<'a> Evaluator<'a> {
     Ok(Completion::empty())
   }
 
-  fn eval_for_body(&mut self, scope: &mut Scope<'_>, body: &ForBody) -> Result<Completion, VmError> {
+  fn eval_for_body(
+    &mut self,
+    scope: &mut Scope<'_>,
+    body: &ForBody,
+  ) -> Result<Completion, VmError> {
     self.eval_stmt_list(scope, &body.body)
+  }
+
+  fn eval_label(&mut self, scope: &mut Scope<'_>, stmt: &LabelStmt) -> Result<Completion, VmError> {
+    let label = stmt.name.as_str();
+
+    // `continue <label>` is only valid when the labelled statement is a loop. We support labelled
+    // loops by passing the active label through to the loop evaluator.
+    let completion = match &*stmt.statement.stx {
+      Stmt::While(inner) => {
+        // One tick for evaluating the labelled loop statement itself (normally done by
+        // `eval_stmt`).
+        self.tick()?;
+        self.eval_while(scope, &inner.stx, Some(label))?
+      }
+      Stmt::DoWhile(inner) => {
+        self.tick()?;
+        self.eval_do_while(scope, &inner.stx, Some(label))?
+      }
+      Stmt::ForTriple(inner) => {
+        self.tick()?;
+        self.eval_for_triple(scope, &inner.stx, Some(label))?
+      }
+      // TODO: ForIn/ForOf.
+      _ => self.eval_stmt(scope, &stmt.statement)?,
+    };
+
+    match completion {
+      Completion::Break(Some(target), v) => {
+        if target == label {
+          Ok(Completion::Normal(v))
+        } else {
+          Ok(Completion::Break(Some(target), v))
+        }
+      }
+      Completion::Continue(Some(target), v) => {
+        if target == label {
+          Err(VmError::Unimplemented("continue to non-loop label"))
+        } else {
+          Ok(Completion::Continue(Some(target), v))
+        }
+      }
+      other => Ok(other),
+    }
+  }
+
+  fn eval_switch(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &SwitchStmt,
+  ) -> Result<Completion, VmError> {
+    let discriminant = self.eval_expr(scope, &stmt.test)?;
+    let mut switch_scope = scope.reborrow();
+    switch_scope.push_root(discriminant);
+
+    let outer = self.env.lexical_env;
+    let switch_env = switch_scope.env_create(Some(outer))?;
+    self
+      .env
+      .set_lexical_env(switch_scope.heap_mut(), switch_env);
+
+    let result = (|| -> Result<Completion, VmError> {
+      // `switch` shares one lexical scope across all case clauses.
+      for branch in &stmt.branches {
+        self.hoist_lexical_decls_in_stmt_list(&mut switch_scope, switch_env, &branch.stx.body)?;
+      }
+
+      // Select the first matching case clause, or `default` if no clause matches.
+      let mut default_idx: Option<usize> = None;
+      let mut start_idx: Option<usize> = None;
+      for (i, branch) in stmt.branches.iter().enumerate() {
+        match &branch.stx.case {
+          None => {
+            if default_idx.is_none() {
+              default_idx = Some(i);
+            }
+          }
+          Some(case_expr) => {
+            let case_value = self.eval_expr(&mut switch_scope, case_expr)?;
+            if strict_equal(switch_scope.heap(), discriminant, case_value)? {
+              start_idx = Some(i);
+              break;
+            }
+          }
+        }
+      }
+      let Some(start_idx) = start_idx.or(default_idx) else {
+        return Ok(Completion::empty());
+      };
+
+      // Evaluate statement lists from the selected clause until a break or abrupt completion.
+      let last_root = switch_scope.heap_mut().add_root(Value::Undefined);
+      let mut last_value: Option<Value> = None;
+
+      for branch in stmt.branches.iter().skip(start_idx) {
+        for stmt in &branch.stx.body {
+          let completion = self.eval_stmt(&mut switch_scope, stmt)?;
+          let completion = completion.update_empty(last_value);
+          match completion {
+            Completion::Normal(v) => {
+              if let Some(v) = v {
+                last_value = Some(v);
+                switch_scope.heap_mut().set_root(last_root, v);
+              }
+            }
+            abrupt => {
+              switch_scope.heap_mut().remove_root(last_root);
+              return Ok(abrupt);
+            }
+          }
+        }
+      }
+
+      switch_scope.heap_mut().remove_root(last_root);
+      Ok(Completion::Normal(last_value))
+    })();
+
+    self.env.set_lexical_env(switch_scope.heap_mut(), outer);
+    let completion = result?;
+    Ok(match completion {
+      Completion::Break(None, v) => Completion::Normal(v),
+      other => other,
+    })
   }
 
   fn eval_expr(&mut self, scope: &mut Scope<'_>, expr: &Node<Expr>) -> Result<Value, VmError> {
@@ -912,6 +1077,29 @@ impl<'a> Evaluator<'a> {
         let value = self.eval_expr(scope, &expr.right)?;
         self.env.set(scope, name, value, false)?;
         Ok(value)
+      }
+      OperatorName::Addition => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+
+        match (left, right) {
+          (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
+          _ => Err(VmError::Unimplemented("addition operands")),
+        }
+      }
+      OperatorName::LessThan => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+
+        match (left, right) {
+          (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
+          _ => Err(VmError::Unimplemented("less-than operands")),
+        }
       }
       _ => Err(VmError::Unimplemented("binary operator")),
     }

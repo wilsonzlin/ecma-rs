@@ -24,7 +24,9 @@ fn let_shadows_var_in_block() {
 #[test]
 fn tdz_throws_on_access_before_initialization() {
   let mut rt = new_runtime();
-  let err = rt.exec_script(r#"let x = 1; { x; let x = 2; }"#).unwrap_err();
+  let err = rt
+    .exec_script(r#"let x = 1; { x; let x = 2; }"#)
+    .unwrap_err();
   assert!(matches!(err, VmError::Throw(_)));
 }
 
