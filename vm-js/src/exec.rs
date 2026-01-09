@@ -3774,7 +3774,15 @@ impl<'a> Evaluator<'a> {
         }
 
         // For `new`, the `newTarget` is the same as the constructor.
-        self.construct(&mut new_scope, callee, &args, callee)
+        match self.construct(&mut new_scope, callee, &args, callee) {
+          Ok(v) => Ok(v),
+          Err(VmError::NotConstructable) => Err(throw_type_error(
+            self.vm,
+            &mut new_scope,
+            "Value is not a constructor",
+          )?),
+          Err(err) => Err(err),
+        }
       }
       _ => Err(VmError::Unimplemented("unary operator")),
     }
