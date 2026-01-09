@@ -26,8 +26,10 @@
 //! queue is **host-owned**; this crate only provides the job representation.
 
 use crate::GcObject;
+use crate::Heap;
 use crate::PromiseHandle;
 use crate::PromiseRejectionOperation;
+use crate::RootId;
 use crate::Value;
 use crate::VmError;
 use std::fmt;
@@ -103,17 +105,18 @@ pub trait VmJobContext {}
 /// the host (usually as part of a microtask checkpoint).
 ///
 /// This representation is Rust-idiomatic: a job is a boxed `FnOnce` that receives a dynamic
-/// [`VmJobContext`] so it can call back into the evaluator/embedding at run time.
+/// [`VmJobContext`] and a mutable reference to [`VmHostHooks`] so it can schedule additional work
+/// via host hooks (e.g. Promise job chaining).
 pub struct Job {
   kind: JobKind,
-  run: Box<dyn FnOnce(&mut dyn VmJobContext) -> JobResult + Send + 'static>,
+  run: Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>,
 }
 
 impl Job {
   /// Create a new job of `kind` backed by `run`.
   pub fn new(
     kind: JobKind,
-    run: impl FnOnce(&mut dyn VmJobContext) -> JobResult + Send + 'static,
+    run: impl FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static,
   ) -> Self {
     Self {
       kind,
@@ -129,15 +132,105 @@ impl Job {
 
   /// Run the job, consuming it.
   #[inline]
-  pub fn run(self, ctx: &mut dyn VmJobContext) -> JobResult {
+  pub fn run(self, ctx: &mut dyn VmJobContext, host: &mut dyn VmHostHooks) -> JobResult {
     let Job { run, .. } = self;
-    run(ctx)
+    run(ctx, host)
   }
 }
 
 impl fmt::Debug for Job {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("Job").field("kind", &self.kind).finish()
+  }
+}
+
+/// A [`Job`] paired with persistent GC roots that keep captured heap values alive until the job is
+/// executed or cancelled.
+///
+/// Dropping a `RootedJob` without calling [`RootedJob::teardown`] will leak persistent roots
+/// (debug builds `debug_assert!` on drop). Hosts should store `RootedJob` values in a
+/// [`crate::MicrotaskQueue`] and ensure they are cleaned up via
+/// [`crate::MicrotaskQueue::perform_microtask_checkpoint`] or
+/// [`crate::MicrotaskQueue::drain_and_cancel`].
+pub struct RootedJob {
+  job: Option<Job>,
+  roots: Vec<RootId>,
+}
+
+impl RootedJob {
+  /// Create a rooted job with no persistent roots.
+  ///
+  /// This is only GC-safe if the closure does not capture any GC handles.
+  pub fn new(
+    kind: JobKind,
+    run: impl FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static,
+  ) -> Self {
+    Self {
+      job: Some(Job::new(kind, run)),
+      roots: Vec::new(),
+    }
+  }
+
+  /// Create a rooted job, registering `roots` as persistent GC roots.
+  pub fn new_rooted(
+    heap: &mut Heap,
+    roots: impl IntoIterator<Item = Value>,
+    kind: JobKind,
+    run: impl FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static,
+  ) -> Self {
+    let roots = roots.into_iter().map(|v| heap.add_root(v)).collect();
+    Self {
+      job: Some(Job::new(kind, run)),
+      roots,
+    }
+  }
+
+  /// Returns the kind of the underlying job.
+  pub fn kind(&self) -> JobKind {
+    self
+      .job
+      .as_ref()
+      .expect("RootedJob::kind called after run/teardown")
+      .kind()
+  }
+
+  /// Runs this job, consuming its closure but keeping its roots until `teardown`.
+  pub fn run(&mut self, ctx: &mut dyn VmJobContext, host: &mut dyn VmHostHooks) -> JobResult {
+    let job = self
+      .job
+      .take()
+      .expect("RootedJob::run called more than once");
+    job.run(ctx, host)
+  }
+
+  /// Cancels this job (if it has not run) and removes any persistent roots.
+  pub fn teardown(&mut self, heap: &mut Heap) {
+    // Drop the job closure first so it releases any captured handles before we unroot.
+    self.job.take();
+    for id in self.roots.drain(..) {
+      heap.remove_root(id);
+    }
+  }
+}
+
+impl fmt::Debug for RootedJob {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("RootedJob")
+      .field(
+        "kind",
+        &self.job.as_ref().map(|job| job.kind()).unwrap_or(JobKind::Generic),
+      )
+      .field("roots", &self.roots.len())
+      .finish()
+  }
+}
+
+impl Drop for RootedJob {
+  fn drop(&mut self) {
+    debug_assert!(
+      self.roots.is_empty(),
+      "RootedJob dropped without teardown (persistent roots would leak)"
+    );
   }
 }
 
@@ -206,7 +299,7 @@ pub trait VmHostHooks {
   ///
   /// Microtasks are processed at
   /// [microtask checkpoints](https://html.spec.whatwg.org/multipage/webappapis.html#perform-a-microtask-checkpoint).
-  fn host_enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>);
+  fn host_enqueue_promise_job(&mut self, job: RootedJob, realm: Option<RealmId>);
 
   /// Creates a host-defined [`JobCallback`] record.
   ///
@@ -248,4 +341,3 @@ pub trait VmHostHooks {
   ) {
   }
 }
-

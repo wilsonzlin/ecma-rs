@@ -16,6 +16,9 @@
 //!   promises weak set")
 
 use crate::GcObject;
+use crate::Heap;
+use crate::RootId;
+use crate::Value;
 use crate::VmError;
 
 /// An engine-internal microtask job.
@@ -29,6 +32,76 @@ use crate::VmError;
 ///   run during the same microtask checkpoint.
 pub type MicrotaskJob<R> =
   Box<dyn FnOnce(&mut R, &mut dyn JobQueue<R>) -> Result<(), VmError> + 'static>;
+
+/// A GC-safe microtask job that keeps captured heap objects alive using persistent roots.
+///
+/// Microtasks are stored and executed by the host, potentially after one or more GC cycles.
+/// Capturing a [`GcObject`](crate::GcObject) handle in a closure is **not** sufficient to keep the
+/// underlying allocation alive: the GC does not trace Rust closures.
+///
+/// This wrapper allows the creator of a job (typically the VM) to register a set of persistent
+/// roots that keep the captured values alive until the job is either:
+/// - executed during a microtask checkpoint, or
+/// - cancelled via [`RootedMicrotaskJob::teardown`] / [`crate::MicrotaskQueue::drain_and_cancel`].
+///
+/// The host is responsible for calling `teardown` in all cases; dropping a `RootedMicrotaskJob`
+/// without teardown will leak persistent roots (debug builds `debug_assert!` on drop).
+pub struct RootedMicrotaskJob<R> {
+  job: Option<MicrotaskJob<R>>,
+  roots: Vec<RootId>,
+}
+
+impl<R> RootedMicrotaskJob<R> {
+  /// Create a job with no persistent roots.
+  ///
+  /// This is only GC-safe if the closure does not capture any GC handles.
+  pub fn new(job: MicrotaskJob<R>) -> Self {
+    Self {
+      job: Some(job),
+      roots: Vec::new(),
+    }
+  }
+
+  /// Create a job and register persistent roots for `roots`.
+  pub fn new_rooted(
+    heap: &mut Heap,
+    roots: impl IntoIterator<Item = Value>,
+    job: MicrotaskJob<R>,
+  ) -> Self {
+    let roots = roots.into_iter().map(|v| heap.add_root(v)).collect();
+    Self {
+      job: Some(job),
+      roots,
+    }
+  }
+
+  /// Run this job, consuming its closure but keeping its roots until `teardown`.
+  pub fn run(&mut self, runtime: &mut R, queue: &mut dyn JobQueue<R>) -> Result<(), VmError> {
+    let job = self
+      .job
+      .take()
+      .expect("RootedMicrotaskJob::run called more than once");
+    job(runtime, queue)
+  }
+
+  /// Cancels this job (if it has not run) and removes any persistent roots.
+  pub fn teardown(&mut self, heap: &mut Heap) {
+    // Drop the job closure first so it releases any captured handles before we unroot.
+    self.job.take();
+    for id in self.roots.drain(..) {
+      heap.remove_root(id);
+    }
+  }
+}
+
+impl<R> Drop for RootedMicrotaskJob<R> {
+  fn drop(&mut self) {
+    debug_assert!(
+      self.roots.is_empty(),
+      "RootedMicrotaskJob dropped without teardown (persistent roots would leak)"
+    );
+  }
+}
 
 /// Opaque handle to a promise object passed to [`JobQueue::host_promise_rejection_tracker`].
 ///
@@ -72,7 +145,7 @@ pub enum PromiseRejectionOperation {
 /// HTML-shaped event loop).
 pub trait JobQueue<R> {
   /// Enqueue a microtask job to be executed during the next microtask checkpoint.
-  fn enqueue_microtask(&mut self, job: MicrotaskJob<R>);
+  fn enqueue_microtask(&mut self, job: RootedMicrotaskJob<R>);
 
   /// Spec-shaped alias for `HostEnqueuePromiseJob`.
   ///
@@ -82,7 +155,7 @@ pub trait JobQueue<R> {
   /// Spec references:
   /// - ECMA-262: <https://tc39.es/ecma262/#sec-hostenqueuepromisejob>
   /// - HTML: <https://html.spec.whatwg.org/multipage/webappapis.html#hostenqueuepromisejob>
-  fn host_enqueue_promise_job(&mut self, job: MicrotaskJob<R>) {
+  fn host_enqueue_promise_job(&mut self, job: RootedMicrotaskJob<R>) {
     self.enqueue_microtask(job);
   }
 
