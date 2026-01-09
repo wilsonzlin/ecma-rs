@@ -61,7 +61,11 @@ pub(crate) enum FunctionData {
   ///
   /// - When `is_reject` is `false`, this is `thenFinally(value)`.
   /// - When `is_reject` is `true`, this is `catchFinally(reason)`.
-  PromiseFinallyHandler { on_finally: Value, is_reject: bool },
+  PromiseFinallyHandler {
+    on_finally: Value,
+    constructor: Value,
+    is_reject: bool,
+  },
   /// Closure function created by `Promise.prototype.finally`:
   /// - `valueThunk()` returns the captured fulfillment value.
   /// - `thrower()` throws the captured rejection reason.
@@ -247,8 +251,13 @@ impl Trace for JsFunction {
       FunctionData::PromiseResolvingFunction { promise, .. } => {
         tracer.trace_value(Value::Object(promise));
       }
-      FunctionData::PromiseFinallyHandler { on_finally, .. } => {
+      FunctionData::PromiseFinallyHandler {
+        on_finally,
+        constructor,
+        ..
+      } => {
         tracer.trace_value(on_finally);
+        tracer.trace_value(constructor);
       }
       FunctionData::PromiseFinallyThunk { value, .. } => {
         tracer.trace_value(value);

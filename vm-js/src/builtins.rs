@@ -697,6 +697,76 @@ fn new_promise_capability(
   })
 }
 
+fn get_property_value_with_host(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  obj: GcObject,
+  key: PropertyKey,
+  receiver: Value,
+) -> Result<Value, VmError> {
+  let Some(desc) = scope.heap().get_property(obj, &key)? else {
+    return Ok(Value::Undefined);
+  };
+
+  match desc.kind {
+    PropertyKind::Data { value, .. } => Ok(value),
+    PropertyKind::Accessor { get, .. } => {
+      if matches!(get, Value::Undefined) {
+        Ok(Value::Undefined)
+      } else {
+        if !scope.heap().is_callable(get)? {
+          return Err(VmError::TypeError("accessor getter is not callable"));
+        }
+        vm.call_with_host(scope, host, get, receiver, &[])
+      }
+    }
+  }
+}
+
+/// ECMA-262 `PromiseResolve(C, x)` abstract operation.
+fn promise_resolve_abstract(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  constructor: Value,
+  x: Value,
+) -> Result<GcObject, VmError> {
+  let mut scope = scope.reborrow();
+  // Root inputs across allocations/GC.
+  scope.push_root(constructor)?;
+  scope.push_root(x)?;
+
+  if let Value::Object(obj) = x {
+    if scope.heap().is_promise_object(obj) {
+      // `x.constructor === C`
+      let ctor_key_s = scope.alloc_string("constructor")?;
+      scope.push_root(Value::String(ctor_key_s))?;
+      let ctor_key = PropertyKey::from_string(ctor_key_s);
+      let x_ctor = get_property_value_with_host(
+        vm,
+        &mut scope,
+        host,
+        obj,
+        ctor_key,
+        Value::Object(obj),
+      )?;
+      if x_ctor.same_value(constructor, scope.heap()) {
+        return Ok(obj);
+      }
+    }
+  }
+
+  let capability = new_promise_capability(vm, &mut scope, host, constructor)?;
+
+  // Root the promise + resolving function for the duration of the resolve call (which may
+  // allocate/GC).
+  scope.push_root(Value::Object(capability.promise))?;
+  scope.push_root(capability.resolve)?;
+  let _ = vm.call_with_host(&mut scope, host, capability.resolve, Value::Undefined, &[x])?;
+  Ok(capability.promise)
+}
+
 fn create_promise_resolving_functions(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -1118,24 +1188,15 @@ pub fn promise_resolve(
   scope: &mut Scope<'_>,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
-  _this: Value,
+  this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
-  let intr = require_intrinsics(vm)?;
   let x = args.get(0).copied().unwrap_or(Value::Undefined);
-
-  if let Value::Object(obj) = x {
-    if scope.heap().is_promise_object(obj)
-      && scope.heap().object_prototype(obj)? == Some(intr.promise_prototype())
-    {
-      return Ok(Value::Object(obj));
-    }
+  if !matches!(this, Value::Object(_)) {
+    return throw_type_error(vm, scope, host, "Promise.resolve called on non-object");
   }
 
-  let p = new_promise(vm, scope)?;
-  scope.push_root(Value::Object(p))?;
-  let (resolve, _reject) = create_promise_resolving_functions(vm, scope, p)?;
-  let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[x])?;
+  let p = promise_resolve_abstract(vm, scope, host, this, x)?;
   Ok(Value::Object(p))
 }
 
@@ -1249,6 +1310,36 @@ fn promise_then_impl(
   Ok(Value::Object(result_promise))
 }
 
+fn invoke_then(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  receiver: Value,
+  on_fulfilled: Value,
+  on_rejected: Value,
+  non_object_message: &'static str,
+) -> Result<Value, VmError> {
+  let Value::Object(obj) = receiver else {
+    return throw_type_error(vm, scope, host, non_object_message);
+  };
+
+  // Root inputs: `Get` and `Call` can allocate/GC.
+  let mut scope = scope.reborrow();
+  scope.push_root(receiver)?;
+  scope.push_root(on_fulfilled)?;
+  scope.push_root(on_rejected)?;
+
+  let then_key_s = scope.alloc_string("then")?;
+  scope.push_root(Value::String(then_key_s))?;
+  let then_key = PropertyKey::from_string(then_key_s);
+  let then = get_property_value_with_host(vm, &mut scope, host, obj, then_key, receiver)?;
+  if !scope.heap().is_callable(then)? {
+    return throw_type_error(vm, &mut scope, host, "then is not callable");
+  }
+
+  vm.call_with_host(&mut scope, host, then, receiver, &[on_fulfilled, on_rejected])
+}
+
 pub fn promise_prototype_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -1271,7 +1362,15 @@ pub fn promise_prototype_catch(
   args: &[Value],
 ) -> Result<Value, VmError> {
   let on_rejected = args.get(0).copied().unwrap_or(Value::Undefined);
-  promise_then_impl(vm, scope, host, this, Value::Undefined, on_rejected)
+  invoke_then(
+    vm,
+    scope,
+    host,
+    this,
+    Value::Undefined,
+    on_rejected,
+    "Promise.prototype.catch called on non-object",
+  )
 }
 
 pub fn promise_prototype_finally(
@@ -1285,6 +1384,21 @@ pub fn promise_prototype_finally(
   let intr = require_intrinsics(vm)?;
   let on_finally = args.get(0).copied().unwrap_or(Value::Undefined);
 
+  if !scope.heap().is_callable(on_finally)? {
+    return invoke_then(
+      vm,
+      scope,
+      host,
+      this,
+      on_finally,
+      on_finally,
+      "Promise.prototype.finally called on non-object",
+    );
+  }
+
+  // Temporary `%Promise%`-only fallback: we do not yet implement `SpeciesConstructor` for promises.
+  let constructor = Value::Object(intr.promise());
+
   let Value::Object(promise) = this else {
     return throw_type_error(
       vm,
@@ -1293,21 +1407,10 @@ pub fn promise_prototype_finally(
       "Promise.prototype.finally called on non-object",
     );
   };
-  if !scope.heap().is_promise_object(promise) {
-    return throw_type_error(
-      vm,
-      scope,
-      host,
-      "Promise.prototype.finally called on non-promise",
-    );
-  }
-
-  if !scope.heap().is_callable(on_finally)? {
-    return promise_then_impl(vm, scope, host, this, on_finally, on_finally);
-  }
 
   scope.push_root(Value::Object(promise))?;
   scope.push_root(on_finally)?;
+  scope.push_root(constructor)?;
 
   let call_id = intr.promise_finally_handler_call();
 
@@ -1320,6 +1423,7 @@ pub fn promise_prototype_finally(
     then_finally,
     FunctionData::PromiseFinallyHandler {
       on_finally,
+      constructor,
       is_reject: false,
     },
   )?;
@@ -1333,21 +1437,23 @@ pub fn promise_prototype_finally(
     catch_finally,
     FunctionData::PromiseFinallyHandler {
       on_finally,
+      constructor,
       is_reject: true,
     },
   )?;
 
-  // Root the closure functions before calling `promise_then_impl`, which may allocate/GC.
+  // Root the closure functions before invoking `then`, which may allocate/GC.
   scope.push_root(Value::Object(then_finally))?;
   scope.push_root(Value::Object(catch_finally))?;
 
-  promise_then_impl(
+  invoke_then(
     vm,
     scope,
     host,
     this,
     Value::Object(then_finally),
     Value::Object(catch_finally),
+    "Promise.prototype.finally called on non-object",
   )
 }
 
@@ -1362,7 +1468,12 @@ pub fn promise_finally_handler_call(
   let intr = require_intrinsics(vm)?;
 
   let data = scope.heap().get_function_data(callee)?;
-  let FunctionData::PromiseFinallyHandler { on_finally, is_reject } = data else {
+  let FunctionData::PromiseFinallyHandler {
+    on_finally,
+    constructor,
+    is_reject,
+  } = data
+  else {
     return Err(VmError::Unimplemented(
       "Promise finally handler missing internal slots",
     ));
@@ -1374,19 +1485,8 @@ pub fn promise_finally_handler_call(
   let result = vm.call_with_host(scope, host, on_finally, Value::Undefined, &[])?;
   let result = scope.push_root(result)?;
 
-  // `PromiseResolve(%Promise%, result)`
-  let promise_ctor = intr.promise();
-  let p = promise_resolve(
-    vm,
-    scope,
-    host,
-    promise_ctor,
-    Value::Object(promise_ctor),
-    &[result],
-  )?;
-  let Value::Object(promise_obj) = p else {
-    return Err(VmError::Unimplemented("Promise.resolve did not return an object"));
-  };
+  // `PromiseResolve(C, result)`
+  let promise_obj = promise_resolve_abstract(vm, scope, host, constructor, result)?;
 
   // Create `valueThunk` or `thrower`.
   scope.push_root(Value::Object(promise_obj))?;
@@ -1408,13 +1508,14 @@ pub fn promise_finally_handler_call(
 
   // Return `p.then(valueThunk)` / `p.then(thrower)`.
   scope.push_root(Value::Object(thunk))?;
-  promise_then_impl(
+  invoke_then(
     vm,
     scope,
     host,
     Value::Object(promise_obj),
     Value::Object(thunk),
     Value::Undefined,
+    "PromiseResolve(C, result) returned a non-object",
   )
 }
 
