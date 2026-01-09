@@ -17,9 +17,17 @@
 
 use crate::execution_context::ModuleId;
 use crate::VmError;
+
+/// A module request record.
+///
+/// Mirrors the `ModuleRequest` record used by cyclic module records, including optional import
+/// attributes.
+pub use crate::ModuleRequest;
+
+/// A module request record paired with its loaded module record.
+pub use crate::LoadedModuleRequest;
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
@@ -33,50 +41,6 @@ use std::sync::Arc;
 pub enum ModuleStatus {
   New,
   Unlinked,
-}
-
-/// A module request record.
-///
-/// Mirrors the `ModuleRequest` record used by cyclic module records, including optional import
-/// attributes.
-#[derive(Clone, PartialEq, Eq)]
-pub struct ModuleRequest {
-  pub specifier: Arc<str>,
-  pub import_attributes: BTreeMap<Arc<str>, Arc<str>>,
-}
-
-impl fmt::Debug for ModuleRequest {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("ModuleRequest")
-      .field("specifier", &self.specifier)
-      .field("import_attributes", &self.import_attributes)
-      .finish()
-  }
-}
-
-impl ModuleRequest {
-  pub fn new(specifier: impl Into<Arc<str>>) -> Self {
-    Self {
-      specifier: specifier.into(),
-      import_attributes: BTreeMap::new(),
-    }
-  }
-
-  pub fn with_import_attribute(
-    mut self,
-    key: impl Into<Arc<str>>,
-    value: impl Into<Arc<str>>,
-  ) -> Self {
-    self.import_attributes.insert(key.into(), value.into());
-    self
-  }
-}
-
-/// A `ModuleRequest` paired with its resolved/loaded module record.
-#[derive(Clone, Debug)]
-pub struct LoadedModuleRequest<T> {
-  pub request: ModuleRequest,
-  pub module: T,
 }
 
 /// A cyclic module record (minimal surface for graph loading).
@@ -101,7 +65,7 @@ impl CyclicModuleRecord {
     self
       .loaded_modules
       .iter()
-      .find(|loaded| module_requests_equal(&loaded.request, request))
+      .find(|loaded| loaded.request.spec_equal(request))
       .map(|loaded| loaded.module)
   }
 
@@ -111,7 +75,7 @@ impl CyclicModuleRecord {
     if let Some(existing) = self
       .loaded_modules
       .iter_mut()
-      .find(|loaded| module_requests_equal(&loaded.request, &request))
+      .find(|loaded| loaded.request.spec_equal(&request))
     {
       if existing.module != module {
         // `FinishLoadingImportedModule` requires that duplicate requests resolve to the same Module
@@ -536,10 +500,6 @@ pub fn finish_loading_imported_module(
   }
 }
 
-fn module_requests_equal(a: &ModuleRequest, b: &ModuleRequest) -> bool {
-  a.specifier == b.specifier && a.import_attributes == b.import_attributes
-}
-
 fn all_import_attributes_supported(request: &ModuleRequest) -> bool {
-  request.import_attributes.is_empty()
+  request.attributes.is_empty()
 }

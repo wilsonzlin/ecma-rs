@@ -70,7 +70,7 @@ impl ModuleLoaderHost for FakeHost {
   ) {
     let action = self
       .plan
-      .get(request.specifier.as_ref())
+      .get(request.specifier.as_str())
       .unwrap_or_else(|| panic!("unexpected module request {:?}", request.specifier))
       .clone();
 
@@ -96,18 +96,12 @@ impl ModuleLoaderHost for FakeHost {
 #[test]
 fn simple_graph_resolves() {
   let mut modules = ModuleStore::default();
-  let b = modules
-    .insert_cyclic(CyclicModuleRecord::new(Vec::new()))
-    .unwrap();
-  let c = modules
-    .insert_cyclic(CyclicModuleRecord::new(Vec::new()))
-    .unwrap();
-  let a = modules
-    .insert_cyclic(CyclicModuleRecord::new(vec![
-    ModuleRequest::new("B"),
-    ModuleRequest::new("C"),
-  ]))
-    .unwrap();
+  let b = modules.insert_cyclic(CyclicModuleRecord::new(Vec::new()));
+  let c = modules.insert_cyclic(CyclicModuleRecord::new(Vec::new()));
+  let a = modules.insert_cyclic(CyclicModuleRecord::new(vec![
+    ModuleRequest::new("B", vec![]),
+    ModuleRequest::new("C", vec![]),
+  ]));
 
   let mut host = FakeHost::default();
   host.plan_async("B", Ok(b));
@@ -131,12 +125,8 @@ fn simple_graph_resolves() {
 #[test]
 fn cycle_does_not_infinite_loop() {
   let mut modules = ModuleStore::default();
-  let a = modules
-    .insert_cyclic(CyclicModuleRecord::new(vec![ModuleRequest::new("B")]))
-    .unwrap();
-  let b = modules
-    .insert_cyclic(CyclicModuleRecord::new(vec![ModuleRequest::new("A")]))
-    .unwrap();
+  let a = modules.insert_cyclic(CyclicModuleRecord::new(vec![ModuleRequest::new("B", vec![])]));
+  let b = modules.insert_cyclic(CyclicModuleRecord::new(vec![ModuleRequest::new("A", vec![])]));
 
   let mut host = FakeHost::default();
   host.plan_sync("A", Ok(a));
@@ -153,18 +143,12 @@ fn cycle_does_not_infinite_loop() {
 #[test]
 fn load_failure_rejects_and_freezes_state() {
   let mut modules = ModuleStore::default();
-  let b = modules
-    .insert_cyclic(CyclicModuleRecord::new(Vec::new()))
-    .unwrap();
-  let c = modules
-    .insert_cyclic(CyclicModuleRecord::new(Vec::new()))
-    .unwrap();
-  let a = modules
-    .insert_cyclic(CyclicModuleRecord::new(vec![
-    ModuleRequest::new("B"),
-    ModuleRequest::new("C"),
-  ]))
-    .unwrap();
+  let b = modules.insert_cyclic(CyclicModuleRecord::new(Vec::new()));
+  let c = modules.insert_cyclic(CyclicModuleRecord::new(Vec::new()));
+  let a = modules.insert_cyclic(CyclicModuleRecord::new(vec![
+    ModuleRequest::new("B", vec![]),
+    ModuleRequest::new("C", vec![]),
+  ]));
 
   let mut host = FakeHost::default();
   host.plan_async("B", Ok(b));

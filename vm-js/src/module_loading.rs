@@ -19,133 +19,13 @@
 //! - [`VmModuleLoadingContext::finish_loading_imported_module`]
 
 use crate::property::PropertyKey;
-use crate::{GcString, ModuleId, RealmId, Scope, ScriptId, Value, Vm, VmError};
+use crate::{
+  GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId, Scope, ScriptId,
+  Value, Vm, VmError,
+};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
-
-/// An `ImportAttribute` Record (ECMA-262).
-///
-/// Spec: <https://tc39.es/ecma262/#importattribute-record>
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ImportAttribute {
-  pub key: Arc<str>,
-  pub value: Arc<str>,
-}
-
-impl ImportAttribute {
-  #[inline]
-  pub fn new(key: impl Into<Arc<str>>, value: impl Into<Arc<str>>) -> Self {
-    Self {
-      key: key.into(),
-      value: value.into(),
-    }
-  }
-}
-
-/// A `ModuleRequest` Record (ECMA-262).
-///
-/// Spec: <https://tc39.es/ecma262/#modulerequest-record>
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct ModuleRequest {
-  pub specifier: Arc<str>,
-  pub attributes: Vec<ImportAttribute>,
-}
-
-impl ModuleRequest {
-  #[inline]
-  pub fn new(specifier: impl Into<Arc<str>>, attributes: Vec<ImportAttribute>) -> Self {
-    Self {
-      specifier: specifier.into(),
-      attributes,
-    }
-  }
-}
-
-/// The subset of fields shared by `ModuleRequest` and `LoadedModuleRequest`.
-///
-/// This exists so [`module_requests_equal`] can be implemented in the same shape as the spec
-/// (`ModuleRequestsEqual` accepts either record).
-pub trait ModuleRequestLike {
-  fn specifier(&self) -> &str;
-  fn attributes(&self) -> &[ImportAttribute];
-}
-
-impl ModuleRequestLike for ModuleRequest {
-  #[inline]
-  fn specifier(&self) -> &str {
-    &self.specifier
-  }
-
-  #[inline]
-  fn attributes(&self) -> &[ImportAttribute] {
-    &self.attributes
-  }
-}
-
-/// A `LoadedModuleRequest` Record (ECMA-262).
-///
-/// Spec: <https://tc39.es/ecma262/#loadedmodulerequest-record>
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LoadedModuleRequest<M> {
-  pub specifier: Arc<str>,
-  pub attributes: Vec<ImportAttribute>,
-  pub module: M,
-}
-
-impl<M> LoadedModuleRequest<M> {
-  #[inline]
-  pub fn new(request: ModuleRequest, module: M) -> Self {
-    Self {
-      specifier: request.specifier,
-      attributes: request.attributes,
-      module,
-    }
-  }
-}
-
-impl<M> ModuleRequestLike for LoadedModuleRequest<M> {
-  #[inline]
-  fn specifier(&self) -> &str {
-    &self.specifier
-  }
-
-  #[inline]
-  fn attributes(&self) -> &[ImportAttribute] {
-    &self.attributes
-  }
-}
-
-/// Implements `ModuleRequestsEqual(left, right)` from ECMA-262.
-///
-/// Spec: <https://tc39.es/ecma262/#sec-modulerequestsequal>
-///
-/// Import attributes are compared **order-insensitively**.
-pub fn module_requests_equal<L: ModuleRequestLike + ?Sized, R: ModuleRequestLike + ?Sized>(
-  left: &L,
-  right: &R,
-) -> bool {
-  if left.specifier() != right.specifier() {
-    return false;
-  }
-
-  let left_attrs = left.attributes();
-  let right_attrs = right.attributes();
-  if left_attrs.len() != right_attrs.len() {
-    return false;
-  }
-
-  for l in left_attrs {
-    if !right_attrs
-      .iter()
-      .any(|r| l.key == r.key && l.value == r.value)
-    {
-      return false;
-    }
-  }
-
-  true
-}
 
 /// The *identity* of the `referrer` passed to `HostLoadImportedModule`/`FinishLoadingImportedModule`.
 ///
@@ -350,11 +230,11 @@ pub enum ImportCallTypeError {
   OptionsNotObject,
   AttributesNotObject,
   AttributeValueNotString,
-  UnsupportedImportAttribute { key: Arc<str> },
+  UnsupportedImportAttribute { key: String },
 }
 
-fn clone_heap_string_to_arc_str(heap: &crate::Heap, s: GcString) -> Result<Arc<str>, VmError> {
-  Ok(Arc::<str>::from(heap.get_string(s)?.to_utf8_lossy()))
+fn clone_heap_string_to_string(heap: &crate::Heap, s: GcString) -> Result<String, VmError> {
+  Ok(heap.get_string(s)?.to_utf8_lossy())
 }
 
 fn make_key_string(scope: &mut Scope<'_>, s: &str) -> Result<GcString, VmError> {
@@ -431,9 +311,9 @@ pub fn import_attributes_from_options(
       ));
     };
 
-    let key = clone_heap_string_to_arc_str(scope.heap(), key_string).map_err(ImportCallError::Vm)?;
+    let key = clone_heap_string_to_string(scope.heap(), key_string).map_err(ImportCallError::Vm)?;
     let value =
-      clone_heap_string_to_arc_str(scope.heap(), value_string).map_err(ImportCallError::Vm)?;
+      clone_heap_string_to_string(scope.heap(), value_string).map_err(ImportCallError::Vm)?;
 
     attributes.push(ImportAttribute { key, value });
   }
@@ -442,7 +322,7 @@ pub fn import_attributes_from_options(
   for attribute in &attributes {
     if !supported_keys
       .iter()
-      .any(|supported| *supported == attribute.key.as_ref())
+      .any(|supported| *supported == attribute.key.as_str())
     {
       return Err(ImportCallError::TypeError(
         ImportCallTypeError::UnsupportedImportAttribute {
@@ -452,8 +332,11 @@ pub fn import_attributes_from_options(
     }
   }
 
-  // Sort by key.
-  attributes.sort_by(|a, b| a.key.cmp(&b.key));
+  // Sort by key (and value for determinism) by UTF-16 code unit order.
+  attributes.sort_by(|a, b| match crate::cmp_utf16(&a.key, &b.key) {
+    std::cmp::Ordering::Equal => crate::cmp_utf16(&a.value, &b.value),
+    non_eq => non_eq,
+  });
   Ok(attributes)
 }
 
@@ -464,7 +347,7 @@ pub fn all_import_attributes_supported(
 ) -> bool {
   attributes
     .iter()
-    .all(|attr| supported_keys.iter().any(|k| *k == attr.key.as_ref()))
+    .all(|attr| supported_keys.iter().any(|k| *k == attr.key.as_str()))
 }
 
 /// Spec-shaped dynamic import entry point (EvaluateImportCall).
@@ -637,7 +520,7 @@ mod tests {
       import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported)
         .unwrap();
 
-    let keys: Vec<&str> = attrs.iter().map(|a| a.key.as_ref()).collect();
+    let keys: Vec<&str> = attrs.iter().map(|a| a.key.as_str()).collect();
     assert_eq!(keys, vec!["a", "type"]);
   }
 
