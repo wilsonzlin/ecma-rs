@@ -1,5 +1,5 @@
 use crate::heap::{PropertyEntry, Trace, Tracer};
-use crate::{GcObject, GcString, Value};
+use crate::{GcEnv, GcObject, GcString, Value};
 use core::mem;
 
 /// Identifier for a host/native `[[Call]]` implementation.
@@ -56,7 +56,7 @@ pub(crate) struct JsFunction {
   pub(crate) bound_this: Option<Value>,
   pub(crate) bound_args: Option<Box<[Value]>>,
   pub(crate) realm: Option<GcObject>,
-  pub(crate) closure_env: Option<GcObject>,
+  pub(crate) closure_env: Option<GcEnv>,
 }
 
 impl JsFunction {
@@ -124,7 +124,7 @@ impl Trace for JsFunction {
       tracer.trace_value(Value::Object(realm));
     }
     if let Some(env) = self.closure_env {
-      tracer.trace_value(Value::Object(env));
+      tracer.trace_env(env);
     }
   }
 }

@@ -171,6 +171,32 @@ impl GcSymbol {
   }
 }
 
+/// A GC-managed internal environment record.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub(crate) struct GcEnv(pub(crate) HeapId);
+
+#[allow(dead_code)]
+impl GcEnv {
+  /// The underlying [`HeapId`].
+  #[inline]
+  pub fn id(self) -> HeapId {
+    self.0
+  }
+
+  /// The slot index within the heap.
+  #[inline]
+  pub fn index(self) -> u32 {
+    self.0.index()
+  }
+
+  /// The slot generation within the heap.
+  #[inline]
+  pub fn generation(self) -> u32 {
+    self.0.generation()
+  }
+}
+
 /// An ID for a persistent root stored in the heap.
 ///
 /// Returned by [`Heap::add_root`](crate::Heap::add_root) and later passed to
@@ -181,6 +207,22 @@ pub struct RootId(pub(crate) u32);
 
 impl RootId {
   /// The underlying index into the heap's persistent root table.
+  #[inline]
+  pub fn index(self) -> u32 {
+    self.0
+  }
+}
+
+/// An ID for a persistent environment root stored in the heap.
+///
+/// This is used to keep internal environment records alive across GC cycles.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub(crate) struct EnvRootId(pub(crate) u32);
+
+#[allow(dead_code)]
+impl EnvRootId {
+  /// The underlying index into the heap's persistent env root table.
   #[inline]
   pub fn index(self) -> u32 {
     self.0

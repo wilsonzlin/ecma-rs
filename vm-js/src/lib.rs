@@ -36,6 +36,7 @@
 //! [`docs::webidl_host_objects`](crate::docs::webidl_host_objects).
 
 mod error;
+mod env;
 mod exec;
 mod function;
 mod function_properties;
@@ -68,9 +69,11 @@ pub use crate::function_properties::make_constructor;
 pub use crate::function_properties::set_function_length;
 pub use crate::function_properties::set_function_name;
 pub use crate::handle::GcObject;
+pub(crate) use crate::handle::GcEnv;
 pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;
 pub use crate::handle::HeapId;
+pub(crate) use crate::handle::EnvRootId;
 pub use crate::handle::RootId;
 pub use crate::handle::WeakGcObject;
 pub use crate::heap::Heap;

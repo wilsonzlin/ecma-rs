@@ -1,6 +1,6 @@
 use crate::{
-  GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm,
-  VmError,
+  EnvRootId, GcEnv, GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, Scope,
+  Value, Vm, VmError,
 };
 use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
@@ -14,7 +14,7 @@ use parse_js::ast::stmt::{
 };
 use parse_js::operator::OperatorName;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// An ECMAScript completion record (ECMA-262).
 ///
@@ -63,12 +63,6 @@ impl Completion {
   }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct Binding {
-  root: RootId,
-  mutable: bool,
-}
-
 fn global_var_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
     enumerable: true,
@@ -81,46 +75,46 @@ fn global_var_desc(value: Value) -> PropertyDescriptor {
 }
 
 #[derive(Debug)]
-struct GlobalEnv {
+struct RuntimeEnv {
   global_object: GcObject,
-  lexical: Vec<HashMap<String, Binding>>,
+  lexical_env: GcEnv,
+  lexical_root: EnvRootId,
 }
 
-impl GlobalEnv {
-  fn new(global_object: GcObject) -> Self {
-    // Start with the global lexical environment frame.
-    Self {
+impl RuntimeEnv {
+  fn new(heap: &mut Heap, global_object: GcObject) -> Result<Self, VmError> {
+    // Root the global object across env allocation in case it triggers GC.
+    let mut scope = heap.scope();
+    scope.push_root(Value::Object(global_object));
+
+    let lexical_env = scope.env_create(None)?;
+    let lexical_root = scope.heap_mut().add_env_root(lexical_env);
+
+    Ok(Self {
       global_object,
-      lexical: vec![HashMap::new()],
-    }
+      lexical_env,
+      lexical_root,
+    })
   }
 
   fn teardown(&mut self, heap: &mut Heap) {
-    for frame in self.lexical.drain(..) {
-      for binding in frame.values() {
-        heap.remove_root(binding.root);
-      }
-    }
+    heap.remove_env_root(self.lexical_root);
   }
 
-  fn push_lexical(&mut self) {
-    self.lexical.push(HashMap::new());
+  fn set_lexical_env(&mut self, heap: &mut Heap, env: GcEnv) {
+    self.lexical_env = env;
+    heap.set_env_root(self.lexical_root, env);
   }
 
-  fn pop_lexical(&mut self, heap: &mut Heap) {
-    debug_assert!(
-      self.lexical.len() > 1,
-      "attempted to pop global lexical environment"
-    );
-    if self.lexical.len() <= 1 {
-      return;
-    }
-
-    if let Some(frame) = self.lexical.pop() {
-      for binding in frame.values() {
-        heap.remove_root(binding.root);
+  fn resolve_lexical_binding(&self, heap: &Heap, name: &str) -> Result<Option<GcEnv>, VmError> {
+    let mut current = Some(self.lexical_env);
+    while let Some(env) = current {
+      if heap.env_has_binding(env, name)? {
+        return Ok(Some(env));
       }
+      current = heap.env_outer(env)?;
     }
+    Ok(None)
   }
 
   fn declare_var(&mut self, scope: &mut Scope<'_>, name: &str) -> Result<(), VmError> {
@@ -143,30 +137,9 @@ impl GlobalEnv {
     Ok(())
   }
 
-  fn declare_lexical(
-    &mut self,
-    heap: &mut Heap,
-    name: &str,
-    mutable: bool,
-    value: Value,
-  ) -> Result<(), VmError> {
-    let Some(frame) = self.lexical.last_mut() else {
-      return Err(VmError::Unimplemented("lexical env stack underflow"));
-    };
-    if frame.contains_key(name) {
-      // TODO: Should be a syntax error (early error).
-      return Err(VmError::Unimplemented("duplicate lexical declaration"));
-    }
-    let root = heap.add_root(value);
-    frame.insert(name.to_string(), Binding { root, mutable });
-    Ok(())
-  }
-
   fn get(&self, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
-    for frame in self.lexical.iter().rev() {
-      if let Some(binding) = frame.get(name) {
-        return Ok(scope.heap().get_root(binding.root));
-      }
+    if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
+      return Ok(Some(scope.heap().env_get_binding_value(env, name, false)?));
     }
 
     // Fall back to global object property lookup.
@@ -174,11 +147,13 @@ impl GlobalEnv {
     let mut key_scope = scope.reborrow();
     key_scope.push_root(Value::Object(global_object));
     let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+
     // Distinguish between a missing property (unbound identifier) and a present property whose
     // value is actually `undefined`.
     if !key_scope.ordinary_has_property(global_object, key)? {
       return Ok(None);
     }
+
     let receiver = Value::Object(global_object);
     Ok(Some(key_scope.ordinary_get(global_object, key, receiver)?))
   }
@@ -190,15 +165,10 @@ impl GlobalEnv {
     value: Value,
     strict: bool,
   ) -> Result<(), VmError> {
-    for frame in self.lexical.iter_mut().rev() {
-      if let Some(binding) = frame.get(name).copied() {
-        if !binding.mutable {
-          // TODO: Should throw a TypeError.
-          return Err(VmError::Unimplemented("assignment to const"));
-        }
-        scope.heap_mut().set_root(binding.root, value);
-        return Ok(());
-      }
+    if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
+      return scope
+        .heap_mut()
+        .env_set_mutable_binding(env, name, value, strict);
     }
 
     // Assignment to global (var) bindings is backed by the global object.
@@ -295,14 +265,14 @@ pub struct JsRuntime {
   pub vm: Vm,
   pub heap: Heap,
   realm: Realm,
-  env: GlobalEnv,
+  env: RuntimeEnv,
 }
 
 impl JsRuntime {
   pub fn new(vm: Vm, heap: Heap) -> Result<Self, VmError> {
     let mut heap = heap;
     let realm = Realm::new(&mut heap)?;
-    let env = GlobalEnv::new(realm.global_object());
+    let env = RuntimeEnv::new(&mut heap, realm.global_object())?;
     Ok(Self {
       vm,
       heap,
@@ -337,7 +307,11 @@ impl JsRuntime {
       vm: &mut self.vm,
       env: &mut self.env,
     };
+
     evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
+    let global_lex = evaluator.env.lexical_env;
+    evaluator.hoist_lexical_decls_in_stmt_list(&mut scope, global_lex, &top.stx.body)?;
+
     let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
     match completion {
       Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
@@ -347,7 +321,6 @@ impl JsRuntime {
       Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
     }
   }
-
 }
 
 impl Drop for JsRuntime {
@@ -361,7 +334,7 @@ impl Drop for JsRuntime {
 
 struct Evaluator<'a> {
   vm: &'a mut Vm,
-  env: &'a mut GlobalEnv,
+  env: &'a mut RuntimeEnv,
 }
 
 impl<'a> Evaluator<'a> {
@@ -380,17 +353,43 @@ impl<'a> Evaluator<'a> {
     self.vm.tick()
   }
 
-  fn hoist_var_decls(
-    &mut self,
-    scope: &mut Scope<'_>,
-    stmts: &[Node<Stmt>],
-  ) -> Result<(), VmError> {
+  fn hoist_var_decls(&mut self, scope: &mut Scope<'_>, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
     let mut names = HashSet::<String>::new();
     for stmt in stmts {
       self.collect_var_names(&stmt.stx, &mut names)?;
     }
     for name in names {
       self.env.declare_var(scope, &name)?;
+    }
+    Ok(())
+  }
+
+  fn hoist_lexical_decls_in_stmt_list(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcEnv,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
+    for stmt in stmts {
+      let Stmt::VarDecl(var) = &*stmt.stx else {
+        continue;
+      };
+
+      match var.stx.mode {
+        VarDeclMode::Let => {
+          for declarator in &var.stx.declarators {
+            let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
+            scope.env_create_mutable_binding(env, name)?;
+          }
+        }
+        VarDeclMode::Const => {
+          for declarator in &var.stx.declarators {
+            let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
+            scope.env_create_immutable_binding(env, name)?;
+          }
+        }
+        _ => {}
+      }
     }
     Ok(())
   }
@@ -510,9 +509,15 @@ impl<'a> Evaluator<'a> {
     scope: &mut Scope<'_>,
     block: &BlockStmt,
   ) -> Result<Completion, VmError> {
-    self.env.push_lexical();
-    let result = self.eval_stmt_list(scope, &block.body);
-    self.env.pop_lexical(scope.heap_mut());
+    let outer = self.env.lexical_env;
+    let block_env = scope.env_create(Some(outer))?;
+    self.env.set_lexical_env(scope.heap_mut(), block_env);
+
+    let result = self
+      .hoist_lexical_decls_in_stmt_list(scope, block_env, &block.body)
+      .and_then(|_| self.eval_stmt_list(scope, &block.body));
+
+    self.env.set_lexical_env(scope.heap_mut(), outer);
     result
   }
 
@@ -575,9 +580,14 @@ impl<'a> Evaluator<'a> {
             Some(init) => self.eval_expr(scope, init)?,
             None => Value::Undefined,
           };
-          self
-            .env
-            .declare_lexical(scope.heap_mut(), name, true, value)?;
+
+          if !scope.heap().env_has_binding(self.env.lexical_env, name)? {
+            // Non-block statement contexts may not have performed lexical hoisting yet.
+            scope.env_create_mutable_binding(self.env.lexical_env, name)?;
+          }
+          scope
+            .heap_mut()
+            .env_initialize_binding(self.env.lexical_env, name, value)?;
         }
         Ok(Completion::empty())
       }
@@ -589,9 +599,13 @@ impl<'a> Evaluator<'a> {
             return Err(VmError::Unimplemented("const without initializer"));
           };
           let value = self.eval_expr(scope, init)?;
-          self
-            .env
-            .declare_lexical(scope.heap_mut(), name, false, value)?;
+
+          if !scope.heap().env_has_binding(self.env.lexical_env, name)? {
+            scope.env_create_immutable_binding(self.env.lexical_env, name)?;
+          }
+          scope
+            .heap_mut()
+            .env_initialize_binding(self.env.lexical_env, name, value)?;
         }
         Ok(Completion::empty())
       }
@@ -654,25 +668,45 @@ impl<'a> Evaluator<'a> {
     catch: &CatchBlock,
     thrown: Value,
   ) -> Result<Completion, VmError> {
-    self.env.push_lexical();
-    if let Some(param) = &catch.parameter {
-      self.bind_catch_param(scope.heap_mut(), &param.stx, thrown)?;
-    }
-    let result = self.eval_stmt_list(scope, &catch.body);
-    self.env.pop_lexical(scope.heap_mut());
+    let outer = self.env.lexical_env;
+    let catch_env = scope.env_create(Some(outer))?;
+    self.env.set_lexical_env(scope.heap_mut(), catch_env);
+
+    let result = {
+      // Root the thrown value across catch binding instantiation, which may allocate.
+      let mut catch_scope = scope.reborrow();
+      catch_scope.push_root(thrown);
+
+      self
+        .hoist_lexical_decls_in_stmt_list(&mut catch_scope, catch_env, &catch.body)
+        .and_then(|_| {
+          if let Some(param) = &catch.parameter {
+            self.bind_catch_param(&mut catch_scope, &param.stx, thrown, catch_env)?;
+          }
+          self.eval_stmt_list(&mut catch_scope, &catch.body)
+        })
+    };
+
+    self.env.set_lexical_env(scope.heap_mut(), outer);
     result
   }
 
   fn bind_catch_param(
     &mut self,
-    heap: &mut Heap,
+    scope: &mut Scope<'_>,
     param: &PatDecl,
     thrown: Value,
+    env: GcEnv,
   ) -> Result<(), VmError> {
     match &*param.pat.stx {
-      Pat::Id(id) => self
-        .env
-        .declare_lexical(heap, &id.stx.name, true, thrown),
+      Pat::Id(id) => {
+        let name = id.stx.name.as_str();
+        if !scope.heap().env_has_binding(env, name)? {
+          scope.env_create_mutable_binding(env, name)?;
+        }
+        scope.heap_mut().env_initialize_binding(env, name, thrown)?;
+        Ok(())
+      }
       _ => Err(VmError::Unimplemented("destructuring catch parameter")),
     }
   }

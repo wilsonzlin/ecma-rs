@@ -1,10 +1,9 @@
-use crate::function::{
-  CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId,
-};
+use crate::env::{EnvBinding, EnvRecord};
+use crate::function::{CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId};
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
-use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
+use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
 use std::collections::BTreeMap;
 
@@ -49,8 +48,11 @@ pub struct Heap {
 
   // Root sets.
   pub(crate) root_stack: Vec<Value>,
+  pub(crate) env_root_stack: Vec<GcEnv>,
   persistent_roots: Vec<Option<Value>>,
   persistent_roots_free: Vec<u32>,
+  persistent_env_roots: Vec<Option<GcEnv>>,
+  persistent_env_roots_free: Vec<u32>,
 
   // Global symbol registry for `Symbol.for`-like behaviour.
   //
@@ -76,8 +78,11 @@ impl Heap {
       free_list: Vec::new(),
       next_symbol_id: 1,
       root_stack: Vec::new(),
+      env_root_stack: Vec::new(),
       persistent_roots: Vec::new(),
       persistent_roots_free: Vec::new(),
+      persistent_env_roots: Vec::new(),
+      persistent_env_roots_free: Vec::new(),
       symbol_registry: BTreeMap::new(),
     }
   }
@@ -87,9 +92,11 @@ impl Heap {
   /// Stack roots pushed via [`Scope::push_root`] are removed when the returned `Scope` is dropped.
   pub fn scope(&mut self) -> Scope<'_> {
     let root_stack_len_at_entry = self.root_stack.len();
+    let env_root_stack_len_at_entry = self.env_root_stack.len();
     Scope {
       heap: self,
       root_stack_len_at_entry,
+      env_root_stack_len_at_entry,
     }
   }
 
@@ -137,8 +144,14 @@ impl Heap {
       for value in &self.root_stack {
         tracer.trace_value(*value);
       }
+      for env in &self.env_root_stack {
+        tracer.trace_env(*env);
+      }
       for value in self.persistent_roots.iter().flatten() {
         tracer.trace_value(*value);
+      }
+      for env in self.persistent_env_roots.iter().flatten() {
+        tracer.trace_env(*env);
       }
       for sym in self.symbol_registry.values().copied() {
         tracer.trace_value(Value::Symbol(sym));
@@ -250,6 +263,68 @@ impl Heap {
     }
   }
 
+  pub(crate) fn add_env_root(&mut self, env: GcEnv) -> EnvRootId {
+    debug_assert!(self.is_valid_env(env));
+
+    let idx = match self.persistent_env_roots_free.pop() {
+      Some(idx) => idx as usize,
+      None => {
+        self.persistent_env_roots.push(None);
+        self.persistent_env_roots.len() - 1
+      }
+    };
+    debug_assert!(self.persistent_env_roots[idx].is_none());
+    self.persistent_env_roots[idx] = Some(env);
+    EnvRootId(idx as u32)
+  }
+
+  #[allow(dead_code)]
+  pub(crate) fn get_env_root(&self, id: EnvRootId) -> Option<GcEnv> {
+    self
+      .persistent_env_roots
+      .get(id.0 as usize)
+      .and_then(|slot| *slot)
+  }
+
+  pub(crate) fn set_env_root(&mut self, id: EnvRootId, env: GcEnv) {
+    debug_assert!(self.is_valid_env(env));
+
+    let idx = id.0 as usize;
+    debug_assert!(
+      idx < self.persistent_env_roots.len(),
+      "invalid EnvRootId"
+    );
+    if idx >= self.persistent_env_roots.len() {
+      return;
+    }
+    debug_assert!(
+      self.persistent_env_roots[idx].is_some(),
+      "EnvRootId already removed"
+    );
+    if self.persistent_env_roots[idx].is_some() {
+      self.persistent_env_roots[idx] = Some(env);
+    }
+  }
+
+  #[allow(dead_code)]
+  pub(crate) fn remove_env_root(&mut self, id: EnvRootId) {
+    let idx = id.0 as usize;
+    debug_assert!(
+      idx < self.persistent_env_roots.len(),
+      "invalid EnvRootId"
+    );
+    if idx >= self.persistent_env_roots.len() {
+      return;
+    }
+    debug_assert!(
+      self.persistent_env_roots[idx].is_some(),
+      "EnvRootId already removed"
+    );
+    if self.persistent_env_roots[idx].take().is_some() {
+      self.persistent_env_roots_free.push(id.0);
+    }
+  }
+
   /// Returns `true` if `obj` currently points to a live object allocation.
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
@@ -266,6 +341,10 @@ impl Heap {
   /// Returns `true` if `sym` currently points to a live symbol allocation.
   pub fn is_valid_symbol(&self, sym: GcSymbol) -> bool {
     matches!(self.get_heap_object(sym.0), Ok(HeapObject::Symbol(_)))
+  }
+
+  pub(crate) fn is_valid_env(&self, env: GcEnv) -> bool {
+    matches!(self.get_heap_object(env.0), Ok(HeapObject::Env(_)))
   }
 
   /// Returns `true` if `value` is callable (i.e. has an ECMAScript `[[Call]]` internal method).
@@ -362,6 +441,20 @@ impl Heap {
   fn get_object_mut(&mut self, obj: GcObject) -> Result<&mut JsObject, VmError> {
     match self.get_heap_object_mut(obj.0)? {
       HeapObject::Object(o) => Ok(o),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  fn get_env(&self, env: GcEnv) -> Result<&EnvRecord, VmError> {
+    match self.get_heap_object(env.0)? {
+      HeapObject::Env(e) => Ok(e),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  fn get_env_mut(&mut self, env: GcEnv) -> Result<&mut EnvRecord, VmError> {
+    match self.get_heap_object_mut(env.0)? {
+      HeapObject::Env(e) => Ok(e),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -669,6 +762,146 @@ impl Heap {
     Ok(())
   }
 
+  pub(crate) fn env_outer(&self, env: GcEnv) -> Result<Option<GcEnv>, VmError> {
+    Ok(self.get_env(env)?.outer)
+  }
+
+  pub(crate) fn env_has_binding(&self, env: GcEnv, name: &str) -> Result<bool, VmError> {
+    Ok(self.get_env(env)?.find_binding_index(self, name)?.is_some())
+  }
+
+  pub(crate) fn env_initialize_binding(
+    &mut self,
+    env: GcEnv,
+    name: &str,
+    value: Value,
+  ) -> Result<(), VmError> {
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+
+    let idx = {
+      let rec = self.get_env(env)?;
+      rec
+        .find_binding_index(self, name)?
+        .ok_or(VmError::Unimplemented("unbound identifier"))?
+    };
+
+    let rec = self.get_env_mut(env)?;
+    let binding = rec
+      .bindings
+      .get_mut(idx)
+      .expect("idx came from find_binding_index");
+
+    if binding.initialized {
+      return Err(VmError::Unimplemented("binding already initialized"));
+    }
+
+    binding.value = value;
+    binding.initialized = true;
+    Ok(())
+  }
+
+  pub(crate) fn env_get_binding_value(
+    &self,
+    env: GcEnv,
+    name: &str,
+    _strict: bool,
+  ) -> Result<Value, VmError> {
+    let rec = self.get_env(env)?;
+    let Some(idx) = rec.find_binding_index(self, name)? else {
+      return Err(VmError::Unimplemented("unbound identifier"));
+    };
+    let binding = rec.bindings.get(idx).expect("idx came from find_binding_index");
+    if !binding.initialized {
+      // TDZ.
+      return Err(VmError::Throw(Value::Undefined));
+    }
+    Ok(binding.value)
+  }
+
+  pub(crate) fn env_set_mutable_binding(
+    &mut self,
+    env: GcEnv,
+    name: &str,
+    value: Value,
+    _strict: bool,
+  ) -> Result<(), VmError> {
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+
+    let idx = {
+      let rec = self.get_env(env)?;
+      rec
+        .find_binding_index(self, name)?
+        .ok_or(VmError::Unimplemented("unbound identifier"))?
+    };
+
+    let rec = self.get_env_mut(env)?;
+    let binding = rec
+      .bindings
+      .get_mut(idx)
+      .expect("idx came from find_binding_index");
+
+    if !binding.initialized {
+      // TDZ.
+      return Err(VmError::Throw(Value::Undefined));
+    }
+
+    if !binding.mutable {
+      // Assignment to const.
+      return Err(VmError::Throw(Value::Undefined));
+    }
+
+    binding.value = value;
+    Ok(())
+  }
+
+  fn env_add_binding(&mut self, env: GcEnv, binding: EnvBinding) -> Result<(), VmError> {
+    let idx = self.validate(env.0).ok_or(VmError::InvalidHandle)?;
+
+    let (binding_count, old_bytes) = {
+      let slot = &self.slots[idx];
+      let Some(HeapObject::Env(env)) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      (env.bindings.len(), slot.bytes)
+    };
+
+    let new_binding_count = binding_count.checked_add(1).ok_or(VmError::OutOfMemory)?;
+    let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(new_binding_count);
+
+    // Before allocating, enforce heap limits based on the net growth of this environment record.
+    let grow_by = new_bytes.saturating_sub(old_bytes);
+    self.ensure_can_allocate(grow_by)?;
+
+    // Allocate the new binding table fallibly so hostile inputs cannot abort the host process
+    // on allocator OOM.
+    let mut buf: Vec<EnvBinding> = Vec::new();
+    buf
+      .try_reserve_exact(new_binding_count)
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    {
+      let slot = &self.slots[idx];
+      let Some(HeapObject::Env(env)) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      buf.extend_from_slice(&env.bindings);
+    }
+
+    buf.push(binding);
+    let bindings = buf.into_boxed_slice();
+
+    let Some(HeapObject::Env(env)) = self.slots[idx].value.as_mut() else {
+      return Err(VmError::InvalidHandle);
+    };
+    env.bindings = bindings;
+
+    self.update_slot_bytes(idx, new_bytes);
+
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+    Ok(())
+  }
+
   fn define_property(
     &mut self,
     obj: GcObject,
@@ -892,11 +1125,16 @@ impl Heap {
 pub struct Scope<'a> {
   heap: &'a mut Heap,
   root_stack_len_at_entry: usize,
+  env_root_stack_len_at_entry: usize,
 }
 
 impl Drop for Scope<'_> {
   fn drop(&mut self) {
     self.heap.root_stack.truncate(self.root_stack_len_at_entry);
+    self
+      .heap
+      .env_root_stack
+      .truncate(self.env_root_stack_len_at_entry);
   }
 }
 
@@ -911,12 +1149,20 @@ impl<'a> Scope<'a> {
     value
   }
 
+  pub(crate) fn push_env_root(&mut self, env: GcEnv) -> GcEnv {
+    debug_assert!(self.heap.is_valid_env(env));
+    self.heap.env_root_stack.push(env);
+    env
+  }
+
   /// Creates a nested child scope that borrows the same heap.
   pub fn reborrow(&mut self) -> Scope<'_> {
     let root_stack_len_at_entry = self.heap.root_stack.len();
+    let env_root_stack_len_at_entry = self.heap.env_root_stack.len();
     Scope {
       heap: &mut *self.heap,
       root_stack_len_at_entry,
+      env_root_stack_len_at_entry,
     }
   }
 
@@ -1140,6 +1386,64 @@ impl<'a> Scope<'a> {
 
     Ok(func)
   }
+
+  pub(crate) fn env_create(&mut self, outer: Option<GcEnv>) -> Result<GcEnv, VmError> {
+    // Root `outer` during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    if let Some(outer) = outer {
+      scope.push_env_root(outer);
+    }
+
+    let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(0);
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Env(EnvRecord::new(outer));
+    Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
+
+  pub(crate) fn env_create_mutable_binding(&mut self, env: GcEnv, name: &str) -> Result<(), VmError> {
+    if self.heap().env_has_binding(env, name)? {
+      return Err(VmError::Unimplemented("duplicate binding"));
+    }
+
+    let mut scope = self.reborrow();
+    scope.push_env_root(env);
+
+    let name = scope.alloc_string(name)?;
+    scope.push_root(Value::String(name));
+
+    scope.heap.env_add_binding(
+      env,
+      EnvBinding {
+        name,
+        value: Value::Undefined,
+        mutable: true,
+        initialized: false,
+      },
+    )
+  }
+
+  pub(crate) fn env_create_immutable_binding(&mut self, env: GcEnv, name: &str) -> Result<(), VmError> {
+    if self.heap().env_has_binding(env, name)? {
+      return Err(VmError::Unimplemented("duplicate binding"));
+    }
+
+    let mut scope = self.reborrow();
+    scope.push_env_root(env);
+
+    let name = scope.alloc_string(name)?;
+    scope.push_root(Value::String(name));
+
+    scope.heap.env_add_binding(
+      env,
+      EnvBinding {
+        name,
+        value: Value::Undefined,
+        mutable: false,
+        initialized: false,
+      },
+    )
+  }
 }
 
 #[derive(Debug)]
@@ -1165,6 +1469,7 @@ enum HeapObject {
   Symbol(JsSymbol),
   Object(JsObject),
   Function(JsFunction),
+  Env(EnvRecord),
 }
 
 impl Trace for HeapObject {
@@ -1174,6 +1479,7 @@ impl Trace for HeapObject {
       HeapObject::Symbol(s) => s.trace(tracer),
       HeapObject::Object(o) => o.trace(tracer),
       HeapObject::Function(f) => f.trace(tracer),
+      HeapObject::Env(e) => e.trace(tracer),
     }
   }
 }
@@ -1293,6 +1599,10 @@ impl<'a> Tracer<'a> {
       Value::Symbol(s) => self.trace_heap_id(s.0),
       Value::Object(o) => self.trace_heap_id(o.0),
     }
+  }
+
+  pub(crate) fn trace_env(&mut self, env: GcEnv) {
+    self.trace_heap_id(env.0);
   }
 
   fn trace_heap_id(&mut self, id: HeapId) {
