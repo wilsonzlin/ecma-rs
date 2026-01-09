@@ -205,11 +205,18 @@ impl Heap {
   ///
   /// This is a minimal implementation of the `ToPropertyKey` shape from ECMA-262:
   /// - `String`/`Symbol` values are returned directly.
-  /// - All other values currently go through `ToString`.
+  /// - `Object` values are first converted using [`crate::ops::to_primitive`].
+  /// - All other values go through `ToString`.
   pub fn to_property_key(&mut self, value: Value) -> Result<PropertyKey, VmError> {
     match value {
       Value::String(s) => Ok(PropertyKey::String(s)),
       Value::Symbol(s) => Ok(PropertyKey::Symbol(s)),
+      Value::Object(_) => {
+        // Per spec: ToPrimitive (hint String), then ToString unless it's a Symbol.
+        // We currently use the placeholder `to_primitive` until built-ins exist.
+        let prim = crate::ops::to_primitive(self, value)?;
+        self.to_property_key(prim)
+      }
       other => Ok(PropertyKey::String(self.to_string(other)?)),
     }
   }
@@ -219,7 +226,8 @@ impl Heap {
   /// This covers the primitive cases needed by WebIDL conversions:
   /// - `undefined`, `null`, booleans, numbers, strings.
   ///
-  /// For `Object`, this is not implemented yet (requires `ToPrimitive`).
+  /// For `Object`, this uses [`crate::ops::to_primitive`] (currently a placeholder) and then
+  /// converts the resulting primitive.
   ///
   /// For `Symbol`, this throws a TypeError.
   pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
@@ -240,7 +248,13 @@ impl Heap {
       Value::Number(n) => scope.alloc_string(&number_to_string(n)),
       Value::String(s) => Ok(s),
       Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
-      Value::Object(_) => Err(VmError::Unimplemented("ToString for Object (ToPrimitive)")),
+      Value::Object(_) => {
+        // Per spec: ToPrimitive, then ToString.
+        // `to_primitive` currently returns a placeholder string for objects.
+        let prim = crate::ops::to_primitive(scope.heap_mut(), value)?;
+        scope.push_root(prim);
+        scope.heap_mut().to_string(prim)
+      }
     }
   }
 
