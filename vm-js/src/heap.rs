@@ -605,7 +605,7 @@ impl Heap {
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
       self.get_heap_object(obj.0),
-      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_) | HeapObject::Env(_))
+      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_))
     )
   }
 
