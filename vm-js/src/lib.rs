@@ -136,6 +136,7 @@ pub use crate::module_loading::ImportCallError;
 pub use crate::module_loading::ImportCallTypeError;
 pub use crate::module_loading::ImportAttribute;
 pub use crate::module_loading::LoadedModuleRequest;
+pub use crate::module_loading::LoadedModulesOwner;
 pub use crate::module_loading::ModuleCompletion;
 pub use crate::module_loading::ModuleLoadPayload;
 pub use crate::module_loading::ModuleReferrer;

@@ -163,6 +163,31 @@ pub enum ModuleReferrer {
   Realm(RealmId),
 }
 
+/// Minimal access to an ECMA-262 `[[LoadedModules]]` list.
+///
+/// In the specification, Script Records, Cyclic Module Records, and Realm Records each have a
+/// `[[LoadedModules]]` internal slot used by `FinishLoadingImportedModule` to memoize the result of
+/// loading a `(specifier, attributes)` module request.
+///
+/// This trait exists so `FinishLoadingImportedModule` can be implemented in a reusable, spec-shaped
+/// way without committing to concrete Script/Module/Realm record representations yet.
+pub trait LoadedModulesOwner {
+  fn loaded_modules(&self) -> &[LoadedModuleRequest<ModuleId>];
+  fn loaded_modules_mut(&mut self) -> &mut Vec<LoadedModuleRequest<ModuleId>>;
+}
+
+impl LoadedModulesOwner for Vec<LoadedModuleRequest<ModuleId>> {
+  #[inline]
+  fn loaded_modules(&self) -> &[LoadedModuleRequest<ModuleId>] {
+    self.as_slice()
+  }
+
+  #[inline]
+  fn loaded_modules_mut(&mut self) -> &mut Vec<LoadedModuleRequest<ModuleId>> {
+    self
+  }
+}
+
 /// Host-defined data passed through `HostLoadImportedModule`.
 ///
 /// In ECMA-262, `_hostDefined_` is typed as "anything" and is carried through spec algorithms.
@@ -460,14 +485,41 @@ pub fn start_dynamic_import(
 
 /// Spec helper: `FinishLoadingImportedModule(referrer, moduleRequest, payload, result)`.
 ///
-/// This function dispatches to `ContinueModuleLoading` or `ContinueDynamicImport` based on the
-/// payload kind.
+/// This helper implements the core spec semantics:
+/// - On a normal completion, update `referrer.[[LoadedModules]]`:
+///   - If a `ModuleRequestsEqual` match already exists, assert it resolves to the same module.
+///   - Otherwise append a new `LoadedModuleRequest`.
+/// - Dispatch to `ContinueModuleLoading` or `ContinueDynamicImport` based on payload kind.
 pub fn finish_loading_imported_module(
-  _referrer: ModuleReferrer,
-  _module_request: ModuleRequest,
+  referrer: &mut impl LoadedModulesOwner,
+  module_request: ModuleRequest,
   payload: ModuleLoadPayload,
   result: ModuleCompletion,
 ) -> Result<(), VmError> {
+  // FinishLoadingImportedModule (ECMA-262):
+  // If this completion was normal, cache the resolved module into `[[LoadedModules]]` and enforce
+  // the spec invariant that a duplicate request must resolve to the same module record.
+  if let Ok(module) = &result {
+    if let Some(existing) = referrer
+      .loaded_modules()
+      .iter()
+      .find(|record| module_requests_equal(*record, &module_request))
+    {
+      assert_eq!(
+        existing.module,
+        *module,
+        "FinishLoadingImportedModule invariant violation: module request {specifier:?} was previously loaded as {existing:?} but completed as {new:?}",
+        specifier = module_request.specifier,
+        existing = existing.module,
+        new = *module
+      );
+    } else {
+      referrer
+        .loaded_modules_mut()
+        .push(LoadedModuleRequest::new(module_request, *module));
+    }
+  }
+
   match payload.0 {
     ModuleLoadPayloadInner::GraphLoadingState(state) => continue_module_loading(state, result),
     ModuleLoadPayloadInner::PromiseCapability(promise_capability) => {
@@ -477,7 +529,10 @@ pub fn finish_loading_imported_module(
 }
 
 /// Placeholder for the static-module loading continuation (`ContinueModuleLoading`).
-pub fn continue_module_loading(_state: GraphLoadingState, _result: ModuleCompletion) -> Result<(), VmError> {
+pub fn continue_module_loading(
+  _state: GraphLoadingState,
+  _result: ModuleCompletion,
+) -> Result<(), VmError> {
   Err(VmError::Unimplemented("ContinueModuleLoading"))
 }
 
@@ -649,12 +704,12 @@ mod tests {
 
   #[test]
   fn finish_loading_imported_module_dispatches_by_payload_kind() {
-    let referrer = ModuleReferrer::Realm(RealmId::from_raw(1));
     let request = ModuleRequest::new("./x.mjs", vec![]);
     let ok = Ok(ModuleId::from_raw(1));
 
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let err = finish_loading_imported_module(
-      referrer,
+      &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
       ok,
@@ -662,13 +717,102 @@ mod tests {
     .unwrap_err();
     assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
 
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let err = finish_loading_imported_module(
-      referrer,
+      &mut loaded_modules,
       request,
       ModuleLoadPayload::promise_capability(PromiseCapability::new(())),
       Ok(ModuleId::from_raw(1)),
     )
     .unwrap_err();
     assert!(matches!(err, VmError::Unimplemented("ContinueDynamicImport")));
+  }
+
+  #[test]
+  fn finish_loading_imported_module_appends_loaded_modules_on_success() {
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
+    let request = ModuleRequest::new("./x.mjs", vec![ImportAttribute::new("type", "json")]);
+    let module = ModuleId::from_raw(123);
+
+    let err = finish_loading_imported_module(
+      &mut loaded_modules,
+      request.clone(),
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Ok(module),
+    )
+    .unwrap_err();
+    assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
+
+    assert_eq!(loaded_modules.len(), 1);
+    assert_eq!(loaded_modules[0].specifier.as_ref(), "./x.mjs");
+    assert_eq!(loaded_modules[0].attributes, request.attributes);
+    assert_eq!(loaded_modules[0].module, module);
+  }
+
+  #[test]
+  fn finish_loading_imported_module_does_not_append_on_failure() {
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
+    let request = ModuleRequest::new("./x.mjs", vec![]);
+
+    let err = finish_loading_imported_module(
+      &mut loaded_modules,
+      request,
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Err(VmError::Unimplemented("load failure")),
+    )
+    .unwrap_err();
+    assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
+    assert!(loaded_modules.is_empty());
+  }
+
+  #[test]
+  fn finish_loading_imported_module_does_not_duplicate_on_same_module() {
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
+    let request = ModuleRequest::new("./x.mjs", vec![]);
+    let module = ModuleId::from_raw(1);
+
+    let _ = finish_loading_imported_module(
+      &mut loaded_modules,
+      request.clone(),
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Ok(module),
+    );
+    let _ = finish_loading_imported_module(
+      &mut loaded_modules,
+      request.clone(),
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Ok(module),
+    );
+    assert_eq!(loaded_modules.len(), 1);
+    assert_eq!(loaded_modules[0].module, module);
+  }
+
+  #[test]
+  fn finish_loading_imported_module_panics_on_duplicate_mismatch() {
+    use std::panic::AssertUnwindSafe;
+
+    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
+    let request = ModuleRequest::new("./x.mjs", vec![]);
+    let module_a = ModuleId::from_raw(1);
+    let module_b = ModuleId::from_raw(2);
+
+    let _ = finish_loading_imported_module(
+      &mut loaded_modules,
+      request.clone(),
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Ok(module_a),
+    );
+
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+      let _ = finish_loading_imported_module(
+        &mut loaded_modules,
+        request,
+        ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+        Ok(module_b),
+      );
+    }));
+    assert!(result.is_err());
+    assert_eq!(loaded_modules.len(), 1);
+    assert_eq!(loaded_modules[0].module, module_a);
   }
 }
