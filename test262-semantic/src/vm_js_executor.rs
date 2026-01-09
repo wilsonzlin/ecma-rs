@@ -1,20 +1,22 @@
 use crate::executor::{ExecError, ExecPhase, ExecResult, Executor, JsError};
 use crate::report::Variant;
 use crate::runner::TestCase;
+use diagnostics::render::render_diagnostic;
+use diagnostics::SimpleFiles;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use vm_js::format_stack_trace;
-use vm_js::{Heap, HeapLimits, PropertyKey, PropertyKind, TerminationReason, Value, Vm, VmError, VmOptions};
-
+use vm_js::{Heap, HeapLimits, PropertyKey, PropertyKind, SourceText, StackFrame, TerminationReason, Value, Vm, VmError, VmOptions};
+ 
 const DEFAULT_HEAP_MAX_BYTES: usize = 64 * 1024 * 1024;
 const DEFAULT_HEAP_GC_THRESHOLD_BYTES: usize = 32 * 1024 * 1024;
-
+ 
 /// A `test262-semantic` executor backed by the `vm-js` interpreter.
 #[derive(Debug, Clone, Copy)]
 pub struct VmJsExecutor {
   heap_limits: HeapLimits,
 }
-
+ 
 impl Default for VmJsExecutor {
   fn default() -> Self {
     Self {
@@ -22,20 +24,17 @@ impl Default for VmJsExecutor {
     }
   }
 }
-
+ 
 impl Executor for VmJsExecutor {
   fn execute(&self, case: &TestCase, source: &str, cancel: &Arc<AtomicBool>) -> ExecResult {
     if cancel.load(Ordering::Relaxed) {
       return Err(ExecError::Cancelled);
     }
-
+ 
     if case.variant == Variant::Module {
-      return Err(ExecError::Skipped(
-        "module tests are not supported yet (vm-js executor only supports classic scripts)"
-          .to_string(),
-      ));
+      return Err(ExecError::Skipped("modules not supported".to_string()));
     }
-
+ 
     let vm = Vm::new(VmOptions {
       interrupt_flag: Some(Arc::clone(cancel)),
       ..VmOptions::default()
@@ -51,148 +50,282 @@ impl Executor for VmJsExecutor {
         )));
       }
     };
-
-    match runtime.exec_script(source) {
+ 
+    // Give the VM a useful/stable source name for stack traces.
+    let file_name = if case.id.is_empty() {
+      "<test262>".to_string()
+    } else {
+      case.id.clone()
+    };
+    let source_text = Arc::new(SourceText::new(file_name, source));
+ 
+    let result = runtime.exec_script_source(source_text);
+ 
+    // Cancellation should win over any other outcome (including parse/runtime errors).
+    if cancel.load(Ordering::Relaxed) {
+      return Err(ExecError::Cancelled);
+    }
+ 
+    match result {
       Ok(_) => Ok(()),
-      Err(err) => Err(map_vm_error(err, &mut runtime)),
+      Err(err) => Err(map_vm_error(case, source, cancel, &mut runtime, err)),
     }
   }
 }
-
-fn map_vm_error(err: VmError, runtime: &mut vm_js::JsRuntime) -> ExecError {
+ 
+fn map_vm_error(
+  case: &TestCase,
+  source: &str,
+  cancel: &Arc<AtomicBool>,
+  runtime: &mut vm_js::JsRuntime,
+  err: VmError,
+) -> ExecError {
+  if cancel.load(Ordering::Relaxed) {
+    return ExecError::Cancelled;
+  }
+ 
   match err {
-    VmError::Syntax(diags) => {
-      let mut message = format_diagnostics(&diags);
-      if !message.starts_with("SyntaxError") {
-        message = format!("SyntaxError: {message}");
-      }
-      ExecError::Js(JsError::new(ExecPhase::Parse, Some("SyntaxError".to_string()), message))
+    VmError::Syntax(mut diags) => {
+      diagnostics::sort_diagnostics(&mut diags);
+ 
+      let file_name = if case.id.is_empty() {
+        "<test262>".to_string()
+      } else {
+        case.id.clone()
+      };
+      let mut files = SimpleFiles::new();
+      let _ = files.add(file_name, source);
+ 
+      let message = diags
+        .iter()
+        .map(|d| render_diagnostic(&files, d).trim_end().to_string())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+ 
+      ExecError::Js(JsError::new(
+        ExecPhase::Parse,
+        Some("SyntaxError".to_string()),
+        message,
+      ))
     }
-    VmError::Throw(thrown) => ExecError::Js(map_thrown_value(runtime, thrown)),
+ 
+    VmError::Throw(thrown) => {
+      let (typ, message) = describe_thrown_value(runtime, thrown);
+      let stack = stack_from_frames(runtime.vm.capture_stack());
+      ExecError::Js(JsError {
+        phase: ExecPhase::Runtime,
+        typ,
+        message,
+        stack,
+      })
+    }
+ 
     VmError::Termination(term) => match term.reason {
       TerminationReason::Interrupted | TerminationReason::DeadlineExceeded | TerminationReason::OutOfFuel => {
         ExecError::Cancelled
       }
-      TerminationReason::OutOfMemory | TerminationReason::StackOverflow => {
-        let stack = format_stack_trace(&term.stack);
-        let mut js = JsError::new(ExecPhase::Runtime, None, term.to_string());
-        if !stack.is_empty() {
-          js.stack = Some(stack);
-        }
-        ExecError::Js(js)
-      }
+ 
+      TerminationReason::StackOverflow => ExecError::Js(JsError {
+        phase: ExecPhase::Runtime,
+        typ: Some("RangeError".to_string()),
+        message: term.to_string(),
+        stack: stack_from_frames(term.stack),
+      }),
+ 
+      // Chosen mapping: treat OOM as a `RangeError` (resource exhaustion), which
+      // is also where we classify stack overflow.
+      TerminationReason::OutOfMemory => ExecError::Js(JsError {
+        phase: ExecPhase::Runtime,
+        typ: Some("RangeError".to_string()),
+        message: term.to_string(),
+        stack: stack_from_frames(term.stack),
+      }),
     },
-    other => ExecError::Js(JsError::new(ExecPhase::Runtime, None, other.to_string())),
+ 
+    VmError::NotCallable
+    | VmError::NotConstructable
+    | VmError::PrototypeCycle
+    | VmError::PropertyNotData
+    | VmError::PropertyNotFound
+    | VmError::TypeError(_) => ExecError::Js(JsError {
+      phase: ExecPhase::Runtime,
+      typ: Some("TypeError".to_string()),
+      message: err.to_string(),
+      stack: stack_from_frames(runtime.vm.capture_stack()),
+    }),
+ 
+    VmError::PrototypeChainTooDeep => ExecError::Js(JsError {
+      phase: ExecPhase::Runtime,
+      typ: Some("RangeError".to_string()),
+      message: err.to_string(),
+      stack: stack_from_frames(runtime.vm.capture_stack()),
+    }),
+ 
+    // Chosen mapping: treat OOM as a `RangeError` (resource exhaustion), which
+    // is also where we classify stack overflow.
+    VmError::OutOfMemory => ExecError::Js(JsError {
+      phase: ExecPhase::Runtime,
+      typ: Some("RangeError".to_string()),
+      message: err.to_string(),
+      stack: stack_from_frames(runtime.vm.capture_stack()),
+    }),
+ 
+    VmError::Unimplemented(_) => ExecError::Js(JsError {
+      phase: ExecPhase::Runtime,
+      typ: None,
+      message: err.to_string(),
+      stack: stack_from_frames(runtime.vm.capture_stack()),
+    }),
+ 
+    other => ExecError::Js(JsError {
+      phase: ExecPhase::Runtime,
+      typ: None,
+      message: other.to_string(),
+      stack: stack_from_frames(runtime.vm.capture_stack()),
+    }),
   }
 }
-
-fn format_diagnostics(diags: &[diagnostics::Diagnostic]) -> String {
-  if diags.is_empty() {
-    return "unknown syntax error".to_string();
-  }
-  diags
-    .iter()
-    .map(|d| {
-      if d.code.as_str().is_empty() {
-        d.message.clone()
-      } else {
-        format!("{}: {}", d.code.as_str(), d.message)
-      }
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
-}
-
-fn map_thrown_value(runtime: &mut vm_js::JsRuntime, thrown: Value) -> JsError {
-  // Root the thrown value while we inspect it; allocations for property keys can trigger GC.
+ 
+fn describe_thrown_value(runtime: &mut vm_js::JsRuntime, value: Value) -> (Option<String>, String) {
+  // Root the thrown value while we allocate property keys so GC cannot collect
+  // it out from under us.
   let mut scope = runtime.heap.scope();
-  scope.push_root(thrown);
-  let heap = scope.heap_mut();
+  let _ = scope.push_root(value);
 
-  let (typ, message, stack) = match thrown {
+  match value {
     Value::Object(obj) => {
-      let name = get_string_property(heap, obj, "name");
-      let message = get_string_property(heap, obj, "message");
-      let stack = get_string_property(heap, obj, "stack");
-      let fallback = format_value(heap, thrown);
-      (
-        name,
-        message.unwrap_or_else(|| fallback.clone()),
-        stack.filter(|s| !s.is_empty()),
-      )
+      let typ = get_object_string_data_property(&mut scope, obj, "name");
+      let message = get_object_string_data_property(&mut scope, obj, "message")
+        .or_else(|| typ.clone())
+        .unwrap_or_else(|| "<object>".to_string());
+      (typ, message)
     }
-    _ => (None, format_value(heap, thrown), None),
-  };
-
-  let mut message = message;
-  if let Some(typ) = typ.as_deref() {
-    if !message.starts_with(typ) {
-      if message.is_empty() {
-        message = typ.to_string();
-      } else {
-        message = format!("{typ}: {message}");
-      }
+ 
+    Value::Undefined => (None, "undefined".to_string()),
+    Value::Null => (None, "null".to_string()),
+    Value::Bool(b) => (None, b.to_string()),
+    Value::Number(n) => (None, format_js_number(n)),
+    Value::String(s) => {
+      let msg = scope
+        .heap()
+        .get_string(s)
+        .map(|s| s.to_utf8_lossy())
+        .unwrap_or_else(|_| "<string>".to_string());
+      (None, msg)
     }
-  }
-
-  let mut err = JsError::new(ExecPhase::Runtime, typ, message);
-  if let Some(stack) = stack {
-    err.stack = Some(stack);
-  }
-  err
-}
-
-fn get_string_property(heap: &mut Heap, obj: vm_js::GcObject, name: &str) -> Option<String> {
-  let key_s = {
-    let mut scope = heap.scope();
-    scope.alloc_string(name).ok()?
-  };
-  let key = PropertyKey::from_string(key_s);
-  let desc = heap.get_property(obj, &key).ok().flatten()?;
-  let value = match desc.kind {
-    PropertyKind::Data { value, .. } => value,
-    PropertyKind::Accessor { .. } => return None,
-  };
-  value_as_string(heap, value)
-}
-
-fn value_as_string(heap: &Heap, value: Value) -> Option<String> {
-  match value {
-    Value::String(s) => heap.get_string(s).ok().map(|s| s.to_utf8_lossy()),
-    _ => None,
-  }
-}
-
-fn format_value(heap: &Heap, value: Value) -> String {
-  match value {
-    Value::Undefined => "undefined".to_string(),
-    Value::Null => "null".to_string(),
-    Value::Bool(b) => b.to_string(),
-    Value::Number(n) => {
-      // Keep this stable and close enough to JS for debugging (no exponential dance).
-      if n.is_nan() {
-        "NaN".to_string()
-      } else if n == f64::INFINITY {
-        "Infinity".to_string()
-      } else if n == f64::NEG_INFINITY {
-        "-Infinity".to_string()
-      } else {
-        n.to_string()
-      }
-    }
-    Value::String(s) => heap
-      .get_string(s)
-      .map(|s| s.to_utf8_lossy())
-      .unwrap_or_else(|_| "<invalid string>".to_string()),
     Value::Symbol(sym) => {
-      let desc = heap
+      let msg = scope
+        .heap()
         .symbol_description(sym)
-        .and_then(|s| heap.get_string(s).ok().map(|s| s.to_utf8_lossy()));
-      match desc {
-        Some(desc) => format!("Symbol({desc})"),
-        None => "Symbol()".to_string(),
-      }
+        .and_then(|desc| scope.heap().get_string(desc).ok().map(|s| s.to_utf8_lossy()))
+        .map(|desc| format!("Symbol({desc})"))
+        .unwrap_or_else(|| "Symbol()".to_string());
+      (None, msg)
     }
-    Value::Object(_) => "[object Object]".to_string(),
+  }
+}
+ 
+fn get_object_string_data_property(
+  scope: &mut vm_js::Scope<'_>,
+  obj: vm_js::GcObject,
+  prop: &str,
+) -> Option<String> {
+  let key = PropertyKey::from_string(scope.alloc_string(prop).ok()?);
+  let desc = scope.heap().get_property(obj, &key).ok().flatten()?;
+  match desc.kind {
+    PropertyKind::Data { value, .. } => match value {
+      Value::String(s) => scope.heap().get_string(s).ok().map(|s| s.to_utf8_lossy()),
+      _ => None,
+    },
+    PropertyKind::Accessor { .. } => None,
+  }
+}
+ 
+fn format_js_number(n: f64) -> String {
+  if n.is_nan() {
+    return "NaN".to_string();
+  }
+  if n.is_infinite() {
+    return if n.is_sign_negative() {
+      "-Infinity".to_string()
+    } else {
+      "Infinity".to_string()
+    };
+  }
+  // Best-effort: Rust's formatting matches JS for the common cases we care
+  // about (`1`, `-0`, etc).
+  n.to_string()
+}
+ 
+fn stack_from_frames(frames: Vec<StackFrame>) -> Option<String> {
+  if frames.is_empty() {
+    return None;
+  }
+  let formatted = format_stack_trace(&frames);
+  if formatted.is_empty() {
+    None
+  } else {
+    Some(formatted)
+  }
+}
+ 
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::frontmatter::Frontmatter;
+  use crate::report::ExpectedOutcome;
+  use std::path::PathBuf;
+ 
+  fn test_case(id: &str) -> TestCase {
+    TestCase {
+      id: id.to_string(),
+      path: PathBuf::from(id),
+      variant: Variant::NonStrict,
+      expected: ExpectedOutcome::Pass,
+      metadata: Frontmatter::default(),
+      body: String::new(),
+    }
+  }
+ 
+  #[test]
+  fn cancellation_flag_short_circuits() {
+    let exec = VmJsExecutor::default();
+    let cancel = Arc::new(AtomicBool::new(true));
+    let err = exec.execute(&test_case("cancel.js"), "1;", &cancel).unwrap_err();
+    assert!(matches!(err, ExecError::Cancelled));
+  }
+ 
+  #[test]
+  fn syntax_error_maps_to_parse_syntaxerror() {
+    let exec = VmJsExecutor::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let err = exec
+      .execute(&test_case("syntax.js"), "let =;", &cancel)
+      .unwrap_err();
+    let ExecError::Js(js) = err else {
+      panic!("expected JS error, got {err:?}");
+    };
+    assert_eq!(js.phase, ExecPhase::Parse);
+    assert_eq!(js.typ.as_deref(), Some("SyntaxError"));
+    assert!(
+      js.message.contains("syntax.js"),
+      "rendered diagnostic should include file name, got: {}",
+      js.message
+    );
+  }
+ 
+  #[test]
+  fn throw_number_maps_to_runtime_error() {
+    let exec = VmJsExecutor::default();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let err = exec
+      .execute(&test_case("throw.js"), "throw 1;", &cancel)
+      .unwrap_err();
+    let ExecError::Js(js) = err else {
+      panic!("expected JS error, got {err:?}");
+    };
+    assert_eq!(js.phase, ExecPhase::Runtime);
+    assert!(js.typ.is_none());
+    assert_eq!(js.message, "1");
   }
 }

@@ -147,8 +147,12 @@ cargo run -p test262-semantic -- \
 
 ## Executor
 
-Until the ecma-rs VM exists, the crate defaults to a `stub_executor` feature
-which makes the runner compile and provides a placeholder executor.
+By default, this runner uses a `vm-js`-backed executor (a small interpreter used
+as early scaffolding for the eventual ecma-rs VM).
 
-Once the VM lands, a follow-up change can implement the internal `Executor`
-trait against it.
+For wiring/CI experiments where you want the harness to run but always report
+success, enable the `stub_executor` feature:
+
+```bash
+cargo run -p test262-semantic --features stub_executor -- --suite smoke
+```
