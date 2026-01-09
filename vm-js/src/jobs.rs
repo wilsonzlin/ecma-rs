@@ -28,6 +28,7 @@
 use crate::GcObject;
 use crate::Value;
 use crate::VmError;
+use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -144,30 +145,60 @@ impl fmt::Debug for Job {
 /// HTML uses JobCallback records to capture the "incumbent settings object" / active script state
 /// at the moment a callback is created, and later re-establish that state when calling it.
 ///
-/// In this crate the record is opaque: the host decides what to store. The VM only carries this
-/// value around and gives it back to the host when it needs to call the callback.
+/// In this crate the record is mostly opaque: the host may associate arbitrary data with the
+/// callback, but the callback object itself is stored explicitly so engine code can keep it alive
+/// across GC cycles.
+///
+/// # GC safety / rooting
+///
+/// `JobCallback` is **not** automatically traced by the GC.
+///
+/// If a `JobCallback` is stored somewhere that can outlive a stack rooting scope (e.g. in Promise
+/// reaction records, as queued microtasks, etc), the embedding/engine must ensure that
+/// [`JobCallback::callback`] is traced/rooted by the relevant data structure.
+///
+/// Similarly, any GC handles stored inside the host-defined `data` payload are **opaque** to the GC
+/// and must be traced/rooted by the host.
 #[derive(Clone)]
-pub struct JobCallback(Arc<dyn std::any::Any + Send + Sync>);
+pub struct JobCallback {
+  callback: GcObject,
+  data: Arc<dyn Any + Send + Sync>,
+}
 
 impl JobCallback {
-  /// Create a new host-defined JobCallback record.
-  ///
-  /// The payload is host-defined and can be downcast by the host when the callback is later
-  /// invoked.
-  pub fn new<T: std::any::Any + Send + Sync>(data: T) -> Self {
-    Self(Arc::new(data))
+  /// Create a new `JobCallback` with no extra host-defined metadata.
+  pub fn new(callback: GcObject) -> Self {
+    Self {
+      callback,
+      data: Arc::new(()),
+    }
   }
 
-  /// Attempts to downcast the payload by reference.
-  pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
-    self.0.downcast_ref::<T>()
+  /// Create a new `JobCallback` with host-defined metadata.
+  pub fn new_with_data<T: Any + Send + Sync>(callback: GcObject, data: T) -> Self {
+    Self {
+      callback,
+      data: Arc::new(data),
+    }
+  }
+
+  /// Returns the callback object captured by this record.
+  #[inline]
+  pub fn callback(&self) -> GcObject {
+    self.callback
+  }
+
+  /// Attempts to downcast the host-defined metadata payload by reference.
+  pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
+    self.data.downcast_ref::<T>()
   }
 }
 
 impl fmt::Debug for JobCallback {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("JobCallback")
-      .field("type_id", &self.0.type_id())
+      .field("callback", &self.callback)
+      .field("data_type_id", &self.data.type_id())
       .finish()
   }
 }

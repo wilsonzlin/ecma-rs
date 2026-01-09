@@ -2,13 +2,16 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+use vm_js::Heap;
+use vm_js::HeapLimits;
 use vm_js::Job;
 use vm_js::JobCallback;
 use vm_js::JobKind;
 use vm_js::Value;
+use vm_js::VmError;
 use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
-use vm_js::VmError;
+use vm_js::WeakGcObject;
 
 #[derive(Default)]
 struct TestHost {
@@ -56,10 +59,16 @@ fn promise_jobs_can_be_run_in_fifo_order() {
 }
 
 #[test]
-fn host_call_job_callback_stub_is_present_and_object_safe() {
+fn host_call_job_callback_stub_is_present_and_object_safe() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let callback_obj = {
+    let mut scope = heap.scope();
+    scope.alloc_object()?
+  };
+
   let mut host = TestHost::default();
   let mut ctx = TestContext::default();
-  let callback = JobCallback::new(());
+  let callback = JobCallback::new(callback_obj);
 
   // Not implementing `host_call_job_callback` should still compile; the default impl is a stub.
   let err = (&mut host as &mut dyn VmHostHooks).host_call_job_callback(
@@ -72,4 +81,83 @@ fn host_call_job_callback_stub_is_present_and_object_safe() {
     err,
     Err(VmError::Unimplemented("HostCallJobCallback"))
   ));
+  Ok(())
+}
+
+#[test]
+fn job_callback_exposes_callback_object() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let callback_obj;
+  {
+    let mut scope = heap.scope();
+    callback_obj = scope.alloc_object()?;
+  }
+
+  let cb = JobCallback::new(callback_obj);
+  assert_eq!(cb.callback(), callback_obj);
+  Ok(())
+}
+
+#[test]
+fn job_callback_downcast_ref_exposes_host_data() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let callback_obj;
+  {
+    let mut scope = heap.scope();
+    callback_obj = scope.alloc_object()?;
+  }
+
+  let cb = JobCallback::new_with_data(callback_obj, 42u32);
+  assert_eq!(cb.callback(), callback_obj);
+  assert_eq!(cb.downcast_ref::<u32>(), Some(&42u32));
+  assert_eq!(cb.downcast_ref::<u64>(), None);
+  Ok(())
+}
+
+#[test]
+fn job_callback_does_not_implicitly_root_callback() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let obj;
+  let cb;
+  let weak;
+  {
+    let mut scope = heap.scope();
+    obj = scope.alloc_object()?;
+    cb = JobCallback::new(obj);
+    weak = WeakGcObject::from(obj);
+  }
+
+  // Holding onto the `JobCallback` record must not keep the callback alive by itself.
+  assert_eq!(cb.callback(), obj);
+  heap.collect_garbage();
+  assert_eq!(weak.upgrade(&heap), None);
+  Ok(())
+}
+
+#[test]
+fn job_callback_callback_can_be_rooted_by_host() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let obj;
+  let cb;
+  let weak;
+  {
+    let mut scope = heap.scope();
+    obj = scope.alloc_object()?;
+    cb = JobCallback::new(obj);
+    weak = WeakGcObject::from(obj);
+  }
+
+  let root = heap.add_root(Value::Object(cb.callback()));
+  heap.collect_garbage();
+  assert_eq!(weak.upgrade(&heap), Some(obj));
+
+  heap.remove_root(root);
+  heap.collect_garbage();
+  assert_eq!(weak.upgrade(&heap), None);
+
+  Ok(())
 }
