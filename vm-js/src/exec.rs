@@ -630,53 +630,43 @@ impl JsRuntime {
       col,
     };
 
-    let exec_ctx = crate::ExecutionContext { realm: self.realm.id(), script_or_module: None };
-    let vm = &mut self.vm;
-    vm.push_execution_context(exec_ctx);
-
-    // Bind the runtime fields we need so we can borrow-split `(vm, heap, env)` cleanly.
-    let heap = &mut self.heap;
-    let env = &mut self.env;
+    let exec_ctx = crate::ExecutionContext {
+      realm: self.realm.id(),
+      script_or_module: None,
+    };
+    let mut vm_ctx = self.vm.execution_context_guard(exec_ctx);
+    let prev_host = vm_ctx.push_active_host_hooks(host);
 
     let result = (|| {
-      // Route all internal `vm.call` / `vm.construct` uses through `host` for the duration of script
-      // execution so Promise jobs are enqueued onto the embedding's microtask queue.
-      vm.with_host_hooks_override(host, |vm| -> Result<Value, VmError> {
-        let mut vm_frame = vm.enter_frame(frame)?;
+      let mut vm_frame = vm_ctx.enter_frame(frame)?;
 
-        let mut scope = heap.scope();
-        let global_this = Value::Object(global_object);
-        let mut evaluator = Evaluator {
-          vm: &mut *vm_frame,
-          env,
-          strict,
-          this: global_this,
-          new_target: Value::Undefined,
-        };
+      let mut scope = self.heap.scope();
+      let global_this = Value::Object(global_object);
+      let mut evaluator = Evaluator {
+        vm: &mut *vm_frame,
+        hooks: None,
+        env: &mut self.env,
+        strict,
+        this: global_this,
+        new_target: Value::Undefined,
+      };
 
-        evaluator.instantiate_script(&mut scope, &top.stx.body)?;
+      evaluator.instantiate_script(&mut scope, &top.stx.body)?;
 
-        let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
-        match completion {
-          Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-          Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
-            value: thrown.value,
-            stack: thrown.stack,
-          }),
-          Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
-          Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
-          Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
-        }
-      })
+      let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
+      match completion {
+        Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+        Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+          value: thrown.value,
+          stack: thrown.stack,
+        }),
+        Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
+        Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
+        Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
+      }
     })();
 
-    let popped = vm.pop_execution_context();
-    debug_assert_eq!(
-      popped,
-      Some(exec_ctx),
-      "execution context stack mismatch in JsRuntime::exec_script_source_with_host"
-    );
-
+    vm_ctx.pop_active_host_hooks(prev_host);
     result
   }
 }
@@ -819,21 +809,16 @@ impl<'a> Evaluator<'a> {
     func: &Node<Func>,
     args: &[Value],
   ) -> Result<(), VmError> {
-    // Bind parameters.
-    for (idx, param) in func.stx.parameters.iter().enumerate() {
-      if param.stx.rest || param.stx.default_value.is_some() {
-        return Err(VmError::Unimplemented("non-simple function parameters"));
-      }
-      let value = args.get(idx).copied().unwrap_or(Value::Undefined);
-      bind_pattern(
-        self.vm,
+    // Pre-create all parameter bindings before evaluating default initializers so identifier
+    // references during parameter evaluation observe TDZ semantics.
+    let env_rec = self.env.lexical_env;
+    for param in &func.stx.parameters {
+      self.instantiate_lexical_names_from_pat(
         scope,
-        self.env,
+        env_rec,
         &param.stx.pattern.stx.pat.stx,
-        value,
-        BindingKind::Let,
-        self.strict,
-        self.this,
+        param.loc,
+        true,
       )?;
     }
 
@@ -841,6 +826,8 @@ impl<'a> Evaluator<'a> {
     //
     // test262's harness expects `arguments` to exist and be array-like (`length`, indexed elements).
     // We do not implement mapped arguments objects yet.
+    //
+    // `arguments` must be created before default parameter initializers run so defaults can read it.
     if !func.stx.arrow && !scope.heap().env_has_binding(self.env.lexical_env, "arguments")? {
       let intr = self
         .vm
@@ -880,6 +867,72 @@ impl<'a> Evaluator<'a> {
       scope
         .heap_mut()
         .env_initialize_binding(self.env.lexical_env, "arguments", Value::Object(args_obj))?;
+    }
+
+    // Bind parameters in order, evaluating default initializers as needed.
+    for (idx, param) in func.stx.parameters.iter().enumerate() {
+      if param.stx.rest {
+        // Rest parameter: collect remaining args into an Array.
+        let rest_slice = args.get(idx..).unwrap_or(&[]);
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+
+        let mut rest_scope = scope.reborrow();
+        let arr = rest_scope.alloc_array(0)?;
+        rest_scope.push_root(Value::Object(arr))?;
+        rest_scope
+          .heap_mut()
+          .object_set_prototype(arr, Some(intr.array_prototype()))?;
+
+        for (i, v) in rest_slice.iter().copied().enumerate() {
+          let mut elem_scope = rest_scope.reborrow();
+          elem_scope.push_root(Value::Object(arr))?;
+          elem_scope.push_root(v)?;
+          let key_s = elem_scope.alloc_string(&i.to_string())?;
+          elem_scope.push_root(Value::String(key_s))?;
+          let key = PropertyKey::from_string(key_s);
+          let ok = elem_scope.create_data_property(arr, key, v)?;
+          if !ok {
+            return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+          }
+        }
+
+        bind_pattern(
+          self.vm,
+          &mut rest_scope,
+          self.env,
+          &param.stx.pattern.stx.pat.stx,
+          Value::Object(arr),
+          BindingKind::Let,
+          self.strict,
+          self.this,
+        )?;
+
+        if idx + 1 != func.stx.parameters.len() {
+          return Err(VmError::Unimplemented("rest parameter must be last"));
+        }
+        break;
+      }
+
+      let mut value = args.get(idx).copied().unwrap_or(Value::Undefined);
+      if matches!(value, Value::Undefined) {
+        if let Some(default_expr) = &param.stx.default_value {
+          value = self.eval_expr(scope, default_expr)?;
+        }
+      }
+
+      bind_pattern(
+        self.vm,
+        scope,
+        self.env,
+        &param.stx.pattern.stx.pat.stx,
+        value,
+        BindingKind::Let,
+        self.strict,
+        self.this,
+      )?;
     }
 
     if let Some(FuncBody::Block(stmts)) = &func.stx.body {

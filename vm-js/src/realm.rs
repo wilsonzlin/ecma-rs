@@ -288,6 +288,10 @@ impl Realm {
     self.global_object
   }
 
+  pub fn id(&self) -> RealmId {
+    RealmId::from_raw(self.global_object.id().0)
+  }
+
   /// The realm's intrinsic objects.
   pub fn intrinsics(&self) -> &Intrinsics {
     &self.intrinsics

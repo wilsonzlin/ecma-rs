@@ -179,10 +179,14 @@ pub struct Vm {
   ///
   /// ## Safety contract
   ///
-  /// This raw pointer is only written by [`Vm::with_host_hooks_override`], which borrows the host
-  /// hooks mutably for the duration of the provided closure. All uses of this pointer must be
-  /// scoped within that closure, and must treat the pointer as a reborrow of the original `&mut`
-  /// reference.
+  /// This raw pointer is written by:
+  /// - [`Vm::with_host_hooks_override`]
+  /// - [`Vm::push_active_host_hooks`] / [`Vm::pop_active_host_hooks`]
+  /// - [`Vm::call_with_host`] / [`Vm::construct_with_host`] (for the duration of the call)
+  ///
+  /// Each of these APIs borrows the host hook implementation mutably for the duration in which the
+  /// pointer may be dereferenced, and treats it as a reborrow of the original `&mut dyn
+  /// VmHostHooks`.
   host_hooks_override: Option<*mut (dyn VmHostHooks + 'static)>,
   ecma_functions: Vec<EcmaFunctionCode>,
   ecma_function_cache: HashMap<EcmaFunctionKey, EcmaFunctionId>,
@@ -358,6 +362,14 @@ impl Drop for VmFrameGuard<'_> {
 }
 
 impl Vm {
+  fn erase_host_hooks_lifetime(
+    host: &mut dyn VmHostHooks,
+  ) -> *mut (dyn VmHostHooks + 'static) {
+    let ptr: *mut (dyn VmHostHooks + '_) = host;
+    // SAFETY: We only use this pointer while the embedder-provided `host` reference is alive.
+    unsafe { mem::transmute::<*mut (dyn VmHostHooks + '_), *mut (dyn VmHostHooks + 'static)>(ptr) }
+  }
+
   pub fn new(options: VmOptions) -> Self {
     let (interrupt, interrupt_handle) = match &options.interrupt_flag {
       Some(flag) => InterruptToken::from_shared_flag(flag.clone()),
@@ -425,15 +437,7 @@ impl Vm {
     }
 
     let prev = self.host_hooks_override;
-    // Store the host hook pointer with an erased lifetime. This is safe because:
-    // - the pointer is only used while `host` is mutably borrowed for the duration of this method,
-    // - and the override is restored on drop of `Guard` before `host` can be used again.
-    let host_ptr: *mut dyn VmHostHooks = host;
-    // SAFETY: `dyn Trait + 'a` and `dyn Trait + 'static` have the same runtime representation; the
-    // lifetime is purely a type-system constraint. The `Guard` ensures the pointer is not used
-    // outside the dynamic extent of this call.
-    let host_ptr: *mut (dyn VmHostHooks + 'static) = unsafe { std::mem::transmute(host_ptr) };
-    self.host_hooks_override = Some(host_ptr);
+    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
     let guard = Guard { vm: self, prev };
     f(&mut *guard.vm)
   }
@@ -1025,6 +1029,22 @@ impl Vm {
     self.execution_context_stack.push(ctx);
   }
 
+  pub(crate) fn push_active_host_hooks(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+  ) -> Option<*mut (dyn VmHostHooks + 'static)> {
+    let prev = self.host_hooks_override;
+    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
+    prev
+  }
+
+  pub(crate) fn pop_active_host_hooks(
+    &mut self,
+    previous: Option<*mut (dyn VmHostHooks + 'static)>,
+  ) {
+    self.host_hooks_override = previous;
+  }
+
   /// Pops the top [`ExecutionContext`] from the execution context stack.
   pub fn pop_execution_context(&mut self) -> Option<ExecutionContext> {
     self.execution_context_stack.pop()
@@ -1147,12 +1167,30 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    self.call(scope, callee, this, args)
+    let mut host = mem::take(&mut self.microtasks);
+    let result = self.call_with_host(scope, &mut host, callee, this, args);
+    self.microtasks = host;
+    result
   }
 
   /// Calls `callee` with the provided `this` value and arguments, using a custom host hook
   /// implementation.
   pub fn call_with_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let prev_host = self.host_hooks_override;
+    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
+    let result = self.call_with_host_inner(scope, host, callee, this, args);
+    self.host_hooks_override = prev_host;
+    result
+  }
+
+  fn call_with_host_inner(
     &mut self,
     scope: &mut Scope<'_>,
     host: &mut dyn VmHostHooks,
@@ -1327,6 +1365,21 @@ impl Vm {
   /// Constructs `callee` with the provided arguments and `new_target`, using a custom host hook
   /// implementation.
   pub fn construct_with_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let prev_host = self.host_hooks_override;
+    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
+    let result = self.construct_with_host_inner(scope, host, callee, args, new_target);
+    self.host_hooks_override = prev_host;
+    result
+  }
+
+  fn construct_with_host_inner(
     &mut self,
     scope: &mut Scope<'_>,
     host: &mut dyn VmHostHooks,
