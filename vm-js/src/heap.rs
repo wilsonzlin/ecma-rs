@@ -296,23 +296,25 @@ impl Heap {
     }
   }
 
-  fn get_object(&self, obj: GcObject) -> Result<&JsObject, VmError> {
+  fn get_object_base(&self, obj: GcObject) -> Result<&ObjectBase, VmError> {
     match self.get_heap_object(obj.0)? {
-      HeapObject::Object(o) => Ok(o),
+      HeapObject::Object(o) => Ok(&o.base),
+      HeapObject::Function(f) => Ok(&f.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
 
-  fn get_object_mut(&mut self, obj: GcObject) -> Result<&mut JsObject, VmError> {
+  fn get_object_base_mut(&mut self, obj: GcObject) -> Result<&mut ObjectBase, VmError> {
     match self.get_heap_object_mut(obj.0)? {
-      HeapObject::Object(o) => Ok(o),
+      HeapObject::Object(o) => Ok(&mut o.base),
+      HeapObject::Function(f) => Ok(&mut f.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
 
   /// Gets an object's `[[Prototype]]`.
   pub fn object_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
-    Ok(self.get_object(obj)?.prototype)
+    Ok(self.get_object_base(obj)?.prototype)
   }
 
   /// Sets an object's `[[Prototype]]`.
@@ -322,7 +324,7 @@ impl Heap {
     prototype: Option<GcObject>,
   ) -> Result<(), VmError> {
     // Validate `obj` early so we don't silently accept stale handles.
-    let _ = self.get_object(obj)?;
+    let _ = self.get_object_base(obj)?;
 
     // Direct self-cycle.
     if prototype == Some(obj) {
@@ -351,7 +353,7 @@ impl Heap {
       current = self.object_prototype(p)?;
     }
 
-    self.get_object_mut(obj)?.prototype = prototype;
+    self.get_object_base_mut(obj)?.prototype = prototype;
     Ok(())
   }
 
@@ -366,7 +368,7 @@ impl Heap {
     obj: GcObject,
     prototype: Option<GcObject>,
   ) -> Result<(), VmError> {
-    self.get_object_mut(obj)?.prototype = prototype;
+    self.get_object_base_mut(obj)?.prototype = prototype;
     Ok(())
   }
 
@@ -376,7 +378,7 @@ impl Heap {
     obj: GcObject,
     key: &PropertyKey,
   ) -> Result<Option<PropertyDescriptor>, VmError> {
-    let obj = self.get_object(obj)?;
+    let obj = self.get_object_base(obj)?;
     for prop in obj.properties.iter() {
       if self.property_key_eq(&prop.key, key) {
         return Ok(Some(prop.desc));
@@ -445,7 +447,7 @@ impl Heap {
     // Two-phase borrow to avoid holding `&mut JsObject` while calling back into `&self` for string
     // comparisons in `property_key_eq`.
     let idx = {
-      let obj = self.get_object(obj)?;
+      let obj = self.get_object_base(obj)?;
       obj
         .properties
         .iter()
@@ -456,7 +458,7 @@ impl Heap {
       return Err(VmError::PropertyNotFound);
     };
 
-    let obj = self.get_object_mut(obj)?;
+    let obj = self.get_object_base_mut(obj)?;
     let prop = obj
       .properties
       .get_mut(idx)
@@ -499,37 +501,70 @@ impl Heap {
   ) -> Result<(), VmError> {
     let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
 
-    let (property_count, old_bytes, existing_idx) = {
+    #[derive(Clone, Copy)]
+    enum ObjectLikeKind {
+      Object,
+      Function { bound_args_len: usize },
+    }
+
+    let (kind, property_count, old_bytes, existing_idx) = {
       let slot = &self.slots[idx];
       let Some(obj) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
       };
-      let HeapObject::Object(obj) = obj else {
-        return Err(VmError::InvalidHandle);
-      };
-
-      let existing_idx = obj
-        .properties
-        .iter()
-        .position(|entry| self.property_key_eq(&entry.key, &key));
-
-      (obj.properties.len(), slot.bytes, existing_idx)
+      match obj {
+        HeapObject::Object(obj) => {
+          let existing_idx = obj
+            .base
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          (ObjectLikeKind::Object, obj.base.properties.len(), slot.bytes, existing_idx)
+        }
+        HeapObject::Function(func) => {
+          let existing_idx = func
+            .base
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
+          (
+            ObjectLikeKind::Function { bound_args_len },
+            func.base.properties.len(),
+            slot.bytes,
+            existing_idx,
+          )
+        }
+        _ => return Err(VmError::InvalidHandle),
+      }
     };
 
     match existing_idx {
       Some(existing_idx) => {
         // Replace in-place (no change to heap size).
-        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+        let Some(obj) = self.slots[idx].value.as_mut() else {
           return Err(VmError::InvalidHandle);
         };
-        obj.properties[existing_idx].desc = desc;
+        match obj {
+          HeapObject::Object(obj) => obj.base.properties[existing_idx].desc = desc,
+          HeapObject::Function(func) => func.base.properties[existing_idx].desc = desc,
+          _ => return Err(VmError::InvalidHandle),
+        }
         Ok(())
       }
       None => {
         let new_property_count = property_count
           .checked_add(1)
           .ok_or(VmError::OutOfMemory)?;
-        let new_bytes = JsObject::heap_size_bytes_for_property_count(new_property_count);
+        let new_bytes = match kind {
+          ObjectLikeKind::Object => JsObject::heap_size_bytes_for_property_count(new_property_count),
+          ObjectLikeKind::Function { bound_args_len } => {
+            JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
+              bound_args_len,
+              new_property_count,
+            )
+          }
+        };
 
         // Before allocating, enforce heap limits based on the net growth of this object.
         let grow_by = new_bytes.saturating_sub(old_bytes);
@@ -544,19 +579,27 @@ impl Heap {
 
         {
           let slot = &self.slots[idx];
-          let Some(HeapObject::Object(obj)) = slot.value.as_ref() else {
+          let Some(obj) = slot.value.as_ref() else {
             return Err(VmError::InvalidHandle);
           };
-          buf.extend_from_slice(&obj.properties);
+          match obj {
+            HeapObject::Object(obj) => buf.extend_from_slice(&obj.base.properties),
+            HeapObject::Function(func) => buf.extend_from_slice(&func.base.properties),
+            _ => return Err(VmError::InvalidHandle),
+          }
         }
 
         buf.push(PropertyEntry { key, desc });
         let properties = buf.into_boxed_slice();
 
-        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+        let Some(obj) = self.slots[idx].value.as_mut() else {
           return Err(VmError::InvalidHandle);
         };
-        obj.properties = properties;
+        match obj {
+          HeapObject::Object(obj) => obj.base.properties = properties,
+          HeapObject::Function(func) => func.base.properties = properties,
+          _ => return Err(VmError::InvalidHandle),
+        }
 
         self.update_slot_bytes(idx, new_bytes);
 
@@ -920,23 +963,56 @@ impl Trace for JsSymbol {
 }
 
 #[derive(Debug)]
-struct JsObject {
+pub(crate) struct ObjectBase {
   prototype: Option<GcObject>,
+  #[allow(dead_code)]
+  extensible: bool,
   properties: Box<[PropertyEntry]>,
 }
 
-impl JsObject {
-  fn new() -> Self {
+impl ObjectBase {
+  pub(crate) fn new() -> Self {
     Self {
       prototype: None,
+      extensible: true,
       properties: Box::default(),
     }
   }
 
-  fn heap_size_bytes_for_property_count(count: usize) -> usize {
-    let props_bytes = count
+  pub(crate) fn property_count(&self) -> usize {
+    self.properties.len()
+  }
+
+  pub(crate) fn properties_heap_size_bytes_for_count(count: usize) -> usize {
+    count
       .checked_mul(mem::size_of::<PropertyEntry>())
-      .unwrap_or(usize::MAX);
+      .unwrap_or(usize::MAX)
+  }
+}
+
+impl Trace for ObjectBase {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    if let Some(proto) = self.prototype {
+      tracer.trace_value(Value::Object(proto));
+    }
+    for prop in self.properties.iter() {
+      prop.trace(tracer);
+    }
+  }
+}
+
+#[derive(Debug)]
+struct JsObject {
+  base: ObjectBase,
+}
+
+impl JsObject {
+  fn new() -> Self {
+    Self { base: ObjectBase::new() }
+  }
+
+  fn heap_size_bytes_for_property_count(count: usize) -> usize {
+    let props_bytes = ObjectBase::properties_heap_size_bytes_for_count(count);
     mem::size_of::<Self>()
       .checked_add(props_bytes)
       .unwrap_or(usize::MAX)
@@ -945,12 +1021,7 @@ impl JsObject {
 
 impl Trace for JsObject {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    if let Some(proto) = self.prototype {
-      tracer.trace_value(Value::Object(proto));
-    }
-    for prop in self.properties.iter() {
-      prop.trace(tracer);
-    }
+    self.base.trace(tracer);
   }
 }
 
