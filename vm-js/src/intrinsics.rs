@@ -57,7 +57,12 @@ struct CommonKeys {
   length: PropertyKey,
 }
 
-fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool) -> PropertyDescriptor {
+fn data_desc(
+  value: Value,
+  writable: bool,
+  enumerable: bool,
+  configurable: bool,
+) -> PropertyDescriptor {
   PropertyDescriptor {
     enumerable,
     configurable,
@@ -65,7 +70,10 @@ fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool)
   }
 }
 
-fn alloc_rooted_object(scope: &mut Scope<'_>, roots: &mut Vec<RootId>) -> Result<GcObject, VmError> {
+fn alloc_rooted_object(
+  scope: &mut Scope<'_>,
+  roots: &mut Vec<RootId>,
+) -> Result<GcObject, VmError> {
   let obj = scope.alloc_object()?;
   roots.push(scope.heap_mut().add_root(Value::Object(obj)));
   Ok(obj)
@@ -124,7 +132,8 @@ fn init_native_error(
   scope.define_property(
     constructor,
     common.prototype,
-    data_desc(Value::Object(prototype), false, false, false),
+    // Per ECMA-262, constructor `.prototype` properties are writable but non-configurable.
+    data_desc(Value::Object(prototype), true, false, false),
   )?;
   // X.name / X.length
   scope.define_property(

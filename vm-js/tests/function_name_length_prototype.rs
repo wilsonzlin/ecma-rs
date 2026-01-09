@@ -1,6 +1,6 @@
 use vm_js::{
   set_function_name, Heap, HeapLimits, NativeConstructId, NativeFunctionId, PropertyKey,
-  PropertyKind, Value, VmError,
+  PropertyKind, Realm, Value, VmError,
 };
 
 #[test]
@@ -53,12 +53,7 @@ fn set_function_name_formats_symbol_and_prefix() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let init_name = scope.alloc_string("init")?;
-  let func = scope.alloc_native_function(
-    NativeFunctionId(0),
-    None,
-    init_name,
-    0,
-  )?;
+  let func = scope.alloc_native_function(NativeFunctionId(0), None, init_name, 0)?;
   let sym = scope.alloc_symbol(Some("sym"))?;
   set_function_name(&mut scope, func, PropertyKey::from_symbol(sym), Some("get"))?;
 
@@ -76,7 +71,8 @@ fn set_function_name_formats_symbol_and_prefix() -> Result<(), VmError> {
 }
 
 #[test]
-fn constructible_native_function_gets_prototype_and_constructor_properties() -> Result<(), VmError> {
+fn constructible_native_function_gets_prototype_and_constructor_properties() -> Result<(), VmError>
+{
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut scope = heap.scope();
 
@@ -120,5 +116,49 @@ fn constructible_native_function_gets_prototype_and_constructor_properties() -> 
   assert!(writable);
   assert_eq!(value, Value::Object(func));
 
+  Ok(())
+}
+
+#[test]
+fn intrinsic_error_constructor_prototype_property_is_writable() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut realm = Realm::new(&mut heap)?;
+
+  let error = realm.intrinsics().error();
+  let error_prototype = realm.intrinsics().error_prototype();
+
+  {
+    let mut scope = heap.scope();
+
+    // %Error%.prototype
+    let prototype_key = PropertyKey::from_string(scope.alloc_string("prototype")?);
+    let desc = scope
+      .heap()
+      .get_own_property(error, prototype_key)?
+      .expect("%Error% should have a `prototype` own property");
+    assert!(!desc.enumerable);
+    assert!(!desc.configurable);
+    let PropertyKind::Data { value, writable } = desc.kind else {
+      panic!("prototype should be a data property");
+    };
+    assert!(writable);
+    assert_eq!(value, Value::Object(error_prototype));
+
+    // %Error.prototype%.constructor
+    let constructor_key = PropertyKey::from_string(scope.alloc_string("constructor")?);
+    let desc = scope
+      .heap()
+      .get_own_property(error_prototype, constructor_key)?
+      .expect("%Error.prototype% should have a `constructor` own property");
+    assert!(!desc.enumerable);
+    assert!(desc.configurable);
+    let PropertyKind::Data { value, writable } = desc.kind else {
+      panic!("constructor should be a data property");
+    };
+    assert!(writable);
+    assert_eq!(value, Value::Object(error));
+  }
+
+  realm.teardown(&mut heap);
   Ok(())
 }
