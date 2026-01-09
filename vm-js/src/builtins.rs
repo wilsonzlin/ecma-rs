@@ -986,21 +986,23 @@ fn resolve_promise(
       None => Ok(Value::Undefined),
       Some(desc) => match desc.kind {
         PropertyKind::Data { value, .. } => Ok(value),
-         PropertyKind::Accessor { get, .. } => {
-           if matches!(get, Value::Undefined) {
-             Ok(Value::Undefined)
-           } else {
-             if !key_scope.heap().is_callable(get)? {
-              return Err(crate::throw_type_error(
-                &mut key_scope,
-                intr,
-                "accessor getter is not callable",
-              ));
-             }
-             vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
-           }
-         }
-       },
+        PropertyKind::Accessor { get, .. } => {
+          if matches!(get, Value::Undefined) {
+            Ok(Value::Undefined)
+          } else if !key_scope.heap().is_callable(get)? {
+            // Model `Get(thenable, "then")` throwing a TypeError when an accessor getter exists but
+            // is not callable. This must reject the promise rather than propagate as a VM error
+            // from `resolve()`.
+            Err(crate::throw_type_error(
+              &mut key_scope,
+              intr,
+              "accessor getter is not callable",
+            ))
+          } else {
+            vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
+          }
+        }
+      },
     }
   };
 
