@@ -29,6 +29,7 @@ use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use std::any::Any;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -152,7 +153,6 @@ impl BudgetState {
 }
 
 /// VM execution state shell.
-#[derive(Debug)]
 pub struct Vm {
   options: VmOptions,
   interrupt: InterruptToken,
@@ -162,6 +162,11 @@ pub struct Vm {
   execution_context_stack: Vec<ExecutionContext>,
   native_calls: Vec<NativeCall>,
   native_constructs: Vec<NativeConstruct>,
+  /// Optional host/embedding state associated with this VM.
+  ///
+  /// Native (host-implemented) call/construct handlers are expected to downcast this to their
+  /// embedding-specific type via [`Vm::user_data`] / [`Vm::user_data_mut`].
+  user_data: Option<Box<dyn Any>>,
   microtasks: MicrotaskQueue,
   ecma_functions: Vec<EcmaFunctionCode>,
   ecma_function_cache: HashMap<EcmaFunctionKey, EcmaFunctionId>,
@@ -174,6 +179,34 @@ pub struct Vm {
   native_calls_len_override: Option<usize>,
   #[cfg(test)]
   native_constructs_len_override: Option<usize>,
+}
+
+impl std::fmt::Debug for Vm {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let mut ds = f.debug_struct("Vm");
+    ds.field("options", &self.options);
+    ds.field("interrupt", &self.interrupt);
+    ds.field("interrupt_handle", &self.interrupt_handle);
+    ds.field("budget", &self.budget);
+    ds.field("stack", &self.stack);
+    ds.field("execution_context_stack", &self.execution_context_stack);
+    ds.field("native_calls", &self.native_calls.len());
+    ds.field("native_constructs", &self.native_constructs.len());
+    ds.field("user_data", &self.user_data.as_ref().map(|_| "<opaque>"));
+    ds.field("microtasks", &self.microtasks);
+    ds.field("ecma_functions", &self.ecma_functions.len());
+    ds.field("ecma_function_cache", &self.ecma_function_cache.len());
+    ds.field("intrinsics", &self.intrinsics);
+    #[cfg(test)]
+    {
+      ds.field("native_calls_len_override", &self.native_calls_len_override);
+      ds.field(
+        "native_constructs_len_override",
+        &self.native_constructs_len_override,
+      );
+    }
+    ds.finish()
+  }
 }
 
 /// RAII guard returned by [`Vm::push_budget`].
@@ -324,6 +357,7 @@ impl Vm {
       execution_context_stack: Vec::new(),
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
+      user_data: None,
       microtasks: MicrotaskQueue::new(),
       ecma_functions: Vec::new(),
       ecma_function_cache: HashMap::new(),
@@ -492,6 +526,43 @@ impl Vm {
   /// Clear the interrupt flag back to `false`.
   pub fn reset_interrupt(&self) {
     self.interrupt_handle.reset();
+  }
+
+  /// Attach arbitrary host/embedding state to this VM.
+  ///
+  /// This is intended for native (host-implemented) call/construct handlers, whose signature only
+  /// gives access to `&mut Vm`, to reach shared embedding state (DOM, wrapper caches, etc.) without
+  /// closures.
+  ///
+  /// Native handlers are expected to downcast the stored value to their embedding type via
+  /// [`Vm::user_data`] / [`Vm::user_data_mut`].
+  pub fn set_user_data<T: Any>(&mut self, data: T) {
+    self.user_data = Some(Box::new(data));
+  }
+
+  /// Borrow the embedded user data if it is of type `T`.
+  pub fn user_data<T: Any>(&self) -> Option<&T> {
+    self.user_data.as_deref()?.downcast_ref::<T>()
+  }
+
+  /// Mutably borrow the embedded user data if it is of type `T`.
+  pub fn user_data_mut<T: Any>(&mut self) -> Option<&mut T> {
+    self.user_data.as_deref_mut()?.downcast_mut::<T>()
+  }
+
+  /// Take ownership of the embedded user data if it is of type `T`.
+  ///
+  /// If the stored value exists but is not of type `T`, returns `None` and leaves the user data
+  /// untouched.
+  pub fn take_user_data<T: Any>(&mut self) -> Option<T> {
+    let user_data = self.user_data.take()?;
+    match user_data.downcast::<T>() {
+      Ok(data) => Some(*data),
+      Err(original) => {
+        self.user_data = Some(original);
+        None
+      }
+    }
   }
 
   /// Returns the current execution budget (including remaining fuel/deadline).
