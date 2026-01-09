@@ -72,6 +72,7 @@ fn set_prototype_rejects_indirect_cycle_including_functions() -> Result<(), VmEr
 #[test]
 fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(32 * 1024 * 1024, 32 * 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
   let mut scope = heap.scope();
 
   let key_str = scope.alloc_string("x")?;
@@ -115,6 +116,42 @@ fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
     Err(VmError::PrototypeChainTooDeep)
   ));
 
+  // The ordinary object internal methods should have the same traversal guards (and must not rely
+  // on recursion, which can overflow the stack for large but legal chains).
+  assert_eq!(
+    scope.ordinary_get(&mut vm, leaf, key, Value::Object(leaf))?,
+    Value::Number(123.0)
+  );
+  assert!(matches!(
+    scope.ordinary_get(&mut vm, too_deep, key, Value::Object(too_deep)),
+    Err(VmError::PrototypeChainTooDeep)
+  ));
+  assert!(matches!(
+    scope.ordinary_set(
+      &mut vm,
+      too_deep,
+      key,
+      Value::Number(999.0),
+      Value::Object(too_deep)
+    ),
+    Err(VmError::PrototypeChainTooDeep)
+  ));
+  assert!(scope.ordinary_set(
+    &mut vm,
+    leaf,
+    key,
+    Value::Number(456.0),
+    Value::Object(leaf)
+  )?);
+  assert_eq!(
+    scope.heap().object_get_own_data_property_value(leaf, &key)?,
+    Some(Value::Number(456.0))
+  );
+  assert_eq!(
+    scope.heap().object_get_own_data_property_value(base, &key)?,
+    Some(Value::Number(123.0))
+  );
+
   // If a cycle is introduced (e.g. via a host bug / unsafe mutation), lookups must not loop.
   let a = scope.alloc_object()?;
   let b = scope.alloc_object()?;
@@ -127,6 +164,20 @@ fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
   let missing_key = PropertyKey::from_string(missing_key_str);
   assert!(matches!(
     scope.heap().get_property(a, &missing_key),
+    Err(VmError::PrototypeCycle)
+  ));
+  assert!(matches!(
+    scope.ordinary_get(&mut vm, a, missing_key, Value::Object(a)),
+    Err(VmError::PrototypeCycle)
+  ));
+  assert!(matches!(
+    scope.ordinary_set(
+      &mut vm,
+      a,
+      missing_key,
+      Value::Number(1.0),
+      Value::Object(a)
+    ),
     Err(VmError::PrototypeCycle)
   ));
 

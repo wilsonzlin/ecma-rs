@@ -87,48 +87,33 @@ impl<'a> Scope<'a> {
 
   /// ECMAScript `[[HasProperty]]` for ordinary objects.
   pub fn ordinary_has_property(&self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
-    if self.ordinary_get_own_property(obj, key)?.is_some() {
-      return Ok(true);
-    }
-    match self.object_get_prototype(obj)? {
-      Some(parent) => self.ordinary_has_property(parent, key),
-      None => Ok(false),
-    }
+    self.heap().has_property(obj, &key)
   }
 
   /// ECMAScript `[[Get]]` for ordinary objects.
   pub fn ordinary_get(
     &mut self,
     vm: &mut Vm,
-    mut obj: GcObject,
+    obj: GcObject,
     key: PropertyKey,
     receiver: Value,
   ) -> Result<Value, VmError> {
-    loop {
-      let desc = self.ordinary_get_own_property(obj, key)?;
-      let Some(desc) = desc else {
-        match self.object_get_prototype(obj)? {
-          Some(parent) => {
-            obj = parent;
-            continue;
-          }
-          None => return Ok(Value::Undefined),
-        }
-      };
+    let Some(desc) = self.heap().get_property(obj, &key)? else {
+      return Ok(Value::Undefined);
+    };
 
-      return match desc.kind {
-        PropertyKind::Data { value, .. } => Ok(value),
-        PropertyKind::Accessor { get, .. } => {
-          if matches!(get, Value::Undefined) {
-            Ok(Value::Undefined)
-          } else {
-            if !self.heap().is_callable(get)? {
-              return Err(VmError::TypeError("accessor getter is not callable"));
-            }
-            vm.call(self, get, receiver, &[])
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(value),
+      PropertyKind::Accessor { get, .. } => {
+        if matches!(get, Value::Undefined) {
+          Ok(Value::Undefined)
+        } else {
+          if !self.heap().is_callable(get)? {
+            return Err(VmError::TypeError("accessor getter is not callable"));
           }
+          vm.call(self, get, receiver, &[])
         }
-      };
+      }
     }
   }
 
@@ -146,8 +131,69 @@ impl<'a> Scope<'a> {
     self.push_root(value)?;
     self.push_root(receiver)?;
 
-    let own_desc = self.ordinary_get_own_property(obj, key)?;
-    ordinary_set_with_own_descriptor(vm, self, obj, key, value, receiver, own_desc)
+    let mut desc = self.heap().get_property(obj, &key)?;
+    if desc.is_none() {
+      desc = Some(PropertyDescriptor {
+        enumerable: true,
+        configurable: true,
+        kind: PropertyKind::Data {
+          value: Value::Undefined,
+          writable: true,
+        },
+      });
+    }
+
+    let Some(desc) = desc else {
+      return Err(VmError::InvariantViolation(
+        "ordinary_set: internal error: missing property descriptor",
+      ));
+    };
+
+    match desc.kind {
+      PropertyKind::Data { writable, .. } => {
+        if !writable {
+          return Ok(false);
+        }
+        let Value::Object(receiver_obj) = receiver else {
+          return Ok(false);
+        };
+
+        let existing_desc = self.ordinary_get_own_property(receiver_obj, key)?;
+        if let Some(existing_desc) = existing_desc {
+          if existing_desc.is_accessor_descriptor() {
+            return Ok(false);
+          }
+          let receiver_writable = match existing_desc.kind {
+            PropertyKind::Data { writable, .. } => writable,
+            PropertyKind::Accessor { .. } => return Ok(false),
+          };
+          if !receiver_writable {
+            return Ok(false);
+          }
+
+          return self.define_own_property(
+            receiver_obj,
+            key,
+            PropertyDescriptorPatch {
+              value: Some(value),
+              ..Default::default()
+            },
+          );
+        }
+
+        self.create_data_property(receiver_obj, key, value)
+      }
+      PropertyKind::Accessor { set, .. } => {
+        if matches!(set, Value::Undefined) {
+          return Ok(false);
+        }
+        if !self.heap().is_callable(set)? {
+          return Err(VmError::TypeError("accessor setter is not callable"));
+        }
+        let _ = vm.call(self, set, receiver, &[value])?;
+        Ok(true)
+      }
+    }
   }
 
   /// ECMAScript `[[Delete]]` for ordinary objects.
@@ -540,85 +586,5 @@ fn apply_descriptor_patch(current: PropertyDescriptor, desc: PropertyDescriptorP
         writable: desc.writable.unwrap_or(false),
       },
     },
-  }
-}
-
-fn ordinary_set_with_own_descriptor(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  obj: GcObject,
-  key: PropertyKey,
-  value: Value,
-  receiver: Value,
-  own_desc: Option<PropertyDescriptor>,
-) -> Result<bool, VmError> {
-  let mut own_desc = own_desc;
-
-  if own_desc.is_none() {
-    match scope.object_get_prototype(obj)? {
-      Some(parent) => return scope.ordinary_set(vm, parent, key, value, receiver),
-      None => {
-        own_desc = Some(PropertyDescriptor {
-          enumerable: true,
-          configurable: true,
-          kind: PropertyKind::Data {
-            value: Value::Undefined,
-            writable: true,
-          },
-        });
-      }
-    }
-  }
-
-  let Some(own_desc) = own_desc else {
-    return Err(VmError::Unimplemented(
-      "ordinary_set: missing own property descriptor",
-    ));
-  };
-
-  match own_desc.kind {
-    PropertyKind::Data { writable, .. } => {
-      if !writable {
-        return Ok(false);
-      }
-      let Value::Object(receiver_obj) = receiver else {
-        return Ok(false);
-      };
-
-      let existing_desc = scope.ordinary_get_own_property(receiver_obj, key)?;
-      if let Some(existing_desc) = existing_desc {
-        if existing_desc.is_accessor_descriptor() {
-          return Ok(false);
-        }
-        let receiver_writable = match existing_desc.kind {
-          PropertyKind::Data { writable, .. } => writable,
-          PropertyKind::Accessor { .. } => return Ok(false),
-        };
-        if !receiver_writable {
-          return Ok(false);
-        }
-
-        return scope.define_own_property(
-          receiver_obj,
-          key,
-          PropertyDescriptorPatch {
-            value: Some(value),
-            ..Default::default()
-          },
-        );
-      }
-
-      scope.create_data_property(receiver_obj, key, value)
-    }
-    PropertyKind::Accessor { set, .. } => {
-      if matches!(set, Value::Undefined) {
-        return Ok(false);
-      }
-      if !scope.heap().is_callable(set)? {
-        return Err(VmError::TypeError("accessor setter is not callable"));
-      }
-      let _ = vm.call(scope, set, receiver, &[value])?;
-      Ok(true)
-    }
   }
 }
