@@ -723,6 +723,19 @@ impl Heap {
     }
   }
 
+  /// ECMAScript `DefinePropertyOrThrow`.
+  ///
+  /// This is a convenience wrapper around [`Heap::define_own_property`]. If the definition is
+  /// rejected (`false`), this returns a `TypeError`.
+  pub fn define_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<(), VmError> {
+    self.define_own_property_or_throw(obj, key, desc)
+  }
+
   pub fn create_data_property(
     &mut self,
     obj: GcObject,

@@ -203,3 +203,25 @@ fn defining_new_property_with_empty_patch_creates_default_data_descriptor() -> R
 
   Ok(())
 }
+
+#[test]
+fn define_property_or_throw_throws_type_error_on_rejection() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let (obj, key) = {
+    let mut scope = heap.scope();
+
+    let obj = scope.alloc_object()?;
+    scope.object_prevent_extensions(obj)?;
+
+    let key = PropertyKey::from_string(scope.alloc_string("x")?);
+    (obj, key)
+  };
+
+  let err = heap
+    .define_property_or_throw(obj, key, PropertyDescriptorPatch::default())
+    .unwrap_err();
+  assert!(matches!(err, VmError::TypeError(_)));
+
+  Ok(())
+}

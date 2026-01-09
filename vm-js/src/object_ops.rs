@@ -51,6 +51,24 @@ impl<'a> Scope<'a> {
     validate_and_apply_property_descriptor(self, Some(obj), key, extensible, desc, current)
   }
 
+  /// ECMAScript `DefinePropertyOrThrow`.
+  ///
+  /// This is a convenience wrapper around [`Scope::ordinary_define_own_property`]. If the
+  /// definition is rejected (`false`), this returns a `TypeError`.
+  pub fn define_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<(), VmError> {
+    let ok = self.ordinary_define_own_property(obj, key, desc)?;
+    if ok {
+      Ok(())
+    } else {
+      Err(VmError::TypeError("DefinePropertyOrThrow rejected"))
+    }
+  }
+
   /// ECMAScript `[[HasProperty]]` for ordinary objects.
   pub fn ordinary_has_property(&self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
     if self.ordinary_get_own_property(obj, key)?.is_some() {
@@ -147,6 +165,20 @@ impl<'a> Scope<'a> {
         ..Default::default()
       },
     )
+  }
+
+  pub fn create_data_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+  ) -> Result<(), VmError> {
+    let ok = self.create_data_property(obj, key, value)?;
+    if ok {
+      Ok(())
+    } else {
+      Err(VmError::TypeError("CreateDataProperty rejected"))
+    }
   }
 }
 
