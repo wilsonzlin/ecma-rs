@@ -1,4 +1,6 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmOptions};
+use vm_js::{
+  Heap, HeapLimits, JsRuntime, PropertyKey, Value, Vm, VmError, VmOptions, MAX_PROTOTYPE_CHAIN,
+};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -236,6 +238,53 @@ fn try_catch_converts_invalid_property_descriptor_patch_into_type_error_object()
     .exec_script(
       r#"try { Object.defineProperty({}, "x", { value: 1, get: function() {} }); } catch(e) { e.name }"#,
     )
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn try_catch_converts_prototype_chain_too_deep_into_type_error_object() {
+  // Triggering `PrototypeChainTooDeep` requires building a very deep chain.
+  //
+  // Doing this via `Object.create` is O(N^2) because each `[[SetPrototypeOf]]` check walks the
+  // existing chain; build the chain in Rust using unchecked prototype writes (O(N)) and then
+  // trigger the checked path from script.
+  let vm = Vm::new(VmOptions::default());
+  let heap = Heap::new(HeapLimits::new(32 * 1024 * 1024, 32 * 1024 * 1024));
+  let mut rt = JsRuntime::new(vm, heap).unwrap();
+
+  let global = rt.realm().global_object();
+  {
+    let mut scope = rt.heap_mut().scope();
+    scope.push_root(Value::Object(global)).unwrap();
+
+    let mut leaf = scope.alloc_object().unwrap();
+    let leaf_root = scope.heap_mut().add_root(Value::Object(leaf)).unwrap();
+
+    // Build a chain of length `MAX_PROTOTYPE_CHAIN + 1` so the next checked traversal fails.
+    for _ in 0..MAX_PROTOTYPE_CHAIN {
+      let obj = scope.alloc_object().unwrap();
+      unsafe {
+        scope
+          .heap_mut()
+          .object_set_prototype_unchecked(obj, Some(leaf))
+          .unwrap();
+      }
+      leaf = obj;
+      scope.heap_mut().set_root(leaf_root, Value::Object(leaf));
+    }
+
+    let key = PropertyKey::from_string(scope.alloc_string("deep").unwrap());
+    let ok = scope
+      .create_data_property(global, key, Value::Object(leaf))
+      .unwrap();
+    assert!(ok);
+
+    scope.heap_mut().remove_root(leaf_root);
+  }
+
+  let value = rt
+    .exec_script(r#"try { Object.setPrototypeOf({}, deep); } catch(e) { e.name }"#)
     .unwrap();
   assert_value_is_utf8(&rt, value, "TypeError");
 }

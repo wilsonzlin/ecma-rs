@@ -1807,6 +1807,19 @@ impl<'a> Evaluator<'a> {
         )?;
         Ok(Completion::Throw(err))
       }
+      Err(VmError::PrototypeChainTooDeep) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "prototype chain too deep",
+        )?;
+        Ok(Completion::Throw(err))
+      }
       Err(VmError::InvalidPropertyDescriptorPatch) => {
         let intr = self
           .vm
