@@ -33,9 +33,14 @@ pub struct Intrinsics {
   object_prototype: GcObject,
   function_prototype: GcObject,
   array_prototype: GcObject,
+  string_prototype: GcObject,
+  symbol_prototype: GcObject,
   object_constructor: GcObject,
   function_constructor: GcObject,
   array_constructor: GcObject,
+  string_constructor: GcObject,
+  symbol_constructor: GcObject,
+  json: GcObject,
 
   error: GcObject,
   error_prototype: GcObject,
@@ -308,6 +313,16 @@ impl Intrinsics {
       .heap_mut()
       .object_set_prototype(array_prototype, Some(object_prototype))?;
 
+    let string_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(string_prototype, Some(object_prototype))?;
+
+    let symbol_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(symbol_prototype, Some(object_prototype))?;
+
     // --- Common property keys used throughout the intrinsic graph ---
     //
     // Root these key strings for the duration of intrinsic initialization: subsequent allocations
@@ -327,6 +342,16 @@ impl Intrinsics {
       name: PropertyKey::from_string(name_key_s),
       length: PropertyKey::from_string(length_key_s),
     };
+
+    // --- Prototype/native method call handlers ---
+    let object_prototype_to_string = vm.register_native_call(builtins::object_prototype_to_string)?;
+    let function_prototype_call_method =
+      vm.register_native_call(builtins::function_prototype_call_method)?;
+    let array_prototype_map = vm.register_native_call(builtins::array_prototype_map)?;
+    let array_prototype_join = vm.register_native_call(builtins::array_prototype_join)?;
+    let string_prototype_to_string = vm.register_native_call(builtins::string_prototype_to_string)?;
+    let error_prototype_to_string = vm.register_native_call(builtins::error_prototype_to_string)?;
+    let json_stringify = vm.register_native_call(builtins::json_stringify)?;
 
     // --- Baseline constructors ---
     // `%Object%`
@@ -368,6 +393,23 @@ impl Intrinsics {
 
     install_object_static_methods(vm, scope, roots, function_prototype, object_constructor)?;
 
+    // Object.prototype.toString
+    {
+      let to_string_s = scope.alloc_string("toString")?;
+      scope.push_root(Value::String(to_string_s));
+      let key = PropertyKey::from_string(to_string_s);
+      let func = scope.alloc_native_function(object_prototype_to_string, None, to_string_s, 0)?;
+      scope.push_root(Value::Object(func));
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        object_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
     // `%Function%`
     let function_call = vm.register_native_call(builtins::function_constructor_call)?;
     let function_construct =
@@ -405,6 +447,24 @@ impl Intrinsics {
       data_desc(Value::Object(function_constructor), true, false, true),
     )?;
 
+    // Function.prototype.call
+    {
+      let call_s = scope.alloc_string("call")?;
+      scope.push_root(Value::String(call_s));
+      let key = PropertyKey::from_string(call_s);
+      let func =
+        scope.alloc_native_function(function_prototype_call_method, None, call_s, 1)?;
+      scope.push_root(Value::Object(func));
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        function_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
     // `%Array%`
     let array_call = vm.register_native_call(builtins::array_constructor_call)?;
     let array_construct = vm.register_native_construct(builtins::array_constructor_construct)?;
@@ -441,6 +501,167 @@ impl Intrinsics {
       data_desc(Value::Object(array_constructor), true, false, true),
     )?;
 
+    // Array.prototype.map / join
+    {
+      let map_s = scope.alloc_string("map")?;
+      scope.push_root(Value::String(map_s));
+      let map_key = PropertyKey::from_string(map_s);
+      let map_fn = scope.alloc_native_function(array_prototype_map, None, map_s, 1)?;
+      scope.push_root(Value::Object(map_fn));
+      scope
+        .heap_mut()
+        .object_set_prototype(map_fn, Some(function_prototype))?;
+      scope.define_property(
+        array_prototype,
+        map_key,
+        data_desc(Value::Object(map_fn), true, false, true),
+      )?;
+
+      let join_s = scope.alloc_string("join")?;
+      scope.push_root(Value::String(join_s));
+      let join_key = PropertyKey::from_string(join_s);
+      let join_fn = scope.alloc_native_function(array_prototype_join, None, join_s, 1)?;
+      scope.push_root(Value::Object(join_fn));
+      scope
+        .heap_mut()
+        .object_set_prototype(join_fn, Some(function_prototype))?;
+      scope.define_property(
+        array_prototype,
+        join_key,
+        data_desc(Value::Object(join_fn), true, false, true),
+      )?;
+    }
+
+    // `%String%`
+    let string_call = vm.register_native_call(builtins::string_constructor_call)?;
+    let string_construct = vm.register_native_construct(builtins::string_constructor_construct)?;
+    let string_name = scope.alloc_string("String")?;
+    let string_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      string_call,
+      Some(string_construct),
+      string_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(string_constructor, Some(function_prototype))?;
+    scope.define_property(
+      string_constructor,
+      common.prototype,
+      data_desc(Value::Object(string_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      string_constructor,
+      common.name,
+      data_desc(Value::String(string_name), false, false, true),
+    )?;
+    scope.define_property(
+      string_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      string_prototype,
+      common.constructor,
+      data_desc(Value::Object(string_constructor), true, false, true),
+    )?;
+
+    // String.prototype.toString
+    {
+      let to_string_s = scope.alloc_string("toString")?;
+      scope.push_root(Value::String(to_string_s));
+      let key = PropertyKey::from_string(to_string_s);
+      let func =
+        scope.alloc_native_function(string_prototype_to_string, None, to_string_s, 0)?;
+      scope.push_root(Value::Object(func));
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        string_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // `%Symbol%`
+    let symbol_call = vm.register_native_call(builtins::symbol_constructor_call)?;
+    let symbol_name = scope.alloc_string("Symbol")?;
+    let symbol_constructor =
+      alloc_rooted_native_function(scope, roots, symbol_call, None, symbol_name, 1)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(symbol_constructor, Some(function_prototype))?;
+    scope.define_property(
+      symbol_constructor,
+      common.prototype,
+      data_desc(Value::Object(symbol_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      symbol_constructor,
+      common.name,
+      data_desc(Value::String(symbol_name), false, false, true),
+    )?;
+    scope.define_property(
+      symbol_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      symbol_prototype,
+      common.constructor,
+      data_desc(Value::Object(symbol_constructor), true, false, true),
+    )?;
+
+    // Install well-known symbols as properties on the global `Symbol` constructor.
+    {
+      let wks = &well_known_symbols;
+      let cases = [
+        ("asyncIterator", wks.async_iterator),
+        ("hasInstance", wks.has_instance),
+        ("isConcatSpreadable", wks.is_concat_spreadable),
+        ("iterator", wks.iterator),
+        ("match", wks.match_),
+        ("matchAll", wks.match_all),
+        ("replace", wks.replace),
+        ("search", wks.search),
+        ("species", wks.species),
+        ("split", wks.split),
+        ("toPrimitive", wks.to_primitive),
+        ("toStringTag", wks.to_string_tag),
+        ("unscopables", wks.unscopables),
+      ];
+      for (name, sym) in cases {
+        let key_s = scope.alloc_string(name)?;
+        scope.push_root(Value::String(key_s));
+        let key = PropertyKey::from_string(key_s);
+        scope.define_property(
+          symbol_constructor,
+          key,
+          data_desc(Value::Symbol(sym), false, false, false),
+        )?;
+      }
+    }
+
+    // `%JSON%`
+    let json = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(json, Some(object_prototype))?;
+    {
+      let stringify_s = scope.alloc_string("stringify")?;
+      scope.push_root(Value::String(stringify_s));
+      let key = PropertyKey::from_string(stringify_s);
+      let func = scope.alloc_native_function(json_stringify, None, stringify_s, 1)?;
+      scope.push_root(Value::Object(func));
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(json, key, data_desc(Value::Object(func), true, false, true))?;
+    }
+
     // --- Error + subclasses ---
     let error_call = vm.register_native_call(builtins::error_constructor_call)?;
     let error_construct = vm.register_native_construct(builtins::error_constructor_construct)?;
@@ -456,6 +677,23 @@ impl Intrinsics {
       "Error",
       1,
     )?;
+
+    // Error.prototype.toString
+    {
+      let to_string_s = scope.alloc_string("toString")?;
+      scope.push_root(Value::String(to_string_s));
+      let key = PropertyKey::from_string(to_string_s);
+      let func = scope.alloc_native_function(error_prototype_to_string, None, to_string_s, 0)?;
+      scope.push_root(Value::Object(func));
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        error_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
 
     let (type_error, type_error_prototype) = init_native_error(
       vm,
@@ -671,9 +909,14 @@ impl Intrinsics {
       object_prototype,
       function_prototype,
       array_prototype,
+      string_prototype,
+      symbol_prototype,
       object_constructor,
       function_constructor,
       array_constructor,
+      string_constructor,
+      symbol_constructor,
+      json,
       error,
       error_prototype,
       type_error,
@@ -712,6 +955,14 @@ impl Intrinsics {
     self.array_prototype
   }
 
+  pub fn string_prototype(&self) -> GcObject {
+    self.string_prototype
+  }
+
+  pub fn symbol_prototype(&self) -> GcObject {
+    self.symbol_prototype
+  }
+
   pub fn object_constructor(&self) -> GcObject {
     self.object_constructor
   }
@@ -722,6 +973,18 @@ impl Intrinsics {
 
   pub fn array_constructor(&self) -> GcObject {
     self.array_constructor
+  }
+
+  pub fn string_constructor(&self) -> GcObject {
+    self.string_constructor
+  }
+
+  pub fn symbol_constructor(&self) -> GcObject {
+    self.symbol_constructor
+  }
+
+  pub fn json(&self) -> GcObject {
+    self.json
   }
 
   pub fn error(&self) -> GcObject {

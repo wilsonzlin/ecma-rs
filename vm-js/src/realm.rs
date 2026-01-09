@@ -65,6 +65,35 @@ impl Realm {
         global_data_desc(Value::Object(global_object)),
       )?;
 
+      // --- Global value properties ---
+      let infinity_key = PropertyKey::from_string(scope.alloc_string("Infinity")?);
+      scope.define_property(
+        global_object,
+        infinity_key,
+        PropertyDescriptor {
+          enumerable: false,
+          configurable: false,
+          kind: PropertyKind::Data {
+            value: Value::Number(f64::INFINITY),
+            writable: false,
+          },
+        },
+      )?;
+
+      let nan_key = PropertyKey::from_string(scope.alloc_string("NaN")?);
+      scope.define_property(
+        global_object,
+        nan_key,
+        PropertyDescriptor {
+          enumerable: false,
+          configurable: false,
+          kind: PropertyKind::Data {
+            value: Value::Number(f64::NAN),
+            writable: false,
+          },
+        },
+      )?;
+
       // (Optional but useful) Define a global `undefined` binding. In the spec this property is
       // non-writable, non-enumerable, non-configurable.
       let undefined_key = PropertyKey::from_string(scope.alloc_string("undefined")?);
@@ -101,6 +130,27 @@ impl Realm {
         global_object,
         array_key,
         global_data_desc(Value::Object(intrinsics.array_constructor())),
+      )?;
+
+      let string_key = PropertyKey::from_string(scope.alloc_string("String")?);
+      scope.define_property(
+        global_object,
+        string_key,
+        global_data_desc(Value::Object(intrinsics.string_constructor())),
+      )?;
+
+      let symbol_key = PropertyKey::from_string(scope.alloc_string("Symbol")?);
+      scope.define_property(
+        global_object,
+        symbol_key,
+        global_data_desc(Value::Object(intrinsics.symbol_constructor())),
+      )?;
+
+      let json_key = PropertyKey::from_string(scope.alloc_string("JSON")?);
+      scope.define_property(
+        global_object,
+        json_key,
+        global_data_desc(Value::Object(intrinsics.json())),
       )?;
 
       let error_key = PropertyKey::from_string(scope.alloc_string("Error")?);

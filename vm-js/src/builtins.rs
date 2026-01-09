@@ -1,5 +1,6 @@
 use crate::function::FunctionData;
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
+use crate::string::JsString;
 use crate::{
   GcObject, Job, JobCallback, JobKind, PromiseCapability, PromiseReaction, PromiseReactionType,
   PromiseState, Scope, Value, Vm, VmError,
@@ -844,4 +845,462 @@ pub fn promise_prototype_catch(
 ) -> Result<Value, VmError> {
   let on_rejected = args.get(0).copied().unwrap_or(Value::Undefined);
   promise_then_impl(vm, scope, this, Value::Undefined, on_rejected)
+}
+
+fn string_key(scope: &mut Scope<'_>, s: &str) -> Result<PropertyKey, VmError> {
+  let key_s = scope.alloc_string(s)?;
+  scope.push_root(Value::String(key_s));
+  Ok(PropertyKey::from_string(key_s))
+}
+
+fn get_data_property_value(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  key: &PropertyKey,
+) -> Result<Option<Value>, VmError> {
+  let Some(desc) = scope.heap().get_property(obj, key)? else {
+    return Ok(None);
+  };
+  match desc.kind {
+    PropertyKind::Data { value, .. } => Ok(Some(value)),
+    PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+  }
+}
+
+fn to_length(value: Value) -> usize {
+  let Value::Number(n) = value else {
+    return 0;
+  };
+  if !n.is_finite() || n <= 0.0 {
+    return 0;
+  }
+  if n >= usize::MAX as f64 {
+    return usize::MAX;
+  }
+  n.floor() as usize
+}
+
+fn vec_try_push<T>(buf: &mut Vec<T>, value: T) -> Result<(), VmError> {
+  if buf.len() == buf.capacity() {
+    buf.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+  }
+  buf.push(value);
+  Ok(())
+}
+
+fn vec_try_extend_from_slice<T: Copy>(buf: &mut Vec<T>, slice: &[T]) -> Result<(), VmError> {
+  let needed = slice.len().saturating_sub(buf.capacity().saturating_sub(buf.len()));
+  if needed > 0 {
+    buf.try_reserve(needed).map_err(|_| VmError::OutOfMemory)?;
+  }
+  buf.extend_from_slice(slice);
+  Ok(())
+}
+
+/// `Function.prototype.call`.
+pub fn function_prototype_call_method(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_arg = args.first().copied().unwrap_or(Value::Undefined);
+  let rest = args.get(1..).unwrap_or(&[]);
+  vm.call(scope, this, this_arg, rest)
+}
+
+/// `Object.prototype.toString` (partial).
+pub fn object_prototype_to_string(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let s = match this {
+    Value::Undefined => "[object Undefined]",
+    Value::Null => "[object Null]",
+    Value::Bool(_) => "[object Boolean]",
+    Value::Number(_) => "[object Number]",
+    Value::String(_) => "[object String]",
+    Value::Symbol(_) => "[object Symbol]",
+    Value::Object(obj) => {
+      if scope.heap().is_callable(Value::Object(obj))? {
+        "[object Function]"
+      } else {
+        "[object Object]"
+      }
+    }
+  };
+  Ok(Value::String(scope.alloc_string(s)?))
+}
+
+fn get_array_length(scope: &mut Scope<'_>, obj: GcObject) -> Result<usize, VmError> {
+  let length_key = string_key(scope, "length")?;
+  Ok(match get_data_property_value(scope, obj, &length_key)? {
+    Some(v) => to_length(v),
+    None => 0,
+  })
+}
+
+fn define_array_length(scope: &mut Scope<'_>, obj: GcObject, len: usize) -> Result<(), VmError> {
+  let length_key = string_key(scope, "length")?;
+  scope.define_property(
+    obj,
+    length_key,
+    data_desc(Value::Number(len as f64), true, false, false),
+  )
+}
+
+/// `Array.prototype.map` (minimal).
+pub fn array_prototype_map(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => return Err(VmError::Unimplemented("Array.prototype.map on non-object")),
+  };
+
+  let len = get_array_length(scope, this_obj)?;
+
+  let callback = args.first().copied().unwrap_or(Value::Undefined);
+  let this_arg = args.get(1).copied().unwrap_or(Value::Undefined);
+
+  let intr = require_intrinsics(vm)?;
+  let out = scope.alloc_object()?;
+  scope.push_root(Value::Object(out));
+  scope
+    .heap_mut()
+    .object_set_prototype(out, Some(intr.array_prototype()))?;
+  define_array_length(scope, out, len)?;
+
+  for i in 0..len {
+    vm.tick()?;
+    let key = PropertyKey::from_string(scope.alloc_string(&i.to_string())?);
+    let Some(value) = get_data_property_value(scope, this_obj, &key)? else {
+      continue;
+    };
+
+    // callback(value, index, array)
+    let call_args = [value, Value::Number(i as f64), Value::Object(this_obj)];
+    let mapped = vm.call(scope, callback, this_arg, &call_args)?;
+
+    scope.define_property(out, key, data_desc(mapped, true, true, true))?;
+  }
+
+  Ok(Value::Object(out))
+}
+
+/// `Array.prototype.join` (minimal).
+pub fn array_prototype_join(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => return Err(VmError::Unimplemented("Array.prototype.join on non-object")),
+  };
+
+  let len = get_array_length(scope, this_obj)?;
+
+  let sep = match args.first().copied() {
+    None | Some(Value::Undefined) => scope.alloc_string(",")?,
+    Some(v) => scope.heap_mut().to_string(v)?,
+  };
+  scope.push_root(Value::String(sep));
+  let sep_slice = scope.heap().get_string(sep)?.as_code_units();
+  let mut sep_units: Vec<u16> = Vec::new();
+  sep_units
+    .try_reserve_exact(sep_slice.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+  vec_try_extend_from_slice(&mut sep_units, sep_slice)?;
+
+  let empty = scope.alloc_string("")?;
+  scope.push_root(Value::String(empty));
+
+  let mut out: Vec<u16> = Vec::new();
+  let max_bytes = scope.heap().limits().max_bytes;
+
+  for i in 0..len {
+    if i % 1024 == 0 {
+      vm.tick()?;
+    }
+
+    if i > 0 {
+      if JsString::heap_size_bytes_for_len(out.len().saturating_add(sep_units.len())) > max_bytes {
+        return Err(VmError::OutOfMemory);
+      }
+      vec_try_extend_from_slice(&mut out, &sep_units)?;
+    }
+
+    let key = PropertyKey::from_string(scope.alloc_string(&i.to_string())?);
+    let value = get_data_property_value(scope, this_obj, &key)?.unwrap_or(Value::Undefined);
+    let part = match value {
+      Value::Undefined | Value::Null => empty,
+      other => scope.heap_mut().to_string(other)?,
+    };
+
+    let units = scope.heap().get_string(part)?.as_code_units();
+    if JsString::heap_size_bytes_for_len(out.len().saturating_add(units.len())) > max_bytes {
+      return Err(VmError::OutOfMemory);
+    }
+    vec_try_extend_from_slice(&mut out, units)?;
+  }
+
+  let s = scope.alloc_string_from_u16_vec(out)?;
+  Ok(Value::String(s))
+}
+
+/// `String` constructor called as a function.
+pub fn string_constructor_call(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let s = match args.first().copied() {
+    None => scope.alloc_string("")?,
+    Some(v) => scope.heap_mut().to_string(v)?,
+  };
+  Ok(Value::String(s))
+}
+
+/// `new String(value)` (minimal wrapper object).
+pub fn string_constructor_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  args: &[Value],
+  new_target: Value,
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let prim = match args.first().copied() {
+    None => scope.alloc_string("")?,
+    Some(v) => scope.heap_mut().to_string(v)?,
+  };
+  scope.push_root(Value::String(prim));
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+  scope
+    .heap_mut()
+    .object_set_prototype(obj, Some(intr.string_prototype()))?;
+
+  // Store the primitive value on an internal symbol so `String.prototype.toString` can recover it.
+  let marker = scope.alloc_string("vm-js.internal.StringData")?;
+  let marker_sym = scope.heap_mut().symbol_for(marker)?;
+  let marker_key = PropertyKey::from_symbol(marker_sym);
+  scope.define_property(
+    obj,
+    marker_key,
+    data_desc(Value::String(prim), true, false, false),
+  )?;
+
+  // Best-effort: if `new_target.prototype` is an object, use it.
+  if let Value::Object(nt) = new_target {
+    let proto_key = string_key(scope, "prototype")?;
+    if let Ok(Value::Object(p)) = scope.heap().get(nt, &proto_key) {
+      scope.heap_mut().object_set_prototype(obj, Some(p))?;
+    }
+  }
+
+  Ok(Value::Object(obj))
+}
+
+/// `String.prototype.toString` (minimal).
+pub fn string_prototype_to_string(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  match this {
+    Value::String(s) => Ok(Value::String(s)),
+    Value::Object(obj) => {
+      let marker = scope.alloc_string("vm-js.internal.StringData")?;
+      let marker_sym = scope.heap_mut().symbol_for(marker)?;
+      let marker_key = PropertyKey::from_symbol(marker_sym);
+      match scope.heap().object_get_own_data_property_value(obj, &marker_key)? {
+        Some(Value::String(s)) => Ok(Value::String(s)),
+        _ => Err(VmError::Unimplemented("String.prototype.toString on non-String object")),
+      }
+    }
+    _ => Err(VmError::Unimplemented("String.prototype.toString on non-string")),
+  }
+}
+
+/// `Symbol(description)`.
+pub fn symbol_constructor_call(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let desc = match args.first().copied() {
+    None | Some(Value::Undefined) => None,
+    Some(v) => Some(scope.heap_mut().to_string(v)?),
+  };
+  let sym = scope.new_symbol(desc)?;
+  Ok(Value::Symbol(sym))
+}
+
+fn concat_with_colon_space(name: &[u16], message: &[u16]) -> Result<Vec<u16>, VmError> {
+  let mut out: Vec<u16> = Vec::new();
+  out
+    .try_reserve(name.len().saturating_add(2).saturating_add(message.len()))
+    .map_err(|_| VmError::OutOfMemory)?;
+  vec_try_extend_from_slice(&mut out, name)?;
+  vec_try_push(&mut out, b':' as u16)?;
+  vec_try_push(&mut out, b' ' as u16)?;
+  vec_try_extend_from_slice(&mut out, message)?;
+  Ok(out)
+}
+
+/// `Error.prototype.toString` (minimal).
+pub fn error_prototype_to_string(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let this_obj = match this {
+    Value::Object(o) => o,
+    _ => return Err(VmError::Unimplemented("Error.prototype.toString on non-object")),
+  };
+
+  let name_key = string_key(scope, "name")?;
+  let message_key = string_key(scope, "message")?;
+
+  let name_value = get_data_property_value(scope, this_obj, &name_key)?.unwrap_or(Value::Undefined);
+  let message_value =
+    get_data_property_value(scope, this_obj, &message_key)?.unwrap_or(Value::Undefined);
+
+  let name = match name_value {
+    Value::Undefined => scope.alloc_string("Error")?,
+    other => scope.heap_mut().to_string(other)?,
+  };
+  scope.push_root(Value::String(name));
+
+  let message = match message_value {
+    Value::Undefined => scope.alloc_string("")?,
+    other => scope.heap_mut().to_string(other)?,
+  };
+  scope.push_root(Value::String(message));
+
+  let name_units = scope.heap().get_string(name)?.as_code_units();
+  let message_units = scope.heap().get_string(message)?.as_code_units();
+
+  if name_units.is_empty() {
+    return Ok(Value::String(message));
+  }
+  if message_units.is_empty() {
+    return Ok(Value::String(name));
+  }
+
+  let out = concat_with_colon_space(name_units, message_units)?;
+  let s = scope.alloc_string_from_u16_vec(out)?;
+  Ok(Value::String(s))
+}
+
+/// `JSON.stringify` (minimal).
+pub fn json_stringify(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  const QUOTE: u16 = b'"' as u16;
+  const BACKSLASH: u16 = b'\\' as u16;
+
+  fn push_u16_ascii(buf: &mut Vec<u16>, s: &[u8]) -> Result<(), VmError> {
+    for &b in s {
+      vec_try_push(buf, b as u16)?;
+    }
+    Ok(())
+  }
+
+  fn push_hex_escape(buf: &mut Vec<u16>, unit: u16) -> Result<(), VmError> {
+    vec_try_push(buf, b'\\' as u16)?;
+    vec_try_push(buf, b'u' as u16)?;
+    let mut n = unit;
+    let mut digits = [0u16; 4];
+    for d in digits.iter_mut().rev() {
+      let nibble = (n & 0xF) as u8;
+      let c = match nibble {
+        0..=9 => b'0' + nibble,
+        10..=15 => b'a' + (nibble - 10),
+        _ => b'0',
+      };
+      *d = c as u16;
+      n >>= 4;
+    }
+    vec_try_extend_from_slice(buf, &digits)?;
+    Ok(())
+  }
+
+  let value = args.first().copied().unwrap_or(Value::Undefined);
+
+  let out = match value {
+    Value::Undefined => return Ok(Value::Undefined),
+    Value::Null => return Ok(Value::String(scope.alloc_string("null")?)),
+    Value::Bool(true) => return Ok(Value::String(scope.alloc_string("true")?)),
+    Value::Bool(false) => return Ok(Value::String(scope.alloc_string("false")?)),
+    Value::Number(n) => {
+      if n.is_nan() || n.is_infinite() {
+        return Ok(Value::String(scope.alloc_string("null")?));
+      }
+      let s = n.to_string();
+      return Ok(Value::String(scope.alloc_string(&s)?));
+    }
+    Value::String(s) => s,
+    Value::Symbol(_) | Value::Object(_) => return Ok(Value::Undefined),
+  };
+
+  let max_bytes = scope.heap().limits().max_bytes;
+  let units = scope.heap().get_string(out)?.as_code_units();
+
+  let mut buf: Vec<u16> = Vec::new();
+  vec_try_push(&mut buf, QUOTE)?;
+
+  for (i, &unit) in units.iter().enumerate() {
+    if i % 1024 == 0 {
+      vm.tick()?;
+    }
+    if JsString::heap_size_bytes_for_len(buf.len().saturating_add(6)) > max_bytes {
+      return Err(VmError::OutOfMemory);
+    }
+
+    match unit {
+      QUOTE => push_u16_ascii(&mut buf, b"\\\"")?,
+      BACKSLASH => push_u16_ascii(&mut buf, b"\\\\")?,
+      0x08 => push_u16_ascii(&mut buf, b"\\b")?,
+      0x0C => push_u16_ascii(&mut buf, b"\\f")?,
+      0x0A => push_u16_ascii(&mut buf, b"\\n")?,
+      0x0D => push_u16_ascii(&mut buf, b"\\r")?,
+      0x09 => push_u16_ascii(&mut buf, b"\\t")?,
+      0x0000..=0x001F => push_hex_escape(&mut buf, unit)?,
+      0xD800..=0xDFFF => push_hex_escape(&mut buf, unit)?,
+      other => vec_try_push(&mut buf, other)?,
+    }
+  }
+
+  vec_try_push(&mut buf, QUOTE)?;
+  if JsString::heap_size_bytes_for_len(buf.len()) > max_bytes {
+    return Err(VmError::OutOfMemory);
+  }
+  let out = scope.alloc_string_from_u16_vec(buf)?;
+  Ok(Value::String(out))
 }

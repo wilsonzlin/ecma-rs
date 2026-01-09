@@ -1771,6 +1771,13 @@ impl<'a> Evaluator<'a> {
     let arr = arr_scope.alloc_object()?;
     arr_scope.push_root(Value::Object(arr));
     iterator::mark_array(&mut arr_scope, arr)?;
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    arr_scope
+      .heap_mut()
+      .object_set_prototype(arr, Some(intr.array_prototype()))?;
 
     let mut next_index: u32 = 0;
     for elem in &expr.elements {
@@ -1840,6 +1847,13 @@ impl<'a> Evaluator<'a> {
     let mut obj_scope = scope.reborrow();
     let obj = obj_scope.alloc_object()?;
     obj_scope.push_root(Value::Object(obj));
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    obj_scope
+      .heap_mut()
+      .object_set_prototype(obj, Some(intr.object_prototype()))?;
 
     for member in &expr.members {
       let mut member_scope = obj_scope.reborrow();

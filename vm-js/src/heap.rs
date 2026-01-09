@@ -192,6 +192,11 @@ impl Heap {
     self.used_bytes
   }
 
+  /// The heap's configured memory limits.
+  pub fn limits(&self) -> HeapLimits {
+    self.limits
+  }
+
   #[cfg(debug_assertions)]
   fn debug_recompute_used_bytes(&self) -> usize {
     self
