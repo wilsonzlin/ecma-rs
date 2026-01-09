@@ -91,6 +91,17 @@ fn global_var_desc(value: Value) -> PropertyDescriptor {
   }
 }
 
+fn global_var_binding_desc(value: Value) -> PropertyDescriptor {
+  PropertyDescriptor {
+    enumerable: true,
+    configurable: false,
+    kind: PropertyKind::Data {
+      value,
+      writable: true,
+    },
+  }
+}
+
 fn detect_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
   for stmt in stmts {
     let Stmt::Expr(expr_stmt) = &*stmt.stx else {
@@ -270,7 +281,7 @@ impl RuntimeEnv {
           return Ok(());
         }
 
-        key_scope.define_property(global_object, key, global_var_desc(Value::Undefined))?;
+        key_scope.define_property(global_object, key, global_var_binding_desc(Value::Undefined))?;
         Ok(())
       }
       VarEnv::Env(env) => {
@@ -442,7 +453,7 @@ impl RuntimeEnv {
         }
 
         // If the binding was inherited through the prototype chain, define an own data property.
-        key_scope.define_property(global_object, key, global_var_desc(value))?;
+        key_scope.define_property(global_object, key, global_var_binding_desc(value))?;
         Ok(())
       }
       VarEnv::Env(env) => outer_scope
@@ -2864,8 +2875,11 @@ impl<'a> Evaluator<'a> {
       OperatorName::Delete => match &*expr.argument.stx {
         Expr::Id(id) => {
           if self.strict {
-            let msg = format!("{name} is not defined", name = id.stx.name);
-            return Err(throw_reference_error(self.vm, scope, &msg)?);
+            return Err(throw_type_error(
+              self.vm,
+              scope,
+              "Delete of an unqualified identifier in strict mode.",
+            )?);
           }
 
           // Sloppy-mode: deleting an unqualified identifier returns `true` if the reference is
@@ -2894,8 +2908,11 @@ impl<'a> Evaluator<'a> {
         }
         Expr::IdPat(id) => {
           if self.strict {
-            let msg = format!("{name} is not defined", name = id.stx.name);
-            return Err(throw_reference_error(self.vm, scope, &msg)?);
+            return Err(throw_type_error(
+              self.vm,
+              scope,
+              "Delete of an unqualified identifier in strict mode.",
+            )?);
           }
 
           if self
@@ -2981,7 +2998,25 @@ impl<'a> Evaluator<'a> {
         Ok(new_value)
       }
       OperatorName::Typeof => {
-        let argument = self.eval_expr(scope, &expr.argument)?;
+        let argument = match &*expr.argument.stx {
+          Expr::Id(id) => {
+            // Preserve the `typeof` special-case: unresolvable identifiers yield `"undefined"`
+            // instead of throwing a ReferenceError.
+            self.tick()?;
+            self
+              .env
+              .get(self.vm, scope, &id.stx.name)?
+              .unwrap_or(Value::Undefined)
+          }
+          Expr::IdPat(id) => {
+            self.tick()?;
+            self
+              .env
+              .get(self.vm, scope, &id.stx.name)?
+              .unwrap_or(Value::Undefined)
+          }
+          _ => self.eval_expr(scope, &expr.argument)?,
+        };
         let t = typeof_name(scope.heap(), argument)?;
         let s = scope.alloc_string(t)?;
         Ok(Value::String(s))
