@@ -24,6 +24,24 @@ fn arrow_function_captures_lexical_this() {
 }
 
 #[test]
+fn arrow_function_top_level_this_sloppy_is_global_object() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"(() => this).call({}) === globalThis"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn arrow_function_top_level_this_strict_is_undefined() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#""use strict"; (() => this).call(globalThis) === undefined"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
 fn arrow_function_is_not_constructable() {
   let mut rt = new_runtime();
   let value = rt
@@ -36,4 +54,3 @@ fn arrow_function_is_not_constructable() {
     .unwrap();
   assert_value_is_utf8(&rt, value, "TypeError");
 }
-
