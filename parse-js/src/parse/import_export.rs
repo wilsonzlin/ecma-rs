@@ -284,7 +284,7 @@ impl<'a> Parser<'a> {
       if has_attributes {
         self.consume();
         let mut asi = Asi::can();
-        Some(self.expr_with_asi(ctx, [], &mut asi)?)
+        Some(self.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?)
       } else {
         None
       }
@@ -497,7 +497,7 @@ impl<'a> Parser<'a> {
         if has_attributes {
           p.consume();
           let mut asi = Asi::can();
-          Some(p.expr_with_asi(ctx, [], &mut asi)?)
+          Some(p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?)
         } else {
           None
         }

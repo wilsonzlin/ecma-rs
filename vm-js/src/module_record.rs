@@ -1,13 +1,20 @@
 use crate::execution_context::ModuleId;
 use crate::module_graph::ModuleGraph;
+use crate::ImportAttribute;
 use crate::ModuleRequest;
 use crate::RootId;
 use crate::VmError;
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId};
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::import_export::ExportNames;
+use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
+use parse_js::lex::KEYWORDS_MAPPING;
+use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalExportEntry {
@@ -105,9 +112,11 @@ impl SourceTextModuleRecord {
           if import_stmt.stx.type_only {
             continue;
           }
-          record
-            .requested_modules
-            .push(module_request_from_specifier(&import_stmt.stx.module));
+          let req = module_request_from_specifier(
+            &import_stmt.stx.module,
+            import_stmt.stx.attributes.as_ref(),
+          )?;
+          push_requested_module(&mut record.requested_modules, req);
         }
 
         Stmt::ExportDefaultExpr(_) => {
@@ -122,13 +131,15 @@ impl SourceTextModuleRecord {
             continue;
           }
 
-          let from = export_stmt
-            .stx
-            .from
-            .as_ref()
-            .map(|s| module_request_from_specifier(s));
+          let from = match export_stmt.stx.from.as_ref() {
+            Some(specifier) => Some(module_request_from_specifier(
+              specifier,
+              export_stmt.stx.attributes.as_ref(),
+            )?),
+            None => None,
+          };
           if let Some(req) = &from {
-            record.requested_modules.push(req.clone());
+            push_requested_module(&mut record.requested_modules, req.clone());
           }
 
           match (&export_stmt.stx.names, from) {
@@ -418,6 +429,110 @@ impl SourceTextModuleRecord {
   }
 }
 
-fn module_request_from_specifier(specifier: &str) -> ModuleRequest {
-  ModuleRequest::new(specifier, Vec::new())
+fn module_request_from_specifier(
+  specifier: &str,
+  attributes: Option<&Node<Expr>>,
+) -> Result<ModuleRequest, VmError> {
+  Ok(ModuleRequest::new(
+    specifier,
+    with_clause_to_attributes(attributes)?,
+  ))
+}
+
+fn push_requested_module(out: &mut Vec<ModuleRequest>, request: ModuleRequest) {
+  if !out.iter().any(|existing| existing.spec_equal(&request)) {
+    out.push(request);
+  }
+}
+
+/// Implements `WithClauseToAttributes` (ECMA-262) for static import/export declarations.
+fn with_clause_to_attributes(attributes: Option<&Node<Expr>>) -> Result<Vec<ImportAttribute>, VmError> {
+  let Some(attributes) = attributes else {
+    return Ok(Vec::new());
+  };
+
+  let Expr::LitObj(obj) = &*attributes.stx else {
+    return Err(syntax_error(
+      attributes.loc,
+      "import attributes must be an object literal",
+    ));
+  };
+
+  let mut seen = HashSet::<String>::new();
+  let mut out = Vec::<ImportAttribute>::new();
+
+  for member in &obj.stx.members {
+    let (key, key_loc, value_expr) = match &member.stx.typ {
+      ObjMemberType::Valued { key, val } => {
+        let key_node = match key {
+          ClassOrObjKey::Direct(direct) => direct,
+          ClassOrObjKey::Computed(_) => {
+            return Err(syntax_error(
+              member.loc,
+              "computed import attribute keys are not allowed",
+            ));
+          }
+        };
+
+        let is_ident_or_keyword =
+          key_node.stx.tt == TT::Identifier || KEYWORDS_MAPPING.contains_key(&key_node.stx.tt);
+        let is_string = key_node.stx.tt == TT::LiteralString;
+        if !is_ident_or_keyword && !is_string {
+          return Err(syntax_error(
+            key_node.loc,
+            "import attribute keys must be identifiers, keywords, or string literals",
+          ));
+        }
+
+        let value_expr = match val {
+          ClassOrObjVal::Prop(Some(expr)) => expr,
+          _ => {
+            return Err(syntax_error(
+              member.loc,
+              "import attribute entries must be simple key/value properties",
+            ));
+          }
+        };
+
+        (key_node.stx.key.clone(), key_node.loc, value_expr)
+      }
+      ObjMemberType::Shorthand { .. } => {
+        return Err(syntax_error(
+          member.loc,
+          "shorthand properties are not allowed in import attributes",
+        ));
+      }
+      ObjMemberType::Rest { .. } => {
+        return Err(syntax_error(
+          member.loc,
+          "spread properties are not allowed in import attributes",
+        ));
+      }
+    };
+
+    if !seen.insert(key.clone()) {
+      return Err(syntax_error(key_loc, "duplicate import attribute key"));
+    }
+
+    let value = match &*value_expr.stx {
+      Expr::LitStr(str_lit) => str_lit.stx.value.clone(),
+      _ => {
+        return Err(syntax_error(
+          value_expr.loc,
+          "import attribute values must be string literals",
+        ));
+      }
+    };
+
+    out.push(ImportAttribute { key, value });
+  }
+
+  // Sort by key in lexicographic UTF-16 code unit order (ECMA-262 requirement).
+  out.sort_by(|a, b| crate::cmp_utf16(&a.key, &b.key));
+  Ok(out)
+}
+
+fn syntax_error(loc: parse_js::loc::Loc, message: &str) -> VmError {
+  let span = loc.to_diagnostics_span(FileId(0));
+  VmError::Syntax(vec![Diagnostic::error("VMJS0001", message, span)])
 }
