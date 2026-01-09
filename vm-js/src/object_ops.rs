@@ -146,10 +146,11 @@ impl<'a> Scope<'a> {
     }
   }
 
-  /// ECMAScript `[[Get]]` for ordinary objects, using an explicit host hook implementation.
+  /// ECMAScript `[[Get]]` for ordinary objects using a custom host hook implementation.
   ///
-  /// This behaves like [`Scope::ordinary_get`], but threads `host` through accessor invocations so
-  /// Promise jobs created by getters are routed via the embedding's [`VmHostHooks`] implementation.
+  /// This mirrors [`Scope::ordinary_get`], but invokes accessor getters via [`Vm::call_with_host`]
+  /// so any Promise jobs enqueued during the getter run are routed via `host` (instead of the
+  /// VM-owned microtask queue used by [`Vm::call`]).
   pub fn ordinary_get_with_host(
     &mut self,
     vm: &mut Vm,
