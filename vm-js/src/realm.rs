@@ -161,6 +161,14 @@ impl Realm {
         global_data_desc(Value::Object(intrinsics.aggregate_error())),
       )?;
 
+      // Promise
+      let promise_key = PropertyKey::from_string(scope.alloc_string("Promise")?);
+      scope.define_property(
+        global_object,
+        promise_key,
+        global_data_desc(Value::Object(intrinsics.promise())),
+      )?;
+
       Ok(())
     })() {
       for root in roots.drain(..) {

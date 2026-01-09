@@ -49,6 +49,14 @@ pub(crate) enum ConstructHandler {
   Ecma(EcmaFunctionId),
 }
 
+/// Extra per-function internal-slot-like data used by certain built-ins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum FunctionData {
+  None,
+  /// Promise resolving function created by `CreateResolvingFunctions`.
+  PromiseResolvingFunction { promise: GcObject, is_reject: bool },
+}
+
 /// A JavaScript function object.
 ///
 /// This is intentionally minimal and "spec-shaped":
@@ -75,6 +83,7 @@ pub(crate) struct JsFunction {
   pub(crate) is_strict: bool,
 
   pub(crate) base: ObjectBase,
+  pub(crate) data: FunctionData,
 
   // Forward-compat internal slots (currently unused but spec-aligned).
   pub(crate) bound_target: Option<GcObject>,
@@ -99,6 +108,7 @@ impl JsFunction {
       this_mode: ThisMode::Global,
       is_strict: false,
       base: ObjectBase::new(None),
+      data: FunctionData::None,
       bound_target: None,
       bound_this: None,
       bound_args: None,
@@ -128,6 +138,7 @@ impl JsFunction {
       this_mode,
       is_strict,
       base: ObjectBase::new(None),
+      data: FunctionData::None,
       bound_target: None,
       bound_this: None,
       bound_args: None,
@@ -160,6 +171,13 @@ impl Trace for JsFunction {
   fn trace(&self, tracer: &mut Tracer<'_>) {
     self.base.trace(tracer);
     tracer.trace_value(Value::String(self.name));
+
+    match self.data {
+      FunctionData::None => {}
+      FunctionData::PromiseResolvingFunction { promise, .. } => {
+        tracer.trace_value(Value::Object(promise));
+      }
+    }
 
     if let Some(target) = self.bound_target {
       tracer.trace_value(Value::Object(target));

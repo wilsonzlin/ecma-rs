@@ -1,5 +1,9 @@
+use crate::function::FunctionData;
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
-use crate::{GcObject, Scope, Value, Vm, VmError};
+use crate::{
+  GcObject, Job, JobCallback, JobKind, PromiseCapability, PromiseReaction, PromiseReactionType,
+  PromiseState, Scope, Value, Vm, VmError,
+};
 
 fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool) -> PropertyDescriptor {
   PropertyDescriptor {
@@ -450,4 +454,349 @@ pub fn error_constructor_construct(
   )?;
 
   Ok(Value::Object(obj))
+}
+
+fn throw_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let ctor = intr.type_error();
+
+  let msg = scope.alloc_string(message)?;
+  scope.push_root(Value::String(msg));
+
+  let err = error_constructor_construct(
+    vm,
+    scope,
+    ctor,
+    &[Value::String(msg)],
+    Value::Object(ctor),
+  )?;
+  Err(VmError::Throw(err))
+}
+
+fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> {
+  let intr = require_intrinsics(vm)?;
+  scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))
+}
+
+fn create_promise_resolving_functions(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  promise: GcObject,
+) -> Result<(Value, Value), VmError> {
+  let intr = require_intrinsics(vm)?;
+  let call_id = intr.promise_resolving_function_call();
+
+  // Root the promise while allocating the resolving functions.
+  scope.push_root(Value::Object(promise));
+
+  let resolve_name = scope.alloc_string("resolve")?;
+  let resolve = scope.alloc_native_function(call_id, None, resolve_name, 1)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(resolve, Some(intr.function_prototype()))?;
+  scope.heap_mut().set_function_data(
+    resolve,
+    FunctionData::PromiseResolvingFunction {
+      promise,
+      is_reject: false,
+    },
+  )?;
+
+  let reject_name = scope.alloc_string("reject")?;
+  let reject = scope.alloc_native_function(call_id, None, reject_name, 1)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(reject, Some(intr.function_prototype()))?;
+  scope.heap_mut().set_function_data(
+    reject,
+    FunctionData::PromiseResolvingFunction {
+      promise,
+      is_reject: true,
+    },
+  )?;
+
+  Ok((Value::Object(resolve), Value::Object(reject)))
+}
+
+fn enqueue_promise_reaction_job(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  reaction: PromiseReaction,
+  argument: Value,
+) -> Result<(), VmError> {
+  let handler_callback_object = reaction.handler.as_ref().map(|h| h.callback_object());
+  let capability = reaction.capability;
+
+  let mut job = Job::new(JobKind::Promise, move |ctx, host| {
+    let Some(cap) = reaction.capability else {
+      return Ok(());
+    };
+
+    match reaction.type_ {
+      PromiseReactionType::Fulfill => {
+        let handler_result = if let Some(handler) = &reaction.handler {
+          match host.host_call_job_callback(ctx, handler, Value::Undefined, &[argument]) {
+            Ok(v) => v,
+            Err(VmError::Throw(e)) => {
+              let _ = ctx.call(cap.reject, Value::Undefined, &[e])?;
+              return Ok(());
+            }
+            Err(e) => return Err(e),
+          }
+        } else {
+          argument
+        };
+
+        let _ = ctx.call(cap.resolve, Value::Undefined, &[handler_result])?;
+        Ok(())
+      }
+      PromiseReactionType::Reject => {
+        if let Some(handler) = &reaction.handler {
+          match host.host_call_job_callback(ctx, handler, Value::Undefined, &[argument]) {
+            Ok(v) => {
+              let _ = ctx.call(cap.resolve, Value::Undefined, &[v])?;
+              Ok(())
+            }
+            Err(VmError::Throw(e)) => {
+              let _ = ctx.call(cap.reject, Value::Undefined, &[e])?;
+              Ok(())
+            }
+            Err(e) => Err(e),
+          }
+        } else {
+          let _ = ctx.call(cap.reject, Value::Undefined, &[argument])?;
+          Ok(())
+        }
+      }
+    }
+  });
+
+  // Root captured GC values for the lifetime of the queued job.
+  job.push_root(scope.heap_mut().add_root(argument));
+  if let Some(handler) = handler_callback_object {
+    job.push_root(scope.heap_mut().add_root(Value::Object(handler)));
+  }
+  if let Some(cap) = capability {
+    job.push_root(scope.heap_mut().add_root(Value::Object(cap.promise)));
+    job.push_root(scope.heap_mut().add_root(cap.resolve));
+    job.push_root(scope.heap_mut().add_root(cap.reject));
+  }
+
+  vm.microtask_queue_mut().enqueue_promise_job(job, None);
+  Ok(())
+}
+
+fn trigger_promise_reactions(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  reactions: Box<[PromiseReaction]>,
+  argument: Value,
+) -> Result<(), VmError> {
+  for reaction in reactions.into_vec() {
+    enqueue_promise_reaction_job(vm, scope, reaction, argument)?;
+  }
+  Ok(())
+}
+
+fn fulfill_promise(vm: &mut Vm, scope: &mut Scope<'_>, promise: GcObject, value: Value) -> Result<(), VmError> {
+  let (fulfill_reactions, _reject_reactions) = scope
+    .heap_mut()
+    .promise_settle_and_take_reactions(promise, PromiseState::Fulfilled, value)?;
+  trigger_promise_reactions(vm, scope, fulfill_reactions, value)
+}
+
+fn reject_promise(vm: &mut Vm, scope: &mut Scope<'_>, promise: GcObject, reason: Value) -> Result<(), VmError> {
+  let (_fulfill_reactions, reject_reactions) = scope
+    .heap_mut()
+    .promise_settle_and_take_reactions(promise, PromiseState::Rejected, reason)?;
+  trigger_promise_reactions(vm, scope, reject_reactions, reason)
+}
+
+pub fn promise_constructor_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  throw_type_error(vm, scope, "Promise constructor must be called with new")
+}
+
+pub fn promise_constructor_construct(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  args: &[Value],
+  _new_target: Value,
+) -> Result<Value, VmError> {
+  let executor = args.get(0).copied().unwrap_or(Value::Undefined);
+  if !scope.heap().is_callable(executor)? {
+    return throw_type_error(vm, scope, "Promise executor is not callable");
+  }
+
+  let promise = new_promise(vm, scope)?;
+  scope.push_root(Value::Object(promise));
+
+  let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
+
+  // Invoke executor(resolve, reject).
+  match vm.call(scope, executor, Value::Undefined, &[resolve, reject]) {
+    Ok(_) => {}
+    Err(VmError::Throw(reason)) => {
+      // If executor throws, reject the promise with the thrown value.
+      reject_promise(vm, scope, promise, reason)?;
+    }
+    Err(e) => return Err(e),
+  }
+
+  Ok(Value::Object(promise))
+}
+
+pub fn promise_resolving_function_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let resolution = args.get(0).copied().unwrap_or(Value::Undefined);
+  let data = scope.heap().get_function_data(callee)?;
+  let FunctionData::PromiseResolvingFunction { promise, is_reject } = data else {
+    return Err(VmError::Unimplemented("promise resolving function internal slots"));
+  };
+
+  if is_reject {
+    reject_promise(vm, scope, promise, resolution)?;
+  } else {
+    fulfill_promise(vm, scope, promise, resolution)?;
+  }
+  Ok(Value::Undefined)
+}
+
+pub fn promise_resolve(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let x = args.get(0).copied().unwrap_or(Value::Undefined);
+
+  if let Value::Object(obj) = x {
+    if scope.heap().is_promise_object(obj)
+      && scope.heap().object_prototype(obj)? == Some(intr.promise_prototype())
+    {
+      return Ok(Value::Object(obj));
+    }
+  }
+
+  let p = new_promise(vm, scope)?;
+  scope.heap_mut().promise_fulfill(p, x)?;
+  Ok(Value::Object(p))
+}
+
+pub fn promise_reject(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let reason = args.get(0).copied().unwrap_or(Value::Undefined);
+  let p = new_promise(vm, scope)?;
+  reject_promise(vm, scope, p, reason)?;
+  Ok(Value::Object(p))
+}
+
+fn promise_then_impl(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  this: Value,
+  on_fulfilled: Value,
+  on_rejected: Value,
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+
+  let Value::Object(promise) = this else {
+    return throw_type_error(vm, scope, "Promise.prototype.then called on non-object");
+  };
+  if !scope.heap().is_promise_object(promise) {
+    return throw_type_error(vm, scope, "Promise.prototype.then called on non-promise");
+  }
+
+  // `PerformPromiseThen` sets `[[PromiseIsHandled]] = true`.
+  scope.heap_mut().promise_set_is_handled(promise, true)?;
+
+  // Normalize handlers: use "empty" when not callable.
+  let on_fulfilled = match on_fulfilled {
+    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => Some(JobCallback::new(obj)),
+    _ => None,
+  };
+  let on_rejected = match on_rejected {
+    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => Some(JobCallback::new(obj)),
+    _ => None,
+  };
+
+  // Create the derived promise + capability.
+  let result_promise = scope
+    .alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
+  scope.push_root(Value::Object(result_promise));
+  let (resolve, reject) = create_promise_resolving_functions(vm, scope, result_promise)?;
+  let capability = PromiseCapability {
+    promise: result_promise,
+    resolve,
+    reject,
+  };
+
+  let fulfill_reaction = PromiseReaction {
+    capability: Some(capability),
+    type_: PromiseReactionType::Fulfill,
+    handler: on_fulfilled,
+  };
+  let reject_reaction = PromiseReaction {
+    capability: Some(capability),
+    type_: PromiseReactionType::Reject,
+    handler: on_rejected,
+  };
+
+  match scope.heap().promise_state(promise)? {
+    PromiseState::Pending => {
+      scope.promise_append_fulfill_reaction(promise, fulfill_reaction)?;
+      scope.promise_append_reject_reaction(promise, reject_reaction)?;
+    }
+    PromiseState::Fulfilled => {
+      let arg = scope.heap().promise_result(promise)?.unwrap_or(Value::Undefined);
+      enqueue_promise_reaction_job(vm, scope, fulfill_reaction, arg)?;
+    }
+    PromiseState::Rejected => {
+      let arg = scope.heap().promise_result(promise)?.unwrap_or(Value::Undefined);
+      enqueue_promise_reaction_job(vm, scope, reject_reaction, arg)?;
+    }
+  }
+
+  Ok(Value::Object(result_promise))
+}
+
+pub fn promise_prototype_then(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let on_fulfilled = args.get(0).copied().unwrap_or(Value::Undefined);
+  let on_rejected = args.get(1).copied().unwrap_or(Value::Undefined);
+  promise_then_impl(vm, scope, this, on_fulfilled, on_rejected)
+}
+
+pub fn promise_prototype_catch(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let on_rejected = args.get(0).copied().unwrap_or(Value::Undefined);
+  promise_then_impl(vm, scope, this, Value::Undefined, on_rejected)
 }

@@ -5,7 +5,9 @@
 //! microtask checkpoint reentrancy guard.
 
 use crate::Job;
+use crate::JobCallback;
 use crate::RealmId;
+use crate::Value;
 use crate::VmError;
 use crate::VmHostHooks;
 use crate::VmJobContext;
@@ -29,6 +31,34 @@ impl MicrotaskQueue {
   #[inline]
   pub fn enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>) {
     self.queue.push_back((realm, job));
+  }
+
+  /// Returns the number of queued jobs.
+  #[inline]
+  pub fn len(&self) -> usize {
+    self.queue.len()
+  }
+
+  /// Returns whether the queue is empty.
+  #[inline]
+  pub fn is_empty(&self) -> bool {
+    self.queue.is_empty()
+  }
+
+  pub(crate) fn begin_checkpoint(&mut self) -> bool {
+    if self.performing_microtask_checkpoint {
+      return false;
+    }
+    self.performing_microtask_checkpoint = true;
+    true
+  }
+
+  pub(crate) fn end_checkpoint(&mut self) {
+    self.performing_microtask_checkpoint = false;
+  }
+
+  pub(crate) fn pop_front(&mut self) -> Option<(Option<RealmId>, Job)> {
+    self.queue.pop_front()
   }
 
   /// Performs a microtask checkpoint (HTML terminology).
@@ -68,6 +98,16 @@ impl MicrotaskQueue {
 impl VmHostHooks for MicrotaskQueue {
   fn host_enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>) {
     self.enqueue_promise_job(job, realm);
+  }
+
+  fn host_call_job_callback(
+    &mut self,
+    ctx: &mut dyn VmJobContext,
+    callback: &JobCallback,
+    this_argument: Value,
+    arguments: &[Value],
+  ) -> Result<Value, VmError> {
+    ctx.call(Value::Object(callback.callback_object()), this_argument, arguments)
   }
 
   fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {

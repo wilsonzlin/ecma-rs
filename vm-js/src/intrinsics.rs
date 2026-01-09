@@ -53,6 +53,10 @@ pub struct Intrinsics {
   uri_error_prototype: GcObject,
   aggregate_error: GcObject,
   aggregate_error_prototype: GcObject,
+
+  promise: GcObject,
+  promise_prototype: GcObject,
+  promise_resolving_function_call: NativeFunctionId,
 }
 
 #[derive(Clone, Copy)]
@@ -543,6 +547,125 @@ impl Intrinsics {
       "AggregateError",
       2,
     )?;
+
+    // --- Promise ---
+    let promise_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(promise_prototype, Some(object_prototype))?;
+
+    let promise_resolving_function_call =
+      vm.register_native_call(builtins::promise_resolving_function_call)?;
+
+    let promise_call = vm.register_native_call(builtins::promise_constructor_call)?;
+    let promise_construct = vm.register_native_construct(builtins::promise_constructor_construct)?;
+    let promise_name = scope.alloc_string("Promise")?;
+    let promise = alloc_rooted_native_function(
+      scope,
+      roots,
+      promise_call,
+      Some(promise_construct),
+      promise_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(promise, Some(function_prototype))?;
+
+    // Promise.prototype.constructor
+    scope.define_property(
+      promise_prototype,
+      common.constructor,
+      data_desc(Value::Object(promise), true, false, true),
+    )?;
+
+    // Promise.prototype on the constructor.
+    scope.define_property(
+      promise,
+      common.prototype,
+      data_desc(Value::Object(promise_prototype), true, false, false),
+    )?;
+
+    // Promise.name / Promise.length
+    scope.define_property(
+      promise,
+      common.name,
+      data_desc(Value::String(promise_name), false, false, true),
+    )?;
+    scope.define_property(
+      promise,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+
+    // Promise.resolve / Promise.reject
+    {
+      let resolve_call = vm.register_native_call(builtins::promise_resolve)?;
+      let resolve_name = scope.alloc_string("resolve")?;
+      let resolve = alloc_rooted_native_function(scope, roots, resolve_call, None, resolve_name, 1)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(resolve, Some(function_prototype))?;
+
+      let key = PropertyKey::from_string(scope.alloc_string("resolve")?);
+      scope.define_property(
+        promise,
+        key,
+        data_desc(Value::Object(resolve), true, false, true),
+      )?;
+
+      let reject_call = vm.register_native_call(builtins::promise_reject)?;
+      let reject_name = scope.alloc_string("reject")?;
+      let reject = alloc_rooted_native_function(scope, roots, reject_call, None, reject_name, 1)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(reject, Some(function_prototype))?;
+
+      let key = PropertyKey::from_string(scope.alloc_string("reject")?);
+      scope.define_property(
+        promise,
+        key,
+        data_desc(Value::Object(reject), true, false, true),
+      )?;
+    }
+
+    // Promise.prototype.then / Promise.prototype.catch / @@toStringTag
+    {
+      let then_call = vm.register_native_call(builtins::promise_prototype_then)?;
+      let then_name = scope.alloc_string("then")?;
+      let then = alloc_rooted_native_function(scope, roots, then_call, None, then_name, 2)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(then, Some(function_prototype))?;
+
+      let key = PropertyKey::from_string(scope.alloc_string("then")?);
+      scope.define_property(
+        promise_prototype,
+        key,
+        data_desc(Value::Object(then), true, false, true),
+      )?;
+
+      let catch_call = vm.register_native_call(builtins::promise_prototype_catch)?;
+      let catch_name = scope.alloc_string("catch")?;
+      let catch_ = alloc_rooted_native_function(scope, roots, catch_call, None, catch_name, 1)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(catch_, Some(function_prototype))?;
+
+      let key = PropertyKey::from_string(scope.alloc_string("catch")?);
+      scope.define_property(
+        promise_prototype,
+        key,
+        data_desc(Value::Object(catch_), true, false, true),
+      )?;
+
+      let to_string_tag_value = scope.alloc_string("Promise")?;
+      scope.define_property(
+        promise_prototype,
+        PropertyKey::Symbol(well_known_symbols.to_string_tag),
+        data_desc(Value::String(to_string_tag_value), false, false, true),
+      )?;
+    }
     Ok(Self {
       well_known_symbols,
       object_prototype,
@@ -567,6 +690,10 @@ impl Intrinsics {
       uri_error_prototype,
       aggregate_error,
       aggregate_error_prototype,
+
+      promise,
+      promise_prototype,
+      promise_resolving_function_call,
     })
   }
 
@@ -659,6 +786,18 @@ impl Intrinsics {
 
   pub fn aggregate_error_prototype(&self) -> GcObject {
     self.aggregate_error_prototype
+  }
+
+  pub fn promise(&self) -> GcObject {
+    self.promise
+  }
+
+  pub fn promise_prototype(&self) -> GcObject {
+    self.promise_prototype
+  }
+
+  pub(crate) fn promise_resolving_function_call(&self) -> NativeFunctionId {
+    self.promise_resolving_function_call
   }
 }
 

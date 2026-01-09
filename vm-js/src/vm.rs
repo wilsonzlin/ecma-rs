@@ -5,14 +5,20 @@ use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
 use crate::function::{CallHandler, ConstructHandler, NativeConstructId, NativeFunctionId};
 use crate::GcObject;
+use crate::Heap;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
+use crate::jobs::VmJobContext;
+use crate::jobs::VmHostHooks;
+use crate::microtasks::MicrotaskQueue;
+use crate::RootId;
 use crate::source::StackFrame;
 use crate::Intrinsics;
 use crate::PropertyKey;
 use crate::RealmId;
 use crate::Scope;
 use crate::Value;
+use std::collections::VecDeque;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -103,6 +109,7 @@ pub struct Vm {
   execution_context_stack: Vec<ExecutionContext>,
   native_calls: Vec<NativeCall>,
   native_constructs: Vec<NativeConstruct>,
+  microtasks: MicrotaskQueue,
   // Per-realm intrinsic graph used by built-in native function implementations.
   //
   // For now `vm-js` assumes a single active realm per `Vm`. When multiple realms are supported,
@@ -262,6 +269,7 @@ impl Vm {
       execution_context_stack: Vec::new(),
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
+      microtasks: MicrotaskQueue::new(),
       intrinsics: None,
       #[cfg(test)]
       native_calls_len_override: None,
@@ -270,6 +278,127 @@ impl Vm {
     };
     vm.reset_budget_to_default();
     vm
+  }
+
+  /// Returns the VM-owned microtask queue.
+  ///
+  /// Promise built-ins enqueue Promise jobs onto this queue.
+  #[inline]
+  pub fn microtask_queue(&self) -> &MicrotaskQueue {
+    &self.microtasks
+  }
+
+  /// Borrows the VM-owned microtask queue mutably.
+  #[inline]
+  pub fn microtask_queue_mut(&mut self) -> &mut MicrotaskQueue {
+    &mut self.microtasks
+  }
+
+  /// Performs a microtask checkpoint, draining the VM's microtask queue.
+  pub fn perform_microtask_checkpoint(&mut self, heap: &mut Heap) -> Result<(), VmError> {
+    struct Ctx<'a> {
+      vm: &'a mut Vm,
+      heap: &'a mut Heap,
+    }
+
+    impl VmJobContext for Ctx<'_> {
+      fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError> {
+        let mut scope = self.heap.scope();
+        self.vm.call(&mut scope, callee, this, args)
+      }
+
+      fn construct(
+        &mut self,
+        callee: Value,
+        args: &[Value],
+        new_target: Value,
+      ) -> Result<Value, VmError> {
+        let mut scope = self.heap.scope();
+        self.vm.construct(&mut scope, callee, args, new_target)
+      }
+
+      fn add_root(&mut self, value: Value) -> RootId {
+        self.heap.add_root(value)
+      }
+
+      fn remove_root(&mut self, id: RootId) {
+        self.heap.remove_root(id)
+      }
+    }
+
+    struct LocalHost {
+      pending: VecDeque<(Option<RealmId>, crate::Job)>,
+    }
+
+    impl LocalHost {
+      fn new() -> Self {
+        Self {
+          pending: VecDeque::new(),
+        }
+      }
+
+      fn drain_into(&mut self, queue: &mut MicrotaskQueue) {
+        while let Some((realm, job)) = self.pending.pop_front() {
+          queue.enqueue_promise_job(job, realm);
+        }
+      }
+    }
+
+    impl VmHostHooks for LocalHost {
+      fn host_enqueue_promise_job(&mut self, job: crate::Job, realm: Option<RealmId>) {
+        self.pending.push_back((realm, job));
+      }
+
+      fn host_call_job_callback(
+        &mut self,
+        ctx: &mut dyn VmJobContext,
+        callback: &crate::JobCallback,
+        this_argument: Value,
+        arguments: &[Value],
+      ) -> Result<Value, VmError> {
+        ctx.call(Value::Object(callback.callback_object()), this_argument, arguments)
+      }
+
+      fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+        Some(self)
+      }
+    }
+
+    if !self.microtasks.begin_checkpoint() {
+      return Ok(());
+    }
+
+    // Keep running jobs until the queue becomes empty, capturing the first error but continuing to
+    // drain so we don't leak job roots on drop.
+    let mut first_err: Option<VmError> = None;
+
+    loop {
+      let Some((_realm, job)) = self.microtasks.pop_front() else {
+        break;
+      };
+
+      let mut ctx = Ctx { vm: self, heap };
+      let mut host = LocalHost::new();
+
+      let job_result = job.run(&mut ctx, &mut host);
+
+      // Some job types may schedule new Promise jobs via `VmHostHooks`; enqueue them into the VM's
+      // microtask queue before proceeding.
+      host.drain_into(&mut ctx.vm.microtasks);
+
+      if first_err.is_none() {
+        if let Err(e) = job_result {
+          first_err = Some(e);
+        }
+      }
+    }
+
+    self.microtasks.end_checkpoint();
+
+    match first_err {
+      None => Ok(()),
+      Some(e) => Err(e),
+    }
   }
 
   pub(crate) fn set_intrinsics(&mut self, intrinsics: Intrinsics) {

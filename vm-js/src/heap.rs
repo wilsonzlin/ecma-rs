@@ -1,7 +1,7 @@
 use crate::env::{EnvBinding, EnvRecord};
 use crate::function::{
-  CallHandler, ConstructHandler, EcmaFunctionId, JsFunction, NativeConstructId, NativeFunctionId,
-  ThisMode,
+  CallHandler, ConstructHandler, EcmaFunctionId, FunctionData, JsFunction, NativeConstructId,
+  NativeFunctionId, ThisMode,
 };
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::promise::{PromiseReaction, PromiseReactionType, PromiseState};
@@ -1153,6 +1153,51 @@ impl Heap {
     Ok(())
   }
 
+  /// Settles a pending Promise and returns its previous reaction lists.
+  ///
+  /// This is a convenience for implementing `FulfillPromise`/`RejectPromise` in the JS Promise
+  /// built-in: the reaction lists must be observed in order to enqueue reaction jobs, but they are
+  /// cleared as part of the settlement step.
+  pub(crate) fn promise_settle_and_take_reactions(
+    &mut self,
+    promise: GcObject,
+    state: PromiseState,
+    result: Value,
+  ) -> Result<(Box<[PromiseReaction]>, Box<[PromiseReaction]>), VmError> {
+    if state == PromiseState::Pending {
+      return Err(VmError::Unimplemented(
+        "promise_settle_and_take_reactions requires a non-pending state",
+      ));
+    }
+
+    let idx = self.validate(promise.0).ok_or(VmError::InvalidHandle)?;
+
+    let (fulfill_reactions, reject_reactions, new_bytes) = {
+      let promise = match self.slots[idx].value.as_mut() {
+        Some(HeapObject::Promise(p)) => p,
+        _ => return Err(VmError::InvalidHandle),
+      };
+
+      // Per spec, subsequent resolves/rejects of an already-settled promise are no-ops.
+      if promise.state != PromiseState::Pending {
+        return Ok((Box::default(), Box::default()));
+      }
+
+      promise.state = state;
+      promise.result = Some(result);
+
+      let fulfill_reactions = mem::take(&mut promise.fulfill_reactions).unwrap_or_default();
+      let reject_reactions = mem::take(&mut promise.reject_reactions).unwrap_or_default();
+
+      (fulfill_reactions, reject_reactions, promise.heap_size_bytes())
+    };
+
+    self.update_slot_bytes(idx, new_bytes);
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+    Ok((fulfill_reactions, reject_reactions))
+  }
+
   /// Settles a pending Promise as fulfilled.
   pub fn promise_fulfill(&mut self, promise: GcObject, value: Value) -> Result<(), VmError> {
     self.promise_set_state_and_result(promise, PromiseState::Fulfilled, Some(value))
@@ -1871,6 +1916,27 @@ impl Heap {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => Ok(f),
       _ => Err(VmError::NotCallable),
+    }
+  }
+
+  pub(crate) fn get_function_data(&self, func: GcObject) -> Result<FunctionData, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.data),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_data(
+    &mut self,
+    func: GcObject,
+    data: FunctionData,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.data = data;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
     }
   }
 }
