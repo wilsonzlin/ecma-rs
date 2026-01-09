@@ -15,7 +15,7 @@ use parse_js::ast::expr::lit::{
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
   ArrowFuncExpr, BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, FuncExpr, IdExpr,
-  MemberExpr, UnaryExpr,
+  MemberExpr, TaggedTemplateExpr, UnaryExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
@@ -2003,6 +2003,7 @@ impl<'a> Evaluator<'a> {
       Expr::LitArr(node) => self.eval_lit_arr(scope, &node.stx),
       Expr::LitObj(node) => self.eval_lit_obj(scope, &node.stx),
       Expr::LitTemplate(node) => self.eval_lit_template(scope, &node.stx),
+      Expr::TaggedTemplate(node) => self.eval_tagged_template(scope, &node.stx),
       Expr::This(_) => Ok(self.this),
       Expr::NewTarget(_) => Ok(self.new_target),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
@@ -2373,6 +2374,172 @@ impl<'a> Evaluator<'a> {
 
     let s = scope.alloc_string_from_u16_vec(units)?;
     Ok(Value::String(s))
+  }
+
+  fn eval_tagged_template(
+    &mut self,
+    scope: &mut Scope<'_>,
+    expr: &TaggedTemplateExpr,
+  ) -> Result<Value, VmError> {
+    // Compute `callee` and `this` similarly to `CallExpression` evaluation.
+    let (callee_value, this_value) = match &*expr.function.stx {
+      Expr::Member(member) if member.stx.optional_chaining => {
+        let base = self.eval_expr(scope, &member.stx.left)?;
+        if is_nullish(base) {
+          // Optional chaining short-circuit on the base value.
+          return Ok(Value::Undefined);
+        }
+        let Value::Object(object) = base else {
+          return Err(VmError::Unimplemented("member access on non-object"));
+        };
+
+        // Root `object` across property-key allocation in case it triggers GC.
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object))?;
+        let key_s = key_scope.alloc_string(&member.stx.right)?;
+        let reference = Reference::Property {
+          object,
+          key: PropertyKey::from_string(key_s),
+        };
+        let callee_value = self.get_value_from_reference(&mut key_scope, &reference)?;
+        (callee_value, Value::Object(object))
+      }
+      Expr::ComputedMember(member) if member.stx.optional_chaining => {
+        let base = self.eval_expr(scope, &member.stx.object)?;
+        if is_nullish(base) {
+          return Ok(Value::Undefined);
+        }
+        let Value::Object(object) = base else {
+          return Err(VmError::Unimplemented("computed member access on non-object"));
+        };
+
+        // Root `object` across key evaluation + `ToPropertyKey`, which may allocate and trigger GC.
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object))?;
+        let member_value = self.eval_expr(&mut key_scope, &member.stx.member)?;
+        key_scope.push_root(member_value)?;
+        let key = key_scope.heap_mut().to_property_key(member_value)?;
+        let reference = Reference::Property { object, key };
+        let callee_value = self.get_value_from_reference(&mut key_scope, &reference)?;
+        (callee_value, Value::Object(object))
+      }
+      Expr::Member(_) | Expr::ComputedMember(_) | Expr::Id(_) | Expr::IdPat(_) => {
+        let reference = self.eval_reference(scope, &expr.function)?;
+        let this_value = match reference {
+          Reference::Property { object, .. } => Value::Object(object),
+          _ => Value::Undefined,
+        };
+
+        let mut callee_scope = scope.reborrow();
+        self.root_reference(&mut callee_scope, &reference)?;
+        let callee_value = self.get_value_from_reference(&mut callee_scope, &reference)?;
+        (callee_value, this_value)
+      }
+      _ => {
+        let callee_value = self.eval_expr(scope, &expr.function)?;
+        (callee_value, Value::Undefined)
+      }
+    };
+
+    // Root callee/this/args for the duration of the call.
+    let mut call_scope = scope.reborrow();
+    call_scope.push_roots(&[callee_value, this_value])?;
+
+    let template_obj = self.create_template_object(&mut call_scope, &expr.parts)?;
+    call_scope.push_root(Value::Object(template_obj))?;
+
+    let mut args: Vec<Value> = Vec::new();
+    let subst_count = expr
+      .parts
+      .iter()
+      .filter(|p| matches!(p, LitTemplatePart::Substitution(_)))
+      .count();
+    args
+      .try_reserve_exact(subst_count + 1)
+      .map_err(|_| VmError::OutOfMemory)?;
+    args.push(Value::Object(template_obj));
+
+    // Evaluate substitutions left-to-right.
+    for part in &expr.parts {
+      let LitTemplatePart::Substitution(sub_expr) = part else {
+        continue;
+      };
+      let value = self.eval_expr(&mut call_scope, sub_expr)?;
+      call_scope.push_root(value)?;
+      args.push(value);
+    }
+
+    self.vm.call(&mut call_scope, callee_value, this_value, &args)
+  }
+
+  fn create_template_object(
+    &mut self,
+    scope: &mut Scope<'_>,
+    parts: &[LitTemplatePart],
+  ) -> Result<GcObject, VmError> {
+    let seg_count = parts
+      .iter()
+      .filter(|p| matches!(p, LitTemplatePart::String(_)))
+      .count();
+
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+
+    let cooked = scope.alloc_array(seg_count)?;
+    scope.push_root(Value::Object(cooked))?;
+    scope
+      .heap_mut()
+      .object_set_prototype(cooked, Some(intr.array_prototype()))?;
+
+    let raw = scope.alloc_array(seg_count)?;
+    scope.push_root(Value::Object(raw))?;
+    scope
+      .heap_mut()
+      .object_set_prototype(raw, Some(intr.array_prototype()))?;
+
+    let mut idx: u32 = 0;
+    for part in parts {
+      let LitTemplatePart::String(s) = part else {
+        continue;
+      };
+
+      let mut elem_scope = scope.reborrow();
+      let cooked_s = elem_scope.alloc_string(s)?;
+      elem_scope.push_root(Value::String(cooked_s))?;
+      let key_s = elem_scope.alloc_string(&idx.to_string())?;
+      elem_scope.push_root(Value::String(key_s))?;
+      let key = PropertyKey::from_string(key_s);
+
+      let ok = elem_scope.create_data_property(cooked, key, Value::String(cooked_s))?;
+      if !ok {
+        return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+      }
+      let ok = elem_scope.create_data_property(raw, key, Value::String(cooked_s))?;
+      if !ok {
+        return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+      }
+
+      idx = idx.saturating_add(1);
+    }
+
+    let raw_key_s = scope.alloc_string("raw")?;
+    scope.push_root(Value::String(raw_key_s))?;
+    scope.define_property(
+      cooked,
+      PropertyKey::from_string(raw_key_s),
+      PropertyDescriptor {
+        enumerable: false,
+        configurable: false,
+        kind: PropertyKind::Data {
+          value: Value::Object(raw),
+          writable: false,
+        },
+      },
+    )?;
+
+    Ok(cooked)
   }
 
   fn eval_lit_arr(&mut self, scope: &mut Scope<'_>, expr: &LitArrExpr) -> Result<Value, VmError> {
