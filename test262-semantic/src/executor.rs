@@ -93,8 +93,6 @@ pub fn default_executor() -> Box<dyn Executor> {
 
   #[cfg(not(feature = "stub_executor"))]
   {
-    compile_error!(
-      "test262-semantic has no default executor. Enable `--features stub_executor` or add a real JS VM executor."
-    );
+    return Box::new(crate::vm_js_executor::VmJsExecutor::default());
   }
 }
