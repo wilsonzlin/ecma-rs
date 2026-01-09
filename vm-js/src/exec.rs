@@ -1331,7 +1331,11 @@ impl<'a> Evaluator<'a> {
         ObjMemberType::Valued { key, val } => {
           let key = match key {
             ClassOrObjKey::Direct(direct) => {
-              let key_s = member_scope.alloc_string(&direct.stx.key)?;
+              let key_s = if let Some(units) = literal_string_code_units(&direct.assoc) {
+                member_scope.alloc_string_from_code_units(units)?
+              } else {
+                member_scope.alloc_string(&direct.stx.key)?
+              };
               PropertyKey::from_string(key_s)
             }
             ClassOrObjKey::Computed(expr) => {

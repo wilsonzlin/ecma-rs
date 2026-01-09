@@ -16,6 +16,7 @@ use crate::ast::func::Func;
 use crate::ast::node::LeadingZeroDecimalLiteral;
 use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
+use crate::ast::node::LiteralStringCodeUnits;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::decl::PatDecl;
@@ -613,11 +614,13 @@ impl<'a> Parser<'a> {
       let loc = t.loc;
       let tt = t.typ;
       let mut legacy_escape = None;
+      let mut literal_code_units: Option<Vec<u16>> = None;
       let key = match tt {
         TT::LiteralString => {
-          let (_tok_loc, key, escape_loc, _code_units) =
+          let (_tok_loc, key, escape_loc, code_units) =
             self.lit_str_val_with_mode_and_legacy_escape(LexMode::Standard)?;
           legacy_escape = escape_loc;
+          literal_code_units = Some(code_units);
           key
         }
         TT::LiteralNumber => self.lit_num_val()?.to_string(),
@@ -633,6 +636,11 @@ impl<'a> Parser<'a> {
       };
 
       let mut direct = Node::new(loc, ClassOrObjMemberDirectKey { key, tt });
+      if let Some(units) = literal_code_units {
+        direct
+          .assoc
+          .set(LiteralStringCodeUnits(units.into_boxed_slice()));
+      }
       if let Some(escape_loc) = legacy_escape {
         direct.assoc.set(LegacyOctalEscapeSequence(escape_loc));
       }
