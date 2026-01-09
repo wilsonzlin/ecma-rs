@@ -1316,15 +1316,34 @@ fn invoke_then(
   non_object_message: &'static str,
 ) -> Result<Value, VmError> {
   let intr = require_intrinsics(vm)?;
-  let Value::Object(obj) = receiver else {
-    return Err(crate::throw_type_error(scope, intr, non_object_message));
-  };
 
   // Root inputs: `Get` and `Call` can allocate/GC.
   let mut scope = scope.reborrow();
   scope.push_root(receiver)?;
   scope.push_root(on_fulfilled)?;
   scope.push_root(on_rejected)?;
+
+  // `Invoke(receiver, "then", ...)` uses `GetV`, which performs `ToObject` for primitives
+  // (throwing only for `null`/`undefined`).
+  let obj = match receiver {
+    Value::Object(obj) => obj,
+    Value::Null | Value::Undefined => {
+      return Err(crate::throw_type_error(&mut scope, intr, non_object_message));
+    }
+    primitive => {
+      let object_ctor = Value::Object(intr.object_constructor());
+      scope.push_root(object_ctor)?;
+      let value =
+        vm.call_with_host(&mut scope, host, object_ctor, Value::Undefined, &[primitive])?;
+      let Value::Object(obj) = value else {
+        return Err(VmError::InvariantViolation(
+          "Object(..) conversion returned non-object",
+        ));
+      };
+      scope.push_root(Value::Object(obj))?;
+      obj
+    }
+  };
 
   let then_key_s = scope.alloc_string("then")?;
   scope.push_root(Value::String(then_key_s))?;

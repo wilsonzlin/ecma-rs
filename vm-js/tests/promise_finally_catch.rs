@@ -3,11 +3,13 @@ use std::collections::VecDeque;
 
 use vm_js::{
   GcObject, Heap, HeapLimits, Job, PromiseHandle, PromiseRejectionOperation, PromiseState, PropertyKey,
-  Realm, RealmId, RootId, Scope, Value, Vm, VmError, VmHostHooks, VmJobContext, VmOptions,
+  PropertyDescriptor, PropertyKind, Realm, RealmId, RootId, Scope, Value, Vm, VmError, VmHostHooks,
+  VmJobContext, VmOptions,
 };
 
 thread_local! {
   static CATCH_CALLS: Cell<u32> = Cell::new(0);
+  static BORROWED_THEN_CALLS: Cell<u32> = Cell::new(0);
   static FINALLY_CALLS: Cell<u32> = Cell::new(0);
   static THEN_ARG: Cell<Option<f64>> = Cell::new(None);
   static FINALLY_RETURN_PROMISE: Cell<Option<GcObject>> = Cell::new(None);
@@ -15,6 +17,7 @@ thread_local! {
 
 fn reset_thread_locals() {
   CATCH_CALLS.with(|c| c.set(0));
+  BORROWED_THEN_CALLS.with(|c| c.set(0));
   FINALLY_CALLS.with(|c| c.set(0));
   THEN_ARG.with(|c| c.set(None));
   FINALLY_RETURN_PROMISE.with(|c| c.set(None));
@@ -131,6 +134,21 @@ fn on_rejected_returns_42(
   Ok(Value::Number(42.0))
 }
 
+fn borrowed_then_returns_123(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  BORROWED_THEN_CALLS.with(|c| c.set(c.get() + 1));
+  assert_eq!(this, Value::Number(1.0));
+  assert_eq!(args.get(0).copied().unwrap_or(Value::Undefined), Value::Undefined);
+  assert_eq!(args.get(1).copied().unwrap_or(Value::Undefined), Value::Number(99.0));
+  Ok(Value::Number(123.0))
+}
+
 fn on_finally_increments(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
@@ -232,6 +250,61 @@ fn promise_catch_transforms_rejection_into_fulfillment() -> Result<(), VmError> 
   assert_eq!(CATCH_CALLS.with(|c| c.get()), 1);
   assert_eq!(ctx.heap.promise_state(q)?, PromiseState::Fulfilled);
   assert_eq!(ctx.heap.promise_result(q)?, Some(Value::Number(42.0)));
+
+  realm.teardown(&mut ctx.heap);
+  Ok(())
+}
+
+#[test]
+fn promise_catch_is_borrowable_and_boxes_primitives_for_then_lookup() -> Result<(), VmError> {
+  reset_thread_locals();
+
+  let mut ctx = TestContext::new();
+  let mut host = TestHost::default();
+  let mut realm = Realm::new(&mut ctx.vm, &mut ctx.heap)?;
+
+  let promise_proto = realm.intrinsics().promise_prototype();
+  let promise_catch = get_own_data_function(&mut ctx.heap, promise_proto, "catch")?;
+  let number_proto = realm.intrinsics().number_prototype();
+
+  let result = {
+    let mut scope = ctx.heap.scope();
+    scope.push_root(Value::Object(number_proto))?;
+
+    // Number.prototype.then = borrowed_then_returns_123
+    let call_id = ctx.vm.register_native_call(borrowed_then_returns_123)?;
+    let name = scope.alloc_string("then")?;
+    let then_fn = scope.alloc_native_function(call_id, None, name, 2)?;
+    scope.push_root(Value::Object(then_fn))?;
+
+    let key_s = scope.alloc_string("then")?;
+    scope.push_root(Value::String(key_s))?;
+    let key = PropertyKey::from_string(key_s);
+    scope.define_property(
+      number_proto,
+      key,
+      PropertyDescriptor {
+        enumerable: true,
+        configurable: true,
+        kind: PropertyKind::Data {
+          value: Value::Object(then_fn),
+          writable: true,
+        },
+      },
+    )?;
+
+    // Promise.prototype.catch.call(1, 99) => Number.prototype.then(undefined, 99)
+    ctx.vm.call_with_host(
+      &mut scope,
+      &mut host,
+      Value::Object(promise_catch),
+      Value::Number(1.0),
+      &[Value::Number(99.0)],
+    )?
+  };
+
+  assert_eq!(result, Value::Number(123.0));
+  assert_eq!(BORROWED_THEN_CALLS.with(|c| c.get()), 1);
 
   realm.teardown(&mut ctx.heap);
   Ok(())
