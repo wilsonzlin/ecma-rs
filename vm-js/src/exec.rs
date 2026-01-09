@@ -137,7 +137,7 @@ impl RuntimeEnv {
     Ok(())
   }
 
-  fn get(&self, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
+  fn get(&self, vm: &mut Vm, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
     if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
       return Ok(Some(scope.heap().env_get_binding_value(env, name, false)?));
     }
@@ -155,7 +155,7 @@ impl RuntimeEnv {
     }
 
     let receiver = Value::Object(global_object);
-    Ok(Some(key_scope.ordinary_get(global_object, key, receiver)?))
+    Ok(Some(key_scope.ordinary_get(vm, global_object, key, receiver)?))
   }
 
   fn set(
@@ -858,17 +858,17 @@ impl<'a> Evaluator<'a> {
     Ok(Value::Bool(expr.value))
   }
 
-  fn eval_id(&self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
+  fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
     self
       .env
-      .get(scope, &expr.name)?
+      .get(self.vm, scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
-  fn eval_id_pat(&self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
+  fn eval_id_pat(&mut self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
     self
       .env
-      .get(scope, &expr.name)?
+      .get(self.vm, scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
@@ -889,7 +889,7 @@ impl<'a> Evaluator<'a> {
     let key = PropertyKey::from_string(key_scope.alloc_string(&expr.right)?);
 
     let receiver = object_value;
-    key_scope.ordinary_get(obj, key, receiver)
+    key_scope.ordinary_get(self.vm, obj, key, receiver)
   }
 
   fn eval_binary(&mut self, scope: &mut Scope<'_>, expr: &BinaryExpr) -> Result<Value, VmError> {
