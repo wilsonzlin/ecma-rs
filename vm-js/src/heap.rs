@@ -1866,6 +1866,13 @@ impl Heap {
       _ => Err(VmError::InvalidHandle),
     }
   }
+
+  pub(crate) fn get_function(&self, func: GcObject) -> Result<&JsFunction, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f),
+      _ => Err(VmError::NotCallable),
+    }
+  }
 }
 
 /// A stack-rooting scope.

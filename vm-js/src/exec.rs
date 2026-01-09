@@ -5,6 +5,7 @@ use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
   RootId, Scope, Value, Vm, VmError, VmJobContext,
 };
+use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::{
@@ -12,16 +13,18 @@ use parse_js::ast::expr::lit::{
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{BinaryExpr, CallExpr, CondExpr, Expr, IdExpr, UnaryExpr};
-use parse_js::ast::func::FuncBody;
-use parse_js::ast::node::{literal_string_code_units, Node};
+use parse_js::ast::func::{Func, FuncBody};
+use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
 use parse_js::ast::stmt::decl::{FuncDecl, PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
   BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForInOfLhs, ForOfStmt, ForTripleStmt,
   IfStmt, LabelStmt, ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
 };
+use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::sync::Arc;
 
 /// An ECMAScript completion record (ECMA-262).
 ///
@@ -70,8 +73,6 @@ impl Completion {
   }
 }
 
-type FunctionRegistry<'ast> = HashMap<GcObject, &'ast FuncDecl>;
-
 fn global_var_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
     enumerable: true,
@@ -83,15 +84,60 @@ fn global_var_desc(value: Value) -> PropertyDescriptor {
   }
 }
 
+fn detect_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
+  for stmt in stmts {
+    let Stmt::Expr(expr_stmt) = &*stmt.stx else {
+      break;
+    };
+
+    let expr = &expr_stmt.stx.expr;
+
+    // Parenthesized string literals are not directive prologues.
+    if expr.assoc.get::<ParenthesizedExpr>().is_some() {
+      break;
+    }
+
+    let Expr::LitStr(lit) = &*expr.stx else {
+      break;
+    };
+
+    if lit.stx.value == "use strict" {
+      return true;
+    }
+  }
+  false
+}
+
+/// Interpreted backing data for an ECMAScript function object.
+///
+/// Today the interpreter executes `parse-js` ASTs directly. Function objects store an
+/// [`EcmaFunctionId`], and the runtime keeps a side table of interpreted bodies so function objects
+/// can outlive a single `exec_script` call without holding references into stack data structures.
+///
+/// # Safety
+///
+/// `func` must point into `script` and remains valid as long as `script` is alive. The interpreter
+/// never mutates the AST after parsing, so addresses remain stable.
+#[derive(Debug, Clone)]
+pub(crate) struct InterpretedEcmaFunction {
+  script: Arc<Node<TopLevel>>,
+  func: *const Func,
+}
+
 #[derive(Debug)]
 pub(crate) struct RuntimeEnv {
   global_object: GcObject,
   lexical_env: GcEnv,
   lexical_root: EnvRootId,
+  reference_error_prototype: GcObject,
 }
 
 impl RuntimeEnv {
-  fn new(heap: &mut Heap, global_object: GcObject) -> Result<Self, VmError> {
+  fn new(
+    heap: &mut Heap,
+    global_object: GcObject,
+    reference_error_prototype: GcObject,
+  ) -> Result<Self, VmError> {
     // Root the global object across env allocation in case it triggers GC.
     let mut scope = heap.scope();
     scope.push_root(Value::Object(global_object));
@@ -103,11 +149,18 @@ impl RuntimeEnv {
       global_object,
       lexical_env,
       lexical_root,
+      reference_error_prototype,
     })
   }
 
   fn teardown(&mut self, heap: &mut Heap) {
     heap.remove_env_root(self.lexical_root);
+  }
+
+  fn new_reference_error(&self, scope: &mut Scope<'_>) -> Result<Value, VmError> {
+    // Minimal "ReferenceError-like" object: only the prototype chain is meaningful today.
+    let obj = scope.alloc_object_with_prototype(Some(self.reference_error_prototype))?;
+    Ok(Value::Object(obj))
   }
 
   fn set_lexical_env(&mut self, heap: &mut Heap, env: GcEnv) {
@@ -199,10 +252,7 @@ impl RuntimeEnv {
     let has_binding = key_scope.ordinary_has_property(global_object, key)?;
     if !has_binding {
       if strict {
-        // TODO: Should throw a ReferenceError.
-        return Err(VmError::Unimplemented(
-          "assignment to undeclared identifier in strict mode",
-        ));
+        return Err(VmError::Throw(self.new_reference_error(&mut key_scope)?));
       }
 
       // Sloppy-mode: create a new global `var` property.
@@ -296,6 +346,7 @@ pub struct JsRuntime {
   pub heap: Heap,
   realm: Realm,
   env: RuntimeEnv,
+  ecma_functions: Vec<InterpretedEcmaFunction>,
 }
 
 impl JsRuntime {
@@ -303,12 +354,17 @@ impl JsRuntime {
     let mut vm = vm;
     let mut heap = heap;
     let realm = Realm::new(&mut vm, &mut heap)?;
-    let env = RuntimeEnv::new(&mut heap, realm.global_object())?;
+    let env = RuntimeEnv::new(
+      &mut heap,
+      realm.global_object(),
+      realm.intrinsics().reference_error_prototype(),
+    )?;
     Ok(Self {
       vm,
       heap,
       realm,
       env,
+      ecma_functions: Vec::new(),
     })
   }
 
@@ -332,13 +388,18 @@ impl JsRuntime {
     };
     let top = parse_with_options(source, opts)
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+    let top = Arc::new(top);
+    let strict = detect_use_strict_directive(&top.stx.body);
 
     let mut scope = self.heap.scope();
-    let mut functions: FunctionRegistry<'_> = HashMap::new();
+    let global_this = Value::Object(self.env.global_object);
     let mut evaluator = Evaluator {
       vm: &mut self.vm,
       env: &mut self.env,
-      functions: &mut functions,
+      ecma_functions: &mut self.ecma_functions,
+      strict,
+      this: global_this,
+      script: top.clone(),
     };
 
     evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
@@ -395,10 +456,13 @@ impl VmJobContext for JsRuntime {
   }
 }
 
-struct Evaluator<'a, 'ast> {
+struct Evaluator<'a> {
   vm: &'a mut Vm,
   env: &'a mut RuntimeEnv,
-  functions: &'a mut FunctionRegistry<'ast>,
+  ecma_functions: &'a mut Vec<InterpretedEcmaFunction>,
+  strict: bool,
+  this: Value,
+  script: Arc<Node<TopLevel>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -407,7 +471,7 @@ enum Reference<'a> {
   Property { object: GcObject, key: PropertyKey },
 }
 
-impl<'a, 'ast> Evaluator<'a, 'ast> {
+impl<'a> Evaluator<'a> {
   /// Runs one VM "tick".
   ///
   /// ## Tick policy (AST evaluator)
@@ -631,7 +695,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_stmt_list(
     &mut self,
     scope: &mut Scope<'_>,
-    stmts: &'ast [Node<Stmt>],
+    stmts: &[Node<Stmt>],
   ) -> Result<Completion, VmError> {
     // Root the running completion value so it cannot be collected while evaluating subsequent
     // statements (which may allocate and trigger GC).
@@ -663,7 +727,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_block_stmt(
     &mut self,
     scope: &mut Scope<'_>,
-    block: &'ast BlockStmt,
+    block: &BlockStmt,
   ) -> Result<Completion, VmError> {
     let outer = self.env.lexical_env;
     let block_env = scope.env_create(Some(outer))?;
@@ -680,12 +744,12 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_stmt(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast Node<Stmt>,
+    stmt: &Node<Stmt>,
   ) -> Result<Completion, VmError> {
     // One tick per statement.
     self.tick()?;
 
-    match &*stmt.stx {
+    let res = match &*stmt.stx {
       Stmt::Empty(_) => Ok(Completion::empty()),
       Stmt::Expr(expr_stmt) => self.eval_expr_stmt(scope, &expr_stmt.stx),
       Stmt::VarDecl(var_decl) => self.eval_var_decl(scope, &var_decl.stx),
@@ -700,11 +764,17 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
       Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, None),
       Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
       Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx),
+      Stmt::FunctionDecl(func_decl) => self.eval_function_decl(scope, &func_decl.stx),
       Stmt::Break(stmt) => Ok(Completion::Break(stmt.stx.label.clone(), None)),
       Stmt::Continue(stmt) => Ok(Completion::Continue(stmt.stx.label.clone(), None)),
-      Stmt::FunctionDecl(stmt) => self.eval_function_decl(scope, &stmt.stx),
 
       _ => Err(VmError::Unimplemented("statement type")),
+    };
+
+    // Treat internal `VmError::Throw` as a JS throw completion so it is catchable by `try/catch`.
+    match res {
+      Err(VmError::Throw(v)) => Ok(Completion::Throw(v)),
+      other => other,
     }
   }
 
@@ -738,10 +808,13 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
             self.vm,
             scope,
             self.env,
+            self.ecma_functions,
             &declarator.pattern.stx.pat.stx,
             value,
             BindingKind::Var,
-            false,
+            self.strict,
+            self.this,
+            &self.script,
           )?;
         }
         Ok(Completion::empty())
@@ -757,10 +830,13 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
               self.vm,
               scope,
               self.env,
+              self.ecma_functions,
               &declarator.pattern.stx.pat.stx,
               value,
               BindingKind::Let,
-              false,
+              self.strict,
+              self.this,
+              &self.script,
             )?;
             continue;
           };
@@ -794,10 +870,13 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
               self.vm,
               scope,
               self.env,
+              self.ecma_functions,
               &declarator.pattern.stx.pat.stx,
               value,
               BindingKind::Const,
-              false,
+              self.strict,
+              self.this,
+              &self.script,
             )?;
             continue;
           }
@@ -824,29 +903,69 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_function_decl(
     &mut self,
     scope: &mut Scope<'_>,
-    decl: &'ast FuncDecl,
+    decl: &FuncDecl,
   ) -> Result<Completion, VmError> {
-    let Some(name) = &decl.name else {
+    let Some(name_node) = &decl.name else {
       return Err(VmError::Unimplemented("anonymous function declaration"));
     };
+    let name = name_node.stx.name.as_str();
 
-    // Allocate a plain object to represent the function and register it in the per-script
-    // function table. This sidesteps `Vm`'s not-yet-wired `EcmaFunctionId` support.
-    let func = scope.alloc_object()?;
-    self.functions.insert(func, decl);
+    let func_node = &decl.function;
+    let func_ptr: *const Func = &*func_node.stx;
 
-    // Root the function object while creating the global binding in case `set_var` allocates and
-    // triggers a GC.
-    let mut decl_scope = scope.reborrow();
-    decl_scope.push_root(Value::Object(func));
+    // Allocate a stable `EcmaFunctionId` and store the interpreted body in the runtime's code
+    // table. This allows function objects to outlive a single `exec_script` call.
+    let code_u32 = u32::try_from(self.ecma_functions.len())
+      .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
     self
-      .env
-      .set_var(&mut decl_scope, &name.stx.name, Value::Object(func))?;
+      .ecma_functions
+      .try_reserve_exact(1)
+      .map_err(|_| VmError::OutOfMemory)?;
+    self.ecma_functions.push(InterpretedEcmaFunction {
+      script: self.script.clone(),
+      func: func_ptr,
+    });
+    let code = EcmaFunctionId(code_u32);
+
+    let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
+    let arrow = func_node.stx.arrow;
+
+    let is_strict = self.strict
+      || match &func_node.stx.body {
+        Some(FuncBody::Block(stmts)) => detect_use_strict_directive(stmts),
+        Some(FuncBody::Expression(_)) => false,
+        None => return Err(VmError::Unimplemented("function declaration without body")),
+      };
+
+    let this_mode = if arrow {
+      ThisMode::Lexical
+    } else if is_strict {
+      ThisMode::Strict
+    } else {
+      ThisMode::Global
+    };
+
+    let closure_env = Some(self.env.lexical_env);
+
+    let name_string = scope.alloc_string(name)?;
+    let func_obj = scope.alloc_ecma_function(
+      code,
+      /* is_constructable */ !arrow,
+      name_string,
+      length,
+      this_mode,
+      is_strict,
+      closure_env,
+    )?;
+
+    // Bind function declarations onto the global (var) environment. This is a simplified model and
+    // does not implement all of GlobalDeclarationInstantiation.
+    self.env.set_var(scope, name, Value::Object(func_obj))?;
 
     Ok(Completion::empty())
   }
 
-  fn eval_if(&mut self, scope: &mut Scope<'_>, stmt: &'ast IfStmt) -> Result<Completion, VmError> {
+  fn eval_if(&mut self, scope: &mut Scope<'_>, stmt: &IfStmt) -> Result<Completion, VmError> {
     let test = self.eval_expr(scope, &stmt.test)?;
     if to_boolean(scope.heap(), test)? {
       self.eval_stmt(scope, &stmt.consequent)
@@ -862,7 +981,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
     Ok(Completion::Throw(value))
   }
 
-  fn eval_try(&mut self, scope: &mut Scope<'_>, stmt: &'ast TryStmt) -> Result<Completion, VmError> {
+  fn eval_try(&mut self, scope: &mut Scope<'_>, stmt: &TryStmt) -> Result<Completion, VmError> {
     let mut result = self.eval_block_stmt(scope, &stmt.wrapped.stx)?;
 
     if matches!(result, Completion::Throw(_)) {
@@ -897,7 +1016,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_catch(
     &mut self,
     scope: &mut Scope<'_>,
-    catch: &'ast CatchBlock,
+    catch: &CatchBlock,
     thrown: Value,
   ) -> Result<Completion, VmError> {
     let outer = self.env.lexical_env;
@@ -936,10 +1055,13 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
       self.vm,
       scope,
       self.env,
+      self.ecma_functions,
       &param.pat.stx,
       thrown,
       BindingKind::Let,
-      false,
+      self.strict,
+      self.this,
+      &self.script,
     )
   }
 
@@ -958,7 +1080,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_while(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast WhileStmt,
+    stmt: &WhileStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     loop {
@@ -982,7 +1104,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_do_while(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast DoWhileStmt,
+    stmt: &DoWhileStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     loop {
@@ -1006,7 +1128,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_for_triple(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast ForTripleStmt,
+    stmt: &ForTripleStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     // Note: this is intentionally minimal and does not implement per-iteration lexical
@@ -1062,7 +1184,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_for_of(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast ForOfStmt,
+    stmt: &ForOfStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     if stmt.await_ {
@@ -1113,20 +1235,26 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
             self.vm,
             &mut iter_scope,
             self.env,
+            self.ecma_functions,
             &pat_decl.stx.pat.stx,
             value,
             kind,
-            false,
+            self.strict,
+            self.this,
+            &self.script,
           )
         }
         ForInOfLhs::Assign(pat) => bind_pattern(
           self.vm,
           &mut iter_scope,
           self.env,
+          self.ecma_functions,
           &pat.stx,
           value,
           BindingKind::Assignment,
-          false,
+          self.strict,
+          self.this,
+          &self.script,
         ),
       };
 
@@ -1168,7 +1296,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_for_body(
     &mut self,
     scope: &mut Scope<'_>,
-    body: &'ast ForBody,
+    body: &ForBody,
   ) -> Result<Completion, VmError> {
     self.eval_stmt_list(scope, &body.body)
   }
@@ -1176,7 +1304,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_label(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast LabelStmt,
+    stmt: &LabelStmt,
   ) -> Result<Completion, VmError> {
     let label = stmt.name.as_str();
 
@@ -1227,7 +1355,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   fn eval_switch(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &'ast SwitchStmt,
+    stmt: &SwitchStmt,
   ) -> Result<Completion, VmError> {
     let discriminant = self.eval_expr(scope, &stmt.test)?;
     let mut switch_scope = scope.reborrow();
@@ -1314,7 +1442,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
       Expr::LitNull(_) => Ok(Value::Null),
       Expr::LitArr(node) => self.eval_lit_arr(scope, &node.stx),
       Expr::LitObj(node) => self.eval_lit_obj(scope, &node.stx),
-      Expr::This(_) => Ok(Value::Object(self.env.global_object)),
+      Expr::This(_) => Ok(self.this),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
       Expr::Call(node) => self.eval_call(scope, &node.stx),
       Expr::Member(_) | Expr::ComputedMember(_) => {
@@ -1395,10 +1523,10 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
     reference: &Reference<'_>,
   ) -> Result<Value, VmError> {
     match *reference {
-      Reference::Binding(name) => self
-        .env
-        .get(self.vm, scope, name)?
-        .ok_or(VmError::Unimplemented("unbound identifier")),
+      Reference::Binding(name) => match self.env.get(self.vm, scope, name)? {
+        Some(v) => Ok(v),
+        None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+      },
       Reference::Property { object, key } => {
         let mut get_scope = scope.reborrow();
         self.root_reference(&mut get_scope, reference);
@@ -1414,7 +1542,7 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
     value: Value,
   ) -> Result<(), VmError> {
     match *reference {
-      Reference::Binding(name) => self.env.set(scope, name, value, false),
+      Reference::Binding(name) => self.env.set(scope, name, value, self.strict),
       Reference::Property { object, key } => {
         let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
         if ok {
@@ -1424,136 +1552,6 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
         }
       }
     }
-  }
-
-  fn eval_call(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
-    if expr.optional_chaining {
-      return Err(VmError::Unimplemented("optional chaining"));
-    }
-
-    // Root callee + arguments while evaluating and potentially allocating/GCing.
-    let mut call_scope = scope.reborrow();
-
-    let (callee, this) = match &*expr.callee.stx {
-      Expr::Member(_) | Expr::ComputedMember(_) | Expr::Id(_) | Expr::IdPat(_) => {
-        let reference = self.eval_reference(&mut call_scope, &expr.callee)?;
-        let callee = self.get_value_from_reference(&mut call_scope, &reference)?;
-        let this = match reference {
-          Reference::Binding(_) => Value::Undefined,
-          Reference::Property { object, .. } => Value::Object(object),
-        };
-        (callee, this)
-      }
-      _ => {
-        let callee = self.eval_expr(&mut call_scope, &expr.callee)?;
-        (callee, Value::Undefined)
-      }
-    };
-
-    call_scope.push_root(callee);
-    call_scope.push_root(this);
-
-    let mut args: Vec<Value> = Vec::new();
-    for arg in &expr.arguments {
-      if arg.stx.spread {
-        let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
-        call_scope.push_root(spread_value);
-
-        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
-        call_scope.push_root(iter.iterator);
-        call_scope.push_root(iter.next_method);
-
-        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)?
-        {
-          call_scope.push_root(value);
-          args.push(value);
-        }
-      } else {
-        let value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
-        call_scope.push_root(value);
-        args.push(value);
-      }
-    }
-
-    self.call_value(&mut call_scope, callee, this, &args)
-  }
-
-  fn call_value(
-    &mut self,
-    scope: &mut Scope<'_>,
-    callee: Value,
-    this: Value,
-    args: &[Value],
-  ) -> Result<Value, VmError> {
-    let Value::Object(obj) = callee else {
-      return Err(VmError::NotCallable);
-    };
-
-    if let Some(decl) = self.functions.get(&obj).copied() {
-      return self.call_user_function(scope, decl, this, args);
-    }
-
-    // Fall back to the VM's native-callable functions.
-    self.vm.call(scope, callee, this, args)
-  }
-
-  fn call_user_function(
-    &mut self,
-    scope: &mut Scope<'_>,
-    decl: &'ast FuncDecl,
-    _this: Value,
-    args: &[Value],
-  ) -> Result<Value, VmError> {
-    let func = &decl.function.stx;
-    if func.async_ || func.generator {
-      return Err(VmError::Unimplemented("async/generator functions"));
-    }
-
-    let Some(body) = &func.body else {
-      return Err(VmError::Unimplemented("function without body"));
-    };
-
-    let outer = self.env.lexical_env;
-    let func_env = scope.env_create(Some(outer))?;
-    self.env.set_lexical_env(scope.heap_mut(), func_env);
-
-    let result = (|| -> Result<Value, VmError> {
-      // Bind parameters.
-      for (idx, param) in func.parameters.iter().enumerate() {
-        if param.stx.rest || param.stx.default_value.is_some() {
-          return Err(VmError::Unimplemented("non-simple function parameters"));
-        }
-        let value = args.get(idx).copied().unwrap_or(Value::Undefined);
-        bind_pattern(
-          self.vm,
-          scope,
-          self.env,
-          &param.stx.pattern.stx.pat.stx,
-          value,
-          BindingKind::Let,
-          false,
-        )?;
-      }
-
-      match body {
-        FuncBody::Expression(expr) => self.eval_expr(scope, expr),
-        FuncBody::Block(stmts) => {
-          // Hoist `let`/`const` bindings in the function body.
-          self.hoist_lexical_decls_in_stmt_list(scope, func_env, stmts)?;
-          let completion = self.eval_stmt_list(scope, stmts)?;
-          match completion {
-            Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-            Completion::Return(v) => Ok(v),
-            Completion::Throw(v) => Err(VmError::Throw(v)),
-            Completion::Break(..) => Err(VmError::Unimplemented("break inside function body")),
-            Completion::Continue(..) => Err(VmError::Unimplemented("continue inside function body")),
-          }
-        }
-      }
-    })();
-
-    self.env.set_lexical_env(scope.heap_mut(), outer);
-    result
   }
 
   fn eval_lit_str(
@@ -1704,17 +1702,91 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
   }
 
   fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
-    self.env.get(self.vm, scope, &expr.name)?
-      .ok_or(VmError::Unimplemented("unbound identifier"))
+    match self.env.get(self.vm, scope, &expr.name)? {
+      Some(v) => Ok(v),
+      None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+    }
   }
 
   fn eval_id_pat(&mut self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
-    self.env.get(self.vm, scope, &expr.name)?
-      .ok_or(VmError::Unimplemented("unbound identifier"))
+    match self.env.get(self.vm, scope, &expr.name)? {
+      Some(v) => Ok(v),
+      None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+    }
   }
 
   fn eval_unary(&mut self, scope: &mut Scope<'_>, expr: &UnaryExpr) -> Result<Value, VmError> {
     match expr.operator {
+      OperatorName::Delete => match &*expr.argument.stx {
+        Expr::Id(id) => {
+          if self.strict {
+            return Err(VmError::Throw(self.env.new_reference_error(scope)?));
+          }
+
+          // Sloppy-mode: deleting an unqualified identifier returns `true` if the reference is
+          // unresolvable, otherwise it performs a global-object property delete. Lexical bindings
+          // are not deletable.
+          if self
+            .env
+            .resolve_lexical_binding(scope.heap(), &id.stx.name)?
+            .is_some()
+          {
+            return Ok(Value::Bool(false));
+          }
+
+          let global_object = self.env.global_object;
+          let mut key_scope = scope.reborrow();
+          key_scope.push_root(Value::Object(global_object));
+          let key_s = key_scope.alloc_string(&id.stx.name)?;
+          key_scope.push_root(Value::String(key_s));
+          let key = PropertyKey::from_string(key_s);
+
+          if !key_scope.ordinary_has_property(global_object, key)? {
+            return Ok(Value::Bool(true));
+          }
+
+          Ok(Value::Bool(key_scope.ordinary_delete(global_object, key)?))
+        }
+        Expr::IdPat(id) => {
+          if self.strict {
+            return Err(VmError::Throw(self.env.new_reference_error(scope)?));
+          }
+
+          if self
+            .env
+            .resolve_lexical_binding(scope.heap(), &id.stx.name)?
+            .is_some()
+          {
+            return Ok(Value::Bool(false));
+          }
+
+          let global_object = self.env.global_object;
+          let mut key_scope = scope.reborrow();
+          key_scope.push_root(Value::Object(global_object));
+          let key_s = key_scope.alloc_string(&id.stx.name)?;
+          key_scope.push_root(Value::String(key_s));
+          let key = PropertyKey::from_string(key_s);
+
+          if !key_scope.ordinary_has_property(global_object, key)? {
+            return Ok(Value::Bool(true));
+          }
+
+          Ok(Value::Bool(key_scope.ordinary_delete(global_object, key)?))
+        }
+        Expr::Member(_) | Expr::ComputedMember(_) => {
+          let reference = self.eval_reference(scope, &expr.argument)?;
+          match reference {
+            Reference::Property { object, key } => Ok(Value::Bool(scope.ordinary_delete(object, key)?)),
+            // Deleting bindings (`delete x`) is handled above.
+            Reference::Binding(_) => Ok(Value::Bool(false)),
+          }
+        }
+        // `delete` of non-reference expressions always returns true (after evaluating the operand).
+        _ => {
+          let _ = self.eval_expr(scope, &expr.argument)?;
+          Ok(Value::Bool(true))
+        }
+      },
       OperatorName::LogicalNot => {
         let argument = self.eval_expr(scope, &expr.argument)?;
         Ok(Value::Bool(!to_boolean(scope.heap(), argument)?))
@@ -1737,23 +1809,201 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
         let _ = self.eval_expr(scope, &expr.argument)?;
         Ok(Value::Undefined)
       }
-      OperatorName::Delete => match &*expr.argument.stx {
-        Expr::Member(_) | Expr::ComputedMember(_) => {
-          let reference = self.eval_reference(scope, &expr.argument)?;
-          match reference {
-            Reference::Property { object, key } => Ok(Value::Bool(scope.ordinary_delete(object, key)?)),
-            // Deleting bindings (`delete x`) is not supported yet.
-            Reference::Binding(_) => Ok(Value::Bool(false)),
-          }
-        }
-        // `delete` of non-reference expressions always returns true (after evaluating the operand).
-        _ => {
-          let _ = self.eval_expr(scope, &expr.argument)?;
-          Ok(Value::Bool(true))
-        }
-      },
       _ => Err(VmError::Unimplemented("unary operator")),
     }
+  }
+
+  fn eval_call(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
+    if expr.optional_chaining {
+      return Err(VmError::Unimplemented("optional chaining call"));
+    }
+
+    // Evaluate the callee and compute the `this` value for the call.
+    let (callee_value, this_value) = match &*expr.callee.stx {
+      Expr::Member(_) | Expr::ComputedMember(_) | Expr::Id(_) | Expr::IdPat(_) => {
+        let reference = self.eval_reference(scope, &expr.callee)?;
+        let this_value = match reference {
+          Reference::Property { object, .. } => Value::Object(object),
+          _ => Value::Undefined,
+        };
+
+        let mut callee_scope = scope.reborrow();
+        self.root_reference(&mut callee_scope, &reference);
+        let callee_value = self.get_value_from_reference(&mut callee_scope, &reference)?;
+        (callee_value, this_value)
+      }
+      _ => {
+        let callee_value = self.eval_expr(scope, &expr.callee)?;
+        (callee_value, Value::Undefined)
+      }
+    };
+
+    // Root callee/this/args for the duration of the call.
+    let mut call_scope = scope.reborrow();
+    let callee_value = call_scope.push_root(callee_value);
+    let this_value = call_scope.push_root(this_value);
+
+    let mut args: Vec<Value> = Vec::new();
+    args
+      .try_reserve_exact(expr.arguments.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    for arg in &expr.arguments {
+      if arg.stx.spread {
+        let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(spread_value);
+
+        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
+        call_scope.push_root(iter.iterator);
+        call_scope.push_root(iter.next_method);
+
+        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)?
+        {
+          call_scope.push_root(value);
+          args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+          args.push(value);
+        }
+      } else {
+        let value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(value);
+        args.push(value);
+      }
+    }
+
+    let callee_obj = match callee_value {
+      Value::Object(obj) => obj,
+      _ => return Err(VmError::NotCallable),
+    };
+
+    // Extract function metadata without holding a heap borrow across allocations.
+    let (call_handler, this_mode, is_strict, closure_env) = {
+      let f = call_scope.heap().get_function(callee_obj)?;
+      (f.call, f.this_mode, f.is_strict, f.closure_env)
+    };
+
+    // Compute the effective `this` binding. This depends on *callee* `[[ThisMode]]`, not caller
+    // strictness.
+    let mut this_arg = match this_mode {
+      ThisMode::Lexical => self.this,
+      _ => this_value,
+    };
+    if matches!(this_mode, ThisMode::Global) && matches!(this_arg, Value::Undefined | Value::Null) {
+      this_arg = Value::Object(self.env.global_object);
+      // Keep the coerced `this` value rooted across the call.
+      call_scope.push_root(this_arg);
+    }
+
+    match call_handler {
+      CallHandler::Native(_) => self.vm.call(&mut call_scope, callee_value, this_arg, &args),
+      CallHandler::Ecma(code) => self.call_ecma_function(
+        &mut call_scope,
+        code,
+        this_mode,
+        is_strict,
+        closure_env,
+        this_arg,
+        &args,
+      ),
+    }
+  }
+
+  fn call_ecma_function(
+    &mut self,
+    scope: &mut Scope<'_>,
+    code: EcmaFunctionId,
+    this_mode: ThisMode,
+    is_strict: bool,
+    closure_env: Option<GcEnv>,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let interpreted = self
+      .ecma_functions
+      .get(code.0 as usize)
+      .cloned()
+      .ok_or(VmError::Unimplemented("unknown ECMAScript function"))?;
+
+    let outer_lex = self.env.lexical_env;
+    let outer_strict = self.strict;
+    let outer_this = self.this;
+    let outer_script = self.script.clone();
+
+    // Establish function execution context.
+    self.strict = is_strict;
+    if !matches!(this_mode, ThisMode::Lexical) {
+      self.this = this;
+    }
+    self.script = interpreted.script.clone();
+
+    let result = (|| -> Result<Value, VmError> {
+      // Create a function lexical environment.
+      let outer_env = closure_env.unwrap_or(outer_lex);
+      let func_env = scope.env_create(Some(outer_env))?;
+      self.env.set_lexical_env(scope.heap_mut(), func_env);
+
+      let func = unsafe { &*interpreted.func };
+      if func.async_ || func.generator {
+        return Err(VmError::Unimplemented("async/generator functions"));
+      }
+
+      // Bind parameters.
+      for (idx, param) in func.parameters.iter().enumerate() {
+        if param.stx.rest || param.stx.default_value.is_some() {
+          return Err(VmError::Unimplemented("non-simple function parameters"));
+        }
+        let value = args.get(idx).copied().unwrap_or(Value::Undefined);
+        bind_pattern(
+          self.vm,
+          scope,
+          self.env,
+          self.ecma_functions,
+          &param.stx.pattern.stx.pat.stx,
+          value,
+          BindingKind::Let,
+          self.strict,
+          self.this,
+          &self.script,
+        )?;
+      }
+
+      // Root args during body execution in case user code stores them into env bindings.
+      for &arg in args {
+        scope.push_root(arg);
+      }
+
+      let Some(body) = &func.body else {
+        return Err(VmError::Unimplemented("function without body"));
+      };
+
+      match body {
+        FuncBody::Block(stmts) => {
+          // `var` bindings are hoisted to `undefined` at function entry.
+          self.hoist_var_decls(scope, stmts)?;
+
+          self.hoist_lexical_decls_in_stmt_list(scope, func_env, stmts)?;
+          let completion = self.eval_stmt_list(scope, stmts)?;
+          match completion {
+            Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+            Completion::Return(v) => Ok(v),
+            Completion::Throw(v) => Err(VmError::Throw(v)),
+            Completion::Break(..) => Err(VmError::Unimplemented("break in function body")),
+            Completion::Continue(..) => Err(VmError::Unimplemented("continue in function body")),
+          }
+        }
+        FuncBody::Expression(expr) => {
+          // Arrow function expression bodies evaluate to the expression value.
+          let v = self.eval_expr(scope, expr)?;
+          Ok(v)
+        }
+      }
+    })();
+
+    // Restore outer execution context and lexical environment.
+    self.env.set_lexical_env(scope.heap_mut(), outer_lex);
+    self.strict = outer_strict;
+    self.this = outer_this;
+    self.script = outer_script;
+
+    result
   }
 
   fn eval_cond(&mut self, scope: &mut Scope<'_>, expr: &CondExpr) -> Result<Value, VmError> {
@@ -1774,7 +2024,17 @@ impl<'a, 'ast> Evaluator<'a, 'ast> {
         match &*expr.left.stx {
           Expr::ObjPat(_) | Expr::ArrPat(_) => {
             let value = self.eval_expr(scope, &expr.right)?;
-            bind_assignment_target(self.vm, scope, self.env, &expr.left, value, false)?;
+            bind_assignment_target(
+              self.vm,
+              scope,
+              self.env,
+              self.ecma_functions,
+              &expr.left,
+              value,
+              self.strict,
+              self.this,
+              &self.script,
+            )?;
             Ok(value)
           }
           _ => {
@@ -1904,14 +2164,20 @@ fn alloc_string_from_lit_str(
 pub(crate) fn eval_expr(
   vm: &mut Vm,
   env: &mut RuntimeEnv,
+  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
+  strict: bool,
+  this: Value,
+  script: &Arc<Node<TopLevel>>,
   scope: &mut Scope<'_>,
   expr: &Node<Expr>,
 ) -> Result<Value, VmError> {
-  let mut functions: FunctionRegistry<'_> = HashMap::new();
   let mut evaluator = Evaluator {
     vm,
     env,
-    functions: &mut functions,
+    ecma_functions,
+    strict,
+    this,
+    script: script.clone(),
   };
   evaluator.eval_expr(scope, expr)
 }
