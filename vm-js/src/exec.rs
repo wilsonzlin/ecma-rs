@@ -614,8 +614,19 @@ impl JsRuntime {
       dialect: Dialect::Ecma,
       source_type: SourceType::Script,
     };
-    let top = parse_with_options(&source.text, opts)
+    let mut top = parse_with_options(&source.text, opts)
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+    let (sem, diagnostics) = bind_js_for_runtime(&mut top, TopLevelMode::Script, FileId(0));
+    if !diagnostics.is_empty() {
+      return Err(VmError::Syntax(diagnostics));
+    }
+    if sem
+      .scopes
+      .values()
+      .any(|s| s.is_dynamic || s.has_direct_eval)
+    {
+      return Err(VmError::Unimplemented("with/eval dynamic scope"));
+    }
     let strict = detect_use_strict_directive(&top.stx.body);
 
     let global_object = self.realm.global_object();
@@ -644,24 +655,26 @@ impl JsRuntime {
         vm: &mut *vm_frame,
         hooks: host,
         env: &mut self.env,
+        sem: Arc::new(sem),
         strict,
         this: global_this,
         new_target: Value::Undefined,
+        current_scope: ScopeId::from_raw(0),
+        scope_stack: Vec::new(),
       };
 
-      evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
-      let global_lex = evaluator.env.lexical_env;
-      evaluator.hoist_lexical_decls_in_stmt_list(&mut scope, global_lex, &top.stx.body)?;
-      evaluator.hoist_function_decls_in_stmt_list(&mut scope, &top.stx.body)?;
+      (|| {
+        evaluator.enter_script(&mut scope, &top)?;
 
-      let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
-      match completion {
-        Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-        Completion::Throw(v) => Err(VmError::Throw(v)),
-        Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
-        Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
-        Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
-      }
+        let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
+        match completion {
+          Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+          Completion::Throw(v) => Err(VmError::Throw(v)),
+          Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
+          Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
+          Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
+        }
+      })()
     })();
 
     let popped = self.vm.pop_execution_context();
