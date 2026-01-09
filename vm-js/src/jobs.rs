@@ -102,17 +102,18 @@ pub trait VmJobContext {}
 /// the host (usually as part of a microtask checkpoint).
 ///
 /// This representation is Rust-idiomatic: a job is a boxed `FnOnce` that receives a dynamic
-/// [`VmJobContext`] so it can call back into the evaluator/embedding at run time.
+/// [`VmJobContext`] and [`VmHostHooks`] so it can call back into the evaluator/embedding at run
+/// time.
 pub struct Job {
   kind: JobKind,
-  run: Box<dyn FnOnce(&mut dyn VmJobContext) -> JobResult + Send + 'static>,
+  run: Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>,
 }
 
 impl Job {
   /// Create a new job of `kind` backed by `run`.
   pub fn new(
     kind: JobKind,
-    run: impl FnOnce(&mut dyn VmJobContext) -> JobResult + Send + 'static,
+    run: impl FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static,
   ) -> Self {
     Self {
       kind,
@@ -128,9 +129,9 @@ impl Job {
 
   /// Run the job, consuming it.
   #[inline]
-  pub fn run(self, ctx: &mut dyn VmJobContext) -> JobResult {
+  pub fn run(self, ctx: &mut dyn VmJobContext, host: &mut dyn VmHostHooks) -> JobResult {
     let Job { run, .. } = self;
-    run(ctx)
+    run(ctx, host)
   }
 }
 

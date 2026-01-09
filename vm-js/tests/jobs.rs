@@ -33,7 +33,7 @@ fn enqueue_three_jobs(host: &mut dyn VmHostHooks, sink: Arc<Mutex<Vec<u8>>>) {
   for i in 1..=3u8 {
     let sink = sink.clone();
     host.host_enqueue_promise_job(
-      Job::new(JobKind::Promise, move |_ctx| {
+      Job::new(JobKind::Promise, move |_ctx, _host| {
         sink.lock().unwrap().push(i);
         Ok(())
       }),
@@ -52,7 +52,7 @@ fn promise_jobs_can_be_run_in_fifo_order() {
 
   let mut ctx = TestContext::default();
   while let Some(job) = host.queue.pop_front() {
-    job.run(&mut ctx).unwrap();
+    job.run(&mut ctx, &mut host).unwrap();
   }
 
   assert_eq!(&*sink.lock().unwrap(), &[1, 2, 3]);
