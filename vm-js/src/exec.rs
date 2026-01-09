@@ -1,7 +1,7 @@
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
-  EnvRootId, GcEnv, GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, RootId,
-  Scope, Value, Vm, VmError, VmJobContext,
+  EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
+  RootId, Scope, Value, Vm, VmError, VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
@@ -1037,13 +1037,7 @@ impl<'a> Evaluator<'a> {
     scope: &mut Scope<'_>,
     node: &Node<LitStrExpr>,
   ) -> Result<Value, VmError> {
-    let s = if let Some(units) = literal_string_code_units(&node.assoc) {
-      // Preserve exact UTF-16 code units from the parser so lone surrogates survive.
-      scope.alloc_string_from_code_units(units)?
-    } else {
-      // Fallback for nodes that don't carry the association marker (should be rare).
-      scope.alloc_string(&node.stx.value)?
-    };
+    let s = alloc_string_from_lit_str(scope, node)?;
     Ok(Value::String(s))
   }
 
@@ -1155,18 +1149,6 @@ impl<'a> Evaluator<'a> {
         self.env.set(scope, name, value, false)?;
         Ok(value)
       }
-      OperatorName::Addition => {
-        let left = self.eval_expr(scope, &expr.left)?;
-        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
-        let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
-        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
-
-        match (left, right) {
-          (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + b)),
-          _ => Err(VmError::Unimplemented("addition operands")),
-        }
-      }
       OperatorName::LessThan => {
         let left = self.eval_expr(scope, &expr.left)?;
         let mut rhs_scope = scope.reborrow();
@@ -1180,6 +1162,17 @@ impl<'a> Evaluator<'a> {
       }
       _ => Err(VmError::Unimplemented("binary operator")),
     }
+  }
+}
+
+fn alloc_string_from_lit_str(
+  scope: &mut Scope<'_>,
+  node: &Node<LitStrExpr>,
+) -> Result<GcString, VmError> {
+  if let Some(units) = literal_string_code_units(&node.assoc) {
+    scope.alloc_string_from_code_units(units)
+  } else {
+    scope.alloc_string_from_utf8(&node.stx.value)
   }
 }
 

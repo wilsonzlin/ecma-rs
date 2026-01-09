@@ -369,6 +369,7 @@ mod tests {
   use crate::property::PropertyKind as HeapPropertyKind;
   use crate::Heap;
   use crate::HeapLimits;
+  use crate::Vm;
   use crate::VmOptions;
 
   fn js(s: &str) -> JsString {
