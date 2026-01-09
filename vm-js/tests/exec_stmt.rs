@@ -206,6 +206,30 @@ fn try_catch_converts_builtin_type_error_into_type_error_object() {
 }
 
 #[test]
+fn try_catch_converts_not_constructable_into_type_error_object() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"try { new 0; } catch(e) { e.name }"#).unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn not_constructable_error_has_message() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { new 0; } catch(e) { e.message }"#)
+    .unwrap();
+
+  let Value::String(s) = value else {
+    panic!("expected string, got {value:?}");
+  };
+  let actual = rt.heap().get_string(s).unwrap().to_utf8_lossy();
+  assert!(
+    actual.contains("constructor"),
+    "expected message to contain 'constructor', got {actual:?}"
+  );
+}
+
+#[test]
 fn type_error_object_has_message() {
   let mut rt = new_runtime();
   let value = rt
