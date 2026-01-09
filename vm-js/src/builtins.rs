@@ -2989,7 +2989,7 @@ pub fn function_prototype_bind(
     Some(bound_args)
   };
 
-  let func = scope.alloc_bound_function(
+  let func = scope.alloc_bound_function_raw(
     target_call,
     target_construct,
     name,

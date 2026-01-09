@@ -1191,7 +1191,13 @@ impl Vm {
         combined.extend_from_slice(bound_args);
         combined.extend_from_slice(args);
 
-        return self.call_with_host(&mut scope, host, Value::Object(bound_target), bound_this, &combined);
+        return self.call_with_host(
+          &mut scope,
+          host,
+          Value::Object(bound_target),
+          bound_this,
+          &combined,
+        );
       }
     }
     let call_handler = scope.heap().get_function_call_handler(callee_obj)?;
@@ -1356,7 +1362,21 @@ impl Vm {
         combined.extend_from_slice(bound_args);
         combined.extend_from_slice(args);
 
-        return self.construct_with_host(&mut scope, host, Value::Object(bound_target), &combined, new_target);
+        // ECMA-262: if `new_target` is the bound function itself, forward `new_target` as the
+        // target function.
+        let forwarded_new_target = if new_target == callee {
+          Value::Object(bound_target)
+        } else {
+          new_target
+        };
+
+        return self.construct_with_host(
+          &mut scope,
+          host,
+          Value::Object(bound_target),
+          &combined,
+          forwarded_new_target,
+        );
       }
     }
     let construct_handler = scope

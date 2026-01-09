@@ -3544,7 +3544,7 @@ impl<'a> Scope<'a> {
   ///
   /// Note: we intentionally do not define standard function properties (`name`, `length`,
   /// `prototype`) here; callers are expected to define `name`/`length` per ECMA-262 as needed.
-  pub(crate) fn alloc_bound_function(
+  pub(crate) fn alloc_bound_function_raw(
     &mut self,
     call: NativeFunctionId,
     construct: Option<NativeConstructId>,
@@ -3610,6 +3610,63 @@ impl<'a> Scope<'a> {
     crate::function_properties::set_function_length(&mut scope, func, length)?;
 
     Ok(func)
+  }
+
+  pub fn alloc_bound_function(
+    &mut self,
+    target: GcObject,
+    bound_this: Value,
+    bound_args: &[Value],
+    name: GcString,
+    length: u32,
+  ) -> Result<GcObject, VmError> {
+    // Extract the native call/construct handlers from `target` without holding a heap borrow across
+    // allocations.
+    let (target_call, target_construct) = {
+      let f = self.heap().get_function(target)?;
+      let call = match &f.call {
+        CallHandler::Native(id) => *id,
+        CallHandler::Ecma(_) | CallHandler::User(_) => {
+          return Err(VmError::Unimplemented(
+            "Scope::alloc_bound_function: non-native target functions",
+          ));
+        }
+      };
+      let construct = match f.construct {
+        Some(ConstructHandler::Native(id)) => Some(id),
+        Some(ConstructHandler::Ecma(_)) => {
+          return Err(VmError::Unimplemented(
+            "Scope::alloc_bound_function: ECMAScript target constructors",
+          ));
+        }
+        None => None,
+      };
+      (call, construct)
+    };
+
+    let bound_args_len = bound_args.len();
+    let bound_args = if bound_args.is_empty() {
+      None
+    } else {
+      // Allocate the bound args buffer fallibly so hostile inputs cannot abort the host process
+      // on allocator OOM.
+      let mut buf: Vec<Value> = Vec::new();
+      buf
+        .try_reserve_exact(bound_args_len)
+        .map_err(|_| VmError::OutOfMemory)?;
+      buf.extend_from_slice(bound_args);
+      Some(buf.into_boxed_slice())
+    };
+
+    self.alloc_bound_function_raw(
+      target_call,
+      target_construct,
+      name,
+      length,
+      target,
+      bound_this,
+      bound_args,
+    )
   }
 }
 
