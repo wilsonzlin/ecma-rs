@@ -3,7 +3,7 @@ use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmError, VmOptions};
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
   let heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-  JsRuntime::new(vm, heap)
+  JsRuntime::new(vm, heap).unwrap()
 }
 
 fn assert_value_is_utf8(rt: &JsRuntime, value: Value, expected: &str) {
@@ -47,4 +47,3 @@ fn env_records_keep_values_alive_across_gc() {
   rt.heap_mut().collect_garbage();
   assert_value_is_utf8(&rt, value, "alive");
 }
-
