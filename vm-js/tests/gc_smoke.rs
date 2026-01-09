@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, PromiseReaction, PromiseReactionType, Value, VmError};
+use vm_js::{Heap, HeapLimits, JobCallback, PromiseReaction, PromiseReactionType, Value, VmError};
 
 #[test]
 fn gc_collects_unreachable_objects() -> Result<(), VmError> {
@@ -154,8 +154,8 @@ fn promise_reaction_lists_are_cleared_on_settlement() -> Result<(), VmError> {
       promise,
       PromiseReaction {
         capability: None,
-        reaction_type: PromiseReactionType::Fulfill,
-        handler: Some(Value::Object(handler)),
+        type_: PromiseReactionType::Fulfill,
+        handler: Some(JobCallback::new(handler)),
       },
     )?;
 

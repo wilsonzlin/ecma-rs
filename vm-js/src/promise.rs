@@ -70,17 +70,14 @@ impl Trace for PromiseCapability {
 /// An ECMAScript PromiseReaction Record stored in a Promise's reaction lists.
 ///
 /// Spec reference: <https://tc39.es/ecma262/#sec-promisereaction-records>
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PromiseReaction {
   /// `[[Capability]]` is either a PromiseCapability record or empty.
   pub capability: Option<PromiseCapability>,
   /// `[[Type]]` is either fulfill or reject.
-  pub reaction_type: PromiseReactionType,
-  /// `[[Handler]]` is either a callable object or empty.
-  ///
-  /// Note: the ECMAScript spec models "empty" separately from `undefined`; at this layer we
-  /// represent it as `None`.
-  pub handler: Option<Value>,
+  pub type_: PromiseReactionType,
+  /// `[[Handler]]` is either a host-defined [`JobCallback`] record or empty.
+  pub handler: Option<JobCallback>,
 }
 
 impl Trace for PromiseReaction {
@@ -88,8 +85,8 @@ impl Trace for PromiseReaction {
     if let Some(cap) = &self.capability {
       cap.trace(tracer);
     }
-    if let Some(handler) = self.handler {
-      tracer.trace_value(handler);
+    if let Some(handler) = &self.handler {
+      handler.trace(tracer);
     }
   }
 }
