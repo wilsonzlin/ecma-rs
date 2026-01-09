@@ -1,11 +1,11 @@
 use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
 use crate::iterator;
 use crate::ops::{add_operator, abstract_equality, to_number};
+use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyDescriptorPatch,
   PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm, VmError, VmJobContext,
 };
-use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::{
