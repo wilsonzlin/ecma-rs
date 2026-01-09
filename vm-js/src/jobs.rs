@@ -244,15 +244,58 @@ impl Drop for Job {
 /// callback, but the callback object itself is stored explicitly so engine code can keep it alive
 /// across GC cycles.
 ///
-/// # GC safety / rooting
+/// # GC safety / rooting (important!)
 ///
-/// `JobCallback` implements [`Trace`] by tracing the callback object, but it is **not** a root by
-/// itself. If a `JobCallback` is stored somewhere that can outlive a stack rooting scope (e.g. in
-/// Promise reaction records, as queued microtasks, etc), the embedding/engine must ensure that the
-/// containing data structure calls `trace`.
+/// A [`JobCallback`] is **host-owned data**. Like any host-owned structure, it is not
+/// automatically visited by the GC: the GC only traces objects that are reachable from the heap
+/// graph and from explicit roots.
+///
+/// `JobCallback` implements [`Trace`] by tracing the callback object, so an embedding can keep the
+/// callback alive by storing `JobCallback` inside a traced structure. However, simply holding a
+/// `JobCallback` record in host state (queued tasks/microtasks, timers, etc.) does **not** keep the
+/// callback alive.
+///
+/// If a callback must stay alive until some future host work runs, the embedding MUST keep
+/// [`JobCallback::callback`] alive by registering it as a persistent root (for example via
+/// [`VmJobContext::add_root`] / [`VmJobContext::remove_root`], typically attached to the queued
+/// [`Job`], or via [`crate::Heap::add_root`] / [`crate::Heap::remove_root`]).
 ///
 /// The host-defined payload is **opaque** to the GC. Hosts MUST NOT store GC handles inside the
 /// payload unless they keep them alive independently.
+///
+/// ## Recommended pattern
+///
+/// When enqueuing a job that will later observe/call a callback, register the callback object as a
+/// persistent root for the lifetime of the queued job:
+///
+/// ```no_run
+/// # use vm_js::{GcObject, Job, JobKind, JobResult, JobCallback, RealmId, RootId, Value, VmError, VmHostHooks, VmJobContext};
+/// # struct Host;
+/// # impl VmHostHooks for Host {
+/// #   fn host_enqueue_promise_job(&mut self, _job: Job, _realm: Option<RealmId>) {}
+/// # }
+/// # struct Ctx;
+/// # impl VmJobContext for Ctx {
+/// #   fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> { unimplemented!() }
+/// #   fn construct(&mut self, _callee: Value, _args: &[Value], _new_target: Value) -> Result<Value, VmError> { unimplemented!() }
+/// #   fn add_root(&mut self, _value: Value) -> RootId { unimplemented!() }
+/// #   fn remove_root(&mut self, _id: RootId) { unimplemented!() }
+/// # }
+/// # let mut host = Host;
+/// # let mut ctx = Ctx;
+/// # let callback_obj: GcObject = todo!();
+/// let job_callback: JobCallback = host.host_make_job_callback(callback_obj);
+///
+/// let mut job = Job::new(JobKind::Generic, move |_ctx, _host| -> JobResult {
+///   // Later: _host.host_call_job_callback(_ctx, &job_callback, ...)?;
+///   let _ = job_callback.callback();
+///   Ok(())
+/// });
+///
+/// // IMPORTANT: keep `callback_obj` alive until the queued job runs.
+/// job.add_root(&mut ctx, Value::Object(callback_obj));
+/// host.host_enqueue_promise_job(job, None);
+/// ```
 #[derive(Clone)]
 pub struct JobCallback {
   callback: GcObject,
@@ -384,6 +427,15 @@ pub trait VmHostHooks {
   ///
   /// Embeddings that do not need incumbent/active-script propagation can use the default
   /// implementation, which stores the callback object with no extra host-defined metadata.
+  ///
+  /// ## GC safety (important!)
+  ///
+  /// The default implementation stores `callback` as a raw [`GcObject`] inside a [`JobCallback`]
+  /// record, but does not register it as a persistent root.
+  ///
+  /// If the callback object must stay alive until some future task/microtask runs, the embedding
+  /// MUST keep it alive itself (for example by rooting it as part of the queued [`Job`] via
+  /// [`Job::add_root`], or by using [`crate::Heap::add_root`]).
   fn host_make_job_callback(&mut self, callback: GcObject) -> JobCallback {
     JobCallback::new(callback)
   }
