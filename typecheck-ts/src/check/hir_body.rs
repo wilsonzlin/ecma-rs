@@ -8642,9 +8642,9 @@ impl<'a> FlowBodyChecker<'a> {
         hir_js::Literal::Number(num) => self.store.intern_type(TypeKind::NumberLiteral(
           num.parse::<f64>().unwrap_or(0.0).into(),
         )),
-        hir_js::Literal::String(s) => self
-          .store
-          .intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone()))),
+        hir_js::Literal::String(s) => self.store.intern_type(TypeKind::StringLiteral(
+          self.store.intern_name(s.lossy.clone()),
+        )),
         hir_js::Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
         hir_js::Literal::Null => prim.null,
         hir_js::Literal::Undefined => prim.undefined,
@@ -9862,7 +9862,7 @@ impl<'a> FlowBodyChecker<'a> {
         }
       }
       ExprKind::Literal(lit) => match lit {
-        hir_js::Literal::String(s) => Some(LiteralValue::String(s.clone())),
+        hir_js::Literal::String(s) => Some(LiteralValue::String(s.lossy.clone())),
         hir_js::Literal::Number(n) => Some(LiteralValue::Number(n.clone())),
         hir_js::Literal::Boolean(b) => Some(LiteralValue::Boolean(*b)),
         hir_js::Literal::Null => Some(LiteralValue::Null),
@@ -9875,7 +9875,7 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn literal_prop(&self, expr_id: ExprId) -> Option<String> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Literal(hir_js::Literal::String(s)) => Some(s.clone()),
+      ExprKind::Literal(hir_js::Literal::String(s)) => Some(s.lossy.clone()),
       _ => None,
     }
   }
@@ -10185,7 +10185,7 @@ impl<'a> FlowBodyChecker<'a> {
         ExprKind::Literal(hir_js::Literal::String(s)),
       ) => {
         if let Some(binding) = self.ident_binding(*expr) {
-          return Some((binding, self.expr_types[expr.0 as usize], s.clone()));
+          return Some((binding, self.expr_types[expr.0 as usize], s.lossy.clone()));
         }
       }
       (
@@ -10196,7 +10196,7 @@ impl<'a> FlowBodyChecker<'a> {
         },
       ) => {
         if let Some(binding) = self.ident_binding(*expr) {
-          return Some((binding, self.expr_types[expr.0 as usize], s.clone()));
+          return Some((binding, self.expr_types[expr.0 as usize], s.lossy.clone()));
         }
       }
       _ => {}

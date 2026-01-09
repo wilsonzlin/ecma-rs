@@ -102,7 +102,7 @@ impl<'p> HirSourceToInst<'p> {
       hir_js::Literal::Number(v) => {
         Arg::Const(Const::Num(JsNumber(v.parse::<f64>().unwrap_or_default())))
       }
-      hir_js::Literal::String(v) => Arg::Const(Const::Str(v.clone())),
+      hir_js::Literal::String(v) => Arg::Const(Const::Str(v.lossy.clone())),
       hir_js::Literal::Null => Arg::Const(Const::Null),
       hir_js::Literal::Undefined => Arg::Const(Const::Undefined),
       hir_js::Literal::BigInt(v) => {
@@ -678,12 +678,12 @@ impl<'p> HirSourceToInst<'p> {
         {
           let literal = if typeof_on_left {
             match &right_expr.kind {
-              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.lossy.as_str()),
               _ => None,
             }
           } else {
             match &left_expr.kind {
-              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.as_str()),
+              ExprKind::Literal(hir_js::Literal::String(value)) => Some(value.lossy.as_str()),
               _ => None,
             }
           };

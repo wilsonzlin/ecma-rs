@@ -1925,7 +1925,7 @@ fn emit_template_literal(
 fn emit_literal(em: &mut Emitter, lit: &Literal) -> EmitResult {
   match lit {
     Literal::Number(num) => em.write_number(num),
-    Literal::String(str) => emit_string(em, str),
+    Literal::String(str) => emit_string(em, &str.lossy),
     Literal::Boolean(true) => em.write_keyword("true"),
     Literal::Boolean(false) => em.write_keyword("false"),
     Literal::Null => em.write_keyword("null"),

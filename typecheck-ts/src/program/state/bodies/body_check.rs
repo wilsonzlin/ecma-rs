@@ -1169,7 +1169,7 @@ impl ProgramState {
                   if let hir_js::ExprKind::Literal(hir_js::Literal::String(s)) =
                     &body.exprs[prop.0 as usize].kind
                   {
-                    Some(s.clone())
+                    Some(s.lossy.clone())
                   } else {
                     None
                   }

@@ -47,6 +47,17 @@ fn computed_methods(result: &hir_js::LowerResult) -> Vec<&hir_js::DefData> {
     .collect()
 }
 
+fn first_string_literal(result: &hir_js::LowerResult) -> hir_js::StringLiteral {
+  for body in result.bodies.iter() {
+    for expr in body.exprs.iter() {
+      if let ExprKind::Literal(hir_js::Literal::String(lit)) = &expr.kind {
+        return lit.clone();
+      }
+    }
+  }
+  panic!("expected at least one string literal in lowered output");
+}
+
 #[test]
 fn def_ids_are_sorted_and_stable() {
   let source = "function f() {}\nconst b = 2;\nconst a = 1;";
@@ -1671,6 +1682,25 @@ fn saturates_overflowing_spans() {
   let expr_span = body.exprs.first().expect("expr").span;
   assert_eq!(expr_span.start, u32::MAX);
   assert_eq!(expr_span.end, u32::MAX);
+}
+
+#[test]
+fn lowers_string_literal_utf16_code_units_unpaired_surrogate() {
+  let result =
+    lower_from_source_with_kind(FileKind::Ts, r#"const s = "\uD800";"#).expect("lower");
+  let literal = first_string_literal(&result);
+  assert_eq!(literal.lossy, "\u{FFFD}");
+  assert_eq!(literal.code_units.as_deref(), Some(&[0xD800][..]));
+}
+
+#[test]
+fn lowers_string_literal_utf16_code_units_for_bmp() {
+  let source = r#"const s = "hello";"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+  let literal = first_string_literal(&result);
+  assert_eq!(literal.lossy, "hello");
+  let expected: Vec<u16> = "hello".encode_utf16().collect();
+  assert_eq!(literal.code_units.as_deref(), Some(expected.as_slice()));
 }
 
 #[test]

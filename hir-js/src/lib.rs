@@ -102,6 +102,7 @@ pub use hir::Param;
 pub use hir::Pat;
 pub use hir::PatKind;
 pub use hir::PropertyName;
+pub use hir::StringLiteral;
 pub use hir::Stmt;
 pub use hir::StmtKind;
 pub use hir::TemplateLiteral;

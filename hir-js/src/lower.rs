@@ -8,8 +8,8 @@ use crate::hir::{
   ImportEs, ImportKind, ImportNamed, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
   JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, ModuleAttributes,
   ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat,
-  PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp,
-  VarDecl, VarDeclKind, VarDeclarator,
+  PatKind, Stmt, StmtKind, StringLiteral, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp,
+  UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -1833,7 +1833,14 @@ fn lower_expr(
     AstExpr::This(_) => ExprKind::This,
     AstExpr::Super(_) => ExprKind::Super,
     AstExpr::LitNum(num) => ExprKind::Literal(Literal::Number(num.stx.value.to_string())),
-    AstExpr::LitStr(str) => ExprKind::Literal(Literal::String(str.stx.value.clone())),
+    AstExpr::LitStr(str) => {
+      let code_units = parse_js::ast::node::literal_string_code_units(&str.assoc)
+        .map(|units| units.to_vec().into_boxed_slice());
+      ExprKind::Literal(Literal::String(StringLiteral {
+        lossy: str.stx.value.clone(),
+        code_units,
+      }))
+    }
     AstExpr::LitBool(b) => ExprKind::Literal(Literal::Boolean(b.stx.value)),
     AstExpr::LitNull(_) => ExprKind::Literal(Literal::Null),
     AstExpr::LitBigInt(b) => ExprKind::Literal(Literal::BigInt(b.stx.value.clone())),

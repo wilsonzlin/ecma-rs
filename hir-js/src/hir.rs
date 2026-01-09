@@ -809,9 +809,19 @@ pub enum ExprKind {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct StringLiteral {
+  /// Best-effort UTF-8 version of the literal, suitable for debugging and
+  /// printing.
+  pub lossy: String,
+  /// Spec-correct UTF-16 code units for the literal (including unpaired
+  /// surrogates), when available.
+  pub code_units: Option<Box<[u16]>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum Literal {
   Number(String),
-  String(String),
+  String(StringLiteral),
   Boolean(bool),
   Null,
   Undefined,
