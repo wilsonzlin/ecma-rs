@@ -14,7 +14,7 @@
 //!   <https://tc39.es/ecma262/#sec-allimportattributessupported>
 
 use crate::property::PropertyKey;
-use crate::{GcString, JsString, RealmId, Scope, Value, VmError};
+use crate::{GcString, JsString, RealmId, Scope, Value, Vm, VmError};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -221,6 +221,7 @@ fn make_key_string(scope: &mut Scope<'_>, s: &str) -> Result<GcString, VmError> 
 /// This implements the import-attributes portion of `EvaluateImportCall`:
 /// <https://tc39.es/ecma262/#sec-evaluate-import-call>
 pub fn import_attributes_from_options(
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   options: Value,
   supported_keys: &[JsString],
@@ -235,7 +236,7 @@ pub fn import_attributes_from_options(
 
   let with_key = PropertyKey::String(make_key_string(scope, "with").map_err(ImportCallError::Vm)?);
   let attributes_obj = scope
-    .ordinary_get(options_obj, with_key, Value::Object(options_obj))
+    .ordinary_get(vm, options_obj, with_key, Value::Object(options_obj))
     .map_err(ImportCallError::Vm)?;
 
   if matches!(attributes_obj, Value::Undefined) {
@@ -272,7 +273,7 @@ pub fn import_attributes_from_options(
     }
 
     let value = scope
-      .ordinary_get(attributes_obj, key, Value::Object(attributes_obj))
+      .ordinary_get(vm, attributes_obj, key, Value::Object(attributes_obj))
       .map_err(ImportCallError::Vm)?;
 
     let Value::String(value_string) = value else {
@@ -435,6 +436,7 @@ mod tests {
 
   #[test]
   fn import_attributes_from_options_validates_and_sorts() {
+    let mut vm = crate::Vm::new(crate::VmOptions::default());
     let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
     let mut scope = heap.scope();
 
@@ -481,7 +483,7 @@ mod tests {
 
     let supported = vec![js("a"), js("type")];
     let attrs =
-      import_attributes_from_options(&mut scope, Value::Object(options), &supported).unwrap();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported).unwrap();
 
     let keys: Vec<String> = attrs.iter().map(|a| a.key.to_utf8_lossy()).collect();
     assert_eq!(keys, vec!["a", "type"]);
@@ -489,12 +491,13 @@ mod tests {
 
   #[test]
   fn import_attributes_from_options_rejects_invalid_types() {
+    let mut vm = crate::Vm::new(crate::VmOptions::default());
     let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
     let mut scope = heap.scope();
 
     let supported = vec![js("type")];
     let err =
-      import_attributes_from_options(&mut scope, Value::Number(1.0), &supported).unwrap_err();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Number(1.0), &supported).unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::OptionsNotObject)
@@ -511,7 +514,7 @@ mod tests {
       .unwrap();
 
     let err =
-      import_attributes_from_options(&mut scope, Value::Object(options), &supported).unwrap_err();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported).unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::AttributesNotObject)
@@ -537,7 +540,7 @@ mod tests {
       .unwrap();
 
     let err =
-      import_attributes_from_options(&mut scope, Value::Object(options2), &supported).unwrap_err();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options2), &supported).unwrap_err();
     assert!(matches!(
       err,
       ImportCallError::TypeError(ImportCallTypeError::AttributeValueNotString)
