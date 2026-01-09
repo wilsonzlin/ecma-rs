@@ -55,10 +55,40 @@ fn var_decl_and_if_statement_execute() {
 }
 
 #[test]
-fn try_finally_updates_empty_completion_value() {
+fn try_statement_update_empty_to_undefined_finally_only() {
   let mut rt = new_runtime();
-  let value = rt.exec_script(r#"try { } finally { 1 }"#).unwrap();
+  let value = rt.exec_script(r#"1; try { } finally { }"#).unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn try_statement_update_empty_to_undefined_catch_only() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"1; try { } catch { }"#).unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn try_statement_update_empty_to_undefined_catch_and_finally() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"1; try { } catch { } finally { }"#).unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn try_finally_preserves_non_empty_value() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"try { 1 } finally { }"#).unwrap();
   assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn while_try_break_finally_returns_undefined() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"while(true){ 1; try{ break; } finally {} }"#)
+    .unwrap();
+  assert_eq!(value, Value::Undefined);
 }
 
 #[test]

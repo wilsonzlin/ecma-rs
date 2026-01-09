@@ -1832,13 +1832,11 @@ impl<'a> Evaluator<'a> {
       }
 
       if finally_result.is_abrupt() {
-        return Ok(finally_result);
+        result = finally_result;
       }
-
-      result = result.update_empty(finally_result.value());
     }
 
-    Ok(result)
+    Ok(result.update_empty(Some(Value::Undefined)))
   }
 
   fn eval_catch(
