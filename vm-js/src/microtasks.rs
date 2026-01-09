@@ -65,23 +65,24 @@ impl MicrotaskQueue {
   ///
   /// - If a checkpoint is already in progress, this is a no-op (reentrancy guard).
   /// - Otherwise, drains the queue until it becomes empty.
-  pub fn perform_microtask_checkpoint(&mut self, ctx: &mut dyn VmJobContext) -> Result<(), VmError> {
+  ///
+  /// Any errors returned by jobs are collected and returned; the checkpoint continues to run later
+  /// jobs even if earlier ones fail (HTML's "report the exception and keep draining microtasks"
+  /// behavior).
+  pub fn perform_microtask_checkpoint(&mut self, ctx: &mut dyn VmJobContext) -> Vec<VmError> {
     if self.performing_microtask_checkpoint {
-      return Ok(());
+      return Vec::new();
     }
 
     self.performing_microtask_checkpoint = true;
-    let result = (|| {
-      loop {
-        let Some((_realm, job)) = self.queue.pop_front() else {
-          break;
-        };
-        job.run(ctx, self)?;
+    let mut errors = Vec::new();
+    while let Some((_realm, job)) = self.queue.pop_front() {
+      if let Err(err) = job.run(ctx, self) {
+        errors.push(err);
       }
-      Ok(())
-    })();
+    }
     self.performing_microtask_checkpoint = false;
-    result
+    errors
   }
 
   /// Tears down all queued jobs without running them.
@@ -92,6 +93,11 @@ impl MicrotaskQueue {
     while let Some((_realm, job)) = self.queue.pop_front() {
       job.discard(ctx);
     }
+  }
+
+  /// Alias for [`MicrotaskQueue::teardown`].
+  pub fn cancel_all(&mut self, ctx: &mut dyn VmJobContext) {
+    self.teardown(ctx);
   }
 }
 

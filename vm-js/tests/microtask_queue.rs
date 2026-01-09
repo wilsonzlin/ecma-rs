@@ -72,7 +72,8 @@ fn fifo_ordering_is_preserved() -> Result<(), VmError> {
     );
   }
 
-  queue.perform_microtask_checkpoint(&mut ctx)?;
+  let errors = queue.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty());
   assert_eq!(&*sink.lock().unwrap(), &[1, 2, 3]);
   Ok(())
 }
@@ -103,7 +104,8 @@ fn microtasks_queued_by_microtasks_run_in_the_same_checkpoint() -> Result<(), Vm
     None,
   );
 
-  queue.perform_microtask_checkpoint(&mut ctx)?;
+  let errors = queue.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty());
   assert_eq!(&*sink.lock().unwrap(), &[1, 2]);
   Ok(())
 }
@@ -136,7 +138,8 @@ fn microtask_checkpoint_reentrancy_guard_prevents_recursion() -> Result<(), VmEr
       let queue = any
         .downcast_mut::<MicrotaskQueue>()
         .ok_or(VmError::Unimplemented("downcast MicrotaskQueue"))?;
-      queue.perform_microtask_checkpoint(ctx)?;
+      let errors = queue.perform_microtask_checkpoint(ctx);
+      assert!(errors.is_empty());
 
       log_for_job1.lock().unwrap().push("job1_after");
       Ok(())
@@ -144,7 +147,8 @@ fn microtask_checkpoint_reentrancy_guard_prevents_recursion() -> Result<(), VmEr
     None,
   );
 
-  queue.perform_microtask_checkpoint(&mut ctx)?;
+  let errors = queue.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty());
 
   assert_eq!(
     &*log.lock().unwrap(),
@@ -174,11 +178,73 @@ fn jobs_keep_values_alive_until_run_when_rooted() -> Result<(), VmError> {
   ctx.heap.collect_garbage();
   assert_eq!(weak.upgrade(&ctx.heap), Some(obj));
 
-  queue.perform_microtask_checkpoint(&mut ctx)?;
+  let errors = queue.perform_microtask_checkpoint(&mut ctx);
+  assert!(errors.is_empty());
 
   // After the job runs its roots are removed, so the object becomes collectible.
   ctx.heap.collect_garbage();
   assert_eq!(weak.upgrade(&ctx.heap), None);
 
+  Ok(())
+}
+
+#[test]
+fn checkpoint_continues_after_errors_and_collects_them() -> Result<(), VmError> {
+  let mut ctx = TestContext::new();
+  let mut queue = MicrotaskQueue::new();
+
+  let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+  let log_for_ok = log.clone();
+
+  queue.enqueue_promise_job(
+    Job::new(JobKind::Promise, |_ctx, _host| Err(VmError::Unimplemented("job1 failed"))),
+    None,
+  );
+
+  queue.enqueue_promise_job(
+    Job::new(JobKind::Promise, move |_ctx, _host| {
+      log_for_ok.lock().unwrap().push("job2");
+      Ok(())
+    }),
+    None,
+  );
+
+  queue.enqueue_promise_job(
+    Job::new(JobKind::Promise, |_ctx, _host| Err(VmError::Unimplemented("job3 failed"))),
+    None,
+  );
+
+  let errors = queue.perform_microtask_checkpoint(&mut ctx);
+  assert_eq!(errors.len(), 2);
+  assert!(matches!(errors[0], VmError::Unimplemented("job1 failed")));
+  assert!(matches!(errors[1], VmError::Unimplemented("job3 failed")));
+  assert_eq!(&*log.lock().unwrap(), &["job2"]);
+  Ok(())
+}
+
+#[test]
+fn cancel_all_discards_jobs_and_unregisters_roots() -> Result<(), VmError> {
+  let mut ctx = TestContext::new();
+  let mut queue = MicrotaskQueue::new();
+
+  let obj = {
+    let mut scope = ctx.heap.scope();
+    scope.alloc_object()?
+  };
+  let weak = WeakGcObject::from(obj);
+
+  let mut job = Job::new(JobKind::Promise, |_ctx, _host| Ok(()));
+  job.add_root(&mut ctx, Value::Object(obj))?;
+  queue.enqueue_promise_job(job, None);
+
+  // The job's persistent root keeps the object alive while the job is pending.
+  ctx.heap.collect_garbage();
+  assert_eq!(weak.upgrade(&ctx.heap), Some(obj));
+
+  queue.cancel_all(&mut ctx);
+  assert!(queue.is_empty());
+
+  ctx.heap.collect_garbage();
+  assert_eq!(weak.upgrade(&ctx.heap), None);
   Ok(())
 }
