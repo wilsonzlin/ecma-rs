@@ -15,7 +15,7 @@ use parse_js::ast::expr::lit::{
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
   ArrowFuncExpr, BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, FuncExpr, IdExpr,
-  MemberExpr, UnaryExpr,
+  MemberExpr, UnaryExpr, UnaryPostfixExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
@@ -793,6 +793,9 @@ impl<'a> Evaluator<'a> {
     scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
+    if let Some(realm) = self.vm.current_realm() {
+      scope.heap_mut().set_function_job_realm(func_obj, realm)?;
+    }
 
     let mut assign_scope = scope.reborrow();
     assign_scope.push_root(Value::Object(func_obj))?;
@@ -2012,6 +2015,7 @@ impl<'a> Evaluator<'a> {
       Expr::Member(node) => self.eval_member(scope, &node.stx),
       Expr::ComputedMember(node) => self.eval_computed_member(scope, &node.stx),
       Expr::Unary(node) => self.eval_unary(scope, &node.stx),
+      Expr::UnaryPostfix(node) => self.eval_unary_postfix(scope, &node.stx),
       Expr::Binary(node) => self.eval_binary(scope, &node.stx),
       Expr::Cond(node) => self.eval_cond(scope, &node.stx),
 
@@ -2158,8 +2162,14 @@ impl<'a> Evaluator<'a> {
         let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
         if ok {
           Ok(())
+        } else if self.strict {
+          Err(throw_type_error(
+            self.vm,
+            scope,
+            "Cannot assign to a read only property.",
+          )?)
         } else {
-          Err(VmError::Unimplemented("OrdinarySet returned false"))
+          Ok(())
         }
       }
     }
@@ -2240,6 +2250,9 @@ impl<'a> Evaluator<'a> {
     scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
+    if let Some(realm) = self.vm.current_realm() {
+      scope.heap_mut().set_function_job_realm(func_obj, realm)?;
+    }
     if func.arrow {
       scope.heap_mut().set_function_bound_this(func_obj, self.this)?;
       scope
@@ -2306,6 +2319,9 @@ impl<'a> Evaluator<'a> {
     alloc_scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
+    if let Some(realm) = self.vm.current_realm() {
+      alloc_scope.heap_mut().set_function_job_realm(func_obj, realm)?;
+    }
     alloc_scope
       .heap_mut()
       .set_function_bound_this(func_obj, self.this)?;
@@ -2570,6 +2586,11 @@ impl<'a> Evaluator<'a> {
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
+              if let Some(realm) = self.vm.current_realm() {
+                member_scope
+                  .heap_mut()
+                  .set_function_job_realm(func_obj, realm)?;
+              }
               if func_node.stx.arrow {
                 member_scope
                   .heap_mut()
@@ -2647,6 +2668,11 @@ impl<'a> Evaluator<'a> {
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
+              if let Some(realm) = self.vm.current_realm() {
+                member_scope
+                  .heap_mut()
+                  .set_function_job_realm(func_obj, realm)?;
+              }
               if func_node.stx.arrow {
                 member_scope
                   .heap_mut()
@@ -2724,6 +2750,11 @@ impl<'a> Evaluator<'a> {
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
+              if let Some(realm) = self.vm.current_realm() {
+                member_scope
+                  .heap_mut()
+                  .set_function_job_realm(func_obj, realm)?;
+              }
               if func_node.stx.arrow {
                 member_scope
                   .heap_mut()
@@ -2919,6 +2950,36 @@ impl<'a> Evaluator<'a> {
           NumericValue::BigInt(b) => Value::BigInt(b.negate()),
         })
       }
+      OperatorName::PrefixIncrement | OperatorName::PrefixDecrement => {
+        let reference = self.eval_reference(scope, &expr.argument)?;
+        let mut update_scope = scope.reborrow();
+        self.root_reference(&mut update_scope, &reference)?;
+        let old = self.get_value_from_reference(&mut update_scope, &reference)?;
+        update_scope.push_root(old)?;
+
+        let old_num = self.to_numeric(&mut update_scope, old)?;
+        let new_value = match old_num {
+          NumericValue::Number(n) => match expr.operator {
+            OperatorName::PrefixIncrement => Value::Number(n + 1.0),
+            OperatorName::PrefixDecrement => Value::Number(n - 1.0),
+            _ => unreachable!(),
+          },
+          NumericValue::BigInt(b) => {
+            let delta = match expr.operator {
+              OperatorName::PrefixIncrement => JsBigInt::from_u128(1),
+              OperatorName::PrefixDecrement => JsBigInt::from_u128(1).negate(),
+              _ => unreachable!(),
+            };
+            let Some(out) = b.checked_add(delta) else {
+              return Err(VmError::Unimplemented("BigInt addition overflow"));
+            };
+            Value::BigInt(out)
+          }
+        };
+
+        self.put_value_to_reference(&mut update_scope, &reference, new_value)?;
+        Ok(new_value)
+      }
       OperatorName::Typeof => {
         let argument = self.eval_expr(scope, &expr.argument)?;
         let t = typeof_name(scope.heap(), argument)?;
@@ -2969,6 +3030,46 @@ impl<'a> Evaluator<'a> {
         self.vm.construct(&mut new_scope, callee, &args, callee)
       }
       _ => Err(VmError::Unimplemented("unary operator")),
+    }
+  }
+
+  fn eval_unary_postfix(
+    &mut self,
+    scope: &mut Scope<'_>,
+    expr: &UnaryPostfixExpr,
+  ) -> Result<Value, VmError> {
+    match expr.operator {
+      OperatorName::PostfixIncrement | OperatorName::PostfixDecrement => {
+        let reference = self.eval_reference(scope, &expr.argument)?;
+        let mut update_scope = scope.reborrow();
+        self.root_reference(&mut update_scope, &reference)?;
+        let old = self.get_value_from_reference(&mut update_scope, &reference)?;
+        update_scope.push_root(old)?;
+
+        let old_num = self.to_numeric(&mut update_scope, old)?;
+        let new_value = match old_num {
+          NumericValue::Number(n) => match expr.operator {
+            OperatorName::PostfixIncrement => Value::Number(n + 1.0),
+            OperatorName::PostfixDecrement => Value::Number(n - 1.0),
+            _ => unreachable!(),
+          },
+          NumericValue::BigInt(b) => {
+            let delta = match expr.operator {
+              OperatorName::PostfixIncrement => JsBigInt::from_u128(1),
+              OperatorName::PostfixDecrement => JsBigInt::from_u128(1).negate(),
+              _ => unreachable!(),
+            };
+            let Some(out) = b.checked_add(delta) else {
+              return Err(VmError::Unimplemented("BigInt addition overflow"));
+            };
+            Value::BigInt(out)
+          }
+        };
+
+        self.put_value_to_reference(&mut update_scope, &reference, new_value)?;
+        Ok(old)
+      }
+      _ => Err(VmError::Unimplemented("postfix unary operator")),
     }
   }
 

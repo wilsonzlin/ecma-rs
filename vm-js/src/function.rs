@@ -1,6 +1,6 @@
 use crate::heap::{ObjectBase, Trace, Tracer};
 use crate::CompiledFunctionRef;
-use crate::{GcEnv, GcObject, GcString, Value};
+use crate::{GcEnv, GcObject, GcString, RealmId, Value};
 use core::mem;
 
 /// Identifier for a host/native `[[Call]]` implementation.
@@ -124,7 +124,15 @@ pub(crate) struct JsFunction {
   /// functions that share one captured value (e.g. a small heap object acting as the
   /// `alreadyResolved` record) and each capture the target promise.
   pub(crate) native_slots: Option<Box<[Value]>>,
+  /// The function's `[[Realm]]` internal slot.
+  ///
+  /// For now this is represented as the Realm's global object.
   pub(crate) realm: Option<GcObject>,
+  /// Realm identity used when scheduling Promise jobs.
+  ///
+  /// This is separate from `realm` because jobs need an opaque host-facing [`RealmId`] token,
+  /// whereas `realm` is used internally for `this` binding and other semantics.
+  pub(crate) job_realm: Option<RealmId>,
   pub(crate) closure_env: Option<GcEnv>,
 }
 
@@ -161,6 +169,7 @@ impl JsFunction {
       bound_args: None,
       native_slots,
       realm: None,
+      job_realm: None,
       closure_env: None,
     }
   }
@@ -193,6 +202,7 @@ impl JsFunction {
       bound_args: None,
       native_slots: None,
       realm: None,
+      job_realm: None,
       closure_env,
     }
   }
@@ -213,6 +223,7 @@ impl JsFunction {
       bound_args: None,
       native_slots: None,
       realm: None,
+      job_realm: None,
       closure_env: None,
     }
   }

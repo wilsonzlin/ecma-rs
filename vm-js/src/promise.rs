@@ -54,14 +54,18 @@ pub enum PromiseReactionType {
 /// Spec reference: <https://tc39.es/ecma262/#sec-promisecapability-records>
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PromiseCapability {
-  pub promise: GcObject,
+  /// The promise value.
+  ///
+  /// In the spec this is always an Object, but representing it as a `Value` simplifies rooting and
+  /// allows callers to use `Value::Undefined` as a sentinel during partially-initialized paths.
+  pub promise: Value,
   pub resolve: Value,
   pub reject: Value,
 }
 
 impl Trace for PromiseCapability {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    tracer.trace_value(Value::Object(self.promise));
+    tracer.trace_value(self.promise);
     tracer.trace_value(self.resolve);
     tracer.trace_value(self.reject);
   }

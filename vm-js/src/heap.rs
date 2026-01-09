@@ -8,7 +8,9 @@ use crate::promise::{PromiseReaction, PromiseReactionType, PromiseState};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::CompiledFunctionRef;
-use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
+use crate::{
+  EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RealmId, RootId, Value, Vm, VmError,
+};
 use core::mem;
 use semantic_js::js::SymbolId;
 use std::collections::HashSet;
@@ -2666,6 +2668,13 @@ impl Heap {
     }
   }
 
+  pub(crate) fn get_function_job_realm(&self, func: GcObject) -> Option<RealmId> {
+    match self.get_heap_object(func.0) {
+      Ok(HeapObject::Function(f)) => f.job_realm,
+      _ => None,
+    }
+  }
+
   pub(crate) fn get_function_closure_env(&self, func: GcObject) -> Result<Option<GcEnv>, VmError> {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => Ok(f.closure_env),
@@ -2705,6 +2714,16 @@ impl Heap {
     match self.get_heap_object_mut(func.0)? {
       HeapObject::Function(f) => {
         f.realm = Some(realm);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_job_realm(&mut self, func: GcObject, realm: RealmId) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.job_realm = Some(realm);
         Ok(())
       }
       _ => Err(VmError::InvalidHandle),
@@ -3128,7 +3147,7 @@ impl<'a> Scope<'a> {
       root_count += 1;
     }
     if let Some(cap) = &reaction.capability {
-      roots[root_count] = Value::Object(cap.promise);
+      roots[root_count] = cap.promise;
       root_count += 1;
       roots[root_count] = cap.resolve;
       root_count += 1;
@@ -3159,7 +3178,7 @@ impl<'a> Scope<'a> {
       root_count += 1;
     }
     if let Some(cap) = &reaction.capability {
-      roots[root_count] = Value::Object(cap.promise);
+      roots[root_count] = cap.promise;
       root_count += 1;
       roots[root_count] = cap.resolve;
       root_count += 1;

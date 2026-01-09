@@ -161,7 +161,7 @@ impl GraphLoadingState {
     )?;
 
     // Root the capability values while creating persistent roots: `Heap::add_root` can trigger GC.
-    let values = [Value::Object(cap.promise), cap.resolve, cap.reject];
+    let values = [cap.promise, cap.resolve, cap.reject];
     scope.push_roots(&values)?;
 
     let mut roots: Vec<RootId> = Vec::new();
@@ -195,7 +195,7 @@ impl GraphLoadingState {
         visited: Vec::new(),
         host_defined,
       }))),
-      Value::Object(cap.promise),
+      cap.promise,
     ))
   }
 
