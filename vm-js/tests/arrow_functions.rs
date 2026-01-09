@@ -42,6 +42,39 @@ fn arrow_function_top_level_this_strict_is_undefined() {
 }
 
 #[test]
+fn arrow_function_captures_lexical_new_target_in_constructor() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        function C() {
+          this.ok = (() => new.target === C)();
+        }
+        var o = new C();
+        o.ok === true
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn arrow_function_captures_lexical_new_target_in_plain_call() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        function f() {
+          return (() => new.target)();
+        }
+        f() === undefined
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
 fn arrow_function_is_not_constructable() {
   let mut rt = new_runtime();
   let value = rt

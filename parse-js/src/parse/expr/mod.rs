@@ -335,33 +335,45 @@ impl<'a> Parser<'a> {
         yield_expr_allowed: false,
       });
       let simple_params = Parser::is_simple_parameter_list(&parameters);
-      let body = match p.peek().typ {
-        TT::BraceOpen => {
-          let contains_use_strict =
-            p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
-          if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
-            return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
-              "`use strict` directive not allowed with a non-simple parameter list",
-            )));
-          }
+      // `new.target` is syntactically allowed in arrow functions (and is lexically
+      // resolved at runtime). Track this similarly to non-arrow function bodies so
+      // `new.target` parses correctly even when the arrow function is parsed as a
+      // standalone expression (e.g. when `vm-js` reparses an arrow function snippet).
+      let prev_new_target_allowed = p.new_target_allowed;
+      p.new_target_allowed += 1;
+      let body = (|| -> SyntaxResult<_> {
+        match p.peek().typ {
+          TT::BraceOpen => {
+            let contains_use_strict =
+              p.is_strict_ecmascript() && p.has_use_strict_directive_in_block_body()?;
+            if p.is_strict_ecmascript() && contains_use_strict && !simple_params {
+              return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+                "`use strict` directive not allowed with a non-simple parameter list",
+              )));
+            }
 
-          let prev_strict_mode = p.strict_mode;
-          if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
-            p.strict_mode += 1;
+            let prev_strict_mode = p.strict_mode;
+            if p.is_strict_ecmascript() && contains_use_strict && !p.is_strict_mode() {
+              p.strict_mode += 1;
+            }
+            let res = (|| {
+              p.validate_formal_parameters(None, &parameters, simple_params, true)?;
+              p.parse_func_block_body(fn_body_ctx)
+            })();
+            p.strict_mode = prev_strict_mode;
+            Ok(res?.into())
           }
-          let res = (|| {
+          _ => {
             p.validate_formal_parameters(None, &parameters, simple_params, true)?;
-            p.parse_func_block_body(fn_body_ctx)
-          })();
-          p.strict_mode = prev_strict_mode;
-          res?.into()
+            Ok(
+              p.expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
+                .into(),
+            )
+          }
         }
-        _ => {
-          p.validate_formal_parameters(None, &parameters, simple_params, true)?;
-          p.expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
-            .into()
-        }
-      };
+      })();
+      p.new_target_allowed = prev_new_target_allowed;
+      let body = body?;
       if terminators.contains(&TT::Colon) && p.peek().typ != TT::Colon {
         return Err(
           p.peek()
