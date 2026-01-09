@@ -99,6 +99,7 @@ pub(crate) struct JsFunction {
   // Forward-compat internal slots (currently unused but spec-aligned).
   pub(crate) bound_target: Option<GcObject>,
   pub(crate) bound_this: Option<Value>,
+  pub(crate) bound_new_target: Option<Value>,
   pub(crate) bound_args: Option<Box<[Value]>>,
   /// Per-function captured state for native/builtin functions.
   ///
@@ -146,6 +147,7 @@ impl JsFunction {
       data: FunctionData::None,
       bound_target: None,
       bound_this: None,
+      bound_new_target: None,
       bound_args: None,
       native_slots,
       realm: None,
@@ -177,6 +179,7 @@ impl JsFunction {
       data: FunctionData::None,
       bound_target: None,
       bound_this: None,
+      bound_new_target: None,
       bound_args: None,
       native_slots: None,
       realm: None,
@@ -196,6 +199,7 @@ impl JsFunction {
       data: FunctionData::None,
       bound_target: None,
       bound_this: None,
+      bound_new_target: None,
       bound_args: None,
       native_slots: None,
       realm: None,
@@ -256,6 +260,9 @@ impl Trace for JsFunction {
     }
     if let Some(bound_this) = self.bound_this {
       tracer.trace_value(bound_this);
+    }
+    if let Some(bound_new_target) = self.bound_new_target {
+      tracer.trace_value(bound_new_target);
     }
     if let Some(bound_args) = &self.bound_args {
       for value in bound_args.iter().copied() {

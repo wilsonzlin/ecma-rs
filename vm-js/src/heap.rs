@@ -2544,6 +2544,20 @@ impl Heap {
     }
   }
 
+  pub(crate) fn set_function_bound_new_target(
+    &mut self,
+    func: GcObject,
+    bound_new_target: Value,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.bound_new_target = Some(bound_new_target);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
   pub(crate) fn set_function_realm(&mut self, func: GcObject, realm: GcObject) -> Result<(), VmError> {
     match self.get_heap_object_mut(func.0)? {
       HeapObject::Function(f) => {

@@ -520,6 +520,7 @@ impl JsRuntime {
       env: &mut self.env,
       strict,
       this: global_this,
+      new_target: Value::Undefined,
     };
 
     evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
@@ -589,6 +590,7 @@ struct Evaluator<'a> {
   env: &'a mut RuntimeEnv,
   strict: bool,
   this: Value,
+  new_target: Value,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1901,6 +1903,7 @@ impl<'a> Evaluator<'a> {
       Expr::LitObj(node) => self.eval_lit_obj(scope, &node.stx),
       Expr::LitTemplate(node) => self.eval_lit_template(scope, &node.stx),
       Expr::This(_) => Ok(self.this),
+      Expr::NewTarget(_) => Ok(self.new_target),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
       Expr::Call(node) => self.eval_call(scope, &node.stx),
       Expr::Func(node) => self.eval_func_expr(scope, node),
@@ -2138,6 +2141,9 @@ impl<'a> Evaluator<'a> {
       .set_function_realm(func_obj, self.env.global_object())?;
     if func.arrow {
       scope.heap_mut().set_function_bound_this(func_obj, self.this)?;
+      scope
+        .heap_mut()
+        .set_function_bound_new_target(func_obj, self.new_target)?;
     }
     Ok(Value::Object(func_obj))
   }
@@ -2174,8 +2180,9 @@ impl<'a> Evaluator<'a> {
         .vm
         .register_ecma_function(self.env.source(), span_start, span_end, EcmaFunctionKind::Expr)?;
     let mut alloc_scope = scope.reborrow();
-    // Root the captured `this` binding across allocation in case it triggers GC.
-    alloc_scope.push_root(self.this)?;
+    // Root captured lexical bindings across allocation in case it triggers GC.
+    let roots = [self.this, self.new_target];
+    alloc_scope.push_roots(&roots)?;
     let name_s = alloc_scope.alloc_string("")?;
     alloc_scope.push_root(Value::String(name_s))?;
 
@@ -2201,6 +2208,9 @@ impl<'a> Evaluator<'a> {
     alloc_scope
       .heap_mut()
       .set_function_bound_this(func_obj, self.this)?;
+    alloc_scope
+      .heap_mut()
+      .set_function_bound_new_target(func_obj, self.new_target)?;
     Ok(Value::Object(func_obj))
   }
 
@@ -2463,6 +2473,9 @@ impl<'a> Evaluator<'a> {
                 member_scope
                   .heap_mut()
                   .set_function_bound_this(func_obj, self.this)?;
+                member_scope
+                  .heap_mut()
+                  .set_function_bound_new_target(func_obj, self.new_target)?;
               }
               member_scope.push_root(Value::Object(func_obj))?;
 
@@ -2537,6 +2550,9 @@ impl<'a> Evaluator<'a> {
                 member_scope
                   .heap_mut()
                   .set_function_bound_this(func_obj, self.this)?;
+                member_scope
+                  .heap_mut()
+                  .set_function_bound_new_target(func_obj, self.new_target)?;
               }
               member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("get"))?;
@@ -2611,6 +2627,9 @@ impl<'a> Evaluator<'a> {
                 member_scope
                   .heap_mut()
                   .set_function_bound_this(func_obj, self.this)?;
+                member_scope
+                  .heap_mut()
+                  .set_function_bound_new_target(func_obj, self.new_target)?;
               }
               member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("set"))?;
@@ -3496,6 +3515,7 @@ pub(crate) fn run_ecma_function(
   prefix_len: u32,
   strict: bool,
   this: Value,
+  new_target: Value,
   func: &Node<Func>,
   args: &[Value],
 ) -> Result<Value, VmError> {
@@ -3508,7 +3528,13 @@ pub(crate) fn run_ecma_function(
     return Err(VmError::Unimplemented("function without body"));
   };
 
-  let mut evaluator = Evaluator { vm, env, strict, this };
+  let mut evaluator = Evaluator {
+    vm,
+    env,
+    strict,
+    this,
+    new_target,
+  };
 
   // Bind parameters.
   for (idx, param) in func.stx.parameters.iter().enumerate() {
@@ -3601,7 +3627,13 @@ pub(crate) fn eval_expr(
   scope: &mut Scope<'_>,
   expr: &Node<Expr>,
 ) -> Result<Value, VmError> {
-  let mut evaluator = Evaluator { vm, env, strict, this };
+  let mut evaluator = Evaluator {
+    vm,
+    env,
+    strict,
+    this,
+    new_target: Value::Undefined,
+  };
   evaluator.eval_expr(scope, expr)
 }
 

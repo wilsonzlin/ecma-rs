@@ -124,3 +124,28 @@ fn labelled_continue_targets_outer_loop() {
     .unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
+
+#[test]
+fn call_expression_invokes_user_function() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"function f(a){ return a; } f(5)"#).unwrap();
+  assert_eq!(value, Value::Number(5.0));
+}
+
+#[test]
+fn new_target_is_undefined_for_plain_call() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"function C(){ return new.target; } C()"#)
+    .unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn new_target_is_constructor_for_new_expression() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"function C(){ return new.target; } var x = new C(); x === C"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}

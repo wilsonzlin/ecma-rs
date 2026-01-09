@@ -1246,9 +1246,16 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    let (this_mode, is_strict, realm, outer, bound_this) = {
+    let (this_mode, is_strict, realm, outer, bound_this, bound_new_target) = {
       let f = scope.heap().get_function(callee)?;
-      (f.this_mode, f.is_strict, f.realm, f.closure_env, f.bound_this)
+      (
+        f.this_mode,
+        f.is_strict,
+        f.realm,
+        f.closure_env,
+        f.bound_this,
+        f.bound_new_target,
+      )
     };
 
     let this = match this_mode {
@@ -1265,6 +1272,13 @@ impl Vm {
         },
         other => other,
       },
+    };
+
+    let new_target = match this_mode {
+      ThisMode::Lexical => bound_new_target.ok_or(VmError::Unimplemented(
+        "arrow function missing captured lexical new.target",
+      ))?,
+      ThisMode::Strict | ThisMode::Global => Value::Undefined,
     };
 
     let global_object =
@@ -1288,6 +1302,7 @@ impl Vm {
       code_meta.prefix_len,
       is_strict,
       this,
+      new_target,
       func_ast.as_ref(),
       args,
     );
@@ -1357,6 +1372,7 @@ impl Vm {
       code_meta.prefix_len,
       is_strict,
       Value::Object(this_obj),
+      new_target,
       func_ast.as_ref(),
       args,
     );
