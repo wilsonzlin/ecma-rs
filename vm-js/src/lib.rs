@@ -149,6 +149,7 @@ pub use crate::value::Value;
 pub use crate::vm::Budget;
 pub use crate::vm::BudgetGuard;
 pub use crate::vm::ExecutionContextGuard;
+pub use crate::vm::VmFrameGuard;
 pub use crate::vm::NativeCall;
 pub use crate::vm::NativeConstruct;
 pub use crate::vm::Vm;

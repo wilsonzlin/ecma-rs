@@ -44,9 +44,11 @@ fn recursive(
 
 #[test]
 fn vm_stack_overflow_on_deep_manual_frames() -> Result<(), VmError> {
+  let max_stack_depth = 4;
+
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut opts = VmOptions::default();
-  opts.max_stack_depth = 4;
+  opts.max_stack_depth = max_stack_depth;
   let mut vm = Vm::new(opts);
 
   let mut scope = heap.scope();
@@ -63,8 +65,14 @@ fn vm_stack_overflow_on_deep_manual_frames() -> Result<(), VmError> {
     panic!("expected termination, got: {err:?}");
   };
   assert_eq!(term.reason, TerminationReason::StackOverflow);
+  assert_eq!(term.stack.len(), max_stack_depth);
+  for frame in &term.stack {
+    assert_eq!(frame.source.as_ref(), "<native>");
+    assert_eq!(frame.function.as_deref(), Some("recurse"));
+    assert_eq!(frame.line, 0);
+    assert_eq!(frame.col, 0);
+  }
 
   assert!(vm.capture_stack().is_empty());
   Ok(())
 }
-

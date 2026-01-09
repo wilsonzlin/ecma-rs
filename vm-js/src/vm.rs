@@ -195,6 +195,53 @@ impl Drop for ExecutionContextGuard<'_> {
   }
 }
 
+/// RAII helper that pushes a [`StackFrame`] on creation and pops it on drop.
+///
+/// This is intended to prevent mismatched `push_frame` / `pop_frame` sequences when running nested
+/// evaluator/host work, and ensures VM stack frames are popped even when unwinding through `?`.
+#[derive(Debug)]
+pub struct VmFrameGuard<'vm> {
+  vm: &'vm mut Vm,
+  expected_len: usize,
+}
+
+impl<'vm> VmFrameGuard<'vm> {
+  fn new(vm: &'vm mut Vm, frame: StackFrame) -> Result<Self, VmError> {
+    vm.push_frame(frame)?;
+    let expected_len = vm.stack.len();
+    Ok(Self { vm, expected_len })
+  }
+}
+
+impl ops::Deref for VmFrameGuard<'_> {
+  type Target = Vm;
+
+  fn deref(&self) -> &Self::Target {
+    &*self.vm
+  }
+}
+
+impl ops::DerefMut for VmFrameGuard<'_> {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut *self.vm
+  }
+}
+
+impl Drop for VmFrameGuard<'_> {
+  fn drop(&mut self) {
+    debug_assert_eq!(
+      self.vm.stack.len(),
+      self.expected_len,
+      "VmFrameGuard dropped after stack length changed (did you manually pop?)"
+    );
+    debug_assert!(
+      !self.vm.stack.is_empty(),
+      "VmFrameGuard dropped with empty VM stack"
+    );
+    self.vm.pop_frame();
+  }
+}
+
 impl Vm {
   pub fn new(options: VmOptions) -> Self {
     let (interrupt, interrupt_handle) = match &options.interrupt_flag {
@@ -306,6 +353,11 @@ impl Vm {
       .copied()
       .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
     construct(self, scope, args, new_target)
+  }
+
+  /// Pushes a stack frame and returns an RAII guard that will pop it on drop.
+  pub fn enter_frame(&mut self, frame: StackFrame) -> Result<VmFrameGuard<'_>, VmError> {
+    VmFrameGuard::new(self, frame)
   }
 
   pub fn push_frame(&mut self, frame: StackFrame) -> Result<(), VmError> {
@@ -456,14 +508,13 @@ impl Vm {
       col: 0,
     };
 
-    self.push_frame(frame)?;
-    let _guard = FrameGuard::new(self);
+    let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
-    self.tick()?;
+    vm.tick()?;
 
     match call_handler {
-      CallHandler::Native(call_id) => self.dispatch_native_call(call_id, &mut scope, this, args),
-      CallHandler::EcmaScript => self.call_ecma_function(&mut scope, callee_obj, this, args),
+      CallHandler::Native(call_id) => vm.dispatch_native_call(call_id, &mut scope, this, args),
+      CallHandler::EcmaScript => vm.call_ecma_function(&mut scope, callee_obj, this, args),
     }
   }
 
@@ -554,18 +605,17 @@ impl Vm {
       col: 0,
     };
 
-    self.push_frame(frame)?;
-    let _guard = FrameGuard::new(self);
+    let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated construction that may not pass through the
     // evaluator.
-    self.tick()?;
+    vm.tick()?;
 
     match construct_handler {
       ConstructHandler::Native(construct_id) => {
-        self.dispatch_native_construct(construct_id, &mut scope, args, new_target)
+        vm.dispatch_native_construct(construct_id, &mut scope, args, new_target)
       }
       ConstructHandler::EcmaScript => {
-        self.construct_ecma_function(&mut scope, callee_obj, args, new_target)
+        vm.construct_ecma_function(&mut scope, callee_obj, args, new_target)
       }
     }
   }
@@ -588,21 +638,5 @@ impl Vm {
     _new_target: Value,
   ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("ecma function construct"))
-  }
-}
-
-struct FrameGuard {
-  vm: *mut Vm,
-}
-
-impl FrameGuard {
-  fn new(vm: &mut Vm) -> Self {
-    Self { vm: vm as *mut Vm }
-  }
-}
-
-impl Drop for FrameGuard {
-  fn drop(&mut self) {
-    unsafe { (&mut *self.vm).pop_frame() };
   }
 }
