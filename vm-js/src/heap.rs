@@ -764,6 +764,17 @@ impl Heap {
     Ok(true)
   }
 
+  fn property_key_is_length(&self, key: &PropertyKey) -> bool {
+    const LENGTH_UNITS: [u16; 6] = [108, 101, 110, 103, 116, 104]; // "length"
+    let PropertyKey::String(s) = key else {
+      return false;
+    };
+    let Ok(js) = self.get_string(*s) else {
+      return false;
+    };
+    js.as_code_units() == LENGTH_UNITS
+  }
+
   /// Convenience: returns the value of an own data property, if present.
   pub fn object_get_own_data_property_value(
     &self,
@@ -786,6 +797,12 @@ impl Heap {
     key: &PropertyKey,
     value: Value,
   ) -> Result<(), VmError> {
+    let key_is_length = self.property_key_is_length(key);
+    let key_array_index = match key {
+      PropertyKey::String(s) => self.string_to_array_index(*s),
+      PropertyKey::Symbol(_) => None,
+    };
+
     // Two-phase borrow to avoid holding `&mut ObjectBase` while calling back into `&self` for
     // string comparisons in `property_key_eq`.
     let idx = {
@@ -801,6 +818,26 @@ impl Heap {
     };
 
     let obj = self.get_object_base_mut(obj)?;
+
+    // Array exotic `length` handling.
+    if key_is_length {
+      if let Some(current_len) = obj.array_length() {
+        let Value::Number(n) = value else {
+          return Err(VmError::Unimplemented(
+            "setting array length to a non-number value is not implemented",
+          ));
+        };
+        let new_len = array_length_from_f64(n)?;
+        if new_len < current_len {
+          return Err(VmError::Unimplemented(
+            "array length truncation is not implemented",
+          ));
+        }
+        obj.set_array_length(new_len);
+        return Ok(());
+      }
+    }
+
     let prop = obj
       .properties
       .get_mut(idx)
@@ -808,10 +845,21 @@ impl Heap {
     match &mut prop.desc.kind {
       PropertyKind::Data { value: slot, .. } => {
         *slot = value;
-        Ok(())
       }
-      PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+      PropertyKind::Accessor { .. } => return Err(VmError::PropertyNotData),
     }
+
+    // Array exotic index semantics: writing an array index extends `length`.
+    if let Some(index) = key_array_index {
+      if let Some(current_len) = obj.array_length() {
+        let new_len = index.wrapping_add(1);
+        if new_len > current_len {
+          obj.set_array_length(new_len);
+        }
+      }
+    }
+
+    Ok(())
   }
 
   pub fn define_own_property(
@@ -1517,6 +1565,12 @@ impl Heap {
     key: PropertyKey,
     desc: PropertyDescriptor,
   ) -> Result<(), VmError> {
+    let key_is_length = self.property_key_is_length(&key);
+    let key_array_index = match key {
+      PropertyKey::String(s) => self.string_to_array_index(s),
+      PropertyKey::Symbol(_) => None,
+    };
+
     let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
 
     #[derive(Clone, Copy)]
@@ -1529,7 +1583,7 @@ impl Heap {
       },
     }
 
-    let (target_kind, property_count, old_bytes, existing_idx) = {
+    let (target_kind, property_count, old_bytes, existing_idx, array_len) = {
       let slot = &self.slots[idx];
       let Some(obj) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
@@ -1546,6 +1600,7 @@ impl Heap {
             obj.base.properties.len(),
             slot.bytes,
             existing_idx,
+            obj.array_length(),
           )
         }
         HeapObject::Function(func) => {
@@ -1560,6 +1615,7 @@ impl Heap {
             func.base.properties.len(),
             slot.bytes,
             existing_idx,
+            None,
           )
         }
         HeapObject::Promise(p) => {
@@ -1577,11 +1633,45 @@ impl Heap {
             p.object.base.properties.len(),
             slot.bytes,
             existing_idx,
+            None,
           )
         }
         _ => return Err(VmError::InvalidHandle),
       }
     };
+
+    // Array exotic `length` handling.
+    //
+    // This is a deliberately-minimal subset:
+    // - supports setting `length` to the current value or larger values;
+    // - rejects truncation.
+    if key_is_length {
+      if let Some(current_len) = array_len {
+        let new_len = match desc.kind {
+          PropertyKind::Data {
+            value: Value::Number(n),
+            ..
+          } => array_length_from_f64(n)?,
+          _ => {
+            return Err(VmError::Unimplemented(
+              "defining array length with non-number or accessor descriptor",
+            ));
+          }
+        };
+
+        if new_len < current_len {
+          return Err(VmError::Unimplemented(
+            "array length truncation is not implemented",
+          ));
+        }
+
+        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+          return Err(VmError::InvalidHandle);
+        };
+        obj.set_array_length(new_len);
+        return Ok(());
+      }
+    }
 
     match existing_idx {
       Some(existing_idx) => {
@@ -1592,7 +1682,6 @@ impl Heap {
           Some(HeapObject::Promise(p)) => p.object.base.properties[existing_idx].desc = desc,
           _ => return Err(VmError::InvalidHandle),
         }
-        Ok(())
       }
       None => {
         let new_property_count = property_count
@@ -1651,9 +1740,25 @@ impl Heap {
 
         #[cfg(debug_assertions)]
         self.debug_assert_used_bytes_is_correct();
-        Ok(())
+      }
+    };
+
+    // Array exotic index semantics: writing an array index extends `length`.
+    if let Some(index) = key_array_index {
+      if array_len.is_some() {
+        let new_len = index.wrapping_add(1);
+        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+          return Err(VmError::InvalidHandle);
+        };
+        if let Some(current_len) = obj.array_length() {
+          if new_len > current_len {
+            obj.set_array_length(new_len);
+          }
+        }
       }
     }
+
+    Ok(())
   }
 
   fn get_heap_object(&self, id: HeapId) -> Result<&HeapObject, VmError> {
@@ -1962,29 +2067,56 @@ impl<'a> Scope<'a> {
     self.alloc_object_with_properties(prototype, &[])
   }
 
-  /// Allocates a new JavaScript Array object on the heap.
+  /// Allocates a JavaScript array exotic object on the heap.
   ///
-  /// This is a minimal stub for WebIDL conversions. The returned object is an ordinary object with
-  /// an own `length` data property.
+  /// The array's `length` internal slot is initialised to `len`.
+  ///
+  /// Note: `[[Prototype]]` is initialised to `None` and should be set by the caller.
   pub fn alloc_array(&mut self, len: usize) -> Result<GcObject, VmError> {
-    // Root the array object while creating the `length` property so that intermediate allocations
-    // (creating the key string, growing the property table) cannot collect it.
-    let arr = self.alloc_object()?;
-    let mut scope = self.reborrow();
-    scope.push_root(Value::Object(arr));
+    let len_u32 =
+      u32::try_from(len).map_err(|_| VmError::Unimplemented("array length exceeds u32"))?;
 
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
     let length_key = scope.alloc_string("length")?;
-    let desc = PropertyDescriptor {
-      enumerable: false,
-      configurable: false,
-      kind: PropertyKind::Data {
-        value: Value::Number(len as f64),
-        writable: true,
+    scope.push_root(Value::String(length_key));
+
+    // Build the initial property table containing the (non-enumerable) `length` data property.
+    //
+    // This gives arrays the expected `Reflect.ownKeys`/`[[OwnPropertyKeys]]`-style key order:
+    // indices first, then `length`.
+    let mut buf: Vec<PropertyEntry> = Vec::new();
+    buf.try_reserve_exact(1).map_err(|_| VmError::OutOfMemory)?;
+    buf.push(PropertyEntry {
+      key: PropertyKey::from_string(length_key),
+      desc: PropertyDescriptor {
+        enumerable: false,
+        configurable: false,
+        kind: PropertyKind::Data {
+          value: Value::Number(len_u32 as f64),
+          writable: true,
+        },
+      },
+    });
+
+    let properties = buf.into_boxed_slice();
+    let new_bytes = JsObject::heap_size_bytes_for_property_count(properties.len());
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = JsObject {
+      base: ObjectBase {
+        prototype: None,
+        extensible: true,
+        properties,
+        kind: ObjectKind::Array(ArrayObject { length: len_u32 }),
       },
     };
-    scope.define_property(arr, PropertyKey::from_string(length_key), desc)?;
-    Ok(arr)
+    Ok(GcObject(scope.heap.alloc_unchecked(
+      HeapObject::Object(obj),
+      new_bytes,
+    )))
   }
+
   /// Allocates a new pending Promise object on the heap.
   pub fn alloc_promise(&mut self) -> Result<GcObject, VmError> {
     self.alloc_promise_with_prototype(None)
@@ -2133,7 +2265,11 @@ impl<'a> Scope<'a> {
     Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)))
   }
 
-  pub(crate) fn env_create_mutable_binding(&mut self, env: GcEnv, name: &str) -> Result<(), VmError> {
+  pub(crate) fn env_create_mutable_binding(
+    &mut self,
+    env: GcEnv,
+    name: &str,
+  ) -> Result<(), VmError> {
     if self.heap().env_has_binding(env, name)? {
       return Err(VmError::Unimplemented("duplicate binding"));
     }
@@ -2155,7 +2291,11 @@ impl<'a> Scope<'a> {
     )
   }
 
-  pub(crate) fn env_create_immutable_binding(&mut self, env: GcEnv, name: &str) -> Result<(), VmError> {
+  pub(crate) fn env_create_immutable_binding(
+    &mut self,
+    env: GcEnv,
+    name: &str,
+  ) -> Result<(), VmError> {
     if self.heap().env_has_binding(env, name)? {
       return Err(VmError::Unimplemented("duplicate binding"));
     }
@@ -2287,6 +2427,7 @@ pub(crate) struct ObjectBase {
   prototype: Option<GcObject>,
   extensible: bool,
   properties: Box<[PropertyEntry]>,
+  kind: ObjectKind,
 }
 
 impl ObjectBase {
@@ -2295,6 +2436,7 @@ impl ObjectBase {
       prototype,
       extensible: true,
       properties: Box::default(),
+      kind: ObjectKind::Ordinary,
     }
   }
 
@@ -2316,6 +2458,7 @@ impl ObjectBase {
       prototype,
       extensible: true,
       properties: buf.into_boxed_slice(),
+      kind: ObjectKind::Ordinary,
     })
   }
 
@@ -2327,6 +2470,31 @@ impl ObjectBase {
     count
       .checked_mul(mem::size_of::<PropertyEntry>())
       .unwrap_or(usize::MAX)
+  }
+
+  fn array_length(&self) -> Option<u32> {
+    match &self.kind {
+      ObjectKind::Array(a) => Some(a.length),
+      ObjectKind::Ordinary => None,
+    }
+  }
+
+  fn set_array_length(&mut self, new_len: u32) {
+    let ObjectKind::Array(a) = &mut self.kind else {
+      return;
+    };
+    a.length = new_len;
+
+    // Arrays always carry an own `length` data property at index 0 in their property table.
+    if let Some(entry) = self.properties.get_mut(0) {
+      if let PropertyKind::Data { value, .. } = &mut entry.desc.kind {
+        *value = Value::Number(new_len as f64);
+      } else {
+        debug_assert!(false, "array length property is not a data descriptor");
+      }
+    } else {
+      debug_assert!(false, "array missing length property entry");
+    }
   }
 }
 
@@ -2367,6 +2535,14 @@ impl JsObject {
     mem::size_of::<Self>()
       .checked_add(props_bytes)
       .unwrap_or(usize::MAX)
+  }
+
+  fn array_length(&self) -> Option<u32> {
+    self.base.array_length()
+  }
+
+  fn set_array_length(&mut self, new_len: u32) {
+    self.base.set_array_length(new_len);
   }
 }
 
@@ -2455,6 +2631,17 @@ impl Trace for JsPromise {
   }
 }
 
+#[derive(Debug)]
+enum ObjectKind {
+  Ordinary,
+  Array(ArrayObject),
+}
+
+#[derive(Debug)]
+struct ArrayObject {
+  length: u32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PropertyEntry {
   key: PropertyKey,
@@ -2527,4 +2714,24 @@ impl<'a> Tracer<'a> {
     }
     Some(idx)
   }
+}
+
+fn array_length_from_f64(n: f64) -> Result<u32, VmError> {
+  if !n.is_finite() {
+    return Err(VmError::Unimplemented(
+      "array length must be a finite number",
+    ));
+  }
+  if n < 0.0 {
+    return Err(VmError::Unimplemented("array length must be >= 0"));
+  }
+  if n.fract() != 0.0 {
+    return Err(VmError::Unimplemented(
+      "array length must be an integer",
+    ));
+  }
+  if n > u32::MAX as f64 {
+    return Err(VmError::Unimplemented("array length exceeds u32"));
+  }
+  Ok(n as u32)
 }
