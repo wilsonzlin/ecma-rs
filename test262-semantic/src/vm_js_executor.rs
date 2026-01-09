@@ -41,7 +41,16 @@ impl Executor for VmJsExecutor {
       ..VmOptions::default()
     });
     let heap = Heap::new(self.heap_limits);
-    let mut runtime = vm_js::JsRuntime::new(vm, heap);
+    let mut runtime = match vm_js::JsRuntime::new(vm, heap) {
+      Ok(runtime) => runtime,
+      Err(err) => {
+        return Err(ExecError::Js(JsError::new(
+          ExecPhase::Runtime,
+          None,
+          err.to_string(),
+        )));
+      }
+    };
 
     match runtime.exec_script(source) {
       Ok(_) => Ok(()),
@@ -187,4 +196,3 @@ fn format_value(heap: &Heap, value: Value) -> String {
     Value::Object(_) => "[object Object]".to_string(),
   }
 }
-
