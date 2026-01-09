@@ -170,6 +170,16 @@ fn to_string_and_to_number_cover_webidl_primitives() -> Result<(), VmError> {
     let mut scope = heap.scope();
     let s = scope.alloc_string("  123  ")?;
     assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
+    // ECMA-262 TrimString uses a broader whitespace set than Rust's `str::trim`.
+    let s = scope.alloc_string("\u{00A0}123\u{00A0}")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
+    let s = scope.alloc_string("\u{FEFF}123\u{FEFF}")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
+    let s = scope.alloc_string("\u{2028}123\u{2029}")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
+    // Zero-width space is *not* part of the ECMAScript whitespace set.
+    let s = scope.alloc_string("\u{200B}123")?;
+    assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
     let s = scope.alloc_string("")?;
     assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 0.0);
     let s = scope.alloc_string("   ")?;
