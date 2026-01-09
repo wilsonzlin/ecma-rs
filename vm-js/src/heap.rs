@@ -2412,7 +2412,7 @@ impl Heap {
 
   fn debug_value_is_valid_or_primitive(&self, value: Value) -> bool {
     match value {
-      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => true,
+      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) | Value::BigInt(_) => true,
       Value::String(s) => self.is_valid_string(s),
       Value::Symbol(s) => self.is_valid_symbol(s),
       Value::Object(o) => self.is_valid_object(o),
@@ -3564,7 +3564,7 @@ impl<'a> Tracer<'a> {
 
   pub(crate) fn trace_value(&mut self, value: Value) {
     match value {
-      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => {}
+      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) | Value::BigInt(_) => {}
       Value::String(s) => self.trace_heap_id(s.0),
       Value::Symbol(s) => self.trace_heap_id(s.0),
       Value::Object(o) => self.trace_heap_id(o.0),

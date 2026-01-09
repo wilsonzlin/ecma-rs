@@ -166,14 +166,21 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     )?;
     assert_eq!(out, Value::Object(arg_obj));
 
-    // `%Object%` called with a primitive is currently unimplemented (boxing).
-    let err = vm.call(
+    // `%Object%` called with a primitive returns a boxed wrapper object.
+    let out = vm.call(
       &mut scope,
       Value::Object(intr.object_constructor()),
       Value::Undefined,
       &[Value::Number(1.0)],
+    )?;
+    let Value::Object(boxed) = out else {
+      panic!("Object(1) should return an object wrapper");
+    };
+    scope.push_root(Value::Object(boxed))?;
+    assert_eq!(
+      scope.heap().object_prototype(boxed)?,
+      Some(intr.number_prototype())
     );
-    assert!(matches!(err, Err(VmError::Unimplemented("ToObject boxing"))));
 
     // `%Array%` call
     let arr_value = vm.call(

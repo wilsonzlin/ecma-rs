@@ -50,11 +50,10 @@ fn computed_member_get_set() {
 #[test]
 fn computed_member_object_key_get_set() {
   let mut rt = new_runtime();
-  // `ToPropertyKey({})` requires `ToPrimitive` (built-ins) which is not implemented yet.
-  let err = rt
+  let value = rt
     .exec_script(r#"var o = {}; var k = {}; o[k] = 4; o[k]"#)
-    .unwrap_err();
-  assert!(matches!(err, VmError::Unimplemented(_)));
+    .unwrap();
+  assert_eq!(value, Value::Number(4.0));
 }
 
 #[test]
@@ -137,5 +136,66 @@ fn call_expr_passes_arguments() {
   drop(scope);
 
   let value = rt.exec_script(r#"argc(1, 2, 3)"#).unwrap();
+  assert_eq!(value, Value::Number(3.0));
+}
+
+#[test]
+fn function_expression_is_callable() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var f = function (x) { return x + 1; }; f(1)"#)
+    .unwrap();
+  assert_eq!(value, Value::Number(2.0));
+}
+
+#[test]
+fn function_objects_inherit_function_prototype() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var f = function () {}; typeof f.call === "function""#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn new_operator_constructs_ecma_function() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"function Foo(x) { this.x = x; } var o = new Foo(3); o.x"#)
+    .unwrap();
+  assert_eq!(value, Value::Number(3.0));
+}
+
+#[test]
+fn direct_eval_executes_string_source() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"eval("1 + 2")"#).unwrap();
+  assert_eq!(value, Value::Number(3.0));
+
+  let value = rt.exec_script(r#"eval(5)"#).unwrap();
+  assert_eq!(value, Value::Number(5.0));
+}
+
+#[test]
+fn template_literal_with_substitution_concatenates() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"`a${1}b`"#).unwrap();
+  let Value::String(s) = value else {
+    panic!("expected string from template literal");
+  };
+  assert_eq!(rt.heap().get_string(s).unwrap().to_utf8_lossy(), "a1b");
+}
+
+#[test]
+fn assignment_addition_works_for_strings_and_numbers() {
+  let mut rt = new_runtime();
+
+  let value = rt.exec_script(r#"var x = "a"; x += "b"; x"#).unwrap();
+  let Value::String(s) = value else {
+    panic!("expected string from x += \"b\"");
+  };
+  assert_eq!(rt.heap().get_string(s).unwrap().to_utf8_lossy(), "ab");
+
+  let value = rt.exec_script(r#"var n = 1; n += 2; n"#).unwrap();
   assert_eq!(value, Value::Number(3.0));
 }

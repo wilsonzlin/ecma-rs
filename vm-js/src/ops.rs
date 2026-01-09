@@ -28,6 +28,9 @@ pub fn to_number(heap: &mut Heap, value: Value) -> Result<f64, VmError> {
     Value::Null => Ok(0.0),
     Value::Bool(b) => Ok(if b { 1.0 } else { 0.0 }),
     Value::Number(n) => Ok(n),
+    Value::BigInt(_) => Err(VmError::TypeError(
+      "Cannot convert a BigInt value to a number",
+    )),
     Value::String(s) => string_to_number(heap, s),
     Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a number")),
     Value::Object(_) => {
@@ -55,6 +58,7 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
       (Null, Null) => return Ok(true),
       (Bool(x), Bool(y)) => return Ok(x == y),
       (Number(x), Number(y)) => return Ok(x == y),
+      (BigInt(x), BigInt(y)) => return Ok(x == y),
       (String(x), String(y)) => return Ok(scope.heap().get_string(x)? == scope.heap().get_string(y)?),
       (Symbol(x), Symbol(y)) => return Ok(x == y),
       (Object(x), Object(y)) => return Ok(x == y),
@@ -83,60 +87,17 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
       }
 
       // Object-to-primitive conversions.
-      (Object(_), String(_) | Number(_) | Symbol(_)) => {
+      (Object(_), String(_) | Number(_) | BigInt(_) | Symbol(_)) => {
         let prim = to_primitive(scope.heap_mut(), a)?;
         a = scope.push_root(prim)?;
       }
-      (String(_) | Number(_) | Symbol(_), Object(_)) => {
+      (String(_) | Number(_) | BigInt(_) | Symbol(_), Object(_)) => {
         let prim = to_primitive(scope.heap_mut(), b)?;
         b = scope.push_root(prim)?;
       }
 
       _ => return Ok(false),
     }
-  }
-}
-
-/// Implements the `+` operator (ECMAScript "Addition" / string concatenation).
-pub fn add_operator(heap: &mut Heap, a: Value, b: Value) -> Result<Value, VmError> {
-  // Root inputs and any intermediate heap values for the duration of the operation: `+` may
-  // allocate (string concatenation) and thus trigger GC.
-  let mut scope = heap.scope();
-  scope.push_root(a)?;
-  scope.push_root(b)?;
-
-  let a = to_primitive(scope.heap_mut(), a)?;
-  scope.push_root(a)?;
-  let b = to_primitive(scope.heap_mut(), b)?;
-  scope.push_root(b)?;
-
-  let should_concat = matches!(a, Value::String(_)) || matches!(b, Value::String(_));
-  if should_concat {
-    let a_str = scope.heap_mut().to_string(a)?;
-    scope.push_root(Value::String(a_str))?;
-    let b_str = scope.heap_mut().to_string(b)?;
-    scope.push_root(Value::String(b_str))?;
-
-    let a_units = scope.heap().get_string(a_str)?.as_code_units();
-    let b_units = scope.heap().get_string(b_str)?.as_code_units();
-
-    let total_len = a_units
-      .len()
-      .checked_add(b_units.len())
-      .ok_or(VmError::OutOfMemory)?;
-    let mut units: Vec<u16> = Vec::new();
-    units
-      .try_reserve_exact(total_len)
-      .map_err(|_| VmError::OutOfMemory)?;
-    units.extend_from_slice(a_units);
-    units.extend_from_slice(b_units);
-
-    let s = scope.alloc_string_from_u16_vec(units)?;
-    Ok(Value::String(s))
-  } else {
-    let an = to_number(scope.heap_mut(), a)?;
-    let bn = to_number(scope.heap_mut(), b)?;
-    Ok(Value::Number(an + bn))
   }
 }
 

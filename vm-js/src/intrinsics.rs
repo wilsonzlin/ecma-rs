@@ -34,12 +34,20 @@ pub struct Intrinsics {
   function_prototype: GcObject,
   array_prototype: GcObject,
   string_prototype: GcObject,
+  number_prototype: GcObject,
+  boolean_prototype: GcObject,
+  bigint_prototype: GcObject,
+  date_prototype: GcObject,
   symbol_prototype: GcObject,
   object_constructor: GcObject,
   function_constructor: GcObject,
   array_constructor: GcObject,
   string_constructor: GcObject,
+  number_constructor: GcObject,
+  boolean_constructor: GcObject,
+  date_constructor: GcObject,
   symbol_constructor: GcObject,
+  is_nan: GcObject,
   json: GcObject,
 
   error: GcObject,
@@ -320,6 +328,26 @@ impl Intrinsics {
       .heap_mut()
       .object_set_prototype(string_prototype, Some(object_prototype))?;
 
+    let number_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(number_prototype, Some(object_prototype))?;
+
+    let boolean_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(boolean_prototype, Some(object_prototype))?;
+
+    let bigint_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(bigint_prototype, Some(object_prototype))?;
+
+    let date_prototype = alloc_rooted_object(scope, roots)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(date_prototype, Some(object_prototype))?;
+
     let symbol_prototype = alloc_rooted_object(scope, roots)?;
     scope
       .heap_mut()
@@ -356,8 +384,24 @@ impl Intrinsics {
     let array_prototype_map = vm.register_native_call(builtins::array_prototype_map)?;
     let array_prototype_join = vm.register_native_call(builtins::array_prototype_join)?;
     let string_prototype_to_string = vm.register_native_call(builtins::string_prototype_to_string)?;
+    let number_prototype_value_of = vm.register_native_call(builtins::number_prototype_value_of)?;
+    let boolean_prototype_value_of = vm.register_native_call(builtins::boolean_prototype_value_of)?;
+    let bigint_prototype_value_of = vm.register_native_call(builtins::bigint_prototype_value_of)?;
+    let date_prototype_to_string = vm.register_native_call(builtins::date_prototype_to_string)?;
+    let date_prototype_value_of = vm.register_native_call(builtins::date_prototype_value_of)?;
+    let date_prototype_to_primitive = vm.register_native_call(builtins::date_prototype_to_primitive)?;
+    let symbol_prototype_value_of = vm.register_native_call(builtins::symbol_prototype_value_of)?;
     let error_prototype_to_string = vm.register_native_call(builtins::error_prototype_to_string)?;
     let json_stringify = vm.register_native_call(builtins::json_stringify)?;
+
+    // `%Number%`, `%Boolean%`, `%Date%`, and global functions.
+    let number_call = vm.register_native_call(builtins::number_constructor_call)?;
+    let number_construct = vm.register_native_construct(builtins::number_constructor_construct)?;
+    let boolean_call = vm.register_native_call(builtins::boolean_constructor_call)?;
+    let boolean_construct = vm.register_native_construct(builtins::boolean_constructor_construct)?;
+    let date_call = vm.register_native_call(builtins::date_constructor_call)?;
+    let date_construct = vm.register_native_construct(builtins::date_constructor_construct)?;
+    let is_nan_call = vm.register_native_call(builtins::global_is_nan)?;
 
     // --- Baseline constructors ---
     // `%Object%`
@@ -628,6 +672,230 @@ impl Intrinsics {
       )?;
     }
 
+    // `%Number%`
+    let number_name = scope.alloc_string("Number")?;
+    let number_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      number_call,
+      Some(number_construct),
+      number_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(number_constructor, Some(function_prototype))?;
+    scope.define_property(
+      number_constructor,
+      common.prototype,
+      data_desc(Value::Object(number_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      number_constructor,
+      common.name,
+      data_desc(Value::String(number_name), false, false, true),
+    )?;
+    scope.define_property(
+      number_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      number_prototype,
+      common.constructor,
+      data_desc(Value::Object(number_constructor), true, false, true),
+    )?;
+
+    // Number.prototype.valueOf
+    {
+      let value_of_s = scope.alloc_string("valueOf")?;
+      scope.push_root(Value::String(value_of_s))?;
+      let key = PropertyKey::from_string(value_of_s);
+      let func = scope.alloc_native_function(number_prototype_value_of, None, value_of_s, 0)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        number_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // Number static properties.
+    {
+      let cases: [(&str, Value); 5] = [
+        ("NaN", Value::Number(f64::NAN)),
+        ("POSITIVE_INFINITY", Value::Number(f64::INFINITY)),
+        ("NEGATIVE_INFINITY", Value::Number(f64::NEG_INFINITY)),
+        ("MAX_VALUE", Value::Number(f64::MAX)),
+        // JS `Number.MIN_VALUE` is the smallest positive **subnormal** (`5e-324`), not
+        // `f64::MIN_POSITIVE` (smallest positive normal).
+        ("MIN_VALUE", Value::Number(f64::from_bits(1))),
+      ];
+      for (name, value) in cases {
+        let key_s = scope.alloc_string(name)?;
+        scope.push_root(Value::String(key_s))?;
+        let key = PropertyKey::from_string(key_s);
+        scope.define_property(number_constructor, key, data_desc(value, false, false, false))?;
+      }
+    }
+
+    // `%Boolean%`
+    let boolean_name = scope.alloc_string("Boolean")?;
+    let boolean_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      boolean_call,
+      Some(boolean_construct),
+      boolean_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(boolean_constructor, Some(function_prototype))?;
+    scope.define_property(
+      boolean_constructor,
+      common.prototype,
+      data_desc(Value::Object(boolean_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      boolean_constructor,
+      common.name,
+      data_desc(Value::String(boolean_name), false, false, true),
+    )?;
+    scope.define_property(
+      boolean_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      boolean_prototype,
+      common.constructor,
+      data_desc(Value::Object(boolean_constructor), true, false, true),
+    )?;
+
+    // Boolean.prototype.valueOf
+    {
+      let value_of_s = scope.alloc_string("valueOf")?;
+      scope.push_root(Value::String(value_of_s))?;
+      let key = PropertyKey::from_string(value_of_s);
+      let func = scope.alloc_native_function(boolean_prototype_value_of, None, value_of_s, 0)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        boolean_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // BigInt.prototype.valueOf
+    {
+      let value_of_s = scope.alloc_string("valueOf")?;
+      scope.push_root(Value::String(value_of_s))?;
+      let key = PropertyKey::from_string(value_of_s);
+      let func = scope.alloc_native_function(bigint_prototype_value_of, None, value_of_s, 0)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        bigint_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // `%Date%`
+    let date_name = scope.alloc_string("Date")?;
+    let date_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      date_call,
+      Some(date_construct),
+      date_name,
+      7,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(date_constructor, Some(function_prototype))?;
+    scope.define_property(
+      date_constructor,
+      common.prototype,
+      data_desc(Value::Object(date_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      date_constructor,
+      common.name,
+      data_desc(Value::String(date_name), false, false, true),
+    )?;
+    scope.define_property(
+      date_constructor,
+      common.length,
+      data_desc(Value::Number(7.0), false, false, true),
+    )?;
+    scope.define_property(
+      date_prototype,
+      common.constructor,
+      data_desc(Value::Object(date_constructor), true, false, true),
+    )?;
+
+    // Date.prototype.toString / valueOf / @@toPrimitive
+    {
+      let to_string_s = scope.alloc_string("toString")?;
+      scope.push_root(Value::String(to_string_s))?;
+      let to_string_key = PropertyKey::from_string(to_string_s);
+      let to_string_fn = scope.alloc_native_function(date_prototype_to_string, None, to_string_s, 0)?;
+      scope.push_root(Value::Object(to_string_fn))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(to_string_fn, Some(function_prototype))?;
+      scope.define_property(
+        date_prototype,
+        to_string_key,
+        data_desc(Value::Object(to_string_fn), true, false, true),
+      )?;
+
+      let value_of_s = scope.alloc_string("valueOf")?;
+      scope.push_root(Value::String(value_of_s))?;
+      let value_of_key = PropertyKey::from_string(value_of_s);
+      let value_of_fn = scope.alloc_native_function(date_prototype_value_of, None, value_of_s, 0)?;
+      scope.push_root(Value::Object(value_of_fn))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(value_of_fn, Some(function_prototype))?;
+      scope.define_property(
+        date_prototype,
+        value_of_key,
+        data_desc(Value::Object(value_of_fn), true, false, true),
+      )?;
+
+      let to_prim_s = scope.alloc_string("[Symbol.toPrimitive]")?;
+      scope.push_root(Value::String(to_prim_s))?;
+      let to_prim_fn =
+        scope.alloc_native_function(date_prototype_to_primitive, None, to_prim_s, 1)?;
+      scope.push_root(Value::Object(to_prim_fn))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(to_prim_fn, Some(function_prototype))?;
+      scope.define_property(
+        date_prototype,
+        PropertyKey::Symbol(well_known_symbols.to_primitive),
+        data_desc(Value::Object(to_prim_fn), true, false, true),
+      )?;
+    }
+
+    // `%isNaN%` (global function)
+    let is_nan_name = scope.alloc_string("isNaN")?;
+    let is_nan = alloc_rooted_native_function(scope, roots, is_nan_call, None, is_nan_name, 1)?;
+    scope
+      .heap_mut()
+      .object_set_prototype(is_nan, Some(function_prototype))?;
+
     // `%Symbol%`
     let symbol_call = vm.register_native_call(builtins::symbol_constructor_call)?;
     let symbol_name = scope.alloc_string("Symbol")?;
@@ -656,6 +924,23 @@ impl Intrinsics {
       common.constructor,
       data_desc(Value::Object(symbol_constructor), true, false, true),
     )?;
+
+    // Symbol.prototype.valueOf
+    {
+      let value_of_s = scope.alloc_string("valueOf")?;
+      scope.push_root(Value::String(value_of_s))?;
+      let key = PropertyKey::from_string(value_of_s);
+      let func = scope.alloc_native_function(symbol_prototype_value_of, None, value_of_s, 0)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        symbol_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
 
     // Install well-known symbols as properties on the global `Symbol` constructor.
     {
@@ -1001,12 +1286,20 @@ impl Intrinsics {
       function_prototype,
       array_prototype,
       string_prototype,
+      number_prototype,
+      boolean_prototype,
+      bigint_prototype,
+      date_prototype,
       symbol_prototype,
       object_constructor,
       function_constructor,
       array_constructor,
       string_constructor,
+      number_constructor,
+      boolean_constructor,
+      date_constructor,
       symbol_constructor,
+      is_nan,
       json,
       error,
       error_prototype,
@@ -1052,6 +1345,22 @@ impl Intrinsics {
     self.string_prototype
   }
 
+  pub fn number_prototype(&self) -> GcObject {
+    self.number_prototype
+  }
+
+  pub fn boolean_prototype(&self) -> GcObject {
+    self.boolean_prototype
+  }
+
+  pub fn bigint_prototype(&self) -> GcObject {
+    self.bigint_prototype
+  }
+
+  pub fn date_prototype(&self) -> GcObject {
+    self.date_prototype
+  }
+
   pub fn symbol_prototype(&self) -> GcObject {
     self.symbol_prototype
   }
@@ -1072,8 +1381,24 @@ impl Intrinsics {
     self.string_constructor
   }
 
+  pub fn number_constructor(&self) -> GcObject {
+    self.number_constructor
+  }
+
+  pub fn boolean_constructor(&self) -> GcObject {
+    self.boolean_constructor
+  }
+
+  pub fn date_constructor(&self) -> GcObject {
+    self.date_constructor
+  }
+
   pub fn symbol_constructor(&self) -> GcObject {
     self.symbol_constructor
+  }
+
+  pub fn is_nan(&self) -> GcObject {
+    self.is_nan
   }
 
   pub fn json(&self) -> GcObject {

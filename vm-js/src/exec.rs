@@ -1,16 +1,16 @@
 use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
 use crate::iterator;
-use crate::ops::{add_operator, abstract_equality, to_number};
+use crate::ops::{abstract_equality, to_number};
 use crate::{
-  EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey,
-  PropertyKind, Realm, RootId, Scope, SourceText, StackFrame, Value, Vm, VmError, VmHostHooks,
-  VmJobContext,
+  EnvRootId, GcEnv, GcObject, GcString, Heap, JsBigInt, PropertyDescriptor, PropertyDescriptorPatch,
+  PropertyKey, PropertyKind, Realm, RootId, Scope, SourceText, StackFrame, Value, Vm, VmError,
+  VmHostHooks, VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::{
-  LitArrElem, LitArrExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr, LitTemplateExpr,
-  LitTemplatePart,
+  LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr,
+  LitTemplateExpr, LitTemplatePart,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
@@ -597,6 +597,29 @@ enum Reference<'a> {
   Property { object: GcObject, key: PropertyKey },
 }
 
+#[derive(Clone, Copy, Debug)]
+enum ToPrimitiveHint {
+  Default,
+  String,
+  Number,
+}
+
+impl ToPrimitiveHint {
+  fn as_str(self) -> &'static str {
+    match self {
+      ToPrimitiveHint::Default => "default",
+      ToPrimitiveHint::String => "string",
+      ToPrimitiveHint::Number => "number",
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum NumericValue {
+  Number(f64),
+  BigInt(JsBigInt),
+}
+
 impl<'a> Evaluator<'a> {
   /// Runs one VM "tick".
   ///
@@ -728,6 +751,13 @@ impl<'a> Evaluator<'a> {
       is_strict,
       Some(self.env.lexical_env),
     )?;
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    scope
+      .heap_mut()
+      .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
     scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
@@ -1665,6 +1695,7 @@ impl<'a> Evaluator<'a> {
     match &*expr.stx {
       Expr::LitStr(node) => self.eval_lit_str(scope, node),
       Expr::LitNum(node) => self.eval_lit_num(&node.stx),
+      Expr::LitBigInt(node) => self.eval_lit_bigint(&node.stx),
       Expr::LitBool(node) => self.eval_lit_bool(&node.stx),
       Expr::LitNull(_) => Ok(Value::Null),
       Expr::LitArr(node) => self.eval_lit_arr(scope, &node.stx),
@@ -1896,6 +1927,13 @@ impl<'a> Evaluator<'a> {
       is_strict,
       Some(self.env.lexical_env),
     )?;
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    scope
+      .heap_mut()
+      .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
     scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
@@ -1951,6 +1989,13 @@ impl<'a> Evaluator<'a> {
       is_strict,
       Some(self.env.lexical_env),
     )?;
+    let intr = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+    alloc_scope
+      .heap_mut()
+      .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
     alloc_scope
       .heap_mut()
       .set_function_realm(func_obj, self.env.global_object())?;
@@ -1971,6 +2016,14 @@ impl<'a> Evaluator<'a> {
 
   fn eval_lit_num(&self, expr: &LitNumExpr) -> Result<Value, VmError> {
     Ok(Value::Number(expr.value.0))
+  }
+
+  fn eval_lit_bigint(&self, expr: &LitBigIntExpr) -> Result<Value, VmError> {
+    let mag: u128 = expr
+      .value
+      .parse()
+      .map_err(|_| VmError::Unimplemented("BigInt literal out of range"))?;
+    Ok(Value::BigInt(JsBigInt::from_u128(mag)))
   }
 
   fn eval_lit_bool(&self, expr: &LitBoolExpr) -> Result<Value, VmError> {
@@ -1997,7 +2050,7 @@ impl<'a> Evaluator<'a> {
         LitTemplatePart::Substitution(expr) => {
           let value = self.eval_expr(scope, expr)?;
           scope.push_root(value)?;
-          let s = scope.heap_mut().to_string(value)?;
+          let s = self.to_string_operator(scope, value)?;
           scope.push_root(Value::String(s))?;
           let js = scope.heap().get_string(s)?;
           units
@@ -2197,6 +2250,13 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
+              let intr = self
+                .vm
+                .intrinsics()
+                .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+              member_scope
+                .heap_mut()
+                .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
@@ -2264,6 +2324,13 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
+              let intr = self
+                .vm
+                .intrinsics()
+                .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+              member_scope
+                .heap_mut()
+                .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
@@ -2331,6 +2398,13 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
+              let intr = self
+                .vm
+                .intrinsics()
+                .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+              member_scope
+                .heap_mut()
+                .object_set_prototype(func_obj, Some(intr.function_prototype()))?;
               member_scope
                 .heap_mut()
                 .set_function_realm(func_obj, self.env.global_object())?;
@@ -2515,11 +2589,16 @@ impl<'a> Evaluator<'a> {
       }
       OperatorName::UnaryPlus => {
         let argument = self.eval_expr(scope, &expr.argument)?;
-        Ok(Value::Number(to_number(scope.heap_mut(), argument)?))
+        let n = self.to_number_operator(scope, argument)?;
+        Ok(Value::Number(n))
       }
       OperatorName::UnaryNegation => {
         let argument = self.eval_expr(scope, &expr.argument)?;
-        Ok(Value::Number(-to_number(scope.heap_mut(), argument)?))
+        let num = self.to_numeric(scope, argument)?;
+        Ok(match num {
+          NumericValue::Number(n) => Value::Number(-n),
+          NumericValue::BigInt(b) => Value::BigInt(b.negate()),
+        })
       }
       OperatorName::Typeof => {
         let argument = self.eval_expr(scope, &expr.argument)?;
@@ -2575,6 +2654,23 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_call(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
+    // Special-case direct `eval(...)` calls.
+    //
+    // `vm-js` does not yet expose a global `eval` builtin, but unit tests (and real-world scripts)
+    // expect `eval("...")` to work. Treat an identifier call as direct eval and interpret the
+    // argument string in the current environment.
+    //
+    // This is intentionally minimal but spec-shaped:
+    // - Arguments are evaluated left-to-right (including spreads).
+    // - Non-String inputs are returned unchanged.
+    if !expr.optional_chaining {
+      match &*expr.callee.stx {
+        Expr::Id(id) if id.stx.name == "eval" => return self.eval_direct_eval(scope, expr),
+        Expr::IdPat(id) if id.stx.name == "eval" => return self.eval_direct_eval(scope, expr),
+        _ => {}
+      }
+    }
+
     // Evaluate the callee and compute the `this` value for the call.
     let (callee_value, this_value) = match &*expr.callee.stx {
       Expr::Member(member) if member.stx.optional_chaining => {
@@ -2673,6 +2769,97 @@ impl<'a> Evaluator<'a> {
       .call(&mut call_scope, callee_value, this_value, &args)
   }
 
+  fn eval_direct_eval(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
+    let mut call_scope = scope.reborrow();
+    let mut args: Vec<Value> = Vec::new();
+    args
+      .try_reserve_exact(expr.arguments.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    for arg in &expr.arguments {
+      if arg.stx.spread {
+        let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(spread_value)?;
+
+        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
+        call_scope.push_roots(&[iter.iterator, iter.next_method])?;
+
+        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)? {
+          call_scope.push_root(value)?;
+          args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+          args.push(value);
+        }
+      } else {
+        let value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(value)?;
+        args.push(value);
+      }
+    }
+
+    let arg0 = args.get(0).copied().unwrap_or(Value::Undefined);
+    match arg0 {
+      Value::String(s) => self.eval_direct_eval_string(&mut call_scope, s),
+      other => Ok(other),
+    }
+  }
+
+  fn eval_direct_eval_string(
+    &mut self,
+    scope: &mut Scope<'_>,
+    source_string: GcString,
+  ) -> Result<Value, VmError> {
+    let source = scope
+      .heap()
+      .get_string(source_string)?
+      .to_utf8_lossy();
+
+    let source = Arc::new(SourceText::new("<eval>", source));
+    let opts = ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    };
+    let top = parse_with_options(&source.text, opts)
+      .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+    let strict = self.strict || detect_use_strict_directive(&top.stx.body);
+
+    // Save and restore the runtime's source and lexical environment while running eval code. This
+    // keeps nested function source spans aligned with the eval input.
+    let prev_source = self.env.source();
+    let prev_base_offset = self.env.base_offset();
+    let prev_prefix_len = self.env.prefix_len();
+    let prev_lexical_env = self.env.lexical_env;
+    let prev_strict = self.strict;
+
+    self.env.set_source_info(source.clone(), 0, 0);
+    let eval_lex = scope.env_create(Some(prev_lexical_env))?;
+    self.env.set_lexical_env(scope.heap_mut(), eval_lex);
+    self.strict = strict;
+
+    let result = (|| {
+      self.hoist_var_decls(scope, &top.stx.body)?;
+      let lex = self.env.lexical_env;
+      self.hoist_lexical_decls_in_stmt_list(scope, lex, &top.stx.body)?;
+      self.hoist_function_decls_in_stmt_list(scope, &top.stx.body)?;
+
+      let completion = self.eval_stmt_list(scope, &top.stx.body)?;
+      match completion {
+        Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+        Completion::Throw(v) => Err(VmError::Throw(v)),
+        Completion::Return(_) => Err(VmError::Unimplemented("return in eval")),
+        Completion::Break(..) => Err(VmError::Unimplemented("break in eval")),
+        Completion::Continue(..) => Err(VmError::Unimplemented("continue in eval")),
+      }
+    })();
+
+    self.strict = prev_strict;
+    self.env.set_lexical_env(scope.heap_mut(), prev_lexical_env);
+    self
+      .env
+      .set_source_info(prev_source, prev_base_offset, prev_prefix_len);
+
+    result
+  }
+
   fn eval_cond(&mut self, scope: &mut Scope<'_>, expr: &CondExpr) -> Result<Value, VmError> {
     let test = self.eval_expr(scope, &expr.test)?;
     if to_boolean(scope.heap(), test)? {
@@ -2713,6 +2900,26 @@ impl<'a> Evaluator<'a> {
           }
         }
       }
+      OperatorName::AssignmentAddition => match &*expr.left.stx {
+        Expr::ObjPat(_) | Expr::ArrPat(_) => Err(VmError::Unimplemented(
+          "assignment addition to destructuring patterns",
+        )),
+        _ => {
+          let reference = self.eval_reference(scope, &expr.left)?;
+          let mut op_scope = scope.reborrow();
+          self.root_reference(&mut op_scope, &reference)?;
+
+          let left = self.get_value_from_reference(&mut op_scope, &reference)?;
+          // Root `left` across evaluation of the RHS in case it allocates and triggers GC.
+          op_scope.push_root(left)?;
+          let right = self.eval_expr(&mut op_scope, &expr.right)?;
+
+          let value = self.addition_operator(&mut op_scope, left, right)?;
+          op_scope.push_root(value)?;
+          self.put_value_to_reference(&mut op_scope, &reference, value)?;
+          Ok(value)
+        }
+      },
       OperatorName::LogicalAnd => {
         let left = self.eval_expr(scope, &expr.left)?;
         if !to_boolean(scope.heap(), left)? {
@@ -2777,10 +2984,34 @@ impl<'a> Evaluator<'a> {
         let mut rhs_scope = scope.reborrow();
         rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
-        add_operator(rhs_scope.heap_mut(), left, right)
+        self.addition_operator(&mut rhs_scope, left, right)
+      }
+      OperatorName::Multiplication => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left)?;
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        rhs_scope.push_root(right)?;
+
+        let left_num = self.to_numeric(&mut rhs_scope, left)?;
+        let right_num = self.to_numeric(&mut rhs_scope, right)?;
+        match (left_num, right_num) {
+          (NumericValue::Number(a), NumericValue::Number(b)) => Ok(Value::Number(a * b)),
+          (NumericValue::BigInt(a), NumericValue::BigInt(b)) => {
+            let Some(out) = a.checked_mul(b) else {
+              return Err(VmError::Unimplemented("BigInt multiplication overflow"));
+            };
+            Ok(Value::BigInt(out))
+          }
+          _ => Err(throw_type_error(
+            self.vm,
+            &mut rhs_scope,
+            "Cannot mix BigInt and other types",
+          )?),
+        }
       }
       OperatorName::Subtraction
-      | OperatorName::Multiplication
       | OperatorName::Division
       | OperatorName::Remainder
       | OperatorName::LessThan
@@ -2795,12 +3026,11 @@ impl<'a> Evaluator<'a> {
         // Root `right` for the duration of numeric conversion: `ToNumber` may allocate when called
         // on objects (via `ToPrimitive`).
         rhs_scope.push_root(right)?;
-        let left_n = to_number(rhs_scope.heap_mut(), left)?;
-        let right_n = to_number(rhs_scope.heap_mut(), right)?;
+        let left_n = self.to_number_operator(&mut rhs_scope, left)?;
+        let right_n = self.to_number_operator(&mut rhs_scope, right)?;
 
         match expr.operator {
           OperatorName::Subtraction => Ok(Value::Number(left_n - right_n)),
-          OperatorName::Multiplication => Ok(Value::Number(left_n * right_n)),
           OperatorName::Division => Ok(Value::Number(left_n / right_n)),
           OperatorName::Remainder => Ok(Value::Number(left_n % right_n)),
           OperatorName::LessThan => Ok(Value::Bool(left_n < right_n)),
@@ -2816,6 +3046,201 @@ impl<'a> Evaluator<'a> {
         }
       }
       _ => Err(VmError::Unimplemented("binary operator")),
+    }
+  }
+
+  fn is_primitive_value(&self, value: Value) -> bool {
+    !matches!(value, Value::Object(_))
+  }
+
+  fn to_primitive(
+    &mut self,
+    scope: &mut Scope<'_>,
+    value: Value,
+    hint: ToPrimitiveHint,
+  ) -> Result<Value, VmError> {
+    let Value::Object(obj) = value else {
+      return Ok(value);
+    };
+
+    // Root `obj` across property lookups / calls (which may allocate and trigger GC).
+    let mut prim_scope = scope.reborrow();
+    prim_scope.push_root(Value::Object(obj))?;
+
+    // 1. GetMethod(input, @@toPrimitive).
+    let to_prim_sym = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
+      .well_known_symbols()
+      .to_primitive;
+    let to_prim_key = PropertyKey::from_symbol(to_prim_sym);
+    let exotic = prim_scope.ordinary_get(self.vm, obj, to_prim_key, Value::Object(obj))?;
+
+    if !matches!(exotic, Value::Undefined | Value::Null) {
+      if !prim_scope.heap().is_callable(exotic)? {
+        return Err(throw_type_error(self.vm, &mut prim_scope, "@@toPrimitive is not callable")?);
+      }
+
+      let hint_s = prim_scope.alloc_string(hint.as_str())?;
+      prim_scope.push_root(Value::String(hint_s))?;
+      let out = self.vm.call(&mut prim_scope, exotic, Value::Object(obj), &[Value::String(hint_s)])?;
+      if self.is_primitive_value(out) {
+        return Ok(out);
+      }
+      return Err(throw_type_error(
+        self.vm,
+        &mut prim_scope,
+        "Cannot convert object to primitive value",
+      )?);
+    }
+
+    // 2. OrdinaryToPrimitive.
+    self.ordinary_to_primitive(&mut prim_scope, obj, hint)
+  }
+
+  fn ordinary_to_primitive(
+    &mut self,
+    scope: &mut Scope<'_>,
+    obj: GcObject,
+    hint: ToPrimitiveHint,
+  ) -> Result<Value, VmError> {
+    let hint = match hint {
+      ToPrimitiveHint::Default => ToPrimitiveHint::Number,
+      other => other,
+    };
+    let methods = match hint {
+      ToPrimitiveHint::String => ["toString", "valueOf"],
+      ToPrimitiveHint::Number | ToPrimitiveHint::Default => ["valueOf", "toString"],
+    };
+
+    for name in methods {
+      let key_s = scope.alloc_string(name)?;
+      scope.push_root(Value::String(key_s))?;
+      let key = PropertyKey::from_string(key_s);
+      let method = scope.ordinary_get(self.vm, obj, key, Value::Object(obj))?;
+
+      if matches!(method, Value::Undefined | Value::Null) {
+        continue;
+      }
+      if !scope.heap().is_callable(method)? {
+        continue;
+      }
+
+      let result = self.vm.call(scope, method, Value::Object(obj), &[])?;
+      if self.is_primitive_value(result) {
+        return Ok(result);
+      }
+    }
+
+    Err(throw_type_error(
+      self.vm,
+      scope,
+      "Cannot convert object to primitive value",
+    )?)
+  }
+
+  fn to_number_operator(&mut self, scope: &mut Scope<'_>, value: Value) -> Result<f64, VmError> {
+    // `ToNumber` includes `ToPrimitive` with a Number hint.
+    let mut num_scope = scope.reborrow();
+    num_scope.push_root(value)?;
+    let prim = self.to_primitive(&mut num_scope, value, ToPrimitiveHint::Number)?;
+    num_scope.push_root(prim)?;
+
+    match to_number(num_scope.heap_mut(), prim) {
+      Ok(n) => Ok(n),
+      Err(VmError::TypeError(msg)) => Err(throw_type_error(self.vm, &mut num_scope, msg)?),
+      Err(err) => Err(err),
+    }
+  }
+
+  fn to_string_operator(
+    &mut self,
+    scope: &mut Scope<'_>,
+    value: Value,
+  ) -> Result<GcString, VmError> {
+    // `ToString` includes `ToPrimitive` with a String hint.
+    let mut string_scope = scope.reborrow();
+    string_scope.push_root(value)?;
+    let prim = self.to_primitive(&mut string_scope, value, ToPrimitiveHint::String)?;
+    string_scope.push_root(prim)?;
+    debug_assert!(self.is_primitive_value(prim), "to_primitive returned object");
+
+    match string_scope.heap_mut().to_string(prim) {
+      Ok(s) => Ok(s),
+      Err(VmError::TypeError(msg)) => Err(throw_type_error(self.vm, &mut string_scope, msg)?),
+      Err(err) => Err(err),
+    }
+  }
+
+  fn addition_operator(
+    &mut self,
+    scope: &mut Scope<'_>,
+    left: Value,
+    right: Value,
+  ) -> Result<Value, VmError> {
+    // Root inputs and intermediates for the duration of the operation: `+` may allocate
+    // (string concatenation, ToString) and thus trigger GC.
+    let mut add_scope = scope.reborrow();
+    add_scope.push_root(left)?;
+    add_scope.push_root(right)?;
+
+    // ECMA-262 AdditionOperator (+): ToPrimitive (default), then string concat if either side is a
+    // string; otherwise numeric addition.
+    let left_prim = self.to_primitive(&mut add_scope, left, ToPrimitiveHint::Default)?;
+    add_scope.push_root(left_prim)?;
+    let right_prim = self.to_primitive(&mut add_scope, right, ToPrimitiveHint::Default)?;
+    add_scope.push_root(right_prim)?;
+
+    if matches!(left_prim, Value::String(_)) || matches!(right_prim, Value::String(_)) {
+      let left_s = self.to_string_operator(&mut add_scope, left_prim)?;
+      add_scope.push_root(Value::String(left_s))?;
+      let right_s = self.to_string_operator(&mut add_scope, right_prim)?;
+      add_scope.push_root(Value::String(right_s))?;
+
+      let left_units = add_scope.heap().get_string(left_s)?.as_code_units();
+      let right_units = add_scope.heap().get_string(right_s)?.as_code_units();
+
+      let total_len = left_units
+        .len()
+        .checked_add(right_units.len())
+        .ok_or(VmError::OutOfMemory)?;
+      let mut units: Vec<u16> = Vec::new();
+      units
+        .try_reserve_exact(total_len)
+        .map_err(|_| VmError::OutOfMemory)?;
+      units.extend_from_slice(left_units);
+      units.extend_from_slice(right_units);
+
+      let s = add_scope.alloc_string_from_u16_vec(units)?;
+      Ok(Value::String(s))
+    } else {
+      let left_num = self.to_numeric(&mut add_scope, left_prim)?;
+      let right_num = self.to_numeric(&mut add_scope, right_prim)?;
+      Ok(match (left_num, right_num) {
+        (NumericValue::Number(a), NumericValue::Number(b)) => Value::Number(a + b),
+        (NumericValue::BigInt(a), NumericValue::BigInt(b)) => {
+          let Some(out) = a.checked_add(b) else {
+            return Err(VmError::Unimplemented("BigInt addition overflow"));
+          };
+          Value::BigInt(out)
+        }
+        _ => return Err(throw_type_error(self.vm, &mut add_scope, "Cannot mix BigInt and other types")?),
+      })
+    }
+  }
+
+  fn to_numeric(&mut self, scope: &mut Scope<'_>, value: Value) -> Result<NumericValue, VmError> {
+    // ECMA-262 `ToNumeric`: ToPrimitive (hint Number), then return BigInt directly or convert to
+    // Number.
+    let prim = self.to_primitive(scope, value, ToPrimitiveHint::Number)?;
+    match prim {
+      Value::BigInt(b) => Ok(NumericValue::BigInt(b)),
+      other => match to_number(scope.heap_mut(), other) {
+        Ok(n) => Ok(NumericValue::Number(n)),
+        Err(VmError::TypeError(msg)) => Err(throw_type_error(self.vm, scope, msg)?),
+        Err(err) => Err(err),
+      },
     }
   }
 }
@@ -2885,6 +3310,51 @@ pub(crate) fn run_ecma_function(
     )?;
   }
 
+  // Create a minimal `arguments` object for non-arrow functions.
+  //
+  // test262's harness expects `arguments` to exist and be array-like (`length`, indexed elements).
+  // We do not implement mapped arguments objects yet.
+  if !func.stx.arrow && !scope.heap().env_has_binding(evaluator.env.lexical_env, "arguments")? {
+    let intr = evaluator
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+
+    let args_obj = scope.alloc_object()?;
+    scope.push_root(Value::Object(args_obj))?;
+    scope
+      .heap_mut()
+      .object_set_prototype(args_obj, Some(intr.object_prototype()))?;
+
+    let len = args.len() as f64;
+    let len_key = PropertyKey::from_string(scope.alloc_string("length")?);
+    scope.define_property(
+      args_obj,
+      len_key,
+      PropertyDescriptor {
+        enumerable: false,
+        configurable: true,
+        kind: PropertyKind::Data {
+          value: Value::Number(len),
+          writable: true,
+        },
+      },
+    )?;
+
+    for (i, v) in args.iter().copied().enumerate() {
+      let mut idx_scope = scope.reborrow();
+      idx_scope.push_root(Value::Object(args_obj))?;
+      idx_scope.push_root(v)?;
+      let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
+      idx_scope.define_property(args_obj, key, global_var_desc(v))?;
+    }
+
+    scope.env_create_mutable_binding(evaluator.env.lexical_env, "arguments")?;
+    scope
+      .heap_mut()
+      .env_initialize_binding(evaluator.env.lexical_env, "arguments", Value::Object(args_obj))?;
+  }
+
   match body {
     FuncBody::Expression(expr) => evaluator.eval_expr(scope, expr),
     FuncBody::Block(stmts) => {
@@ -2926,6 +3396,7 @@ fn to_boolean(heap: &Heap, value: Value) -> Result<bool, VmError> {
     Value::Undefined | Value::Null => false,
     Value::Bool(b) => b,
     Value::Number(n) => n != 0.0 && !n.is_nan(),
+    Value::BigInt(n) => !n.is_zero(),
     Value::String(s) => !heap.get_string(s)?.as_code_units().is_empty(),
     Value::Symbol(_) | Value::Object(_) => true,
   })
@@ -2937,6 +3408,7 @@ fn typeof_name(heap: &Heap, value: Value) -> Result<&'static str, VmError> {
     Value::Null => "object",
     Value::Bool(_) => "boolean",
     Value::Number(_) => "number",
+    Value::BigInt(_) => "bigint",
     Value::String(_) => "string",
     Value::Symbol(_) => "symbol",
     Value::Object(obj) => match heap.get_function_call_handler(obj) {
@@ -2953,6 +3425,7 @@ fn strict_equal(heap: &Heap, a: Value, b: Value) -> Result<bool, VmError> {
     (Value::Null, Value::Null) => true,
     (Value::Bool(x), Value::Bool(y)) => x == y,
     (Value::Number(x), Value::Number(y)) => x == y,
+    (Value::BigInt(x), Value::BigInt(y)) => x == y,
     (Value::String(x), Value::String(y)) => heap.get_string(x)? == heap.get_string(y)?,
     (Value::Symbol(x), Value::Symbol(y)) => x == y,
     (Value::Object(x), Value::Object(y)) => x == y,

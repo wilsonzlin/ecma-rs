@@ -958,6 +958,7 @@ impl<'a> Engine<'a> {
       (Value::Undefined, Value::Undefined) | (Value::Null, Value::Null) => true,
       (Value::Bool(a), Value::Bool(b)) => a == b,
       (Value::Number(a), Value::Number(b)) => a == b,
+      (Value::BigInt(a), Value::BigInt(b)) => a == b,
       (Value::String(a), Value::String(b)) => heap.get_string(a)?.as_code_units() == heap.get_string(b)?.as_code_units(),
       (Value::Symbol(a), Value::Symbol(b)) => a == b,
       (Value::Object(a), Value::Object(b)) => a == b,
@@ -995,6 +996,11 @@ impl<'a> Engine<'a> {
       Value::Number(n) => n,
       Value::Bool(true) => 1.0,
       Value::Bool(false) => 0.0,
+      Value::BigInt(_) => {
+        return Err(VmError::TypeError(
+          "Cannot convert a BigInt value to a number",
+        ));
+      }
       Value::Null => 0.0,
       Value::Undefined => f64::NAN,
       Value::String(s) => scope

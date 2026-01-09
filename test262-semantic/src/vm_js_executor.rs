@@ -205,6 +205,7 @@ fn describe_thrown_value(runtime: &mut vm_js::JsRuntime, value: Value) -> (Optio
     Value::Null => (None, "null".to_string()),
     Value::Bool(b) => (None, b.to_string()),
     Value::Number(n) => (None, format_js_number(n)),
+    Value::BigInt(b) => (None, b.to_decimal_string()),
     Value::String(s) => {
       let msg = scope
         .heap()

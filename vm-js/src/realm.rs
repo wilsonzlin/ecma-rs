@@ -139,11 +139,39 @@ impl Realm {
         global_data_desc(Value::Object(intrinsics.string_constructor())),
       )?;
 
+      let number_key = PropertyKey::from_string(scope.alloc_string("Number")?);
+      scope.define_property(
+        global_object,
+        number_key,
+        global_data_desc(Value::Object(intrinsics.number_constructor())),
+      )?;
+
+      let boolean_key = PropertyKey::from_string(scope.alloc_string("Boolean")?);
+      scope.define_property(
+        global_object,
+        boolean_key,
+        global_data_desc(Value::Object(intrinsics.boolean_constructor())),
+      )?;
+
+      let date_key = PropertyKey::from_string(scope.alloc_string("Date")?);
+      scope.define_property(
+        global_object,
+        date_key,
+        global_data_desc(Value::Object(intrinsics.date_constructor())),
+      )?;
+
       let symbol_key = PropertyKey::from_string(scope.alloc_string("Symbol")?);
       scope.define_property(
         global_object,
         symbol_key,
         global_data_desc(Value::Object(intrinsics.symbol_constructor())),
+      )?;
+
+      let is_nan_key = PropertyKey::from_string(scope.alloc_string("isNaN")?);
+      scope.define_property(
+        global_object,
+        is_nan_key,
+        global_data_desc(Value::Object(intrinsics.is_nan())),
       )?;
 
       let json_key = PropertyKey::from_string(scope.alloc_string("JSON")?);
