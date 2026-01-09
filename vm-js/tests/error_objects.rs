@@ -43,7 +43,7 @@ fn type_error_helper_creates_error_object_with_intrinsic_prototype_and_propertie
   };
 
   // Root the thrown value while allocating property keys below.
-  scope.push_root(value);
+  scope.push_root(value)?;
 
   assert_eq!(
     scope.heap().object_prototype(obj)?,
@@ -84,7 +84,7 @@ fn thrown_type_error_is_catchable_from_script() {
   let type_error_prototype = rt.realm().intrinsics().type_error_prototype();
 
   let mut scope = rt.heap_mut().scope();
-  scope.push_root(caught);
+  scope.push_root(caught).unwrap();
 
   assert_eq!(scope.heap().object_prototype(obj).unwrap(), Some(type_error_prototype));
 

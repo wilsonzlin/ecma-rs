@@ -204,9 +204,9 @@ impl<'a> Scope<'a> {
     desc.validate()?;
 
     // Root all inputs that might be written into the heap before any allocation/GC.
-    self.push_root(Value::Object(obj));
-    root_property_key(self, key);
-    root_descriptor_patch(self, &desc);
+    self.push_root(Value::Object(obj))?;
+    root_property_key(self, key)?;
+    root_descriptor_patch(self, &desc)?;
 
     if self.heap().property_key_is_length(&key) {
       let length_key = self.heap().array_length_key(obj)?;

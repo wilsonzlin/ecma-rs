@@ -29,7 +29,7 @@ fn defining_indices_updates_length() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let array = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(array));
+  scope.push_root(Value::Object(array))?;
 
   let k0 = PropertyKey::from_string(scope.alloc_string("0")?);
   assert!(scope.define_own_property(array, k0, data_patch(Value::Null))?);
@@ -51,7 +51,7 @@ fn shrinking_length_deletes_elements() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let array = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(array));
+  scope.push_root(Value::Object(array))?;
 
   for i in 0..5u32 {
     let key = PropertyKey::from_string(scope.alloc_string(&i.to_string())?);
@@ -87,7 +87,7 @@ fn shrinking_length_fails_if_non_configurable_element_blocks_deletion() -> Resul
   let mut scope = heap.scope();
 
   let array = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(array));
+  scope.push_root(Value::Object(array))?;
 
   // Create a non-configurable element at index 3 (so old length becomes 4).
   for i in 0..3u32 {
@@ -139,7 +139,7 @@ fn non_writable_length_blocks_extension() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let array = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(array));
+  scope.push_root(Value::Object(array))?;
 
   for i in 0..2u32 {
     let key = PropertyKey::from_string(scope.alloc_string(&i.to_string())?);
@@ -182,7 +182,7 @@ fn invalid_length_value_is_rejected() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let array = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(array));
+  scope.push_root(Value::Object(array))?;
 
   let len_key = length_key(&mut scope)?;
   let ok = scope.define_own_property(
@@ -199,4 +199,3 @@ fn invalid_length_value_is_rejected() -> Result<(), VmError> {
   assert_eq!(get_length(&scope, array, len_key)?, Value::Number(0.0));
   Ok(())
 }
-

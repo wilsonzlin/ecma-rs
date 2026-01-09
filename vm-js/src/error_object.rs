@@ -27,17 +27,17 @@ pub fn new_error(
   let err = scope.alloc_object()?;
   // Root the object for the remainder of construction. Subsequent property definition may
   // allocate and trigger GC.
-  scope.push_root(Value::Object(err));
+  scope.push_root(Value::Object(err))?;
 
   scope
     .heap_mut()
     .object_set_prototype(err, Some(prototype))?;
 
   let name_value = scope.alloc_string(name)?;
-  scope.push_root(Value::String(name_value));
+  scope.push_root(Value::String(name_value))?;
 
   let message_value = scope.alloc_string(message)?;
-  scope.push_root(Value::String(message_value));
+  scope.push_root(Value::String(message_value))?;
 
   let name_key = PropertyKey::from_string(scope.alloc_string("name")?);
   scope.define_property(err, name_key, data_desc(Value::String(name_value)))?;
@@ -89,4 +89,3 @@ pub fn new_range_error(
   )?;
   Ok(VmError::Throw(value))
 }
-
