@@ -149,6 +149,7 @@ impl Drop for BudgetGuard<'_> {
 #[derive(Debug)]
 pub struct ExecutionContextGuard<'vm> {
   vm: &'vm mut Vm,
+  ctx: ExecutionContext,
   expected_len: usize,
 }
 
@@ -156,7 +157,7 @@ impl<'vm> ExecutionContextGuard<'vm> {
   fn new(vm: &'vm mut Vm, ctx: ExecutionContext) -> Self {
     vm.push_execution_context(ctx);
     let expected_len = vm.execution_context_stack.len();
-    Self { vm, expected_len }
+    Self { vm, ctx, expected_len }
   }
 }
 
@@ -182,6 +183,11 @@ impl Drop for ExecutionContextGuard<'_> {
       "ExecutionContextGuard dropped after stack length changed (did you manually pop?)"
     );
     let popped = self.vm.pop_execution_context();
+    debug_assert_eq!(
+      popped,
+      Some(self.ctx),
+      "ExecutionContextGuard popped a different execution context than it pushed"
+    );
     debug_assert!(
       popped.is_some(),
       "ExecutionContextGuard dropped with empty execution context stack"
