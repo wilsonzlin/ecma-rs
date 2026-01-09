@@ -801,10 +801,17 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn eval_lit_str(&mut self, scope: &mut Scope<'_>, node: &Node<LitStrExpr>) -> Result<Value, VmError> {
-    let s = match literal_string_code_units(&node.assoc) {
-      Some(units) => scope.alloc_string_from_code_units(units)?,
-      None => scope.alloc_string_from_utf8(&node.stx.value)?,
+  fn eval_lit_str(
+    &mut self,
+    scope: &mut Scope<'_>,
+    node: &Node<LitStrExpr>,
+  ) -> Result<Value, VmError> {
+    let s = if let Some(units) = literal_string_code_units(&node.assoc) {
+      // Preserve exact UTF-16 code units from the parser so lone surrogates survive.
+      scope.alloc_string_from_code_units(units)?
+    } else {
+      // Fallback for nodes that don't carry the association marker (should be rare).
+      scope.alloc_string(&node.stx.value)?
     };
     Ok(Value::String(s))
   }

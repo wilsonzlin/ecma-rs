@@ -158,11 +158,9 @@ impl Heap {
 
   /// Convert a value to a property key.
   ///
-  /// This is a minimal stub (sufficient for early scaffolding):
+  /// This is a minimal implementation (sufficient for early scaffolding):
   /// - `String`/`Symbol` values are returned directly.
-  /// - All other values will eventually go through `ToPropertyKey` (ToPrimitive + ToString).
-  ///   For now, we call the `to_string` placeholder which returns
-  ///   [`VmError::Unimplemented`].
+  /// - All other values go through a partial `ToPropertyKey` (`ToString` for now).
   pub fn to_property_key(&mut self, value: Value) -> Result<PropertyKey, VmError> {
     match value {
       Value::String(s) => Ok(PropertyKey::String(s)),
@@ -204,11 +202,19 @@ impl Heap {
           scope.alloc_string("0")
         } else {
           let mut buf = ryu::Buffer::new();
-          scope.alloc_string(buf.format(n))
+          let formatted = buf.format(n);
+          // `ryu` formats `1.0` as `"1.0"`, but ECMAScript `ToString(1)` is `"1"`.
+          let formatted = formatted.strip_suffix(".0").unwrap_or(formatted);
+          scope.alloc_string(formatted)
         }
       }
       Value::String(_) => unreachable!(),
-      Value::Symbol(_) => Err(VmError::Unimplemented("ToString(Symbol) requires Symbol.prototype")),
+      Value::Symbol(_) => {
+        // Per ECMA-262, `ToString(Symbol)` throws a TypeError. We don't have real Error objects
+        // yet, so throw a string placeholder.
+        let msg = scope.alloc_string("TypeError: Cannot convert a Symbol value to a string")?;
+        Err(VmError::Throw(Value::String(msg)))
+      }
       Value::Object(_) => scope.alloc_string("[object Object]"),
     }
   }
