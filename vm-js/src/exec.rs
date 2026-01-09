@@ -961,13 +961,6 @@ impl<'a> Evaluator<'a> {
           out.insert(name.stx.name.clone());
         }
       }
-      // Function declarations are hoisted like `var` declarations, but we must not traverse into
-      // the function body.
-      Stmt::FunctionDecl(decl) => {
-        if let Some(name) = &decl.stx.name {
-          out.insert(name.stx.name.clone());
-        }
-      }
 
       // TODO: other statement types.
       _ => {}
