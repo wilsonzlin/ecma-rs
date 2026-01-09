@@ -399,7 +399,7 @@ impl JobCallback {
   /// Returns the persistent-root id for this callback, if it has been rooted via
   /// [`JobCallback::ensure_rooted`].
   pub fn root_id(&self) -> Option<RootId> {
-    self.0.rooted.lock().unwrap().copied()
+    *self.0.rooted.lock().unwrap()
   }
 
   /// Unregisters the persistent root created by [`JobCallback::ensure_rooted`], if any.
@@ -570,8 +570,71 @@ pub trait VmHostHooks {
     this_argument: Value,
     arguments: &[Value],
   ) -> Result<Value, VmError> {
+    // `VmJobContext::call` expects a `&mut dyn VmHostHooks`. In a trait default method, `Self` may
+    // be `dyn VmHostHooks` (unsized), so we can't directly pass `self` as a trait object without a
+    // `Self: Sized` bound (which would break object safety).
+    //
+    // Wrap `self` in a sized proxy that forwards all host hooks.
+    struct HostProxy<'a, H: VmHostHooks + ?Sized>(&'a mut H);
+
+    impl<H: VmHostHooks + ?Sized> VmHostHooks for HostProxy<'_, H> {
+      fn host_enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>) {
+        self.0.host_enqueue_promise_job(job, realm);
+      }
+
+      fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+        self.0.as_any_mut()
+      }
+
+      fn host_make_job_callback(&mut self, callback: GcObject) -> JobCallback {
+        self.0.host_make_job_callback(callback)
+      }
+
+      fn host_call_job_callback(
+        &mut self,
+        ctx: &mut dyn VmJobContext,
+        callback: &JobCallback,
+        this_argument: Value,
+        arguments: &[Value],
+      ) -> Result<Value, VmError> {
+        self
+          .0
+          .host_call_job_callback(ctx, callback, this_argument, arguments)
+      }
+
+      fn host_promise_rejection_tracker(
+        &mut self,
+        promise: PromiseHandle,
+        operation: PromiseRejectionOperation,
+      ) {
+        self.0.host_promise_rejection_tracker(promise, operation);
+      }
+
+      fn host_get_supported_import_attributes(&self) -> &'static [&'static str] {
+        self.0.host_get_supported_import_attributes()
+      }
+
+      fn host_load_imported_module(
+        &mut self,
+        ctx: &mut dyn VmModuleLoadingContext,
+        referrer: ModuleReferrer,
+        module_request: ModuleRequest,
+        host_defined: HostDefined,
+        payload: ModuleLoadPayload,
+      ) {
+        self.0.host_load_imported_module(
+          ctx,
+          referrer,
+          module_request,
+          host_defined,
+          payload,
+        );
+      }
+    }
+
+    let mut proxy = HostProxy(self);
     ctx.call(
-      self,
+      &mut proxy,
       Value::Object(callback.callback_object()),
       this_argument,
       arguments,
