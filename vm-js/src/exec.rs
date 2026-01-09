@@ -2159,8 +2159,11 @@ impl<'a> Evaluator<'a> {
         let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
         if ok {
           Ok(())
+        } else if self.strict {
+          Err(throw_type_error(self.vm, scope, "Cannot assign to read-only property")?)
         } else {
-          Err(VmError::Unimplemented("OrdinarySet returned false"))
+          // Sloppy-mode assignment to a non-writable/non-extensible target fails silently.
+          Ok(())
         }
       }
     }
@@ -2997,6 +3000,10 @@ impl<'a> Evaluator<'a> {
 
   fn eval_unary(&mut self, scope: &mut Scope<'_>, expr: &UnaryExpr) -> Result<Value, VmError> {
     match expr.operator {
+      OperatorName::PrefixIncrement => self.eval_update_expression(scope, &expr.argument, 1, true),
+      OperatorName::PrefixDecrement => self.eval_update_expression(scope, &expr.argument, -1, true),
+      OperatorName::PostfixIncrement => self.eval_update_expression(scope, &expr.argument, 1, false),
+      OperatorName::PostfixDecrement => self.eval_update_expression(scope, &expr.argument, -1, false),
       OperatorName::Delete => match &*expr.argument.stx {
         Expr::Id(id) => {
           if self.strict {
@@ -3136,6 +3143,49 @@ impl<'a> Evaluator<'a> {
         self.vm.construct(&mut new_scope, callee, &args, callee)
       }
       _ => Err(VmError::Unimplemented("unary operator")),
+    }
+  }
+
+  fn eval_update_expression(
+    &mut self,
+    scope: &mut Scope<'_>,
+    argument: &Node<Expr>,
+    delta: i8,
+    prefix: bool,
+  ) -> Result<Value, VmError> {
+    let reference = self.eval_reference(scope, argument)?;
+    let mut update_scope = scope.reborrow();
+    self.root_reference(&mut update_scope, &reference)?;
+
+    let old_value = self.get_value_from_reference(&mut update_scope, &reference)?;
+    update_scope.push_root(old_value)?;
+
+    let old_numeric = self.to_numeric(&mut update_scope, old_value)?;
+    let delta_bigint = if delta >= 0 {
+      JsBigInt::from_u128(delta as u128)
+    } else {
+      JsBigInt::from_u128((-delta) as u128).negate()
+    };
+
+    let (old_out, new_value) = match old_numeric {
+      NumericValue::Number(n) => {
+        let new_n = n + f64::from(delta);
+        (Value::Number(n), Value::Number(new_n))
+      }
+      NumericValue::BigInt(b) => {
+        let Some(out) = b.checked_add(delta_bigint) else {
+          return Err(VmError::Unimplemented("BigInt increment/decrement overflow"));
+        };
+        (Value::BigInt(b), Value::BigInt(out))
+      }
+    };
+
+    update_scope.push_root(new_value)?;
+    self.put_value_to_reference(&mut update_scope, &reference, new_value)?;
+    if prefix {
+      Ok(new_value)
+    } else {
+      Ok(old_out)
     }
   }
 
