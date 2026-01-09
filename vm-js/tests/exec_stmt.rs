@@ -219,3 +219,23 @@ fn type_error_object_has_message() {
     "expected message to contain 'not callable', got {actual:?}"
   );
 }
+
+#[test]
+fn try_catch_converts_prototype_cycle_into_type_error_object() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { var o = {}; Object.setPrototypeOf(o, o); } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn try_catch_converts_invalid_property_descriptor_patch_into_type_error_object() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"try { Object.defineProperty({}, "x", { value: 1, get: function() {} }); } catch(e) { e.name }"#,
+    )
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}

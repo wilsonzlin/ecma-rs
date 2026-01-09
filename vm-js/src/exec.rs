@@ -1794,6 +1794,32 @@ impl<'a> Evaluator<'a> {
         let err = new_error(scope, intr.type_error_prototype(), "TypeError", message)?;
         Ok(Completion::Throw(thrown_at_stmt(err)))
       }
+      Err(VmError::PrototypeCycle) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "prototype cycle",
+        )?;
+        Ok(Completion::Throw(err))
+      }
+      Err(VmError::InvalidPropertyDescriptorPatch) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "invalid property descriptor patch: cannot mix data and accessor fields",
+        )?;
+        Ok(Completion::Throw(err))
+      }
       Err(VmError::NotCallable) => {
         let intr = self
           .vm
