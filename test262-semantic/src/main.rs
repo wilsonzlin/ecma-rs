@@ -129,16 +129,6 @@ struct RunArgs {
   /// Glob or regex to filter tests by id (after suite selection).
   #[arg(long)]
   filter: Option<String>,
-
-  /// Harness composition mode.
-  ///
-  /// - `inline` (default): prepend the upstream `test262` harness sources
-  ///   (`assert.js` and `sta.js`) plus any `includes` from YAML frontmatter.
-  /// - `host`: do not automatically prepend `assert.js`/`sta.js`. The
-  ///   executor/host is expected to provide `assert`/`Test262Error` etc. The
-  ///   runner still inlines any `includes` from YAML frontmatter.
-  #[arg(long, value_enum, default_value_t = HarnessMode::Inline)]
-  harness: HarnessMode,
 }
 
 fn main() -> ExitCode {
