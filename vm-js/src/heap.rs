@@ -1266,9 +1266,37 @@ impl Heap {
   pub fn own_property_keys(&self, obj: GcObject) -> Result<Vec<PropertyKey>, VmError> {
     let props = &self.get_object_base(obj)?.properties;
 
+    // This operation allocates temporary vectors sized proportionally to the number of properties.
+    //
+    // Use `try_reserve*` so hostile inputs cannot trigger a process abort via allocator OOM.
+    let (mut array_count, mut string_count, mut symbol_count) = (0usize, 0usize, 0usize);
+    for prop in props.iter() {
+      match prop.key {
+        PropertyKey::String(s) => {
+          if self.string_to_array_index(s).is_some() {
+            array_count = array_count.saturating_add(1);
+          } else {
+            string_count = string_count.saturating_add(1);
+          }
+        }
+        PropertyKey::Symbol(_) => {
+          symbol_count = symbol_count.saturating_add(1);
+        }
+      }
+    }
+
     let mut array_keys: Vec<(u32, PropertyKey)> = Vec::new();
+    array_keys
+      .try_reserve_exact(array_count)
+      .map_err(|_| VmError::OutOfMemory)?;
     let mut string_keys: Vec<PropertyKey> = Vec::new();
+    string_keys
+      .try_reserve_exact(string_count)
+      .map_err(|_| VmError::OutOfMemory)?;
     let mut symbol_keys: Vec<PropertyKey> = Vec::new();
+    symbol_keys
+      .try_reserve_exact(symbol_count)
+      .map_err(|_| VmError::OutOfMemory)?;
 
     for prop in props.iter() {
       match prop.key {
@@ -1285,7 +1313,15 @@ impl Heap {
 
     array_keys.sort_by_key(|(idx, _)| *idx);
 
-    let mut out = Vec::with_capacity(array_keys.len() + string_keys.len() + symbol_keys.len());
+    let out_len = array_keys
+      .len()
+      .checked_add(string_keys.len())
+      .and_then(|n| n.checked_add(symbol_keys.len()))
+      .ok_or(VmError::OutOfMemory)?;
+    let mut out: Vec<PropertyKey> = Vec::new();
+    out
+      .try_reserve_exact(out_len)
+      .map_err(|_| VmError::OutOfMemory)?;
     out.extend(array_keys.into_iter().map(|(_, k)| k));
     out.extend(string_keys);
     out.extend(symbol_keys);
