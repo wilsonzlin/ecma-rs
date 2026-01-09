@@ -171,12 +171,14 @@ impl GcSymbol {
   }
 }
 
-/// A GC-managed internal environment record.
+/// A GC-managed ECMAScript Environment Record.
+///
+/// Environment Records are not JavaScript values (ECMA-262), so they use a dedicated handle type
+/// and a separate rooting API from [`Value`](crate::Value).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
 pub struct GcEnv(pub(crate) HeapId);
 
-#[allow(dead_code)]
 impl GcEnv {
   /// The underlying [`HeapId`].
   #[inline]

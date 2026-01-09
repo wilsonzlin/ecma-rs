@@ -1,4 +1,4 @@
-use crate::env::{EnvBinding, EnvRecord};
+use crate::env::{DeclarativeEnvRecord, EnvBinding, EnvRecord, ObjectEnvRecord};
 use crate::function::{
   CallHandler, ConstructHandler, EcmaFunctionId, FunctionData, JsFunction, NativeConstructId,
   NativeFunctionId, ThisMode,
@@ -732,6 +732,36 @@ impl Heap {
     match self.get_heap_object_mut(env.0)? {
       HeapObject::Env(e) => Ok(e),
       _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Gets the environment record for `env`.
+  ///
+  /// Returns [`VmError::InvalidHandle`] if `env` is stale or points to a non-environment heap
+  /// object.
+  pub(crate) fn get_env_record(&self, env: GcEnv) -> Result<&EnvRecord, VmError> {
+    self.get_env(env)
+  }
+
+  /// Mutably gets the environment record for `env`.
+  ///
+  /// Returns [`VmError::InvalidHandle`] if `env` is stale or points to a non-environment heap
+  /// object.
+  pub(crate) fn get_env_record_mut(&mut self, env: GcEnv) -> Result<&mut EnvRecord, VmError> {
+    self.get_env_mut(env)
+  }
+
+  fn get_declarative_env(&self, env: GcEnv) -> Result<&DeclarativeEnvRecord, VmError> {
+    match self.get_env(env)? {
+      EnvRecord::Declarative(env) => Ok(env),
+      EnvRecord::Object(_) => Err(VmError::Unimplemented("object environment record")),
+    }
+  }
+
+  fn get_declarative_env_mut(&mut self, env: GcEnv) -> Result<&mut DeclarativeEnvRecord, VmError> {
+    match self.get_env_mut(env)? {
+      EnvRecord::Declarative(env) => Ok(env),
+      EnvRecord::Object(_) => Err(VmError::Unimplemented("object environment record")),
     }
   }
   /// Gets an object's `[[Prototype]]`.
@@ -1834,11 +1864,16 @@ impl Heap {
   }
 
   pub(crate) fn env_outer(&self, env: GcEnv) -> Result<Option<GcEnv>, VmError> {
-    Ok(self.get_env(env)?.outer)
+    Ok(self.get_env(env)?.outer())
   }
 
   pub(crate) fn env_has_binding(&self, env: GcEnv, name: &str) -> Result<bool, VmError> {
-    Ok(self.get_env(env)?.find_binding_index(self, name)?.is_some())
+    Ok(
+      self
+        .get_declarative_env(env)?
+        .find_binding_index(self, name)?
+        .is_some(),
+    )
   }
 
   pub(crate) fn env_initialize_binding(
@@ -1850,13 +1885,13 @@ impl Heap {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
 
     let idx = {
-      let rec = self.get_env(env)?;
+      let rec = self.get_declarative_env(env)?;
       rec
         .find_binding_index(self, name)?
         .ok_or(VmError::Unimplemented("unbound identifier"))?
     };
 
-    let rec = self.get_env_mut(env)?;
+    let rec = self.get_declarative_env_mut(env)?;
     let binding = rec
       .bindings
       .get_mut(idx)
@@ -1879,7 +1914,7 @@ impl Heap {
     name: &str,
     _strict: bool,
   ) -> Result<Value, VmError> {
-    let rec = self.get_env(env)?;
+    let rec = self.get_declarative_env(env)?;
     let Some(idx) = rec.find_binding_index(self, name)? else {
       return Err(VmError::Unimplemented("unbound identifier"));
     };
@@ -1907,13 +1942,13 @@ impl Heap {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
 
     let idx = {
-      let rec = self.get_env(env)?;
+      let rec = self.get_declarative_env(env)?;
       rec
         .find_binding_index(self, name)?
         .ok_or(VmError::Unimplemented("unbound identifier"))?
     };
 
-    let rec = self.get_env_mut(env)?;
+    let rec = self.get_declarative_env_mut(env)?;
     let binding = rec
       .bindings
       .get_mut(idx)
@@ -1940,7 +1975,7 @@ impl Heap {
   }
 
   pub fn env_has_symbol_binding(&self, env: GcEnv, symbol: SymbolId) -> Result<bool, VmError> {
-    Ok(self.get_env(env)?.has_symbol_binding(symbol))
+    Ok(self.get_declarative_env(env)?.has_symbol_binding(symbol))
   }
 
   pub fn env_get_symbol_binding_value(
@@ -1948,7 +1983,7 @@ impl Heap {
     env: GcEnv,
     symbol: SymbolId,
   ) -> Result<Value, VmError> {
-    self.get_env(env)?.get_symbol_binding_value(symbol)
+    self.get_declarative_env(env)?.get_symbol_binding_value(symbol)
   }
 
   pub fn env_initialize_symbol_binding(
@@ -1958,7 +1993,9 @@ impl Heap {
     value: Value,
   ) -> Result<(), VmError> {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
-    self.get_env_mut(env)?.initialize_symbol_binding(symbol, value)
+    self
+      .get_declarative_env_mut(env)?
+      .initialize_symbol_binding(symbol, value)
   }
 
   pub fn env_set_mutable_symbol_binding(
@@ -1968,7 +2005,9 @@ impl Heap {
     value: Value,
   ) -> Result<(), VmError> {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
-    self.get_env_mut(env)?.set_mutable_symbol_binding(symbol, value)
+    self
+      .get_declarative_env_mut(env)?
+      .set_mutable_symbol_binding(symbol, value)
   }
 
   fn env_add_binding(&mut self, env: GcEnv, binding: EnvBinding) -> Result<(), VmError> {
@@ -1978,6 +2017,9 @@ impl Heap {
       let slot = &self.slots[idx];
       let Some(HeapObject::Env(env)) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
+      };
+      let EnvRecord::Declarative(env) = env else {
+        return Err(VmError::Unimplemented("object environment record"));
       };
       (env.bindings.len(), slot.bytes)
     };
@@ -2001,6 +2043,9 @@ impl Heap {
       let Some(HeapObject::Env(env)) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
       };
+      let EnvRecord::Declarative(env) = env else {
+        return Err(VmError::Unimplemented("object environment record"));
+      };
       buf.extend_from_slice(&env.bindings);
     }
 
@@ -2013,6 +2058,9 @@ impl Heap {
 
     let Some(HeapObject::Env(env)) = self.slots[idx].value.as_mut() else {
       return Err(VmError::InvalidHandle);
+    };
+    let EnvRecord::Declarative(env) = env else {
+      return Err(VmError::Unimplemented("object environment record"));
     };
     env.bindings = bindings;
 
@@ -3138,7 +3186,7 @@ impl<'a> Scope<'a> {
     Ok(func)
   }
 
-  pub fn alloc_env_record(
+  pub fn alloc_declarative_env_record(
     &mut self,
     outer: Option<GcEnv>,
     bindings: &[EnvBinding],
@@ -3181,12 +3229,45 @@ impl<'a> Scope<'a> {
 
     let bindings = buf.into_boxed_slice();
     let env = EnvRecord::new_with_bindings(outer, bindings);
-    debug_assert_eq!(
-      new_bytes,
-      EnvRecord::heap_size_bytes_for_binding_count(env.bindings.len())
-    );
 
     let obj = HeapObject::Env(env);
+    Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
+  }
+
+  /// Convenience alias for [`Scope::alloc_declarative_env_record`].
+  pub fn alloc_env_record(&mut self, outer: Option<GcEnv>, bindings: &[EnvBinding]) -> Result<GcEnv, VmError> {
+    self.alloc_declarative_env_record(outer, bindings)
+  }
+
+  pub fn alloc_object_env_record(
+    &mut self,
+    binding_object: GcObject,
+    outer: Option<GcEnv>,
+    with_environment: bool,
+  ) -> Result<GcEnv, VmError> {
+    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    if !scope.heap().is_valid_object(binding_object) {
+      return Err(VmError::InvalidHandle);
+    }
+    scope.push_root(Value::Object(binding_object))?;
+    if let Some(outer) = outer {
+      if !scope.heap().is_valid_env(outer) {
+        return Err(VmError::InvalidHandle);
+      }
+      scope.push_env_root(outer)?;
+    }
+
+    // Object environment records have no heap-owned payload allocations; their header is stored
+    // inline in the heap slot table and is accounted for in heap metadata overhead.
+    let new_bytes = 0usize;
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Env(EnvRecord::Object(ObjectEnvRecord {
+      outer,
+      binding_object,
+      with_environment,
+    }));
     Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 

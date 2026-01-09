@@ -1,17 +1,17 @@
 use crate::heap::{Trace, Tracer};
-use crate::{GcEnv, GcString, Heap, Value, VmError};
+use crate::{GcEnv, GcObject, GcString, Heap, Value, VmError};
 use core::mem;
 use semantic_js::js::SymbolId;
 
 #[derive(Debug)]
-pub(crate) struct EnvRecord {
+pub(crate) struct DeclarativeEnvRecord {
   pub(crate) outer: Option<GcEnv>,
   pub(crate) bindings: Box<[EnvBinding]>,
   pub(crate) this_value: Option<Value>,
   pub(crate) new_target: Option<Value>,
 }
 
-impl EnvRecord {
+impl DeclarativeEnvRecord {
   pub(crate) fn new(outer: Option<GcEnv>) -> Self {
     Self {
       outer,
@@ -30,18 +30,11 @@ impl EnvRecord {
     }
   }
 
-  pub(crate) fn heap_size_bytes_for_binding_count(count: usize) -> usize {
-    // Payload bytes owned by this environment record allocation.
-    //
-    // Note: `EnvRecord` headers are stored inline in the heap slot table, so this size
-    // intentionally excludes `mem::size_of::<EnvRecord>()` and only counts the backing binding
-    // table allocation.
-    count
-      .checked_mul(mem::size_of::<EnvBinding>())
-      .unwrap_or(usize::MAX)
-  }
-
-  pub(crate) fn find_binding_index(&self, heap: &Heap, name: &str) -> Result<Option<usize>, VmError> {
+  pub(crate) fn find_binding_index(
+    &self,
+    heap: &Heap,
+    name: &str,
+  ) -> Result<Option<usize>, VmError> {
     for (idx, binding) in self.bindings.iter().enumerate() {
       let Some(binding_name) = binding.name else {
         continue;
@@ -128,19 +121,71 @@ impl EnvRecord {
   }
 }
 
+#[derive(Debug)]
+pub(crate) struct ObjectEnvRecord {
+  pub(crate) outer: Option<GcEnv>,
+  pub(crate) binding_object: GcObject,
+  #[allow(dead_code)]
+  pub(crate) with_environment: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum EnvRecord {
+  Declarative(DeclarativeEnvRecord),
+  Object(ObjectEnvRecord),
+}
+
+impl EnvRecord {
+  pub(crate) fn new(outer: Option<GcEnv>) -> Self {
+    EnvRecord::Declarative(DeclarativeEnvRecord::new(outer))
+  }
+
+  pub(crate) fn new_with_bindings(outer: Option<GcEnv>, bindings: Box<[EnvBinding]>) -> Self {
+    EnvRecord::Declarative(DeclarativeEnvRecord::new_with_bindings(outer, bindings))
+  }
+
+  pub(crate) fn heap_size_bytes_for_binding_count(count: usize) -> usize {
+    // Payload bytes owned by this environment record allocation.
+    //
+    // Note: `EnvRecord` headers are stored inline in the heap slot table, so this size
+    // intentionally excludes `mem::size_of::<EnvRecord>()` and only counts the backing binding
+    // table allocation.
+    count
+      .checked_mul(mem::size_of::<EnvBinding>())
+      .unwrap_or(usize::MAX)
+  }
+
+  pub(crate) fn outer(&self) -> Option<GcEnv> {
+    match self {
+      EnvRecord::Declarative(env) => env.outer,
+      EnvRecord::Object(env) => env.outer,
+    }
+  }
+}
+
 impl Trace for EnvRecord {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    if let Some(outer) = self.outer {
-      tracer.trace_env(outer);
-    }
-    for binding in self.bindings.iter() {
-      binding.trace(tracer);
-    }
-    if let Some(this_value) = self.this_value {
-      tracer.trace_value(this_value);
-    }
-    if let Some(new_target) = self.new_target {
-      tracer.trace_value(new_target);
+    match self {
+      EnvRecord::Declarative(env) => {
+        if let Some(outer) = env.outer {
+          tracer.trace_env(outer);
+        }
+        for binding in env.bindings.iter() {
+          binding.trace(tracer);
+        }
+        if let Some(this_value) = env.this_value {
+          tracer.trace_value(this_value);
+        }
+        if let Some(new_target) = env.new_target {
+          tracer.trace_value(new_target);
+        }
+      }
+      EnvRecord::Object(env) => {
+        if let Some(outer) = env.outer {
+          tracer.trace_env(outer);
+        }
+        tracer.trace_value(Value::Object(env.binding_object));
+      }
     }
   }
 }
