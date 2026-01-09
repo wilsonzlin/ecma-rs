@@ -25,6 +25,17 @@ fn closure_mutates_captured_binding() {
 }
 
 #[test]
+fn multiple_closures_share_captured_binding() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      "function make(){ let x = 0; function inc(){ x = x + 1; } function get(){ return x; } return [inc, get]; } var a = make(); a[0](); a[0](); a[1]()",
+    )
+    .unwrap();
+  assert_eq!(value, Value::Number(2.0));
+}
+
+#[test]
 fn closure_capture_survives_gc() {
   let mut rt = new_runtime();
   rt
@@ -152,6 +163,39 @@ fn arrow_functions_are_not_constructable() {
   let mut rt = new_runtime();
   let value = rt
     .exec_script(r#"try { new ((x) => x); } catch(e) { e.name === "TypeError" }"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn arrow_this_is_lexical_and_ignores_call_site() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        var a = {};
+        var b = {};
+        function makeArrow(){ return (x) => this; }
+        var arrow = makeArrow.call(a);
+        b.f = arrow;
+        (arrow.call(b) === a) && (b.f() === a)
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn arrow_new_target_is_lexical_undefined_in_plain_call() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        function outer(){ return (x) => new.target; }
+        var arrow = outer();
+        arrow() === undefined
+      "#,
+    )
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
