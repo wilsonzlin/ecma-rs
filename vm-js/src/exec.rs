@@ -1,7 +1,10 @@
-use crate::{Heap, RootId, Scope, Value, Vm, VmError};
+use crate::{
+  GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm,
+  VmError,
+};
 use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
-use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
+use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, MemberExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode};
@@ -66,18 +69,37 @@ struct Binding {
   mutable: bool,
 }
 
-#[derive(Debug, Default)]
-struct Env {
-  var: HashMap<String, Binding>,
+fn global_var_desc(value: Value) -> PropertyDescriptor {
+  PropertyDescriptor {
+    enumerable: true,
+    configurable: true,
+    kind: PropertyKind::Data {
+      value,
+      writable: true,
+    },
+  }
+}
+
+#[derive(Debug)]
+struct GlobalEnv {
+  global_object: GcObject,
   lexical: Vec<HashMap<String, Binding>>,
 }
 
-impl Env {
-  fn new() -> Self {
+impl GlobalEnv {
+  fn new(global_object: GcObject) -> Self {
     // Start with the global lexical environment frame.
     Self {
-      var: HashMap::new(),
+      global_object,
       lexical: vec![HashMap::new()],
+    }
+  }
+
+  fn teardown(&mut self, heap: &mut Heap) {
+    for frame in self.lexical.drain(..) {
+      for binding in frame.values() {
+        heap.remove_root(binding.root);
+      }
     }
   }
 
@@ -101,18 +123,24 @@ impl Env {
     }
   }
 
-  fn declare_var(&mut self, heap: &mut Heap, name: &str) {
-    if self.var.contains_key(name) {
-      return;
+  fn declare_var(&mut self, scope: &mut Scope<'_>, name: &str) -> Result<(), VmError> {
+    let global_object = self.global_object;
+
+    // Root the global object across property-key allocation in case it triggers GC.
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(global_object));
+
+    let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+    if key_scope
+      .heap()
+      .object_get_own_property(global_object, &key)?
+      .is_some()
+    {
+      return Ok(());
     }
-    let root = heap.add_root(Value::Undefined);
-    self.var.insert(
-      name.to_string(),
-      Binding {
-        root,
-        mutable: true,
-      },
-    );
+
+    key_scope.define_property(global_object, key, global_var_desc(Value::Undefined))?;
+    Ok(())
   }
 
   fn declare_lexical(
@@ -134,43 +162,130 @@ impl Env {
     Ok(())
   }
 
-  fn get(&self, heap: &Heap, name: &str) -> Option<Value> {
+  fn get(&self, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
     for frame in self.lexical.iter().rev() {
       if let Some(binding) = frame.get(name) {
-        return heap.get_root(binding.root);
+        return Ok(scope.heap().get_root(binding.root));
       }
     }
-    self.var.get(name).and_then(|binding| heap.get_root(binding.root))
+
+    // Fall back to global object property lookup.
+    let global_object = self.global_object;
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(global_object));
+    let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+    let Some(desc) = key_scope.heap().get_property(global_object, &key)? else {
+      return Ok(None);
+    };
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(Some(value)),
+      PropertyKind::Accessor { .. } => Err(VmError::Unimplemented("accessor properties")),
+    }
   }
 
-  fn set(&mut self, heap: &mut Heap, name: &str, value: Value) -> Result<(), VmError> {
+  fn set(
+    &mut self,
+    scope: &mut Scope<'_>,
+    name: &str,
+    value: Value,
+    strict: bool,
+  ) -> Result<(), VmError> {
     for frame in self.lexical.iter_mut().rev() {
       if let Some(binding) = frame.get(name).copied() {
         if !binding.mutable {
           // TODO: Should throw a TypeError.
           return Err(VmError::Unimplemented("assignment to const"));
         }
-        heap.set_root(binding.root, value);
+        scope.heap_mut().set_root(binding.root, value);
         return Ok(());
       }
     }
 
-    if let Some(binding) = self.var.get(name).copied() {
-      heap.set_root(binding.root, value);
+    // Assignment to global (var) bindings is backed by the global object.
+    let global_object = self.global_object;
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(global_object));
+    // Root `value` across key allocation and property definition in case they trigger GC.
+    key_scope.push_root(value);
+    let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+
+    let has_binding = key_scope.heap().has_property(global_object, &key)?;
+    if !has_binding {
+      if strict {
+        // TODO: Should throw a ReferenceError.
+        return Err(VmError::Unimplemented(
+          "assignment to undeclared identifier in strict mode",
+        ));
+      }
+
+      // Sloppy-mode: create a new global `var` property.
+      key_scope.define_property(global_object, key, global_var_desc(value))?;
       return Ok(());
     }
 
-    // Sloppy-mode fallback: create a global `var` binding.
-    self.declare_var(heap, name);
-    let binding = self.var.get(name).copied().unwrap();
-    heap.set_root(binding.root, value);
+    if let Some(desc) = key_scope
+      .heap()
+      .object_get_own_property(global_object, &key)?
+    {
+      match desc.kind {
+        PropertyKind::Data { writable: true, .. } => {
+          key_scope
+            .heap_mut()
+            .object_set_existing_data_property_value(global_object, &key, value)?;
+          return Ok(());
+        }
+        PropertyKind::Data { writable: false, .. } => {
+          // TODO: Should throw a TypeError in strict mode; sloppy-mode is a no-op.
+          return Err(VmError::Unimplemented("assignment to non-writable global property"));
+        }
+        PropertyKind::Accessor { .. } => {
+          return Err(VmError::Unimplemented("accessor properties"));
+        }
+      }
+    }
+
+    // Property is inherited through the prototype chain: define an own data property.
+    key_scope.define_property(global_object, key, global_var_desc(value))?;
     Ok(())
   }
 
-  fn set_var(&mut self, heap: &mut Heap, name: &str, value: Value) -> Result<(), VmError> {
-    self.declare_var(heap, name);
-    let binding = self.var.get(name).copied().unwrap();
-    heap.set_root(binding.root, value);
+  fn set_var(&mut self, scope: &mut Scope<'_>, name: &str, value: Value) -> Result<(), VmError> {
+    // `var` declarations always assign to the global var environment (the global object), even when
+    // a lexical binding shadows the identifier (e.g. a `catch(e)` parameter).
+    //
+    // Root the initializer value across global-binding creation in case it triggers GC.
+    let mut outer_scope = scope.reborrow();
+    outer_scope.push_root(value);
+    self.declare_var(&mut outer_scope, name)?;
+
+    let global_object = self.global_object;
+    let mut key_scope = outer_scope.reborrow();
+    key_scope.push_root(Value::Object(global_object));
+    key_scope.push_root(value);
+    let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+
+    if let Some(desc) = key_scope
+      .heap()
+      .object_get_own_property(global_object, &key)?
+    {
+      match desc.kind {
+        PropertyKind::Data { writable: true, .. } => {
+          key_scope
+            .heap_mut()
+            .object_set_existing_data_property_value(global_object, &key, value)?;
+          return Ok(());
+        }
+        PropertyKind::Data { writable: false, .. } => {
+          return Err(VmError::Unimplemented("assignment to non-writable global property"));
+        }
+        PropertyKind::Accessor { .. } => {
+          return Err(VmError::Unimplemented("accessor properties"));
+        }
+      }
+    }
+
+    // If the binding was inherited through the prototype chain, define an own data property.
+    key_scope.define_property(global_object, key, global_var_desc(value))?;
     Ok(())
   }
 }
@@ -179,16 +294,25 @@ impl Env {
 pub struct JsRuntime {
   pub vm: Vm,
   pub heap: Heap,
-  env: Env,
+  realm: Realm,
+  env: GlobalEnv,
 }
 
 impl JsRuntime {
-  pub fn new(vm: Vm, heap: Heap) -> Self {
-    Self {
+  pub fn new(vm: Vm, heap: Heap) -> Result<Self, VmError> {
+    let mut heap = heap;
+    let realm = Realm::new(&mut heap)?;
+    let env = GlobalEnv::new(realm.global_object());
+    Ok(Self {
       vm,
       heap,
-      env: Env::new(),
-    }
+      realm,
+      env,
+    })
+  }
+
+  pub fn realm(&self) -> &Realm {
+    &self.realm
   }
 
   pub fn heap(&self) -> &Heap {
@@ -208,14 +332,12 @@ impl JsRuntime {
     let top = parse_with_options(source, opts)
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
 
-    let heap = &mut self.heap;
+    let mut scope = self.heap.scope();
     let mut evaluator = Evaluator {
       vm: &mut self.vm,
       env: &mut self.env,
     };
-    evaluator.hoist_var_decls(heap, &top.stx.body)?;
-
-    let mut scope = heap.scope();
+    evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
     let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
     match completion {
       Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
@@ -228,19 +350,32 @@ impl JsRuntime {
 
 }
 
+impl Drop for JsRuntime {
+  fn drop(&mut self) {
+    // Unregister persistent roots created by global lexical bindings and the realm. This keeps heap
+    // reuse in tests/embeddings from accumulating roots and satisfies `Realm`'s debug assertion.
+    self.env.teardown(&mut self.heap);
+    self.realm.teardown(&mut self.heap);
+  }
+}
+
 struct Evaluator<'a> {
   vm: &'a mut Vm,
-  env: &'a mut Env,
+  env: &'a mut GlobalEnv,
 }
 
 impl<'a> Evaluator<'a> {
-  fn hoist_var_decls(&mut self, heap: &mut Heap, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
+  fn hoist_var_decls(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
     let mut names = HashSet::<String>::new();
     for stmt in stmts {
       self.collect_var_names(&stmt.stx, &mut names)?;
     }
     for name in names {
-      self.env.declare_var(heap, &name);
+      self.env.declare_var(scope, &name)?;
     }
     Ok(())
   }
@@ -414,7 +549,7 @@ impl<'a> Evaluator<'a> {
           };
           let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
           let value = self.eval_expr(scope, init)?;
-          self.env.set_var(scope.heap_mut(), name, value)?;
+          self.env.set_var(scope, name, value)?;
         }
         Ok(Completion::empty())
       }
@@ -632,6 +767,7 @@ impl<'a> Evaluator<'a> {
       Expr::LitBool(node) => self.eval_lit_bool(&node.stx),
       Expr::LitNull(_) => Ok(Value::Null),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
+      Expr::Member(node) => self.eval_member(scope, &node.stx),
       Expr::Binary(node) => self.eval_binary(scope, &node.stx),
 
       // Patterns sometimes show up in expression position (e.g. assignment targets). We only
@@ -658,15 +794,40 @@ impl<'a> Evaluator<'a> {
   fn eval_id(&self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
     self
       .env
-      .get(scope.heap(), &expr.name)
+      .get(scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
   fn eval_id_pat(&self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
     self
       .env
-      .get(scope.heap(), &expr.name)
+      .get(scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
+  }
+
+  fn eval_member(&mut self, scope: &mut Scope<'_>, expr: &MemberExpr) -> Result<Value, VmError> {
+    if expr.optional_chaining {
+      return Err(VmError::Unimplemented("optional chaining"));
+    }
+
+    let object_value = self.eval_expr(scope, &expr.left)?;
+    let Value::Object(obj) = object_value else {
+      // TODO: should throw TypeError.
+      return Err(VmError::Unimplemented("member access on non-object"));
+    };
+
+    // Root the receiver across property key allocation in case it triggers GC.
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(object_value);
+    let key = PropertyKey::from_string(key_scope.alloc_string(&expr.right)?);
+
+    let Some(desc) = key_scope.heap().get_property(obj, &key)? else {
+      return Ok(Value::Undefined);
+    };
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(value),
+      PropertyKind::Accessor { .. } => Err(VmError::Unimplemented("accessor properties")),
+    }
   }
 
   fn eval_binary(&mut self, scope: &mut Scope<'_>, expr: &BinaryExpr) -> Result<Value, VmError> {
@@ -687,7 +848,7 @@ impl<'a> Evaluator<'a> {
           _ => return Err(VmError::Unimplemented("assignment target")),
         };
         let value = self.eval_expr(scope, &expr.right)?;
-        self.env.set(scope.heap_mut(), name, value)?;
+        self.env.set(scope, name, value, false)?;
         Ok(value)
       }
       _ => Err(VmError::Unimplemented("binary operator")),
