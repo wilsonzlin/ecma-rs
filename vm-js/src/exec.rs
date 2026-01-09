@@ -234,6 +234,21 @@ struct Evaluator<'a> {
 }
 
 impl<'a> Evaluator<'a> {
+  /// Runs one VM "tick".
+  ///
+  /// ## Tick policy (AST evaluator)
+  ///
+  /// This interpreter charges **one tick** at the start of every statement evaluation
+  /// ([`Evaluator::eval_stmt`]) and every expression evaluation ([`Evaluator::eval_expr`]).
+  ///
+  /// Some constructs (e.g. `for(;;){}` with an empty body and no condition/update expressions) may
+  /// otherwise loop without evaluating any statements/expressions per iteration; those paths tick
+  /// explicitly as well.
+  #[inline]
+  fn tick(&mut self) -> Result<(), VmError> {
+    self.vm.tick()
+  }
+
   fn hoist_var_decls(&mut self, heap: &mut Heap, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
     let mut names = HashSet::<String>::new();
     for stmt in stmts {
@@ -368,7 +383,7 @@ impl<'a> Evaluator<'a> {
 
   fn eval_stmt(&mut self, scope: &mut Scope<'_>, stmt: &Node<Stmt>) -> Result<Completion, VmError> {
     // One tick per statement.
-    self.vm.tick()?;
+    self.tick()?;
 
     match &*stmt.stx {
       Stmt::Empty(_) => Ok(Completion::empty()),
@@ -537,8 +552,6 @@ impl<'a> Evaluator<'a> {
 
   fn eval_while(&mut self, scope: &mut Scope<'_>, stmt: &WhileStmt) -> Result<Completion, VmError> {
     loop {
-      // One tick per loop iteration.
-      self.vm.tick()?;
       let test = self.eval_expr(scope, &stmt.condition)?;
       if !to_boolean(scope.heap(), test)? {
         break;
@@ -560,9 +573,6 @@ impl<'a> Evaluator<'a> {
     stmt: &DoWhileStmt,
   ) -> Result<Completion, VmError> {
     loop {
-      // One tick per loop iteration.
-      self.vm.tick()?;
-
       match self.eval_stmt(scope, &stmt.body)? {
         Completion::Normal(_) => {}
         Completion::Continue(None, _) => {}
@@ -595,9 +605,19 @@ impl<'a> Evaluator<'a> {
       }
     }
 
+    // Most `for` loop iterations are naturally budgeted by ticks in:
+    // - condition/update expression evaluation (if present), and/or
+    // - evaluating at least one statement in the loop body.
+    //
+    // However, `for(;;){}` executes no statements/expressions per iteration. Tick explicitly to
+    // ensure budgets/interrupts are still observed.
+    let needs_explicit_iter_tick =
+      stmt.cond.is_none() && stmt.post.is_none() && stmt.body.stx.body.is_empty();
+
     loop {
-      // One tick per loop iteration.
-      self.vm.tick()?;
+      if needs_explicit_iter_tick {
+        self.tick()?;
+      }
 
       if let Some(cond) = &stmt.cond {
         let test = self.eval_expr(scope, cond)?;
@@ -626,6 +646,9 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_expr(&mut self, scope: &mut Scope<'_>, expr: &Node<Expr>) -> Result<Value, VmError> {
+    // One tick per expression.
+    self.tick()?;
+
     match &*expr.stx {
       Expr::LitStr(node) => self.eval_lit_str(scope, &node.stx),
       Expr::LitNum(node) => self.eval_lit_num(&node.stx),

@@ -252,6 +252,16 @@ impl Vm {
   }
 
   /// Consume one VM "tick": checks fuel/deadline/interrupt state.
+  ///
+  /// ## Tick policy
+  ///
+  /// `Vm` itself does not prescribe what a tick means; ticks are an execution-engine-defined unit
+  /// of work.
+  ///
+  /// The current AST evaluator (`exec.rs`) charges **one tick** at the start of every statement and
+  /// expression evaluation. Additional ticks are charged in a few internal loops that may
+  /// otherwise run without evaluating any statements/expressions (e.g. `for(;;){}` with an empty
+  /// body), and when entering [`Vm::call`] / [`Vm::construct`].
   pub fn tick(&mut self) -> Result<(), VmError> {
     if let Some(fuel) = &mut self.budget.budget.fuel {
       if *fuel == 0 {
@@ -322,6 +332,7 @@ impl Vm {
 
     self.push_frame(frame)?;
     let _guard = FrameGuard::new(self);
+    // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
     self.tick()?;
 
     self.dispatch_native_call(call_id, &mut scope, this, args)
@@ -375,6 +386,8 @@ impl Vm {
 
     self.push_frame(frame)?;
     let _guard = FrameGuard::new(self);
+    // Budget/interrupt check for host-initiated construction that may not pass through the
+    // evaluator.
     self.tick()?;
 
     self.dispatch_native_construct(construct_id, &mut scope, args, new_target)
