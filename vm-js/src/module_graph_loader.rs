@@ -16,6 +16,7 @@
 //! resolved/rejected once.
 
 use crate::execution_context::ModuleId;
+pub use crate::module_record::ModuleStatus;
 use crate::VmError;
 
 /// A module request record.
@@ -32,16 +33,6 @@ use std::collections::HashMap;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::Arc;
-
-/// Module linking/loading status.
-///
-/// This is a minimal subset of ECMA-262's `ModuleStatus` enum; additional states will be added as
-/// module linking/evaluation are implemented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ModuleStatus {
-  New,
-  Unlinked,
-}
 
 /// A cyclic module record (minimal surface for graph loading).
 #[derive(Clone, Debug)]

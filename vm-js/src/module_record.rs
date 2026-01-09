@@ -1,6 +1,7 @@
 use crate::execution_context::ModuleId;
 use crate::module_graph::ModuleGraph;
 use crate::ImportAttribute;
+use crate::LoadedModuleRequest;
 use crate::ModuleRequest;
 use crate::RootId;
 use crate::VmError;
@@ -15,6 +16,17 @@ use parse_js::lex::KEYWORDS_MAPPING;
 use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::collections::HashSet;
+
+/// Module linking/loading status.
+///
+/// This is a minimal subset of ECMA-262's `ModuleStatus` enum; additional states will be added as
+/// module linking/evaluation are implemented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ModuleStatus {
+  #[default]
+  New,
+  Unlinked,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalExportEntry {
@@ -71,12 +83,13 @@ pub(crate) struct ModuleNamespaceCache {
 #[derive(Clone, Debug, Default)]
 pub struct SourceTextModuleRecord {
   pub requested_modules: Vec<ModuleRequest>,
+  pub status: ModuleStatus,
   pub local_export_entries: Vec<LocalExportEntry>,
   pub indirect_export_entries: Vec<IndirectExportEntry>,
   pub star_export_entries: Vec<StarExportEntry>,
 
   /// `[[LoadedModules]]` – a host-populated mapping from module requests to resolved module ids.
-  pub loaded_modules: Vec<(ModuleRequest, ModuleId)>,
+  pub loaded_modules: Vec<LoadedModuleRequest<ModuleId>>,
 
   /// `[[Namespace]]` – cached module namespace object + sorted `[[Exports]]` list.
   ///

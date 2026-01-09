@@ -104,13 +104,10 @@ fn get_array_like_args(scope: &mut Scope<'_>, obj: GcObject) -> Result<Vec<Value
 }
 
 fn set_function_realm_to_current(
-  vm: &Vm,
-  scope: &mut Scope<'_>,
-  func: GcObject,
+  _vm: &Vm,
+  _scope: &mut Scope<'_>,
+  _func: GcObject,
 ) -> Result<(), VmError> {
-  if let Some(realm) = vm.current_realm() {
-    scope.heap_mut().set_function_realm(func, realm)?;
-  }
   Ok(())
 }
 
@@ -714,11 +711,10 @@ pub(crate) fn new_promise_capability(
   }
 
   let promise_obj = new_promise(vm, scope)?;
-  let promise = Value::Object(promise_obj);
-  scope.push_root(promise)?;
+  scope.push_root(Value::Object(promise_obj))?;
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise_obj)?;
   Ok(PromiseCapability {
-    promise,
+    promise: promise_obj,
     resolve,
     reject,
   })
@@ -788,15 +784,10 @@ fn promise_resolve_abstract(
 
   // Root the promise + resolving function for the duration of the resolve call (which may
   // allocate/GC).
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   let _ = vm.call_with_host(&mut scope, host, capability.resolve, Value::Undefined, &[x])?;
-  let Value::Object(promise) = capability.promise else {
-    return Err(VmError::InvariantViolation(
-      "new_promise_capability returned non-object promise",
-    ));
-  };
-  Ok(promise)
+  Ok(capability.promise)
 }
 
 fn create_promise_resolving_functions(
@@ -867,11 +858,12 @@ fn enqueue_promise_reaction_job(
   argument: Value,
   current_realm: Option<RealmId>,
 ) -> Result<(), VmError> {
-  let handler_callback_object = reaction.handler.as_ref().map(|h| h.callback_object());
-  let realm = match handler_callback_object {
-    None => None,
-    Some(handler) => scope.heap().get_function_realm(handler).or(current_realm),
-  };
+  let handler_callback_object = reaction.handler.as_ref().map(|handler| handler.callback_object());
+  let realm = reaction
+    .handler
+    .as_ref()
+    .and_then(|handler| handler.realm())
+    .or(current_realm);
   let capability = reaction.capability;
 
   let job = Job::new(JobKind::Promise, move |ctx, host| {
@@ -930,7 +922,7 @@ fn enqueue_promise_reaction_job(
     value_count += 1;
   }
   if let Some(cap) = capability {
-    values[value_count] = cap.promise;
+    values[value_count] = Value::Object(cap.promise);
     value_count += 1;
     values[value_count] = cap.resolve;
     value_count += 1;
@@ -1093,7 +1085,7 @@ fn resolve_promise(
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
 
   let callback_obj = then_job_callback.callback_object();
-  let realm = scope.heap().get_function_realm(then_obj).or(current_realm);
+  let realm = then_job_callback.realm().or(current_realm);
   let job = Job::new(JobKind::Promise, move |ctx, host| {
     match host.host_call_job_callback(ctx, &then_job_callback, resolution, &[resolve, reject]) {
       Ok(_) => Ok(()),
@@ -1315,7 +1307,7 @@ pub(crate) fn perform_promise_then(
   scope.push_root(Value::Object(result_promise))?;
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, result_promise)?;
   let capability = PromiseCapability {
-    promise: Value::Object(result_promise),
+    promise: result_promise,
     resolve,
     reject,
   };
@@ -1606,7 +1598,7 @@ pub fn promise_try(
   let capability = new_promise_capability(vm, scope, host, this)?;
 
   // Root the promise + resolving functions for the duration of the callback call.
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -1621,7 +1613,7 @@ pub fn promise_try(
     Err(e) => return Err(e),
   }
 
-  Ok(capability.promise)
+  Ok(Value::Object(capability.promise))
 }
 
 pub fn promise_with_resolvers(
@@ -1636,7 +1628,7 @@ pub fn promise_with_resolvers(
 
   let capability = new_promise_capability(vm, scope, host, this)?;
   // Root the new promise and resolving functions before allocating the result object.
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -1650,7 +1642,7 @@ pub fn promise_with_resolvers(
   scope.define_property(
     obj,
     promise_key,
-    data_desc(capability.promise, true, true, true),
+    data_desc(Value::Object(capability.promise), true, true, true),
   )?;
 
   let resolve_key = PropertyKey::from_string(scope.alloc_string("resolve")?);
@@ -1786,7 +1778,7 @@ fn if_abrupt_reject_promise(
     return Err(completion);
   };
   let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[reason])?;
-  Ok(capability.promise)
+  Ok(Value::Object(capability.promise))
 }
 
 fn perform_promise_all(
@@ -1836,7 +1828,7 @@ fn perform_promise_all(
           &[Value::Object(values)],
         )?;
       }
-      return Ok(capability.promise);
+      return Ok(Value::Object(capability.promise));
     };
 
     // Use a nested scope so temporary roots created while wiring each element do not accumulate.
@@ -1920,7 +1912,7 @@ pub fn promise_all(
 
   // Root the resulting promise and resolving functions so `IfAbruptRejectPromise` can call them
   // even if the iterator acquisition/loop allocates and triggers GC.
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -1969,7 +1961,7 @@ fn perform_promise_race(
   loop {
     let next_value = crate::iterator::iterator_step_value(vm, scope, iterator_record)?;
     let Some(next_value) = next_value else {
-      return Ok(capability.promise);
+      return Ok(Value::Object(capability.promise));
     };
 
     let next_promise = vm.call_with_host(scope, host, promise_resolve, constructor, &[next_value])?;
@@ -1988,7 +1980,7 @@ pub fn promise_race(
   // `Promise.race(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
   let capability = new_promise_capability(vm, scope, host, this)?;
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -2068,7 +2060,7 @@ fn perform_promise_all_settled(
           &[Value::Object(values)],
         )?;
       }
-      return Ok(capability.promise);
+      return Ok(Value::Object(capability.promise));
     };
 
     // Use a nested scope so temporary roots created while wiring each element do not accumulate.
@@ -2170,7 +2162,7 @@ pub fn promise_all_settled(
   // `Promise.allSettled(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
   let capability = new_promise_capability(vm, scope, host, this)?;
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -2258,7 +2250,7 @@ fn perform_promise_any(
           &[aggregate],
         )?;
       }
-      return Ok(capability.promise);
+      return Ok(Value::Object(capability.promise));
     };
 
     let mut step_scope = scope.reborrow();
@@ -2335,7 +2327,7 @@ pub fn promise_any(
   // `Promise.any(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
   let capability = new_promise_capability(vm, scope, host, this)?;
-  scope.push_root(capability.promise)?;
+  scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
@@ -2804,9 +2796,8 @@ pub fn function_prototype_bind(
   )?;
   crate::function_properties::set_function_length(scope, func, bound_len)?;
 
-  // Spec: BoundFunctionCreate sets `F.[[Realm]]` to the target function's realm (fallback to the
-  // current realm if unknown).
-  let realm = scope.heap().get_function_realm(target).or(vm.current_realm());
+  // Spec: BoundFunctionCreate sets `F.[[Realm]]` to the target function's realm.
+  let realm = scope.heap().get_function_realm(target)?;
   if let Some(realm) = realm {
     scope.heap_mut().set_function_realm(func, realm)?;
   }

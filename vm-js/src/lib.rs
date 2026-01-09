@@ -151,7 +151,7 @@ pub use crate::module_loading::LoadedModulesOwner;
 pub use crate::module_loading::ModuleCompletion;
 pub use crate::module_loading::ModuleLoadPayload;
 pub use crate::module_loading::ModuleReferrer;
-pub use crate::module_loading::PromiseCapability as ImportPromiseCapability;
+pub use crate::promise::PromiseCapability as ImportPromiseCapability;
 pub use crate::module_loading::VmModuleLoadingContext;
 pub use crate::module_request::cmp_utf16;
 pub use crate::module_request::module_requests_equal;

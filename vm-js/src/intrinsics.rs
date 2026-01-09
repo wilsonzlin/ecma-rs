@@ -72,6 +72,9 @@ pub struct Intrinsics {
   promise_resolving_function_call: NativeFunctionId,
   promise_finally_handler_call: NativeFunctionId,
   promise_finally_thunk_call: NativeFunctionId,
+  promise_all_resolve_element_call: NativeFunctionId,
+  promise_all_settled_element_call: NativeFunctionId,
+  promise_any_reject_element_call: NativeFunctionId,
 }
 
 #[derive(Clone, Copy)]
@@ -1125,6 +1128,12 @@ impl Intrinsics {
       vm.register_native_call(builtins::promise_finally_handler_call)?;
     let promise_finally_thunk_call =
       vm.register_native_call(builtins::promise_finally_thunk_call)?;
+    let promise_all_resolve_element_call =
+      vm.register_native_call(builtins::promise_all_resolve_element_call)?;
+    let promise_all_settled_element_call =
+      vm.register_native_call(builtins::promise_all_settled_element_call)?;
+    let promise_any_reject_element_call =
+      vm.register_native_call(builtins::promise_any_reject_element_call)?;
 
     let promise_call = vm.register_native_call(builtins::promise_constructor_call)?;
     let promise_construct = vm.register_native_construct(builtins::promise_constructor_construct)?;
@@ -1354,6 +1363,9 @@ impl Intrinsics {
       promise_resolving_function_call,
       promise_finally_handler_call,
       promise_finally_thunk_call,
+      promise_all_resolve_element_call,
+      promise_all_settled_element_call,
+      promise_any_reject_element_call,
     })
   }
 
@@ -1518,6 +1530,18 @@ impl Intrinsics {
 
   pub(crate) fn promise_finally_thunk_call(&self) -> NativeFunctionId {
     self.promise_finally_thunk_call
+  }
+
+  pub(crate) fn promise_all_resolve_element_call(&self) -> NativeFunctionId {
+    self.promise_all_resolve_element_call
+  }
+
+  pub(crate) fn promise_all_settled_element_call(&self) -> NativeFunctionId {
+    self.promise_all_settled_element_call
+  }
+
+  pub(crate) fn promise_any_reject_element_call(&self) -> NativeFunctionId {
+    self.promise_any_reject_element_call
   }
 }
 

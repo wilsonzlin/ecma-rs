@@ -1,7 +1,7 @@
 use crate::execution_context::ModuleId;
 use crate::module_record::ModuleNamespaceCache;
 use crate::module_record::ResolveExportResult;
-use crate::ModuleRequest;
+use crate::{LoadedModuleRequest, ModuleRequest};
 use crate::module_record::SourceTextModuleRecord;
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::{cmp_utf16, GcObject, Realm, Scope, Value, VmError};
@@ -52,6 +52,22 @@ impl ModuleGraph {
 
   pub fn module_mut(&mut self, id: ModuleId) -> &mut SourceTextModuleRecord {
     &mut self.modules[module_index(id)]
+  }
+
+  /// Fallible accessor for module records.
+  ///
+  /// Unlike [`ModuleGraph::module`], this returns `None` for invalid `ModuleId`s instead of
+  /// panicking.
+  pub fn get_module(&self, id: ModuleId) -> Option<&SourceTextModuleRecord> {
+    self.modules.get(id.to_raw() as usize)
+  }
+
+  /// Fallible mutable accessor for module records.
+  ///
+  /// Unlike [`ModuleGraph::module_mut`], this returns `None` for invalid `ModuleId`s instead of
+  /// panicking.
+  pub fn get_module_mut(&mut self, id: ModuleId) -> Option<&mut SourceTextModuleRecord> {
+    self.modules.get_mut(id.to_raw() as usize)
   }
 
   pub fn module_count(&self) -> usize {
@@ -124,7 +140,7 @@ impl ModuleGraph {
         if let Some(imported) = self.resolve_host_module(&request) {
           self.modules[referrer_idx]
             .loaded_modules
-            .push((request, imported));
+            .push(LoadedModuleRequest::new(request, imported));
         } else {
           // `ModuleGraph` is a small in-memory helper used primarily by unit tests. Avoid panicking
           // in library code; missing host resolution simply leaves the request unlinked.
@@ -144,7 +160,8 @@ impl ModuleGraph {
       .modules[module_index(referrer)]
       .loaded_modules
       .iter()
-      .find_map(|(req, id)| (req == request).then_some(*id))
+      .find(|loaded| loaded.request.spec_equal(request))
+      .map(|loaded| loaded.module)
   }
 
   fn resolve_host_module(&self, request: &ModuleRequest) -> Option<ModuleId> {
