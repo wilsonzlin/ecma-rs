@@ -1,13 +1,24 @@
-use crate::exec::{eval_expr, InterpretedEcmaFunction, RuntimeEnv};
+use crate::exec::{eval_expr, RuntimeEnv};
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{new_type_error, GcObject, Realm, Scope, Value, Vm, VmError};
+use crate::{GcObject, Scope, Value, Vm, VmError};
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
 use parse_js::ast::node::{literal_string_code_units, Node};
-use parse_js::ast::stx::TopLevel;
 use parse_js::token::TT;
-use std::sync::Arc;
+
+fn throw_type_error(vm: &Vm, scope: &mut Scope<'_>, message: &str) -> Result<VmError, VmError> {
+  let intr = vm
+    .intrinsics()
+    .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+  let value = crate::error_object::new_error(
+    scope,
+    intr.type_error_prototype(),
+    "TypeError",
+    message,
+  )?;
+  Ok(VmError::Throw(value))
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum BindingKind {
@@ -21,14 +32,11 @@ pub(crate) fn bind_pattern(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   pat: &Pat,
   value: Value,
   kind: BindingKind,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   // Keep temporary roots local to this binding operation.
   let mut scope = scope.reborrow();
@@ -36,32 +44,26 @@ pub(crate) fn bind_pattern(
   let value = scope.push_root(value)?;
 
   match pat {
-    Pat::Id(id) => bind_identifier(vm, env, realm, &mut scope, &id.stx.name, value, kind, strict),
+    Pat::Id(id) => bind_identifier(vm, env, &mut scope, &id.stx.name, value, kind, strict),
     Pat::Obj(obj) => bind_object_pattern(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &obj.stx,
       value,
       kind,
       strict,
       this,
-      script,
     ),
     Pat::Arr(arr) => bind_array_pattern(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &arr.stx,
       value,
       kind,
       strict,
       this,
-      script,
     ),
     Pat::AssignTarget(expr) => {
       if !matches!(kind, BindingKind::Assignment) {
@@ -73,13 +75,10 @@ pub(crate) fn bind_pattern(
         vm,
         &mut scope,
         env,
-        realm,
-        ecma_functions,
         expr,
         value,
         strict,
         this,
-        script,
       )
     }
   }
@@ -89,13 +88,10 @@ pub(crate) fn bind_assignment_target(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   target: &Node<Expr>,
   value: Value,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   // Keep temporary roots local to this binding operation.
   let mut scope = scope.reborrow();
@@ -105,7 +101,6 @@ pub(crate) fn bind_assignment_target(
     Expr::Id(id) => bind_identifier(
       vm,
       env,
-      realm,
       &mut scope,
       &id.stx.name,
       value,
@@ -115,7 +110,6 @@ pub(crate) fn bind_assignment_target(
     Expr::IdPat(id) => bind_identifier(
       vm,
       env,
-      realm,
       &mut scope,
       &id.stx.name,
       value,
@@ -126,51 +120,39 @@ pub(crate) fn bind_assignment_target(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &obj.stx,
       value,
       BindingKind::Assignment,
       strict,
       this,
-      script,
     ),
     Expr::ArrPat(arr) => bind_array_pattern(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &arr.stx,
       value,
       BindingKind::Assignment,
       strict,
       this,
-      script,
     ),
     Expr::Member(member) => assign_to_member(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &member.stx,
       value,
       strict,
       this,
-      script,
     ),
     Expr::ComputedMember(member) => assign_to_computed_member(
       vm,
       &mut scope,
       env,
-      realm,
-      ecma_functions,
       &member.stx,
       value,
       strict,
       this,
-      script,
     ),
     _ => Err(VmError::Unimplemented("assignment target")),
   }
@@ -179,7 +161,6 @@ pub(crate) fn bind_assignment_target(
 fn bind_identifier(
   vm: &mut Vm,
   env: &mut RuntimeEnv,
-  realm: &Realm,
   scope: &mut Scope<'_>,
   name: &str,
   value: Value,
@@ -204,7 +185,7 @@ fn bind_identifier(
       }
       scope.heap_mut().env_initialize_binding(env_rec, name, value)
     }
-    BindingKind::Assignment => env.set(vm, scope, realm, name, value, strict),
+    BindingKind::Assignment => env.set(vm, scope, name, value, strict),
   }
 }
 
@@ -212,17 +193,14 @@ fn bind_object_pattern(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   pat: &ObjPat,
   value: Value,
   kind: BindingKind,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   let Value::Object(obj) = value else {
-    return Err(new_type_error(scope, realm, "object destructuring requires object")?);
+    return Err(throw_type_error(vm, scope, "object destructuring requires object")?);
   };
   scope.push_root(Value::Object(obj))?;
 
@@ -236,12 +214,9 @@ fn bind_object_pattern(
       vm,
       scope,
       env,
-      realm,
-      ecma_functions,
       &prop.stx.key,
       strict,
       this,
-      script,
     )?;
     root_property_key(scope, key)?;
     excluded.push(key);
@@ -249,8 +224,7 @@ fn bind_object_pattern(
     let mut prop_value = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
     if matches!(prop_value, Value::Undefined) {
       if let Some(default_expr) = &prop.stx.default_value {
-        prop_value =
-          eval_expr(vm, env, realm, ecma_functions, strict, this, script, scope, default_expr)?;
+        prop_value = eval_expr(vm, env, strict, this, scope, default_expr)?;
       }
     }
 
@@ -258,14 +232,11 @@ fn bind_object_pattern(
       vm,
       scope,
       env,
-      realm,
-      ecma_functions,
       &prop.stx.target.stx,
       prop_value,
       kind,
       strict,
       this,
-      script,
     )?;
   }
 
@@ -301,14 +272,11 @@ fn bind_object_pattern(
     vm,
     scope,
     env,
-    realm,
-    ecma_functions,
     &rest_pat.stx,
     Value::Object(rest_obj),
     kind,
     strict,
     this,
-    script,
   )
 }
 
@@ -316,17 +284,14 @@ fn bind_array_pattern(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   pat: &ArrPat,
   value: Value,
   kind: BindingKind,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   let Value::Object(obj) = value else {
-    return Err(new_type_error(scope, realm, "array destructuring requires object")?);
+    return Err(throw_type_error(vm, scope, "array destructuring requires object")?);
   };
   scope.push_root(Value::Object(obj))?;
 
@@ -347,7 +312,7 @@ fn bind_array_pattern(
 
     if matches!(item, Value::Undefined) {
       if let Some(default_expr) = &elem.default_value {
-        item = eval_expr(vm, env, realm, ecma_functions, strict, this, script, scope, default_expr)?;
+        item = eval_expr(vm, env, strict, this, scope, default_expr)?;
       }
     }
 
@@ -355,14 +320,11 @@ fn bind_array_pattern(
       vm,
       scope,
       env,
-      realm,
-      ecma_functions,
       &elem.target.stx,
       item,
       kind,
       strict,
       this,
-      script,
     )?;
     idx = idx.saturating_add(1);
   }
@@ -409,14 +371,11 @@ fn bind_array_pattern(
     vm,
     scope,
     env,
-    realm,
-    ecma_functions,
     &rest_pat.stx,
     Value::Object(rest_arr),
     kind,
     strict,
     this,
-    script,
   )
 }
 
@@ -424,12 +383,9 @@ fn resolve_obj_pat_key(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   key: &ClassOrObjKey,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<PropertyKey, VmError> {
   match key {
     ClassOrObjKey::Direct(direct) => {
@@ -448,7 +404,7 @@ fn resolve_obj_pat_key(
       Ok(PropertyKey::from_string(s))
     }
     ClassOrObjKey::Computed(expr) => {
-      let value = eval_expr(vm, env, realm, ecma_functions, strict, this, script, scope, expr)?;
+      let value = eval_expr(vm, env, strict, this, scope, expr)?;
       // Root the computed value until `to_property_key` completes.
       let value = scope.push_root(value)?;
       let key = scope.heap_mut().to_property_key(value)?;
@@ -479,13 +435,10 @@ fn assign_to_member(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   member: &MemberExpr,
   value: Value,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   if member.optional_chaining {
     return Err(VmError::Unimplemented("optional chaining assignment target"));
@@ -494,20 +447,14 @@ fn assign_to_member(
   // Root the RHS across evaluation of the LHS object.
   let mut rhs_scope = scope.reborrow();
   rhs_scope.push_root(value)?;
-  let obj_value = eval_expr(
-    vm,
-    env,
-    realm,
-    ecma_functions,
-    strict,
-    this,
-    script,
-    &mut rhs_scope,
-    &member.left,
-  )?;
+  let obj_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.left)?;
 
   let Value::Object(obj) = obj_value else {
-    return Err(new_type_error(&mut rhs_scope, realm, "member assignment on non-object")?);
+    return Err(throw_type_error(
+      vm,
+      &mut rhs_scope,
+      "member assignment on non-object",
+    )?);
   };
 
   let key_s = rhs_scope.alloc_string(&member.right)?;
@@ -517,7 +464,7 @@ fn assign_to_member(
     Ok(())
   } else if strict {
     let msg = format!("Cannot assign to read only property '{}'", member.right);
-    Err(new_type_error(&mut rhs_scope, realm, &msg)?)
+    Err(throw_type_error(vm, &mut rhs_scope, &msg)?)
   } else {
     Ok(())
   }
@@ -527,13 +474,10 @@ fn assign_to_computed_member(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
-  realm: &Realm,
-  ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   member: &ComputedMemberExpr,
   value: Value,
   strict: bool,
   this: Value,
-  script: &Arc<Node<TopLevel>>,
 ) -> Result<(), VmError> {
   if member.optional_chaining {
     return Err(VmError::Unimplemented("optional chaining assignment target"));
@@ -543,36 +487,16 @@ fn assign_to_computed_member(
   let mut rhs_scope = scope.reborrow();
   rhs_scope.push_root(value)?;
 
-  let obj_value = eval_expr(
-    vm,
-    env,
-    realm,
-    ecma_functions,
-    strict,
-    this,
-    script,
-    &mut rhs_scope,
-    &member.object,
-  )?;
+  let obj_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.object)?;
   let Value::Object(obj) = obj_value else {
-    return Err(new_type_error(
+    return Err(throw_type_error(
+      vm,
       &mut rhs_scope,
-      realm,
       "computed member assignment on non-object",
     )?);
   };
 
-  let key_value = eval_expr(
-    vm,
-    env,
-    realm,
-    ecma_functions,
-    strict,
-    this,
-    script,
-    &mut rhs_scope,
-    &member.member,
-  )?;
+  let key_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.member)?;
   let key_value = rhs_scope.push_root(key_value)?;
   let key = rhs_scope.heap_mut().to_property_key(key_value)?;
 
@@ -580,11 +504,7 @@ fn assign_to_computed_member(
   if ok {
     Ok(())
   } else if strict {
-    Err(new_type_error(
-      &mut rhs_scope,
-      realm,
-      "strict mode assignment failed",
-    )?)
+    Err(throw_type_error(vm, &mut rhs_scope, "strict mode assignment failed")?)
   } else {
     Ok(())
   }

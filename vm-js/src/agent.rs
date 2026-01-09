@@ -86,12 +86,12 @@ impl Agent {
     budget: Budget,
     mut host_hooks: Option<&mut dyn HostHooks>,
   ) -> Result<Value, VmError> {
-    let source = SourceText::new(source_name, source_text);
+    let source = Arc::new(SourceText::new(source_name, source_text));
 
     // Swap the VM budget in/out without holding a borrow across `exec_script`.
     let prev_budget = self.runtime.vm.swap_budget_state(budget);
 
-    let mut result = self.runtime.exec_script(&source.text);
+    let mut result = self.runtime.exec_script_source(source);
 
     // If the script executed (successfully or with a JS `throw`), the HTML script processing model
     // performs a microtask checkpoint afterwards. For now this is a host hook placeholder.

@@ -3,7 +3,8 @@ use crate::error::TerminationReason;
 use crate::error::VmError;
 use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
-use crate::function::{CallHandler, ConstructHandler, NativeConstructId, NativeFunctionId};
+use crate::exec::RuntimeEnv;
+use crate::function::{CallHandler, ConstructHandler, EcmaFunctionId, NativeConstructId, NativeFunctionId, ThisMode};
 use crate::GcObject;
 use crate::Heap;
 use crate::interrupt::InterruptHandle;
@@ -13,12 +14,22 @@ use crate::jobs::VmHostHooks;
 use crate::microtasks::MicrotaskQueue;
 use crate::RootId;
 use crate::source::StackFrame;
+use crate::source::SourceText;
 use crate::Intrinsics;
 use crate::PropertyKey;
 use crate::RealmId;
 use crate::Scope;
 use crate::Value;
-use std::collections::VecDeque;
+use diagnostics::FileId;
+use parse_js::ast::class_or_object::{
+  ClassOrObjGetter, ClassOrObjMethod, ClassOrObjSetter, ClassOrObjVal, ObjMember, ObjMemberType,
+};
+use parse_js::ast::expr::Expr as AstExpr;
+use parse_js::ast::func::Func;
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::Stmt;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,6 +56,40 @@ pub type NativeConstruct = for<'a> fn(
   args: &[Value],
   new_target: Value,
 ) -> Result<Value, VmError>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum EcmaFunctionKind {
+  /// A `function f() {}` declaration statement.
+  Decl,
+  /// A function or arrow function expression (`function() {}` / `() => {}`).
+  Expr,
+  /// An object literal method/getter/setter definition (e.g. `f() {}` / `get x() {}`).
+  ///
+  /// These are parsed by wrapping the snippet in an object literal expression: `({ <snippet> })`.
+  ObjectMember,
+}
+
+#[derive(Debug)]
+pub(crate) struct EcmaFunctionCode {
+  pub(crate) source: Arc<SourceText>,
+  pub(crate) span_start: u32,
+  pub(crate) span_end: u32,
+  pub(crate) kind: EcmaFunctionKind,
+  /// How many bytes of synthetic prefix were inserted when parsing the snippet.
+  ///
+  /// This is used to translate `Loc` offsets from the cached AST back into offsets in the original
+  /// source text (e.g. function expressions are parsed by wrapping them in parentheses).
+  pub(crate) prefix_len: u32,
+  parsed: Option<Arc<Node<Func>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct EcmaFunctionKey {
+  source: *const SourceText,
+  span_start: u32,
+  span_end: u32,
+  kind: EcmaFunctionKind,
+}
 
 /// Construction-time VM options.
 #[derive(Debug, Clone)]
@@ -118,6 +163,8 @@ pub struct Vm {
   native_calls: Vec<NativeCall>,
   native_constructs: Vec<NativeConstruct>,
   microtasks: MicrotaskQueue,
+  ecma_functions: Vec<EcmaFunctionCode>,
+  ecma_function_cache: HashMap<EcmaFunctionKey, EcmaFunctionId>,
   // Per-realm intrinsic graph used by built-in native function implementations.
   //
   // For now `vm-js` assumes a single active realm per `Vm`. When multiple realms are supported,
@@ -278,6 +325,8 @@ impl Vm {
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
       microtasks: MicrotaskQueue::new(),
+      ecma_functions: Vec::new(),
+      ecma_function_cache: HashMap::new(),
       intrinsics: None,
       #[cfg(test)]
       native_calls_len_override: None,
@@ -527,6 +576,215 @@ impl Vm {
     Ok(NativeConstructId(idx))
   }
 
+  pub(crate) fn register_ecma_function(
+    &mut self,
+    source: Arc<SourceText>,
+    span_start: u32,
+    span_end: u32,
+    kind: EcmaFunctionKind,
+  ) -> Result<EcmaFunctionId, VmError> {
+    let key = EcmaFunctionKey {
+      source: Arc::as_ptr(&source),
+      span_start,
+      span_end,
+      kind,
+    };
+    if let Some(id) = self.ecma_function_cache.get(&key).copied() {
+      return Ok(id);
+    }
+
+    let idx = u32::try_from(self.ecma_functions.len())
+      .map_err(|_| VmError::LimitExceeded("too many ECMAScript functions registered"))?;
+
+    self
+      .ecma_functions
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    let prefix_len = match kind {
+      EcmaFunctionKind::Decl => 0,
+      EcmaFunctionKind::Expr => 1,
+      EcmaFunctionKind::ObjectMember => 2,
+    };
+
+    self.ecma_functions.push(EcmaFunctionCode {
+      source,
+      span_start,
+      span_end,
+      kind,
+      prefix_len,
+      parsed: None,
+    });
+
+    let id = EcmaFunctionId(idx);
+    self.ecma_function_cache.insert(key, id);
+    Ok(id)
+  }
+
+  fn ecma_function_ast(&mut self, id: EcmaFunctionId) -> Result<Arc<Node<Func>>, VmError> {
+    let (source, span_start, span_end, kind) = {
+      let code = self
+        .ecma_functions
+        .get(id.0 as usize)
+        .ok_or(VmError::InvalidHandle)?;
+      if let Some(parsed) = &code.parsed {
+        return Ok(parsed.clone());
+      }
+      (code.source.clone(), code.span_start, code.span_end, code.kind)
+    };
+
+    let text: &str = &source.text;
+    let mut start = span_start as usize;
+    let mut end = span_end as usize;
+    start = start.min(text.len());
+    end = end.min(text.len());
+    if start > end {
+      return Err(VmError::Unimplemented("invalid ECMAScript function source span"));
+    }
+    let snippet = text
+      .get(start..end)
+      .ok_or(VmError::Unimplemented("invalid ECMAScript function source slice"))?;
+
+    let opts = ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    };
+
+    let mut wrapped: String = String::new();
+    let parse_input: &str = match kind {
+      EcmaFunctionKind::Decl => snippet,
+      EcmaFunctionKind::Expr => {
+        let capacity = snippet
+          .len()
+          .checked_add(2)
+          .ok_or(VmError::OutOfMemory)?;
+        wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
+        wrapped.push('(');
+        wrapped.push_str(snippet);
+        wrapped.push(')');
+        &wrapped
+      }
+      EcmaFunctionKind::ObjectMember => {
+        let capacity = snippet
+          .len()
+          .checked_add(4)
+          .ok_or(VmError::OutOfMemory)?;
+        wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
+        wrapped.push_str("({");
+        wrapped.push_str(snippet);
+        wrapped.push_str("})");
+        &wrapped
+      }
+    };
+
+    let top = parse_with_options(parse_input, opts)
+      .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+
+    let mut body = top.stx.body;
+    if body.len() != 1 {
+      return Err(VmError::Unimplemented(
+        "ECMAScript function snippet did not parse to a single statement",
+      ));
+    }
+
+    let stmt = body
+      .pop()
+      .ok_or(VmError::Unimplemented("missing statement in parsed function snippet"))?;
+
+    let func = match kind {
+      EcmaFunctionKind::Decl => match *stmt.stx {
+        Stmt::FunctionDecl(decl) => decl.stx.function,
+        _ => {
+          return Err(VmError::Unimplemented(
+            "ECMAScript function declaration snippet did not parse as a function declaration",
+          ));
+        }
+      },
+      EcmaFunctionKind::Expr => match *stmt.stx {
+        Stmt::Expr(expr_stmt) => {
+          let expr = expr_stmt.stx.expr;
+          match *expr.stx {
+            AstExpr::Func(func_expr) => func_expr.stx.func,
+            AstExpr::ArrowFunc(arrow_expr) => arrow_expr.stx.func,
+            _ => {
+              return Err(VmError::Unimplemented(
+                "ECMAScript function expression snippet did not parse as a function expression",
+              ));
+            }
+          }
+        }
+        _ => {
+          return Err(VmError::Unimplemented(
+            "ECMAScript function expression snippet did not parse as an expression statement",
+          ));
+        }
+      },
+      EcmaFunctionKind::ObjectMember => match *stmt.stx {
+        Stmt::Expr(expr_stmt) => {
+          let expr = expr_stmt.stx.expr;
+          match *expr.stx {
+            AstExpr::LitObj(obj_expr) => {
+              let member = obj_expr
+                .stx
+                .members
+                .into_iter()
+                .next()
+                .ok_or(VmError::Unimplemented(
+                  "ECMAScript object member snippet did not contain any members",
+                ))?;
+              let ObjMember { typ } = *member.stx;
+              match typ {
+                ObjMemberType::Valued { val, .. } => match val {
+                  ClassOrObjVal::Method(method) => {
+                    let ClassOrObjMethod { func } = *method.stx;
+                    func
+                  }
+                  ClassOrObjVal::Getter(getter) => {
+                    let ClassOrObjGetter { func } = *getter.stx;
+                    func
+                  }
+                  ClassOrObjVal::Setter(setter) => {
+                    let ClassOrObjSetter { func } = *setter.stx;
+                    func
+                  }
+                  _ => {
+                    return Err(VmError::Unimplemented(
+                      "ECMAScript object member snippet did not parse as a method/getter/setter",
+                    ));
+                  }
+                },
+                _ => {
+                  return Err(VmError::Unimplemented(
+                    "ECMAScript object member snippet did not parse as a valued member",
+                  ));
+                }
+              }
+            }
+            _ => {
+              return Err(VmError::Unimplemented(
+                "ECMAScript object member snippet did not parse as an object literal expression",
+              ));
+            }
+          }
+        }
+        _ => {
+          return Err(VmError::Unimplemented(
+            "ECMAScript object member snippet did not parse as an expression statement",
+          ));
+        }
+      },
+    };
+
+    let func = Arc::new(func);
+
+    let slot = self
+      .ecma_functions
+      .get_mut(id.0 as usize)
+      .ok_or(VmError::InvalidHandle)?;
+    slot.parsed = Some(func.clone());
+    Ok(func)
+  }
+
   fn dispatch_native_call(
     &mut self,
     call_id: NativeFunctionId,
@@ -745,16 +1003,17 @@ impl Vm {
       .filter(|name| !name.is_empty())
       .map(Arc::<str>::from);
 
-    let source = match call_handler {
-      CallHandler::Native(_) => Arc::<str>::from("<native>"),
-      CallHandler::Ecma(_) => Arc::<str>::from("<call>"),
+    let (source, line, col) = match call_handler {
+      CallHandler::Native(_) => (Arc::<str>::from("<native>"), 0, 0),
+      CallHandler::Ecma(code_id) => match self.ecma_functions.get(code_id.0 as usize) {
+        Some(code) => {
+          let (line, col) = code.source.line_col(code.span_start);
+          (code.source.name.clone(), line, col)
+        }
+        None => (Arc::<str>::from("<call>"), 0, 0),
+      },
     };
-    let frame = StackFrame {
-      function: function_name,
-      source,
-      line: 0,
-      col: 0,
-    };
+    let frame = StackFrame { function: function_name, source, line, col };
 
     let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
@@ -764,7 +1023,7 @@ impl Vm {
       CallHandler::Native(call_id) => {
         vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
       }
-      CallHandler::Ecma(_) => vm.call_ecma_function(&mut scope, callee_obj, this, args),
+      CallHandler::Ecma(code_id) => vm.call_ecma_function(&mut scope, code_id, callee_obj, this, args),
     }
   }
 
@@ -879,16 +1138,17 @@ impl Vm {
       .filter(|name| !name.is_empty())
       .map(Arc::<str>::from);
 
-    let source = match construct_handler {
-      ConstructHandler::Native(_) => Arc::<str>::from("<native>"),
-      ConstructHandler::Ecma(_) => Arc::<str>::from("<call>"),
+    let (source, line, col) = match construct_handler {
+      ConstructHandler::Native(_) => (Arc::<str>::from("<native>"), 0, 0),
+      ConstructHandler::Ecma(code_id) => match self.ecma_functions.get(code_id.0 as usize) {
+        Some(code) => {
+          let (line, col) = code.source.line_col(code.span_start);
+          (code.source.name.clone(), line, col)
+        }
+        None => (Arc::<str>::from("<call>"), 0, 0),
+      },
     };
-    let frame = StackFrame {
-      function: function_name,
-      source,
-      line: 0,
-      col: 0,
-    };
+    let frame = StackFrame { function: function_name, source, line, col };
 
     let mut vm = self.enter_frame(frame)?;
     // Budget/interrupt check for host-initiated construction that may not pass through the
@@ -899,34 +1159,139 @@ impl Vm {
       ConstructHandler::Native(construct_id) => {
         vm.dispatch_native_construct(construct_id, &mut scope, host, callee_obj, args, new_target)
       }
-      ConstructHandler::Ecma(_) => {
-        vm.construct_ecma_function(&mut scope, callee_obj, args, new_target)
-      }
+      ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(&mut scope, code_id, callee_obj, args, new_target),
     }
   }
 
   fn call_ecma_function(
     &mut self,
-    _scope: &mut Scope<'_>,
-    _callee: crate::GcObject,
-    _this: Value,
-    _args: &[Value],
+    scope: &mut Scope<'_>,
+    code_id: EcmaFunctionId,
+    callee: crate::GcObject,
+    this: Value,
+    args: &[Value],
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented(
-      "calling ECMAScript functions (interpreter/bytecode not wired yet)",
-    ))
+    let (this_mode, is_strict, realm, outer, bound_this) = {
+      let f = scope.heap().get_function(callee)?;
+      (f.this_mode, f.is_strict, f.realm, f.closure_env, f.bound_this)
+    };
+
+    let this = match this_mode {
+      ThisMode::Lexical => {
+        bound_this.ok_or(VmError::Unimplemented(
+          "arrow function missing captured lexical this",
+        ))?
+      }
+      ThisMode::Strict => this,
+      ThisMode::Global => match this {
+        Value::Undefined | Value::Null => match realm {
+          Some(global) => Value::Object(global),
+          None => this,
+        },
+        other => other,
+      },
+    };
+
+    let global_object =
+      realm.ok_or(VmError::Unimplemented("ECMAScript function missing [[Realm]]"))?;
+
+    let func_ast = self.ecma_function_ast(code_id)?;
+    let code_meta = self
+      .ecma_functions
+      .get(code_id.0 as usize)
+      .ok_or(VmError::InvalidHandle)?;
+
+    let func_env = scope.env_create(outer)?;
+    let mut env = RuntimeEnv::new_with_var_env(scope.heap_mut(), global_object, func_env, func_env)?;
+
+    let result = crate::exec::run_ecma_function(
+      self,
+      scope,
+      &mut env,
+      code_meta.source.clone(),
+      code_meta.span_start,
+      code_meta.prefix_len,
+      is_strict,
+      this,
+      func_ast.as_ref(),
+      args,
+    );
+
+    env.teardown(scope.heap_mut());
+    result
   }
 
   fn construct_ecma_function(
     &mut self,
-    _scope: &mut Scope<'_>,
-    _callee: crate::GcObject,
-    _args: &[Value],
-    _new_target: Value,
+    scope: &mut Scope<'_>,
+    code_id: EcmaFunctionId,
+    callee: crate::GcObject,
+    args: &[Value],
+    new_target: Value,
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented(
-      "constructing ECMAScript functions (interpreter/bytecode not wired yet)",
-    ))
+    let (is_strict, global_object, outer) = {
+      let f = scope.heap().get_function(callee)?;
+      (
+        f.is_strict,
+        f.realm
+          .ok_or(VmError::Unimplemented("ECMAScript function missing [[Realm]]"))?,
+        f.closure_env,
+      )
+    };
+
+    // GetPrototypeFromConstructor(newTarget, %Object.prototype%).
+    let proto = match new_target {
+      Value::Object(nt) => {
+        let mut proto_scope = scope.reborrow();
+        proto_scope.push_root(Value::Object(nt))?;
+        let key = PropertyKey::from_string(proto_scope.alloc_string("prototype")?);
+        let value = proto_scope.ordinary_get(self, nt, key, Value::Object(nt))?;
+        match value {
+          Value::Object(o) => o,
+          _ => self
+            .intrinsics()
+            .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
+            .object_prototype(),
+        }
+      }
+      _ => self
+        .intrinsics()
+        .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
+        .object_prototype(),
+    };
+
+    let mut this_scope = scope.reborrow();
+    let this_obj = this_scope.alloc_object_with_prototype(Some(proto))?;
+    this_scope.push_root(Value::Object(this_obj))?;
+
+    let func_env = this_scope.env_create(outer)?;
+    let mut env = RuntimeEnv::new_with_var_env(this_scope.heap_mut(), global_object, func_env, func_env)?;
+
+    let func_ast = self.ecma_function_ast(code_id)?;
+    let code_meta = self
+      .ecma_functions
+      .get(code_id.0 as usize)
+      .ok_or(VmError::InvalidHandle)?;
+
+    let result = crate::exec::run_ecma_function(
+      self,
+      &mut this_scope,
+      &mut env,
+      code_meta.source.clone(),
+      code_meta.span_start,
+      code_meta.prefix_len,
+      is_strict,
+      Value::Object(this_obj),
+      func_ast.as_ref(),
+      args,
+    );
+
+    env.teardown(this_scope.heap_mut());
+
+    match result? {
+      Value::Object(o) => Ok(Value::Object(o)),
+      _ => Ok(Value::Object(this_obj)),
+    }
   }
 }
 

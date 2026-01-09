@@ -2449,6 +2449,51 @@ impl Heap {
     }
   }
 
+  pub(crate) fn get_function_this_mode(&self, func: GcObject) -> Result<ThisMode, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.this_mode),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn get_function_realm(&self, func: GcObject) -> Result<Option<GcObject>, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.realm),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn get_function_closure_env(&self, func: GcObject) -> Result<Option<GcEnv>, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.closure_env),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_bound_this(
+    &mut self,
+    func: GcObject,
+    bound_this: Value,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.bound_this = Some(bound_this);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_realm(&mut self, func: GcObject, realm: GcObject) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.realm = Some(realm);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
   pub(crate) fn set_function_data(
     &mut self,
     func: GcObject,
@@ -2459,13 +2504,6 @@ impl Heap {
         f.data = data;
         Ok(())
       }
-      _ => Err(VmError::InvalidHandle),
-    }
-  }
-
-  pub(crate) fn get_function_closure_env(&self, func: GcObject) -> Result<Option<GcEnv>, VmError> {
-    match self.get_heap_object(func.0)? {
-      HeapObject::Function(f) => Ok(f.closure_env),
       _ => Err(VmError::InvalidHandle),
     }
   }
