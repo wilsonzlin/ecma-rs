@@ -769,25 +769,34 @@ impl Vm {
       .get(start..end)
       .ok_or(VmError::Unimplemented("invalid ECMAScript function source slice"))?;
 
+    // `vm-js` reparses function snippets on-demand by slicing the original source text using spans
+    // recorded during the initial parse.
+    //
+    // `parse-js` spans for some expression nodes can currently include trailing delimiter tokens
+    // from the enclosing syntax (e.g. `;` from expression statements, `)` from call arguments).
+    // When we later parse expression snippets by wrapping them in parentheses (e.g. `(<expr>)`), an
+    // included delimiter would become invalid syntax (e.g. `(<expr>;)`, `(<expr>))`).
+    //
+    // Trim a trailing semicolon eagerly (common for expression statements), and on parse failure
+    // retry after removing other likely delimiter suffixes.
+    let mut snippet = snippet;
+    if kind == EcmaFunctionKind::Expr {
+      let trimmed = snippet.trim_end();
+      snippet = trimmed
+        .strip_suffix(';')
+        .unwrap_or(trimmed)
+        .trim_end();
+    }
+
     let opts = ParseOptions {
       dialect: Dialect::Ecma,
       source_type: SourceType::Script,
     };
 
     let mut wrapped: String = String::new();
-    let parse_input: &str = match kind {
-      EcmaFunctionKind::Decl => snippet,
-      EcmaFunctionKind::Expr => {
-        let capacity = snippet
-          .len()
-          .checked_add(2)
-          .ok_or(VmError::OutOfMemory)?;
-        wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
-        wrapped.push('(');
-        wrapped.push_str(snippet);
-        wrapped.push(')');
-        &wrapped
-      }
+    let top = match kind {
+      EcmaFunctionKind::Decl => parse_with_options(snippet, opts)
+        .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?,
       EcmaFunctionKind::ObjectMember => {
         let capacity = snippet
           .len()
@@ -797,12 +806,53 @@ impl Vm {
         wrapped.push_str("({");
         wrapped.push_str(snippet);
         wrapped.push_str("})");
-        &wrapped
+        parse_with_options(&wrapped, opts)
+          .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?
+      }
+      EcmaFunctionKind::Expr => {
+        let mut attempt: usize = 0;
+        loop {
+          wrapped.clear();
+          let capacity = snippet
+            .len()
+            .checked_add(2)
+            .ok_or(VmError::OutOfMemory)?;
+          wrapped.try_reserve(capacity).map_err(|_| VmError::OutOfMemory)?;
+          wrapped.push('(');
+          wrapped.push_str(snippet);
+          wrapped.push(')');
+
+          match parse_with_options(&wrapped, opts) {
+            Ok(top) => break top,
+            Err(err) => {
+              // Retry by stripping a likely delimiter suffix if present.
+              //
+              // This should be rare: it indicates our saved snippet span included a trailing token
+              // from the enclosing syntax rather than the function expression itself.
+              if attempt >= 4 {
+                return Err(VmError::Syntax(vec![err.to_diagnostic(FileId(0))]));
+              }
+
+              let trimmed = snippet.trim_end();
+              let mut next = None;
+              for suffix in [')', ',', ']', '}'] {
+                if let Some(stripped) = trimmed.strip_suffix(suffix) {
+                  next = Some(stripped.trim_end());
+                  break;
+                }
+              }
+
+              let Some(next) = next else {
+                return Err(VmError::Syntax(vec![err.to_diagnostic(FileId(0))]));
+              };
+
+              snippet = next;
+              attempt += 1;
+            }
+          }
+        }
       }
     };
-
-    let top = parse_with_options(parse_input, opts)
-      .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
 
     let mut body = top.stx.body;
     if body.len() != 1 {
