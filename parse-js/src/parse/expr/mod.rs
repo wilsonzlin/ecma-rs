@@ -1211,15 +1211,17 @@ impl<'a> Parser<'a> {
           let loc = t.loc;
           self.restore_checkpoint(cp);
           // ES2018: Tagged templates allow invalid escape sequences
-          let parts = self.lit_template_parts(ctx, true)?;
-          left = Node::new(
-            left.loc + loc,
+          let function = left;
+          let (parts, template_parts) = self.lit_template_parts_with_template_data(ctx, true)?;
+          let mut node = Node::new(
+            function.loc + loc,
             TaggedTemplateExpr {
-              function: left,
+              function,
               parts,
             },
-          )
-          .into_wrapped();
+          );
+          node.assoc.set(template_parts);
+          left = node.into_wrapped();
           continue;
         }
         // TypeScript: Type assertion: expr as Type or expr as const

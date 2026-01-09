@@ -26,6 +26,7 @@ use crate::ast::node::LegacyOctalEscapeSequence;
 use crate::ast::node::LegacyOctalNumberLiteral;
 use crate::ast::node::LiteralStringCodeUnits;
 use crate::ast::node::Node;
+use crate::ast::node::TemplateStringParts;
 use crate::char::is_line_terminator;
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
@@ -1136,9 +1137,11 @@ impl<'a> Parser<'a> {
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {
     let start = self.checkpoint();
-    let (parts, invalid_escape) = self.lit_template_parts_with_invalid_escape(ctx, false)?;
+    let (parts, template_parts, invalid_escape) =
+      self.lit_template_parts_with_invalid_escape(ctx, false)?;
     let loc = self.since_checkpoint(&start);
     let mut node = Node::new(loc, LitTemplateExpr { parts });
+    node.assoc.set(template_parts);
     if let Some(invalid_escape) = invalid_escape {
       node
         .assoc
@@ -1156,15 +1159,25 @@ impl<'a> Parser<'a> {
     tagged: bool,
   ) -> SyntaxResult<Vec<LitTemplatePart>> {
     self
-      .lit_template_parts_with_invalid_escape(ctx, tagged)
+      .lit_template_parts_with_template_data(ctx, tagged)
       .map(|(parts, _)| parts)
+  }
+
+  pub(crate) fn lit_template_parts_with_template_data(
+    &mut self,
+    ctx: ParseCtx,
+    tagged: bool,
+  ) -> SyntaxResult<(Vec<LitTemplatePart>, TemplateStringParts)> {
+    self
+      .lit_template_parts_with_invalid_escape(ctx, tagged)
+      .map(|(parts, template_parts, _)| (parts, template_parts))
   }
 
   fn lit_template_parts_with_invalid_escape(
     &mut self,
     ctx: ParseCtx,
     tagged: bool,
-  ) -> SyntaxResult<(Vec<LitTemplatePart>, Option<Loc>)> {
+  ) -> SyntaxResult<(Vec<LitTemplatePart>, TemplateStringParts, Option<Loc>)> {
     let t = self.consume();
     let is_end = match t.typ {
       TT::LiteralTemplatePartString => false,
@@ -1175,20 +1188,34 @@ impl<'a> Parser<'a> {
 
     let mut parts = Vec::new();
     let mut invalid_escape = None;
+    let mut raw_parts = Vec::<Box<[u16]>>::new();
+    let mut cooked_parts = Vec::<Option<Box<[u16]>>>::new();
     let raw = self.bytes(t.loc);
     let (content_offset, first_content) =
       template_content(raw, is_end).ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?;
-    if !tagged {
-      if let Some((rel, len)) = find_legacy_escape_sequence(first_content) {
+    let first_raw = first_content.encode_utf16().collect::<Vec<_>>().into_boxed_slice();
+    raw_parts.push(first_raw);
+    let first_legacy_escape = find_legacy_escape_sequence(first_content);
+    if !tagged && invalid_escape.is_none() {
+      if let Some((rel, len)) = first_legacy_escape {
         invalid_escape = Some(Loc(
           t.loc.0 + content_offset + rel,
           t.loc.0 + content_offset + rel + len,
         ));
       }
     }
-    let first_str = match decode_literal(first_content, true) {
-      Ok(val) => val,
-      Err(_err) if tagged => String::new(),
+    let decoded_first = decode_literal_utf16(first_content, true);
+    let (first_str, first_cooked) = match decoded_first {
+      Ok(code_units) => {
+        let str_val = String::from_utf16_lossy(&code_units);
+        let cooked = if tagged && first_legacy_escape.is_some() {
+          None
+        } else {
+          Some(code_units.into_boxed_slice())
+        };
+        (str_val, cooked)
+      }
+      Err(_err) if tagged => (String::new(), None),
       Err(err) => {
         return Err(literal_error_to_syntax(
           err,
@@ -1198,6 +1225,7 @@ impl<'a> Parser<'a> {
         ))
       }
     };
+    cooked_parts.push(first_cooked);
     parts.push(LitTemplatePart::String(first_str));
     if !is_end {
       loop {
@@ -1221,17 +1249,30 @@ impl<'a> Parser<'a> {
         let raw = self.bytes(string.loc);
         let (offset, content) = template_content(raw, string_is_end)
           .ok_or_else(|| string.error(SyntaxErrorType::UnexpectedEnd))?;
+        let raw_part = content.encode_utf16().collect::<Vec<_>>().into_boxed_slice();
+        raw_parts.push(raw_part);
+        let legacy_escape = find_legacy_escape_sequence(content);
         if !tagged && invalid_escape.is_none() {
-          if let Some((rel, len)) = find_legacy_escape_sequence(content) {
+          if let Some((rel, len)) = legacy_escape {
             invalid_escape = Some(Loc(
               string.loc.0 + offset + rel,
               string.loc.0 + offset + rel + len,
             ));
           }
         }
-        let part_str = match decode_literal(content, true) {
-          Ok(val) => val,
-          Err(_err) if tagged => String::new(),
+
+        let decoded_part = decode_literal_utf16(content, true);
+        let (part_str, part_cooked) = match decoded_part {
+          Ok(code_units) => {
+            let str_val = String::from_utf16_lossy(&code_units);
+            let cooked = if tagged && legacy_escape.is_some() {
+              None
+            } else {
+              Some(code_units.into_boxed_slice())
+            };
+            (str_val, cooked)
+          }
+          Err(_err) if tagged => (String::new(), None),
           Err(err) => {
             return Err(literal_error_to_syntax(
               err,
@@ -1241,6 +1282,7 @@ impl<'a> Parser<'a> {
             ))
           }
         };
+        cooked_parts.push(part_cooked);
         parts.push(LitTemplatePart::String(part_str));
         if string_is_end {
           break;
@@ -1248,6 +1290,13 @@ impl<'a> Parser<'a> {
       }
     };
 
-    Ok((parts, invalid_escape))
+    Ok((
+      parts,
+      TemplateStringParts {
+        raw: raw_parts.into_boxed_slice(),
+        cooked: cooked_parts.into_boxed_slice(),
+      },
+      invalid_escape,
+    ))
   }
 }

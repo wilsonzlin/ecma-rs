@@ -75,6 +75,28 @@ pub fn literal_string_code_units(assoc: &NodeAssocData) -> Option<&[u16]> {
     .map(|data| data.0.as_ref())
 }
 
+/// Marker attached to template literal expression nodes recording the raw and
+/// cooked UTF-16 code units for each template string segment.
+///
+/// The slices are aligned with the template's *string segments* (i.e. the
+/// `TemplateHead`/`TemplateMiddle`/`TemplateTail` parts), and do **not** include
+/// substitution expressions.
+///
+/// For tagged templates, a segment's cooked value can be `None`, indicating
+/// `undefined` per ECMAScript's `GetTemplateObject` semantics when the segment
+/// contains an invalid escape sequence.
+#[derive(Clone, Debug)]
+pub struct TemplateStringParts {
+  pub raw: Box<[Box<[u16]>]>,
+  pub cooked: Box<[Option<Box<[u16]>>]>,
+}
+
+/// Returns the template literal raw/cooked strings for a template expression, if
+/// present.
+pub fn template_string_parts(assoc: &NodeAssocData) -> Option<&TemplateStringParts> {
+  assoc.get::<TemplateStringParts>()
+}
+
 /// Marker attached to an untagged template literal node when its raw source
 /// contains an escape sequence that is invalid in template strings (e.g.
 /// `` `\1` `` or `` `\8` ``).
