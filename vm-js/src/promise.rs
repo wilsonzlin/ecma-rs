@@ -8,15 +8,31 @@
 //!
 //! The spec requires Promise jobs (reaction jobs and thenable jobs) to call user-provided
 //! callbacks via `HostCallJobCallback` so the embedding can re-establish incumbent/entry settings.
+//!
+//! In addition, this module exposes a minimal engine-internal [`Promise`] record and an
+//! [`await_value`] helper that schedules async/`await` continuations as Promise jobs (microtasks)
+//! without creating a derived promise.
+//!
+//! Spec references:
+//! - `Await` abstract operation: <https://tc39.es/ecma262/#await>
+//! - `PerformPromiseThen`: <https://tc39.es/ecma262/#sec-performpromisethen>
+//! - `PromiseReactionJob`: <https://tc39.es/ecma262/#sec-promisereactionjob>
+//! - `HostPromiseRejectionTracker`: <https://tc39.es/ecma262/#sec-host-promise-rejection-tracker>
 
+use crate::promise_jobs::new_promise_reaction_job;
 use crate::promise_jobs::new_promise_resolve_thenable_job;
 use crate::GcObject;
 use crate::Heap;
 use crate::Job;
 use crate::JobCallback;
+use crate::PromiseHandle;
+use crate::PromiseRejectionOperation;
 use crate::Value;
 use crate::VmError;
 use crate::VmHostHooks;
+use std::cell::RefCell;
+use std::mem;
+use std::rc::Rc;
 
 /// The `[[Type]]` of a Promise reaction record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,3 +117,172 @@ pub fn create_promise_resolve_thenable_job(
     reject,
   )))
 }
+
+/// A minimal Promise state used by [`Promise`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PromiseState {
+  Pending,
+  Fulfilled(Value),
+  Rejected(Value),
+}
+
+struct PromiseInner {
+  handle: Option<PromiseHandle>,
+  state: PromiseState,
+  is_handled: bool,
+  fulfill_reactions: Vec<PromiseReactionRecord>,
+  reject_reactions: Vec<PromiseReactionRecord>,
+}
+
+/// An engine-internal Promise record.
+///
+/// This is **not** a user-facing `Promise` object implementation; it exists to model Promise job
+/// scheduling and rejection tracking for early async/await machinery.
+#[derive(Clone)]
+pub struct Promise {
+  inner: Rc<RefCell<PromiseInner>>,
+}
+
+impl Promise {
+  /// Create a new pending promise, optionally associated with a host-visible [`PromiseHandle`].
+  pub fn pending(handle: Option<PromiseHandle>) -> Self {
+    Self {
+      inner: Rc::new(RefCell::new(PromiseInner {
+        handle,
+        state: PromiseState::Pending,
+        is_handled: false,
+        fulfill_reactions: Vec::new(),
+        reject_reactions: Vec::new(),
+      })),
+    }
+  }
+
+  /// Create a new already-fulfilled promise (used for `PromiseResolve` on non-promise values).
+  fn fulfilled(value: Value) -> Self {
+    Self {
+      inner: Rc::new(RefCell::new(PromiseInner {
+        handle: None,
+        state: PromiseState::Fulfilled(value),
+        is_handled: true,
+        fulfill_reactions: Vec::new(),
+        reject_reactions: Vec::new(),
+      })),
+    }
+  }
+
+  /// Reject this promise with `reason`, enqueueing any rejection reactions as Promise jobs.
+  ///
+  /// If this promise has no rejection handlers, this will call
+  /// [`VmHostHooks::host_promise_rejection_tracker`] with
+  /// [`PromiseRejectionOperation::Reject`].
+  pub fn reject(&self, host: &mut dyn VmHostHooks, reason: Value) -> Result<(), VmError> {
+    let (handle, should_track_reject, reactions) = {
+      let mut inner = self.inner.borrow_mut();
+      match inner.state {
+        PromiseState::Pending => {}
+        PromiseState::Fulfilled(_) | PromiseState::Rejected(_) => return Ok(()),
+      }
+
+      inner.state = PromiseState::Rejected(reason);
+      let handle = inner.handle;
+      let should_track_reject = !inner.is_handled;
+      let reactions = mem::take(&mut inner.reject_reactions);
+      (handle, should_track_reject, reactions)
+    };
+
+    if should_track_reject {
+      if let Some(handle) = handle {
+        host.host_promise_rejection_tracker(handle, PromiseRejectionOperation::Reject);
+      }
+    }
+
+    for reaction in reactions {
+      host.host_enqueue_promise_job(new_promise_reaction_job(reaction, reason), None);
+    }
+
+    Ok(())
+  }
+
+  fn then_without_result(
+    &self,
+    host: &mut dyn VmHostHooks,
+    heap: &Heap,
+    on_fulfilled: Value,
+    on_rejected: Value,
+  ) -> Result<(), VmError> {
+    let (fulfill_reaction, reject_reaction) =
+      perform_promise_then(host, heap, on_fulfilled, on_rejected)?;
+
+    // `[[PromiseIsHandled]]` bookkeeping for unhandled rejection tracking.
+    let has_reject_handler = reject_reaction.handler.is_some();
+    let mut inner = self.inner.borrow_mut();
+    if has_reject_handler && !inner.is_handled {
+      inner.is_handled = true;
+      if matches!(inner.state, PromiseState::Rejected(_)) {
+        if let Some(handle) = inner.handle {
+          host.host_promise_rejection_tracker(handle, PromiseRejectionOperation::Handle);
+        }
+      }
+    }
+
+    match inner.state {
+      PromiseState::Pending => {
+        inner.fulfill_reactions.push(fulfill_reaction);
+        inner.reject_reactions.push(reject_reaction);
+      }
+      PromiseState::Fulfilled(v) => {
+        host.host_enqueue_promise_job(new_promise_reaction_job(fulfill_reaction, v), None);
+      }
+      PromiseState::Rejected(r) => {
+        host.host_enqueue_promise_job(new_promise_reaction_job(reject_reaction, r), None);
+      }
+    }
+
+    Ok(())
+  }
+}
+
+/// A value that can be awaited.
+#[derive(Clone)]
+pub enum Awaitable {
+  /// A non-Promise ECMAScript value.
+  Value(Value),
+  /// A Promise record.
+  Promise(Promise),
+}
+
+impl From<Value> for Awaitable {
+  fn from(value: Value) -> Self {
+    Self::Value(value)
+  }
+}
+
+impl From<Promise> for Awaitable {
+  fn from(value: Promise) -> Self {
+    Self::Promise(value)
+  }
+}
+
+fn promise_resolve(value: Awaitable) -> Promise {
+  match value {
+    Awaitable::Promise(p) => p,
+    Awaitable::Value(v) => Promise::fulfilled(v),
+  }
+}
+
+/// Spec-shaped helper for async/await continuation scheduling.
+///
+/// Equivalent to `Await(value)` steps 2–4 + step 9:
+/// 1. `promise = PromiseResolve(%Promise%, value)`
+/// 2. `PerformPromiseThen(promise, on_fulfilled, on_rejected)` (no derived promise)
+pub fn await_value(
+  host: &mut dyn VmHostHooks,
+  heap: &Heap,
+  value: Awaitable,
+  on_fulfilled: Value,
+  on_rejected: Value,
+) -> Result<(), VmError> {
+  let promise = promise_resolve(value);
+  promise.then_without_result(host, heap, on_fulfilled, on_rejected)
+}
+

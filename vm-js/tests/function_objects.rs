@@ -1,5 +1,6 @@
 use vm_js::{
   Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
+  Vm, VmOptions,
 };
 
 #[test]
@@ -43,6 +44,7 @@ fn function_objects_support_prototype_and_properties() -> Result<(), VmError> {
 #[test]
 fn function_property_lookups_traverse_prototype_chain() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
   let mut scope = heap.scope();
 
   let name = scope.alloc_string("f")?;
@@ -70,13 +72,7 @@ fn function_property_lookups_traverse_prototype_chain() -> Result<(), VmError> {
     },
   )?;
 
-  let Some(found) = scope.heap().get_property(func, &key)? else {
-    panic!("expected property lookup to traverse prototype chain");
-  };
-  match found.kind {
-    PropertyKind::Data { value, .. } => assert_eq!(value, Value::Number(42.0)),
-    PropertyKind::Accessor { .. } => panic!("expected data property on prototype"),
-  }
+  let found = scope.ordinary_get(&mut vm, func, key, Value::Object(func))?;
+  assert_eq!(found, Value::Number(42.0));
   Ok(())
 }
-
