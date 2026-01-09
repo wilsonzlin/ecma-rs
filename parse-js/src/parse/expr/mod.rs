@@ -901,7 +901,169 @@ impl<'a> Parser<'a> {
             };
 
             let operand = if has_operand {
-              p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
+              if operator.name == OperatorName::New {
+                // `new` has tricky precedence rules in ECMAScript: `new Foo().bar` should parse as
+                // `(new Foo()).bar`, not `new (Foo().bar)`.
+                //
+                // `parse-js` represents `new Foo()` as a `UnaryExpr(New)` whose `argument` is a
+                // `CallExpr` node (holding the constructor target and arguments). To preserve
+                // correct chaining semantics, we must parse **only** the constructor target
+                // (including member access within the callee, e.g. `Foo.bar`) and the optional
+                // argument list, but we must *not* eagerly consume further member/call operators
+                // after that argument list.
+                //
+                // Without this special-case, `new Foo().bar` would incorrectly build
+                // `Unary(New, Member(Call(Foo()), "bar"))`, which evaluates `Foo()` as a *call*
+                // before applying `new`, breaking real-world patterns like
+                // `new URL("...").href` / `new URL("...").searchParams.get("q")`.
+
+                // Parse the constructor target expression without consuming call syntax.
+                let mut callee = p.expr_operand(ctx, terminators, asi)?;
+
+                // Consume member access chains (`new Foo.bar()`).
+                loop {
+                  match p.peek().typ {
+                    TT::Dot | TT::QuestionDot => {
+                      let optional = p.peek().typ == TT::QuestionDot;
+                      p.consume();
+
+                      let checkpoint = p.checkpoint();
+                      let right_tok = p.consume();
+                      let mut prop = String::new();
+                      let mut right = right_tok.loc;
+                      match right_tok.typ {
+                        TT::Identifier | TT::PrivateMember => {
+                          prop = p.string(right);
+                        }
+                        t if KEYWORDS_MAPPING.contains_key(&t) => {
+                          prop = p.string(right);
+                        }
+                        _ => {
+                          if !p.should_recover() {
+                            return Err(right_tok.error(SyntaxErrorType::ExpectedSyntax("property name")));
+                          }
+                          if matches!(
+                            right_tok.typ,
+                            TT::BraceClose
+                              | TT::ParenthesisClose
+                              | TT::BracketClose
+                              | TT::Semicolon
+                              | TT::EOF
+                          ) {
+                            // Recovery: don't consume likely terminators.
+                            p.restore_checkpoint(checkpoint);
+                            right = callee.loc;
+                            prop.clear();
+                          }
+                        }
+                      }
+
+                      callee = Node::new(
+                        callee.loc + right,
+                        MemberExpr {
+                          optional_chaining: optional,
+                          left: callee,
+                          right: prop,
+                        },
+                      )
+                      .into_wrapped();
+                      continue;
+                    }
+                    TT::BracketOpen | TT::QuestionDotBracketOpen => {
+                      let optional = p.peek().typ == TT::QuestionDotBracketOpen;
+                      p.consume();
+
+                      let member = if p.should_recover() {
+                        if p.peek().typ == TT::BracketClose {
+                          let loc = p.peek().loc;
+                          p.create_synthetic_undefined(loc)
+                        } else {
+                          p.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
+                            let loc = p.peek().loc;
+                            p.create_synthetic_undefined(loc)
+                          })
+                        }
+                      } else {
+                        p.expr(ctx, [TT::BracketClose])?
+                      };
+                      let end = p.require(TT::BracketClose)?;
+
+                      callee = Node::new(
+                        callee.loc + end.loc,
+                        ComputedMemberExpr {
+                          optional_chaining: optional,
+                          object: callee,
+                          member,
+                        },
+                      )
+                      .into_wrapped();
+                      continue;
+                    }
+                    _ => break,
+                  }
+                }
+
+                // TypeScript: Allow explicit type arguments on constructor targets
+                // (`new Foo<T>()`, `new Foo.Bar<T>()`).
+                if p.is_typescript()
+                  && p.peek().typ == TT::ChevronLeft
+                  && p.is_start_of_type_arguments()
+                {
+                  if let Some((type_arguments, close_loc)) = p.rewindable(|p| {
+                    p.require(TT::ChevronLeft)?;
+                    let (type_arguments, close_loc) =
+                      match p.ts_type_arguments_after_chevron_left(ctx) {
+                      Ok(res) => res,
+                      Err(_) => return Ok(None),
+                    };
+
+                    let next = p.peek();
+                    let tagged_template = !next.preceded_by_line_terminator
+                      && matches!(
+                        next.typ,
+                        TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
+                      );
+
+                    if p.allow_bare_ts_type_args
+                      || tagged_template
+                      || Self::can_follow_type_arguments_in_expression(next.typ)
+                    {
+                      Ok(Some((type_arguments, close_loc)))
+                    } else {
+                      Ok(None)
+                    }
+                  })? {
+                    callee = Node::new(
+                      callee.loc + close_loc,
+                      InstantiationExpr {
+                        expression: Box::new(callee),
+                        type_arguments,
+                      },
+                    )
+                    .into_wrapped();
+                  }
+                }
+
+                // Optional argument list (`new Foo(...)`).
+                if p.peek().typ == TT::ParenthesisOpen {
+                  p.consume(); // (
+                  let arguments = p.call_args(ctx)?;
+                  let end = p.require(TT::ParenthesisClose)?;
+                  callee = Node::new(
+                    callee.loc + end.loc,
+                    CallExpr {
+                      optional_chaining: false,
+                      arguments,
+                      callee,
+                    },
+                  )
+                  .into_wrapped();
+                }
+
+                callee
+              } else {
+                p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
+              }
             } else {
               match operator.name {
                 OperatorName::Await | OperatorName::YieldDelegated => {
