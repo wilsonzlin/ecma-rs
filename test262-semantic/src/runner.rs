@@ -550,6 +550,7 @@ status = "skip"
     let timeout_manager = TimeoutManager::new();
     run_single_case(
       temp.path(),
+      HarnessMode::Inline,
       &case,
       expectation,
       &executor,
