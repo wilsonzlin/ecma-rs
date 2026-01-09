@@ -3300,20 +3300,36 @@ impl<'a> Scope<'a> {
     outer: Option<GcEnv>,
     bindings: &[EnvBinding],
   ) -> Result<GcEnv, VmError> {
-    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
+    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
+    //
+    // Rooting must be robust against GC triggering while we grow root stacks: if GC runs while
+    // we're pushing roots, any not-yet-pushed binding values could otherwise be collected.
     if let Some(outer) = outer {
       if !scope.heap().is_valid_env(outer) {
         return Err(VmError::InvalidHandle);
       }
-      scope.push_env_root(outer)?;
     }
 
+    // Collect all `Value`-typed roots so we can push them in one operation (GC-safe).
+    let max_roots = bindings.len().saturating_mul(2);
+    let mut roots: Vec<Value> = Vec::new();
+    roots
+      .try_reserve_exact(max_roots)
+      .map_err(|_| VmError::OutOfMemory)?;
     for binding in bindings {
       if let Some(name) = binding.name {
-        scope.push_root(Value::String(name))?;
+        roots.push(Value::String(name));
       }
-      scope.push_root(binding.value)?;
+      roots.push(binding.value);
+    }
+
+    // If `outer` is present, treat it as an extra env root while growing the value root stack.
+    if let Some(outer) = outer {
+      scope.push_roots_with_extra_roots(&roots, &[], &[outer])?;
+      scope.push_env_root(outer)?;
+    } else {
+      scope.push_roots(&roots)?;
     }
 
     let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(bindings.len());
@@ -3354,22 +3370,30 @@ impl<'a> Scope<'a> {
     outer: Option<GcEnv>,
     with_environment: bool,
   ) -> Result<GcEnv, VmError> {
-    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
+    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
+    //
+    // Rooting must be robust against GC triggering while we grow root stacks: if GC runs while
+    // we're pushing one root, any not-yet-pushed roots could otherwise be collected.
     if !scope.heap().is_valid_object(binding_object) {
       return Err(VmError::InvalidHandle);
     }
-    scope.push_root(Value::Object(binding_object))?;
     if let Some(outer) = outer {
       if !scope.heap().is_valid_env(outer) {
         return Err(VmError::InvalidHandle);
       }
-      scope.push_env_root(outer)?;
     }
 
-    // Object environment records have no heap-owned payload allocations; their header is stored
-    // inline in the heap slot table and is accounted for in heap metadata overhead.
-    let new_bytes = 0usize;
+    let value_roots = [Value::Object(binding_object)];
+    if let Some(outer) = outer {
+      // Treat `outer` as an extra env root while growing the value root stack.
+      scope.push_roots_with_extra_roots(&value_roots, &[], &[outer])?;
+      scope.push_env_root(outer)?;
+    } else {
+      scope.push_roots(&value_roots)?;
+    }
+
+    let new_bytes = ObjectEnvRecord::heap_size_bytes();
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Env(EnvRecord::Object(ObjectEnvRecord {

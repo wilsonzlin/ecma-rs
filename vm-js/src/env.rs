@@ -129,6 +129,12 @@ pub(crate) struct ObjectEnvRecord {
   pub(crate) with_environment: bool,
 }
 
+impl ObjectEnvRecord {
+  pub(crate) fn heap_size_bytes() -> usize {
+    mem::size_of::<Self>()
+  }
+}
+
 #[derive(Debug)]
 pub(crate) enum EnvRecord {
   Declarative(DeclarativeEnvRecord),
