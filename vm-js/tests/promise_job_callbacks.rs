@@ -303,7 +303,7 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   Ok(())
 }
 
-#[test]
+  #[test]
 fn promise_reaction_job_throw_is_invariant_violation_when_capability_is_undefined(
 ) -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
