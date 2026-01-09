@@ -6,7 +6,9 @@ use crate::ModuleRequest;
 use crate::RootId;
 use crate::VmError;
 use diagnostics::{Diagnostic, FileId};
-use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
+use parse_js::ast::class_or_object::{
+  ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType,
+};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::lit::{LitArrElem, LitTemplatePart};
