@@ -21,7 +21,6 @@ fn noop(_vm: &mut Vm, _scope: &mut Scope<'_>, _this: Value, _args: &[Value]) -> 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TestJobCallbackData {
   id: u32,
-  callback: GcObject,
 }
 
 #[derive(Debug)]
@@ -46,7 +45,7 @@ impl VmHostHooks for TestHost {
   fn host_make_job_callback(&mut self, callback: GcObject) -> JobCallback {
     let id = u32::try_from(self.made.len()).expect("too many callbacks for test");
     self.made.push(callback);
-    JobCallback::new(TestJobCallbackData { id, callback })
+    JobCallback::new_with_data(callback, TestJobCallbackData { id })
   }
 
   fn host_call_job_callback(
@@ -59,8 +58,9 @@ impl VmHostHooks for TestHost {
     let data = callback
       .downcast_ref::<TestJobCallbackData>()
       .expect("job callback should have been created by TestHost::host_make_job_callback");
+    let callback_obj = callback.callback();
     assert_eq!(
-      self.made[data.id as usize], data.callback,
+      self.made[data.id as usize], callback_obj,
       "JobCallback metadata should remain consistent"
     );
 
@@ -69,7 +69,7 @@ impl VmHostHooks for TestHost {
       .take()
       .expect("unexpected HostCallJobCallback invocation");
 
-    assert_eq!(data.callback, expected.callback);
+    assert_eq!(callback_obj, expected.callback);
     assert_eq!(this_argument, expected.this_argument);
     assert_eq!(arguments, expected.arguments.as_slice());
 
@@ -156,4 +156,3 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   assert_eq!(host.calls, 1);
   Ok(())
 }
-

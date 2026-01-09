@@ -41,7 +41,7 @@ fn is_callable(heap: &Heap, value: Value) -> Result<Option<GcObject>, VmError> {
     return Ok(None);
   };
 
-  match heap.get_function_call_id(obj) {
+  match heap.get_function_call_handler(obj) {
     Ok(_) => Ok(Some(obj)),
     Err(VmError::NotCallable) => Ok(None),
     Err(e) => Err(e),
@@ -101,4 +101,3 @@ pub fn create_promise_resolve_thenable_job(
     reject,
   )))
 }
-
