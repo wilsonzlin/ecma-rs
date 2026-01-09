@@ -57,3 +57,10 @@ fn cond_operator() {
   let value = rt.exec_script(r#"true ? 1 : 2"#).unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
+
+#[test]
+fn delete_member() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"var o = {a: 1}; delete o.a; o.a"#).unwrap();
+  assert_eq!(value, Value::Undefined);
+}

@@ -1291,6 +1291,21 @@ impl<'a> Evaluator<'a> {
         let _ = self.eval_expr(scope, &expr.argument)?;
         Ok(Value::Undefined)
       }
+      OperatorName::Delete => match &*expr.argument.stx {
+        Expr::Member(_) | Expr::ComputedMember(_) => {
+          let reference = self.eval_reference(scope, &expr.argument)?;
+          match reference {
+            Reference::Property { object, key } => Ok(Value::Bool(scope.ordinary_delete(object, key)?)),
+            // Deleting bindings (`delete x`) is not supported yet.
+            Reference::Binding(_) => Ok(Value::Bool(false)),
+          }
+        }
+        // `delete` of non-reference expressions always returns true (after evaluating the operand).
+        _ => {
+          let _ = self.eval_expr(scope, &expr.argument)?;
+          Ok(Value::Bool(true))
+        }
+      },
       _ => Err(VmError::Unimplemented("unary operator")),
     }
   }
