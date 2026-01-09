@@ -249,7 +249,7 @@ fn job_run_removes_roots_even_on_error() -> Result<(), VmError> {
 }
 
 #[test]
-fn host_call_job_callback_stub_is_present_and_object_safe() -> Result<(), VmError> {
+fn host_call_job_callback_default_delegates_to_ctx_call() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let callback_obj = {
     let mut scope = heap.scope();
@@ -269,7 +269,7 @@ fn host_call_job_callback_stub_is_present_and_object_safe() -> Result<(), VmErro
   );
   assert!(matches!(
     err,
-    Err(VmError::Unimplemented("HostCallJobCallback"))
+    Err(VmError::Unimplemented("TestContext::call"))
   ));
   Ok(())
 }

@@ -31,6 +31,7 @@ use crate::{HostDefined, ModuleLoadPayload, ModuleReferrer, ModuleRequest, VmMod
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 /// Opaque identifier for a Realm Record that a job should run in.
 ///
@@ -312,61 +313,151 @@ impl Drop for Job {
 /// # }
 /// ```
 #[derive(Clone)]
-pub struct JobCallback {
+pub struct JobCallback(Arc<JobCallbackInner>);
+
+struct JobCallbackInner {
   callback: GcObject,
+  realm: Option<RealmId>,
   host_defined: Option<Arc<dyn Any + Send + Sync>>,
+  rooted: Mutex<Option<RootId>>,
 }
 
 impl JobCallback {
   /// Create a new `JobCallback` with no extra host-defined metadata.
   pub fn new(callback: GcObject) -> Self {
-    Self {
+    Self::new_in_realm(callback, None)
+  }
+
+  /// Create a new `JobCallback` associated with an opaque realm identifier.
+  pub fn new_in_realm(callback: GcObject, realm: Option<RealmId>) -> Self {
+    Self(Arc::new(JobCallbackInner {
       callback,
+      realm,
       host_defined: None,
-    }
+      rooted: Mutex::new(None),
+    }))
   }
 
   /// Create a new `JobCallback` with host-defined metadata.
   pub fn new_with_data<T: Any + Send + Sync>(callback: GcObject, data: T) -> Self {
-    Self {
+    Self::new_with_data_in_realm(callback, data, None)
+  }
+
+  /// Create a new `JobCallback` with host-defined metadata, associated with an opaque realm
+  /// identifier.
+  pub fn new_with_data_in_realm<T: Any + Send + Sync>(
+    callback: GcObject,
+    data: T,
+    realm: Option<RealmId>,
+  ) -> Self {
+    Self(Arc::new(JobCallbackInner {
       callback,
+      realm,
       host_defined: Some(Arc::new(data)),
-    }
+      rooted: Mutex::new(None),
+    }))
   }
 
   /// Returns the callback object captured by this record.
   #[inline]
   pub fn callback(&self) -> GcObject {
-    self.callback
+    self.0.callback
   }
 
   /// Alias for [`JobCallback::callback`].
   #[inline]
   pub fn callback_object(&self) -> GcObject {
-    self.callback
+    self.0.callback
+  }
+
+  /// Opaque realm identifier captured at creation time, if any.
+  #[inline]
+  pub fn realm(&self) -> Option<RealmId> {
+    self.0.realm
+  }
+
+  /// Ensures the callback object is kept alive by registering it as a persistent root.
+  ///
+  /// This is intended for embeddings that store [`JobCallback`] records in host-owned task queues
+  /// (timers, tasks, microtasks). The GC does not trace host memory; without an explicit root, the
+  /// callback object can be collected and the record will hold a stale handle.
+  ///
+  /// This method is **idempotent**: if the callback is already rooted, it returns the existing
+  /// root id.
+  ///
+  /// Call [`JobCallback::teardown`] to unregister the root when the callback is no longer needed.
+  pub fn ensure_rooted(&self, ctx: &mut dyn VmJobContext) -> Result<RootId, VmError> {
+    let mut guard = self.0.rooted.lock().unwrap();
+    if let Some(id) = *guard {
+      return Ok(id);
+    }
+    let id = ctx.add_root(Value::Object(self.callback()))?;
+    *guard = Some(id);
+    Ok(id)
+  }
+
+  /// Returns the persistent-root id for this callback, if it has been rooted via
+  /// [`JobCallback::ensure_rooted`].
+  pub fn root_id(&self) -> Option<RootId> {
+    self.0.rooted.lock().unwrap().copied()
+  }
+
+  /// Unregisters the persistent root created by [`JobCallback::ensure_rooted`], if any.
+  ///
+  /// This method is **idempotent**.
+  pub fn teardown(&self, ctx: &mut dyn VmJobContext) {
+    let id = self.0.rooted.lock().unwrap().take();
+    if let Some(id) = id {
+      ctx.remove_root(id);
+    }
+  }
+
+  /// Alias for [`JobCallback::teardown`].
+  #[inline]
+  pub fn remove_roots(&self, ctx: &mut dyn VmJobContext) {
+    self.teardown(ctx);
   }
 
   /// Attempts to downcast the host-defined metadata payload by reference.
   pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-    self.host_defined.as_ref()?.downcast_ref::<T>()
+    self.0.host_defined.as_ref()?.downcast_ref::<T>()
+  }
+}
+
+impl Drop for JobCallbackInner {
+  fn drop(&mut self) {
+    // Avoid panicking from a destructor while unwinding (that would abort).
+    if std::thread::panicking() {
+      return;
+    }
+    // We cannot automatically remove the root without access to the heap/context; require explicit
+    // teardown in debug builds.
+    if let Ok(rooted) = self.rooted.get_mut() {
+      debug_assert!(
+        rooted.is_none(),
+        "JobCallback dropped with a leaked persistent root; call JobCallback::teardown(..)"
+      );
+    }
   }
 }
 
 impl fmt::Debug for JobCallback {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("JobCallback")
-      .field("callback", &self.callback)
+      .field("callback", &self.0.callback)
+      .field("realm", &self.0.realm)
       .field(
         "host_defined_type_id",
-        &self.host_defined.as_ref().map(|v| v.type_id()),
+        &self.0.host_defined.as_ref().map(|v| v.type_id()),
       )
+      .field("rooted", &self.root_id().is_some())
       .finish()
   }
 }
 
 impl Trace for JobCallback {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    tracer.trace_value(Value::Object(self.callback));
+    tracer.trace_value(Value::Object(self.0.callback));
   }
 }
 
@@ -468,15 +559,23 @@ pub trait VmHostHooks {
   /// Stub hook for HTML's `HostCallJobCallback`:
   /// <https://html.spec.whatwg.org/multipage/webappapis.html#hostcalljobcallback>.
   ///
-  /// This default implementation is a stub and returns [`VmError::Unimplemented`].
+  /// The default implementation delegates to [`VmJobContext::call`], passing:
+  /// - `callee`: `callback.[[Callback]]`
+  /// - `this`: `this_argument`
+  /// - `args`: `arguments`
   fn host_call_job_callback(
     &mut self,
-    _ctx: &mut dyn VmJobContext,
-    _callback: &JobCallback,
-    _this_argument: Value,
-    _arguments: &[Value],
+    ctx: &mut dyn VmJobContext,
+    callback: &JobCallback,
+    this_argument: Value,
+    arguments: &[Value],
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("HostCallJobCallback"))
+    ctx.call(
+      self,
+      Value::Object(callback.callback_object()),
+      this_argument,
+      arguments,
+    )
   }
 
   /// Promise rejection tracker hook (unhandled rejection reporting).
