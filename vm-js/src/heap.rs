@@ -3198,7 +3198,19 @@ impl<'a> Scope<'a> {
     name: GcString,
     length: u32,
   ) -> Result<GcObject, VmError> {
-    self.alloc_native_function_with_slots(call, construct, name, length, &[])
+    self.alloc_native_function_with_slots_and_env(call, construct, name, length, &[], None)
+  }
+
+  /// Allocates a native JavaScript function object with a captured Environment Record.
+  pub fn alloc_native_function_with_env(
+    &mut self,
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    closure_env: Option<GcEnv>,
+  ) -> Result<GcObject, VmError> {
+    self.alloc_native_function_with_slots_and_env(call, construct, name, length, &[], closure_env)
   }
 
   /// Allocates a native JavaScript function object with captured native slots.
@@ -3210,6 +3222,18 @@ impl<'a> Scope<'a> {
     length: u32,
     slots: &[Value],
   ) -> Result<GcObject, VmError> {
+    self.alloc_native_function_with_slots_and_env(call, construct, name, length, slots, None)
+  }
+
+  fn alloc_native_function_with_slots_and_env(
+    &mut self,
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    slots: &[Value],
+    closure_env: Option<GcEnv>,
+  ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     // Root `name` and `slots` in a way that's robust against GC triggering while we grow the root
@@ -3218,8 +3242,14 @@ impl<'a> Scope<'a> {
     // `push_root`/`push_roots` can trigger GC when growing `root_stack`, so ensure any not-yet-pushed
     // values are treated as extra roots during that operation.
     let name_root = [Value::String(name)];
-    scope.push_roots_with_extra_roots(&name_root, slots, &[])?;
-    scope.push_roots(slots)?;
+    if let Some(env) = closure_env {
+      scope.push_roots_with_extra_roots(&name_root, slots, &[env])?;
+      scope.push_roots_with_extra_roots(slots, &[], &[env])?;
+      scope.push_env_root(env)?;
+    } else {
+      scope.push_roots_with_extra_roots(&name_root, slots, &[])?;
+      scope.push_roots(slots)?;
+    }
 
     let native_slots: Option<Box<[Value]>> = if slots.is_empty() {
       None
@@ -3234,7 +3264,14 @@ impl<'a> Scope<'a> {
       Some(buf.into_boxed_slice())
     };
 
-    let func = JsFunction::new_native_with_slots(call, construct, name, length, native_slots);
+    let func = JsFunction::new_native_with_slots_and_env(
+      call,
+      construct,
+      name,
+      length,
+      native_slots,
+      closure_env,
+    );
     let new_bytes = func.heap_size_bytes();
     scope.heap.ensure_can_allocate(new_bytes)?;
 

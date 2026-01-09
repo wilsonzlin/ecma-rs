@@ -144,7 +144,7 @@ impl JsFunction {
     name: GcString,
     length: u32,
   ) -> Self {
-    Self::new_native_with_slots(call, construct, name, length, None)
+    Self::new_native_with_slots_and_env(call, construct, name, length, None, None)
   }
 
   pub(crate) fn new_native_with_slots(
@@ -153,6 +153,17 @@ impl JsFunction {
     name: GcString,
     length: u32,
     native_slots: Option<Box<[Value]>>,
+  ) -> Self {
+    Self::new_native_with_slots_and_env(call, construct, name, length, native_slots, None)
+  }
+
+  pub(crate) fn new_native_with_slots_and_env(
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    native_slots: Option<Box<[Value]>>,
+    closure_env: Option<GcEnv>,
   ) -> Self {
     Self {
       call: CallHandler::Native(call),
@@ -170,7 +181,7 @@ impl JsFunction {
       native_slots,
       realm: None,
       job_realm: None,
-      closure_env: None,
+      closure_env,
     }
   }
 
