@@ -1,6 +1,6 @@
 use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Value,
-  VmError,
+  Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey,
+  PropertyKind, Value, VmError,
 };
 
 #[test]
@@ -117,6 +117,48 @@ fn property_key_equality_uses_string_code_units_or_symbol_identity() -> Result<(
   let k2 = PropertyKey::from_symbol(sym2);
   assert!(!scope.heap().property_key_eq(&k1, &k2));
   assert!(scope.heap().property_key_eq(&k1, &k1));
+
+  Ok(())
+}
+
+#[test]
+fn define_property_works_on_native_function_objects() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  let name = scope.alloc_string("f")?;
+  let func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
+  scope.push_root(Value::Object(func));
+
+  let key_str = scope.alloc_string("x")?;
+  let key = PropertyKey::from_string(key_str);
+  let desc = PropertyDescriptor {
+    enumerable: true,
+    configurable: true,
+    kind: PropertyKind::Data {
+      value: Value::Number(123.0),
+      writable: true,
+    },
+  };
+  scope.define_property(func, key, desc)?;
+
+  // Ensure the function traces its property table (and the property key) across GC.
+  scope.heap_mut().collect_garbage();
+  assert!(scope.heap().is_valid_string(key_str));
+
+  let got = scope
+    .heap()
+    .object_get_own_property(func, &key)?
+    .expect("property should exist on function object");
+  assert!(got.enumerable);
+  assert!(got.configurable);
+  match got.kind {
+    PropertyKind::Data { value, writable } => {
+      assert!(writable);
+      assert!(matches!(value, Value::Number(n) if n == 123.0));
+    }
+    PropertyKind::Accessor { .. } => panic!("expected data descriptor"),
+  }
 
   Ok(())
 }
