@@ -51,3 +51,48 @@ fn switch_does_not_evaluate_case_selectors_after_match_is_found() {
     .unwrap();
   assert_eq!(value, Value::Number(0.0));
 }
+
+#[test]
+fn switch_default_before_matching_case_is_skipped() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("var y = 0; switch (1) { default: y = 1; case 1: 2; } y")
+    .unwrap();
+  assert_eq!(value, Value::Number(0.0));
+}
+
+#[test]
+fn switch_match_before_default_falls_through_to_default() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("var y = 0; switch (0) { case 0: y = 1; default: y = 2; } y")
+    .unwrap();
+  assert_eq!(value, Value::Number(2.0));
+}
+
+#[test]
+fn switch_default_falls_through_to_after_default_clauses() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("var y = 0; switch (0) { default: 0; case 1: y = 1; } y")
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn switch_after_default_case_selector_is_evaluated_once_when_no_match() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("var x = 0; switch (0) { default: 0; case (++x): 0; } x")
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn switch_after_default_case_selector_is_not_evaluated_when_match_before_default() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("var x = 0; switch (0) { case 0: 0; default: 0; case (++x): 0; } x")
+    .unwrap();
+  assert_eq!(value, Value::Number(0.0));
+}
