@@ -44,3 +44,11 @@ fn method_definition_binds_this() {
   assert_eq!(value, Value::Bool(true));
 }
 
+#[test]
+fn numeric_literal_keys_match_computed_access() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var o={0.000001:1,1e21:2}; o[0.000001]===1 && o[1e21]===2"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}

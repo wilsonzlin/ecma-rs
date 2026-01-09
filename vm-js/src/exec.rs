@@ -23,6 +23,7 @@ use parse_js::ast::stmt::{
 };
 use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
+use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -1902,6 +1903,13 @@ impl<'a> Evaluator<'a> {
             ClassOrObjKey::Direct(direct) => {
               let key_s = if let Some(units) = literal_string_code_units(&direct.assoc) {
                 member_scope.alloc_string_from_code_units(units)?
+              } else if direct.stx.tt == TT::LiteralNumber {
+                let n = direct
+                  .stx
+                  .key
+                  .parse::<f64>()
+                  .map_err(|_| VmError::Unimplemented("numeric literal property name parse"))?;
+                member_scope.heap_mut().to_string(Value::Number(n))?
               } else {
                 member_scope.alloc_string(&direct.stx.key)?
               };

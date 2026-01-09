@@ -98,3 +98,12 @@ fn catch_param_supports_destructuring() {
     .unwrap();
   assert_eq!(value, Value::Number(1.0));
 }
+
+#[test]
+fn object_destructuring_string_key_preserves_unpaired_surrogate() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var o = {"\uD800": 1}; var {"\uD800": x} = o; x"#)
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}

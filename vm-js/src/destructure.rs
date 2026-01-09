@@ -4,8 +4,9 @@ use crate::{new_type_error, GcObject, Realm, Scope, Value, Vm, VmError};
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
-use parse_js::ast::node::Node;
+use parse_js::ast::node::{literal_string_code_units, Node};
 use parse_js::ast::stx::TopLevel;
+use parse_js::token::TT;
 use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug)]
@@ -432,7 +433,18 @@ fn resolve_obj_pat_key(
 ) -> Result<PropertyKey, VmError> {
   match key {
     ClassOrObjKey::Direct(direct) => {
-      let s = scope.alloc_string(&direct.stx.key)?;
+      let s = if let Some(units) = literal_string_code_units(&direct.assoc) {
+        scope.alloc_string_from_code_units(units)?
+      } else if direct.stx.tt == TT::LiteralNumber {
+        let n = direct
+          .stx
+          .key
+          .parse::<f64>()
+          .map_err(|_| VmError::Unimplemented("numeric literal property name parse"))?;
+        scope.heap_mut().to_string(Value::Number(n))?
+      } else {
+        scope.alloc_string(&direct.stx.key)?
+      };
       Ok(PropertyKey::from_string(s))
     }
     ClassOrObjKey::Computed(expr) => {
