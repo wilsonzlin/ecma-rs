@@ -51,9 +51,25 @@ impl<'a> Scope<'a> {
     validate_and_apply_property_descriptor(self, Some(obj), key, extensible, desc, current)
   }
 
+  /// ECMAScript `[[DefineOwnProperty]]`.
+  ///
+  /// This dispatches to the appropriate exotic object's `[[DefineOwnProperty]]` algorithm.
+  pub fn define_own_property(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<bool, VmError> {
+    if self.heap().object_is_array(obj)? {
+      self.array_define_own_property(obj, key, desc)
+    } else {
+      self.ordinary_define_own_property(obj, key, desc)
+    }
+  }
+
   /// ECMAScript `DefinePropertyOrThrow`.
   ///
-  /// This is a convenience wrapper around [`Scope::ordinary_define_own_property`]. If the
+  /// This is a convenience wrapper around [`Scope::define_own_property`]. If the
   /// definition is rejected (`false`), this returns a `TypeError`.
   pub fn define_property_or_throw(
     &mut self,
@@ -61,7 +77,7 @@ impl<'a> Scope<'a> {
     key: PropertyKey,
     desc: PropertyDescriptorPatch,
   ) -> Result<(), VmError> {
-    let ok = self.ordinary_define_own_property(obj, key, desc)?;
+    let ok = self.define_own_property(obj, key, desc)?;
     if ok {
       Ok(())
     } else {
@@ -154,7 +170,7 @@ impl<'a> Scope<'a> {
     key: PropertyKey,
     value: Value,
   ) -> Result<bool, VmError> {
-    self.ordinary_define_own_property(
+    self.define_own_property(
       obj,
       key,
       PropertyDescriptorPatch {
@@ -180,6 +196,165 @@ impl<'a> Scope<'a> {
       Err(VmError::TypeError("CreateDataProperty rejected"))
     }
   }
+
+  fn array_define_own_property(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<bool, VmError> {
+    desc.validate()?;
+
+    // Root all inputs that might be written into the heap before any allocation/GC.
+    self.push_root(Value::Object(obj));
+    root_property_key(self, key);
+    root_descriptor_patch(self, &desc);
+
+    if self.heap().property_key_is_length(&key) {
+      let length_key = self.heap().array_length_key(obj)?;
+      return self.array_set_length(obj, length_key, desc);
+    }
+
+    if let Some(index) = self.heap().array_index(&key) {
+      let old_len = self.heap().array_length(obj)?;
+      if index >= old_len && !self.heap().array_length_writable(obj)? {
+        return Ok(false);
+      }
+
+      let succeeded = self.ordinary_define_own_property(obj, key, desc)?;
+      if !succeeded {
+        return Ok(false);
+      }
+
+      if index >= old_len {
+        let new_len = index
+          .checked_add(1)
+          .ok_or(VmError::InvariantViolation("array index overflow"))?;
+        self.heap_mut().array_set_length(obj, new_len)?;
+      }
+
+      return Ok(true);
+    }
+
+    self.ordinary_define_own_property(obj, key, desc)
+  }
+
+  fn array_set_length(
+    &mut self,
+    obj: GcObject,
+    length_key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<bool, VmError> {
+    // If `Desc` does not specify a new length value, this is just a property definition on the
+    // existing `length` data property (typically toggling writability).
+    let Some(value) = desc.value else {
+      return self.ordinary_define_own_property(obj, length_key, desc);
+    };
+
+    let Some(new_len) = array_length_from_value(value) else {
+      return Ok(false);
+    };
+
+    let old_len = self.heap().array_length(obj)?;
+
+    // Extending `length` is just an ordinary property definition.
+    if new_len >= old_len {
+      let mut new_desc = desc;
+      new_desc.value = Some(Value::Number(new_len as f64));
+      return self.ordinary_define_own_property(obj, length_key, new_desc);
+    }
+
+    // Shrinking: reject if `length` is not writable.
+    if !self.heap().array_length_writable(obj)? {
+      return Ok(false);
+    }
+
+    // If the caller is requesting `writable: false`, the spec requires performing deletions while
+    // `length` is still writable so we can restore `length` on failure.
+    let mut new_writable = true;
+    let mut new_len_desc = desc;
+    if matches!(new_len_desc.writable, Some(false)) {
+      new_writable = false;
+      new_len_desc.writable = Some(true);
+    }
+    new_len_desc.value = Some(Value::Number(new_len as f64));
+
+    let succeeded = self.ordinary_define_own_property(obj, length_key, new_len_desc)?;
+    if !succeeded {
+      return Ok(false);
+    }
+
+    // Delete existing array index properties >= newLen, in descending order.
+    //
+    // `OrdinaryOwnPropertyKeys` already sorts indices numerically, so iterating the resulting list
+    // in reverse deletes indices from high to low.
+    let keys = self.ordinary_own_property_keys(obj)?;
+    for key in keys.into_iter().rev() {
+      let Some(index) = self.heap().array_index(&key) else {
+        continue;
+      };
+      if index < new_len {
+        break;
+      }
+      if index >= old_len {
+        continue;
+      }
+
+      let delete_ok = self.ordinary_delete(obj, key)?;
+      if delete_ok {
+        continue;
+      }
+
+      // Failed to delete a non-configurable element: restore `length` to `index + 1` and (if
+      // requested) make it non-writable.
+      let restore_len = index
+        .checked_add(1)
+        .ok_or(VmError::InvariantViolation("array index overflow"))?;
+
+      let ok = self.ordinary_define_own_property(
+        obj,
+        length_key,
+        PropertyDescriptorPatch {
+          value: Some(Value::Number(restore_len as f64)),
+          ..Default::default()
+        },
+      )?;
+      if !ok {
+        return Err(VmError::InvariantViolation(
+          "array length restoration via OrdinaryDefineOwnProperty failed",
+        ));
+      }
+      if !new_writable {
+        self.heap_mut().array_set_length_writable(obj, false)?;
+      }
+      return Ok(false);
+    }
+
+    if !new_writable {
+      self.heap_mut().array_set_length_writable(obj, false)?;
+    }
+
+    Ok(true)
+  }
+}
+
+fn array_length_from_value(value: Value) -> Option<u32> {
+  let Value::Number(n) = value else {
+    return None;
+  };
+  if !n.is_finite() {
+    return None;
+  }
+  if n < 0.0 {
+    return None;
+  }
+  if n.fract() != 0.0 {
+    return None;
+  }
+  if n > u32::MAX as f64 {
+    return None;
+  }
+  Some(n as u32)
 }
 
 fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
@@ -425,7 +600,7 @@ fn ordinary_set_with_own_descriptor(
           return Ok(false);
         }
 
-        return scope.ordinary_define_own_property(
+        return scope.define_own_property(
           receiver_obj,
           key,
           PropertyDescriptorPatch {

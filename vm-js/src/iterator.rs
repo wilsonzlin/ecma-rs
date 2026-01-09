@@ -1,4 +1,4 @@
-use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
+use crate::property::PropertyKey;
 use crate::{GcObject, GcSymbol, Scope, Value, Vm, VmError};
 
 /// ECMAScript "IteratorRecord" (ECMA-262).
@@ -24,14 +24,6 @@ enum IteratorKind {
   },
 }
 
-fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool) -> PropertyDescriptor {
-  PropertyDescriptor {
-    enumerable,
-    configurable,
-    kind: PropertyKind::Data { value, writable },
-  }
-}
-
 fn string_key(scope: &mut Scope<'_>, s: &str) -> Result<PropertyKey, VmError> {
   Ok(PropertyKey::from_string(scope.alloc_string(s)?))
 }
@@ -41,23 +33,14 @@ fn symbol_for(scope: &mut Scope<'_>, description: &str) -> Result<GcSymbol, VmEr
   scope.heap_mut().symbol_for(key)
 }
 
-fn array_marker_key(scope: &mut Scope<'_>) -> Result<PropertyKey, VmError> {
-  // A globally-registered symbol is used so it is stable across scripts and cannot collide with
-  // user property keys (unless the user explicitly uses Symbol.for with this string, which they
-  // cannot do yet in this early interpreter).
-  Ok(PropertyKey::from_symbol(symbol_for(
-    scope,
-    "vm-js.internal.ArrayMarker",
-  )?))
-}
-
 fn is_array(scope: &mut Scope<'_>, value: Value) -> Result<Option<GcObject>, VmError> {
   let Value::Object(obj) = value else {
     return Ok(None);
   };
-  let marker_key = array_marker_key(scope)?;
-  let has_marker = scope.ordinary_has_property(obj, marker_key)?;
-  Ok(if has_marker { Some(obj) } else { None })
+  if scope.heap().object_is_array(obj)? {
+    return Ok(Some(obj));
+  }
+  Ok(None)
 }
 
 fn array_length(vm: &mut Vm, scope: &mut Scope<'_>, array: GcObject) -> Result<u32, VmError> {
@@ -92,8 +75,7 @@ fn get_method(
 /// `GetIterator` (ECMA-262).
 ///
 /// For now, this supports:
-/// - A fast path for Array objects created by the early interpreter (marked with an internal
-///   symbol).
+/// - A fast path for Array exotic objects.
 /// - A minimal iterator-protocol path via `@@iterator` for objects with native-callable iterator
 ///   methods.
 pub fn get_iterator(vm: &mut Vm, scope: &mut Scope<'_>, iterable: Value) -> Result<IteratorRecord, VmError> {
@@ -253,14 +235,5 @@ pub fn iterator_close(
   Ok(())
 }
 
-/// Marks `obj` as an Array for the interpreter's Array fast-path iterator.
-///
-/// This is used by the early AST interpreter when creating array literals.
-pub fn mark_array(scope: &mut Scope<'_>, obj: GcObject) -> Result<(), VmError> {
-  let marker_key = array_marker_key(scope)?;
-  scope.define_property(
-    obj,
-    marker_key,
-    data_desc(Value::Bool(true), false, false, false),
-  )
-}
+// Note: old `vm-js.internal.ArrayMarker` tagging was removed now that arrays are proper exotic
+// objects.

@@ -1735,7 +1735,7 @@ impl<'a> Evaluator<'a> {
             return Ok(false);
           }
 
-          return scope.ordinary_define_own_property(
+          return scope.define_own_property(
             receiver_obj,
             key,
             PropertyDescriptorPatch {
@@ -1781,9 +1781,8 @@ impl<'a> Evaluator<'a> {
 
   fn eval_lit_arr(&mut self, scope: &mut Scope<'_>, expr: &LitArrExpr) -> Result<Value, VmError> {
     let mut arr_scope = scope.reborrow();
-    let arr = arr_scope.alloc_object()?;
+    let arr = arr_scope.alloc_array(0)?;
     arr_scope.push_root(Value::Object(arr))?;
-    iterator::mark_array(&mut arr_scope, arr)?;
     let intr = self
       .vm
       .intrinsics()
@@ -2024,7 +2023,7 @@ impl<'a> Evaluator<'a> {
               member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("get"))?;
 
-              let ok = member_scope.ordinary_define_own_property(
+              let ok = member_scope.define_own_property(
                 obj,
                 key,
                 PropertyDescriptorPatch {
@@ -2087,7 +2086,7 @@ impl<'a> Evaluator<'a> {
               member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("set"))?;
 
-              let ok = member_scope.ordinary_define_own_property(
+              let ok = member_scope.define_own_property(
                 obj,
                 key,
                 PropertyDescriptorPatch {

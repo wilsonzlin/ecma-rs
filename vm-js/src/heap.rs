@@ -945,7 +945,7 @@ impl Heap {
     Ok(true)
   }
 
-  fn property_key_is_length(&self, key: &PropertyKey) -> bool {
+  pub(crate) fn property_key_is_length(&self, key: &PropertyKey) -> bool {
     const LENGTH_UNITS: [u16; 6] = [108, 101, 110, 103, 116, 104]; // "length"
     let PropertyKey::String(s) = key else {
       return false;
@@ -954,6 +954,107 @@ impl Heap {
       return false;
     };
     js.as_code_units() == LENGTH_UNITS
+  }
+
+  pub(crate) fn object_is_array(&self, obj: GcObject) -> Result<bool, VmError> {
+    Ok(self.get_object_base(obj)?.array_length().is_some())
+  }
+
+  pub(crate) fn array_length(&self, obj: GcObject) -> Result<u32, VmError> {
+    self
+      .get_object_base(obj)?
+      .array_length()
+      .ok_or(VmError::InvariantViolation("expected array object"))
+  }
+
+  pub(crate) fn array_length_key(&self, obj: GcObject) -> Result<PropertyKey, VmError> {
+    let base = self.get_object_base(obj)?;
+    if base.array_length().is_none() {
+      return Err(VmError::InvariantViolation("expected array object"));
+    }
+    let entry = base
+      .properties
+      .get(0)
+      .ok_or(VmError::InvariantViolation("array missing length property"))?;
+    if !self.property_key_is_length(&entry.key) {
+      return Err(VmError::InvariantViolation(
+        "array length property is not at index 0",
+      ));
+    }
+    Ok(entry.key)
+  }
+
+  pub(crate) fn array_length_writable(&self, obj: GcObject) -> Result<bool, VmError> {
+    let base = self.get_object_base(obj)?;
+    if base.array_length().is_none() {
+      return Err(VmError::InvariantViolation("expected array object"));
+    }
+    let entry = base
+      .properties
+      .get(0)
+      .ok_or(VmError::InvariantViolation("array missing length property"))?;
+    if !self.property_key_is_length(&entry.key) {
+      return Err(VmError::InvariantViolation(
+        "array length property is not at index 0",
+      ));
+    }
+    match entry.desc.kind {
+      PropertyKind::Data { writable, .. } => Ok(writable),
+      PropertyKind::Accessor { .. } => Err(VmError::InvariantViolation(
+        "array length property is not a data descriptor",
+      )),
+    }
+  }
+
+  pub(crate) fn array_set_length(&mut self, obj: GcObject, new_len: u32) -> Result<(), VmError> {
+    let base = self.get_object_base_mut(obj)?;
+    if base.array_length().is_none() {
+      return Err(VmError::InvariantViolation("expected array object"));
+    }
+    base.set_array_length(new_len);
+    Ok(())
+  }
+
+  pub(crate) fn array_set_length_writable(
+    &mut self,
+    obj: GcObject,
+    writable: bool,
+  ) -> Result<(), VmError> {
+    // Validate with an immutable borrow first so we don't need to borrow `self` immutably while
+    // holding a mutable borrow into the object.
+    {
+      let base = self.get_object_base(obj)?;
+      if base.array_length().is_none() {
+        return Err(VmError::InvariantViolation("expected array object"));
+      }
+      let entry = base
+        .properties
+        .get(0)
+        .ok_or(VmError::InvariantViolation("array missing length property"))?;
+      if !self.property_key_is_length(&entry.key) {
+        return Err(VmError::InvariantViolation(
+          "array length property is not at index 0",
+        ));
+      }
+    }
+
+    let base = self.get_object_base_mut(obj)?;
+    let entry = base
+      .properties
+      .get_mut(0)
+      .ok_or(VmError::InvariantViolation("array missing length property"))?;
+    match &mut entry.desc.kind {
+      PropertyKind::Data {
+        writable: slot_writable,
+        ..
+      } => {
+        *slot_writable = writable;
+        Ok(())
+      }
+      PropertyKind::Accessor { .. } => Err(VmError::InvariantViolation(
+        "array length property is not a data descriptor",
+      )),
+    }
   }
 
   /// Convenience: returns the value of an own data property, if present.
@@ -1002,18 +1103,11 @@ impl Heap {
 
     // Array exotic `length` handling.
     if key_is_length {
-      if let Some(current_len) = obj.array_length() {
+      if obj.array_length().is_some() {
         let Value::Number(n) = value else {
-          return Err(VmError::Unimplemented(
-            "setting array length to a non-number value is not implemented",
-          ));
+          return Err(VmError::TypeError("Invalid array length"));
         };
-        let new_len = array_length_from_f64(n)?;
-        if new_len < current_len {
-          return Err(VmError::Unimplemented(
-            "array length truncation is not implemented",
-          ));
-        }
+        let new_len = array_length_from_f64(n).ok_or(VmError::TypeError("Invalid array length"))?;
         obj.set_array_length(new_len);
         return Ok(());
       }
@@ -1050,7 +1144,7 @@ impl Heap {
     desc: PropertyDescriptorPatch,
   ) -> Result<bool, VmError> {
     let mut scope = self.scope();
-    scope.ordinary_define_own_property(obj, key, desc)
+    scope.define_own_property(obj, key, desc)
   }
 
   pub fn define_own_property_or_throw(
@@ -1879,38 +1973,30 @@ impl Heap {
       }
     };
 
-    // Array exotic `length` handling.
-    //
-    // This is a deliberately-minimal subset:
-    // - supports setting `length` to the current value or larger values;
-    // - rejects truncation.
-    if key_is_length {
-      if let Some(current_len) = array_len {
-        let new_len = match desc.kind {
-          PropertyKind::Data {
-            value: Value::Number(n),
-            ..
-          } => array_length_from_f64(n)?,
-          _ => {
-            return Err(VmError::Unimplemented(
-              "defining array length with non-number or accessor descriptor",
-            ));
-          }
-        };
-
-        if new_len < current_len {
-          return Err(VmError::Unimplemented(
-            "array length truncation is not implemented",
+    // If defining the `length` property on an Array, keep the internal `length` slot in sync with
+    // the property descriptor's `[[Value]]`.
+    let new_array_length = if key_is_length && array_len.is_some() {
+      if existing_idx != Some(0) {
+        return Err(VmError::InvariantViolation(
+          "array length property is missing or not at index 0",
+        ));
+      }
+      match desc.kind {
+        PropertyKind::Data {
+          value: Value::Number(n),
+          ..
+        } => Some(array_length_from_f64(n).ok_or(VmError::InvariantViolation(
+          "array length must be a uint32 number",
+        ))?),
+        _ => {
+          return Err(VmError::InvariantViolation(
+            "array length property must be a data descriptor with a numeric value",
           ));
         }
-
-        let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
-          return Err(VmError::InvalidHandle);
-        };
-        obj.set_array_length(new_len);
-        return Ok(());
       }
-    }
+    } else {
+      None
+    };
 
     match existing_idx {
       Some(existing_idx) => {
@@ -1981,6 +2067,13 @@ impl Heap {
         self.debug_assert_used_bytes_is_correct();
       }
     };
+
+    if let Some(new_len) = new_array_length {
+      let Some(HeapObject::Object(obj)) = self.slots[idx].value.as_mut() else {
+        return Err(VmError::InvalidHandle);
+      };
+      obj.set_array_length(new_len);
+    }
 
     // Array exotic index semantics: writing an array index extends `length`.
     if let Some(index) = key_array_index {
@@ -3262,24 +3355,20 @@ impl<'a> Tracer<'a> {
   }
 }
 
-fn array_length_from_f64(n: f64) -> Result<u32, VmError> {
+fn array_length_from_f64(n: f64) -> Option<u32> {
   if !n.is_finite() {
-    return Err(VmError::Unimplemented(
-      "array length must be a finite number",
-    ));
+    return None;
   }
   if n < 0.0 {
-    return Err(VmError::Unimplemented("array length must be >= 0"));
+    return None;
   }
   if n.fract() != 0.0 {
-    return Err(VmError::Unimplemented(
-      "array length must be an integer",
-    ));
+    return None;
   }
   if n > u32::MAX as f64 {
-    return Err(VmError::Unimplemented("array length exceeds u32"));
+    return None;
   }
-  Ok(n as u32)
+  Some(n as u32)
 }
 
 fn grown_capacity(current_capacity: usize, required_len: usize) -> usize {

@@ -156,7 +156,7 @@ pub fn object_define_property(
   };
   patch.validate()?;
 
-  let ok = scope.ordinary_define_own_property(target, key, patch)?;
+  let ok = scope.define_own_property(target, key, patch)?;
   if !ok {
     return Err(VmError::TypeError("DefineOwnProperty rejected"));
   }
@@ -316,18 +316,10 @@ pub fn object_set_prototype_of(
 fn create_array_object(vm: &mut Vm, scope: &mut Scope<'_>, len: u32) -> Result<GcObject, VmError> {
   let intr = require_intrinsics(vm)?;
 
-  let array = scope.alloc_object()?;
+  let array = scope.alloc_array(len as usize)?;
   scope
     .heap_mut()
     .object_set_prototype(array, Some(intr.array_prototype()))?;
-
-  let length_key = PropertyKey::from_string(scope.alloc_string("length")?);
-  scope.define_property(
-    array,
-    length_key,
-    data_desc(Value::Number(len as f64), true, false, false),
-  )?;
-
   Ok(array)
 }
 
