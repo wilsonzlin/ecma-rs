@@ -1025,6 +1025,7 @@ fn resolve_promise(
   resolution: Value,
 ) -> Result<(), VmError> {
   let current_realm = vm.current_realm();
+  let intr = require_intrinsics(vm)?;
 
   // 27.2.1.3.2 `Promise Resolve Functions`: self-resolution is a TypeError rejection.
   if let Value::Object(obj) = resolution {
@@ -1059,10 +1060,16 @@ fn resolve_promise(
         PropertyKind::Accessor { get, .. } => {
           if matches!(get, Value::Undefined) {
             Ok(Value::Undefined)
+          } else if !key_scope.heap().is_callable(get)? {
+            // Model `Get(thenable, "then")` throwing a TypeError when an accessor getter exists but
+            // is not callable. This must reject the promise rather than propagate as a VM error
+            // from `resolve()`.
+            Err(crate::throw_type_error(
+              &mut key_scope,
+              intr,
+              "accessor getter is not callable",
+            ))
           } else {
-            if !key_scope.heap().is_callable(get)? {
-              return Err(VmError::TypeError("accessor getter is not callable"));
-            }
             vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
           }
         }
@@ -1372,9 +1379,7 @@ fn invoke_then(
   on_rejected: Value,
   non_object_message: &'static str,
 ) -> Result<Value, VmError> {
-  let Value::Object(obj) = receiver else {
-    return throw_type_error(vm, scope, host, non_object_message);
-  };
+  let intr = require_intrinsics(vm)?;
 
   // Root inputs: `Get` and `Call` can allocate/GC.
   let mut scope = scope.reborrow();
@@ -1382,12 +1387,34 @@ fn invoke_then(
   scope.push_root(on_fulfilled)?;
   scope.push_root(on_rejected)?;
 
+  // `Invoke(receiver, "then", ...)` uses `GetV`, which performs `ToObject` for primitives
+  // (throwing only for `null`/`undefined`).
+  let obj = match receiver {
+    Value::Object(obj) => obj,
+    Value::Null | Value::Undefined => {
+      return Err(crate::throw_type_error(&mut scope, intr, non_object_message));
+    }
+    primitive => {
+      let object_ctor = Value::Object(intr.object_constructor());
+      scope.push_root(object_ctor)?;
+      let value =
+        vm.call_with_host(&mut scope, host, object_ctor, Value::Undefined, &[primitive])?;
+      let Value::Object(obj) = value else {
+        return Err(VmError::InvariantViolation(
+          "Object(..) conversion returned non-object",
+        ));
+      };
+      scope.push_root(Value::Object(obj))?;
+      obj
+    }
+  };
+
   let then_key_s = scope.alloc_string("then")?;
   scope.push_root(Value::String(then_key_s))?;
   let then_key = PropertyKey::from_string(then_key_s);
   let then = get_property_value_with_host(vm, &mut scope, host, obj, then_key, receiver)?;
   if !scope.heap().is_callable(then)? {
-    return throw_type_error(vm, &mut scope, host, "then is not callable");
+    return Err(crate::throw_type_error(&mut scope, intr, "then is not callable"));
   }
 
   vm.call_with_host(&mut scope, host, then, receiver, &[on_fulfilled, on_rejected])
@@ -1437,12 +1464,22 @@ pub fn promise_prototype_finally(
   let intr = require_intrinsics(vm)?;
   let on_finally = args.get(0).copied().unwrap_or(Value::Undefined);
 
+  // Per ECMA-262, `Promise.prototype.finally` throws if the receiver is not an Object
+  // (even though the subsequent `Invoke(promise, "then", ...)` would box primitives).
+  let Value::Object(promise) = this else {
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise.prototype.finally called on non-object",
+    ));
+  };
+
   if !scope.heap().is_callable(on_finally)? {
     return invoke_then(
       vm,
       scope,
       host,
-      this,
+      Value::Object(promise),
       on_finally,
       on_finally,
       "Promise.prototype.finally called on non-object",
@@ -1451,15 +1488,6 @@ pub fn promise_prototype_finally(
 
   // Temporary `%Promise%`-only fallback: we do not yet implement `SpeciesConstructor` for promises.
   let constructor = Value::Object(intr.promise());
-
-  let Value::Object(promise) = this else {
-    return throw_type_error(
-      vm,
-      scope,
-      host,
-      "Promise.prototype.finally called on non-object",
-    );
-  };
 
   scope.push_root(Value::Object(promise))?;
   scope.push_root(on_finally)?;
@@ -1505,7 +1533,7 @@ pub fn promise_prototype_finally(
     vm,
     scope,
     host,
-    this,
+    Value::Object(promise),
     Value::Object(then_finally),
     Value::Object(catch_finally),
     "Promise.prototype.finally called on non-object",
