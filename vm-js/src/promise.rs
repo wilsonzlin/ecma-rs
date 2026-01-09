@@ -54,10 +54,10 @@ pub enum PromiseReactionType {
 /// Spec reference: <https://tc39.es/ecma262/#sec-promisecapability-records>
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PromiseCapability {
-  /// The promise value.
+  /// The `[[Promise]]` value.
   ///
-  /// In the spec this is always an Object, but representing it as a `Value` simplifies rooting and
-  /// allows callers to use `Value::Undefined` as a sentinel during partially-initialized paths.
+  /// Per spec this is a Promise object, but `vm-js` stores it as a [`Value`] to simplify rooting
+  /// and allow `Value::Undefined` as a sentinel during partially-initialized paths.
   pub promise: Value,
   pub resolve: Value,
   pub reject: Value,
@@ -123,7 +123,7 @@ fn is_callable(heap: &Heap, value: Value) -> Result<Option<GcObject>, VmError> {
 /// When `on_fulfilled` / `on_rejected` are callable, this captures them into host-defined
 /// [`JobCallback`] records using [`VmHostHooks::host_make_job_callback`], per the ECMA-262 + HTML
 /// integration requirements.
-pub fn perform_promise_then(
+pub fn normalize_promise_then_handlers(
   host: &mut dyn VmHostHooks,
   heap: &Heap,
   on_fulfilled: Value,
@@ -266,7 +266,7 @@ impl Promise {
     on_rejected: Value,
   ) -> Result<(), VmError> {
     let (fulfill_reaction, reject_reaction) =
-      perform_promise_then(host, heap, on_fulfilled, on_rejected)?;
+      normalize_promise_then_handlers(host, heap, on_fulfilled, on_rejected)?;
 
     // `[[PromiseIsHandled]]` bookkeeping for unhandled rejection tracking.
     let has_reject_handler = reject_reaction.handler.is_some();

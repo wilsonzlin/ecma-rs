@@ -1,6 +1,6 @@
 use vm_js::create_promise_resolve_thenable_job;
 use vm_js::new_promise_reaction_job;
-use vm_js::perform_promise_then;
+use vm_js::normalize_promise_then_handlers;
 use vm_js::GcObject;
 use vm_js::Heap;
 use vm_js::HeapLimits;
@@ -211,7 +211,7 @@ fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {
   let non_callable = scope.alloc_object()?;
 
   let mut host = TestHost::default();
-  let (fulfill_reaction, reject_reaction) = perform_promise_then(
+  let (fulfill_reaction, reject_reaction) = normalize_promise_then_handlers(
     &mut host,
     scope.heap(),
     Value::Object(on_fulfilled),
