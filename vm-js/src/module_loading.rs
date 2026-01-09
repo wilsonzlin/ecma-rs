@@ -304,6 +304,28 @@ fn make_key_string(scope: &mut Scope<'_>, s: &str) -> Result<GcString, VmError> 
   Ok(key)
 }
 
+/// Compare strings by lexicographic order of UTF-16 code units.
+///
+/// ECMA-262 module loading algorithms (e.g. `EvaluateImportCall`) define ordering of import
+/// attribute keys in terms of UTF-16 code units, not Rust's default UTF-8 byte ordering.
+fn cmp_utf16_code_units(a: &str, b: &str) -> std::cmp::Ordering {
+  use std::cmp::Ordering;
+
+  let mut a_units = a.encode_utf16();
+  let mut b_units = b.encode_utf16();
+  loop {
+    match (a_units.next(), b_units.next()) {
+      (Some(a_u), Some(b_u)) => match a_u.cmp(&b_u) {
+        Ordering::Equal => {}
+        non_eq => return non_eq,
+      },
+      (None, Some(_)) => return Ordering::Less,
+      (Some(_), None) => return Ordering::Greater,
+      (None, None) => return Ordering::Equal,
+    }
+  }
+}
+
 /// Extract and validate import attributes from the `options` argument of a dynamic `import()` call.
 ///
 /// This implements the import-attributes portion of `EvaluateImportCall`:
@@ -392,8 +414,8 @@ pub fn import_attributes_from_options(
   }
 
   // Sort by key (and value for determinism) by UTF-16 code unit order.
-  attributes.sort_by(|a, b| match crate::cmp_utf16(&a.key, &b.key) {
-    std::cmp::Ordering::Equal => crate::cmp_utf16(&a.value, &b.value),
+  attributes.sort_by(|a, b| match cmp_utf16_code_units(&a.key, &b.key) {
+    std::cmp::Ordering::Equal => cmp_utf16_code_units(&a.value, &b.value),
     non_eq => non_eq,
   });
   Ok(attributes)
