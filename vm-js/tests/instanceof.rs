@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, RootId, Value, Vm, VmError, VmOptions};
+use vm_js::{Heap, HeapLimits, JsRuntime, RootId, Value, Vm, VmOptions};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -29,9 +29,9 @@ fn instanceof_throws_type_error_when_prototype_is_not_object() {
     .exec_script(r#"function C(){}; C.prototype = 1; ({} instanceof C)"#)
     .unwrap_err();
 
-  let VmError::Throw(thrown) = err else {
-    panic!("expected VmError::Throw, got {err:?}");
-  };
+  let thrown = err
+    .thrown_value()
+    .unwrap_or_else(|| panic!("expected thrown exception, got {err:?}"));
 
   // Root the thrown value across any subsequent allocations / script runs.
   let root: RootId = rt.heap_mut().add_root(thrown).expect("root thrown value");
@@ -66,4 +66,3 @@ fn has_instance_override_is_called() {
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
-

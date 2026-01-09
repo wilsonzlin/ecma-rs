@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, RootId, Value, Vm, VmError, VmOptions};
+use vm_js::{Heap, HeapLimits, JsRuntime, RootId, Value, Vm, VmOptions};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -19,9 +19,9 @@ fn strict_directive_makes_unbound_assignment_throw_reference_error() {
   let mut rt = new_runtime();
   let err = rt.exec_script(r#""use strict"; x = 1;"#).unwrap_err();
 
-  let VmError::Throw(thrown) = err else {
-    panic!("expected VmError::Throw, got {err:?}");
-  };
+  let thrown = err
+    .thrown_value()
+    .unwrap_or_else(|| panic!("expected thrown exception, got {err:?}"));
 
   // Root the thrown value across any subsequent allocations / script runs.
   let root: RootId = rt

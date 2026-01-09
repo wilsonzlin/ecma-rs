@@ -270,10 +270,7 @@ impl GraphLoadingState {
       return Ok(());
     };
 
-    let reason = match err {
-      VmError::Throw(v) => v,
-      _ => Value::Undefined,
-    };
+    let reason = err.thrown_value().unwrap_or(Value::Undefined);
 
     scope.push_root(cap.reject)?;
     scope.push_root(reason)?;

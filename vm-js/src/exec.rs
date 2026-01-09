@@ -33,6 +33,13 @@ use std::sync::Arc;
 use crate::function::ThisMode;
 use crate::vm::EcmaFunctionKind;
 
+/// A `throw` completion value paired with a captured stack trace.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Thrown {
+  pub value: Value,
+  pub stack: Vec<StackFrame>,
+}
+
 /// An ECMAScript completion record (ECMA-262).
 ///
 /// We model the "empty" completion value explicitly as `None` so statement-list evaluation can
@@ -40,7 +47,7 @@ use crate::vm::EcmaFunctionKind;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Completion {
   Normal(Option<Value>),
-  Throw(Value),
+  Throw(Thrown),
   Return(Value),
   Break(Option<String>, Option<Value>),
   Continue(Option<String>, Option<Value>),
@@ -58,7 +65,7 @@ impl Completion {
   pub fn value(&self) -> Option<Value> {
     match self {
       Completion::Normal(v) => *v,
-      Completion::Throw(v) => Some(*v),
+      Completion::Throw(thrown) => Some(thrown.value),
       Completion::Return(v) => Some(*v),
       Completion::Break(_, v) => *v,
       Completion::Continue(_, v) => *v,
@@ -571,7 +578,10 @@ impl JsRuntime {
     let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
     match completion {
       Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-      Completion::Throw(v) => Err(VmError::Throw(v)),
+      Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+        value: thrown.value,
+        stack: thrown.stack,
+      }),
       Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
       Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
       Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
@@ -1097,7 +1107,7 @@ impl<'a> Evaluator<'a> {
       Stmt::VarDecl(var_decl) => self.eval_var_decl(scope, &var_decl.stx),
       Stmt::Block(block) => self.eval_block_stmt(scope, &block.stx),
       Stmt::If(stmt) => self.eval_if(scope, &stmt.stx),
-      Stmt::Throw(stmt) => self.eval_throw(scope, &stmt.stx),
+      Stmt::Throw(stmt) => self.eval_throw(scope, stmt),
       Stmt::Try(stmt) => self.eval_try(scope, &stmt.stx),
       Stmt::Return(stmt) => self.eval_return(scope, &stmt.stx),
       Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, label_set),
@@ -1118,9 +1128,34 @@ impl<'a> Evaluator<'a> {
       _ => Err(VmError::Unimplemented("statement type")),
     };
 
-    // Treat internal `VmError::Throw` as a JS throw completion so it is catchable by `try/catch`.
+    // Treat internal `VmError::Throw*` as a JS throw completion so it is catchable by `try/catch`.
+    //
+    // This is also the central stack capture point for implicit throws (TDZ errors, TypeErrors,
+    // etc) that are surfaced as `Err(VmError::Throw(..))` from lower-level helpers.
     match res {
-      Err(VmError::Throw(v)) => Ok(Completion::Throw(v)),
+      Err(VmError::Throw(value)) => {
+        let source = self.env.source();
+        let rel_start = stmt.loc.start_u32().saturating_sub(self.env.prefix_len());
+        let abs_offset = self.env.base_offset().saturating_add(rel_start);
+        let (line, col) = source.line_col(abs_offset);
+
+        let mut stack = self.vm.capture_stack();
+        if let Some(top) = stack.first_mut() {
+          top.source = source.name.clone();
+          top.line = line;
+          top.col = col;
+        } else {
+          stack.push(StackFrame {
+            function: None,
+            source: source.name.clone(),
+            line,
+            col,
+          });
+        }
+
+        Ok(Completion::Throw(Thrown { value, stack }))
+      }
+      Err(VmError::ThrowWithStack { value, stack }) => Ok(Completion::Throw(Thrown { value, stack })),
       other => other,
     }
   }
@@ -1255,9 +1290,34 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn eval_throw(&mut self, scope: &mut Scope<'_>, stmt: &ThrowStmt) -> Result<Completion, VmError> {
-    let value = self.eval_expr(scope, &stmt.value)?;
-    Ok(Completion::Throw(value))
+  fn eval_throw(&mut self, scope: &mut Scope<'_>, stmt: &Node<ThrowStmt>) -> Result<Completion, VmError> {
+    let value = self.eval_expr(scope, &stmt.stx.value)?;
+
+    // Capture a stack trace at the throw site.
+    //
+    // We capture the VM's current call stack and then update the top frame's `source/line/col` to
+    // point at the throw statement (rather than the function entry). This aligns better with
+    // browser stack traces where the top frame refers to the actual throw location.
+    let source = self.env.source();
+    let rel_start = stmt.loc.start_u32().saturating_sub(self.env.prefix_len());
+    let abs_offset = self.env.base_offset().saturating_add(rel_start);
+    let (line, col) = source.line_col(abs_offset);
+
+    let mut stack = self.vm.capture_stack();
+    if let Some(top) = stack.first_mut() {
+      top.source = source.name.clone();
+      top.line = line;
+      top.col = col;
+    } else {
+      stack.push(StackFrame {
+        function: None,
+        source: source.name.clone(),
+        line,
+        col,
+      });
+    }
+
+    Ok(Completion::Throw(Thrown { value, stack }))
   }
 
   fn eval_try(&mut self, scope: &mut Scope<'_>, stmt: &TryStmt) -> Result<Completion, VmError> {
@@ -1266,7 +1326,7 @@ impl<'a> Evaluator<'a> {
     if matches!(result, Completion::Throw(_)) {
       if let Some(catch) = &stmt.catch {
         let thrown = match result {
-          Completion::Throw(v) => v,
+          Completion::Throw(thrown) => thrown.value,
           _ => return Err(VmError::Unimplemented("try/catch missing thrown value")),
         };
         result = self.eval_catch(scope, &catch.stx, thrown)?;
@@ -3452,7 +3512,10 @@ impl<'a> Evaluator<'a> {
       let completion = self.eval_stmt_list(scope, &top.stx.body)?;
       match completion {
         Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-        Completion::Throw(v) => Err(VmError::Throw(v)),
+        Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+          value: thrown.value,
+          stack: thrown.stack,
+        }),
         Completion::Return(_) => Err(VmError::Unimplemented("return in eval")),
         Completion::Break(..) => Err(VmError::Unimplemented("break in eval")),
         Completion::Continue(..) => Err(VmError::Unimplemented("continue in eval")),
@@ -4123,7 +4186,34 @@ pub(crate) fn run_ecma_function(
   }
 
   match body {
-    FuncBody::Expression(expr) => evaluator.eval_expr(scope, expr),
+    FuncBody::Expression(expr) => match evaluator.eval_expr(scope, expr) {
+      Ok(v) => Ok(v),
+      Err(VmError::Throw(value)) => {
+        // Capture stack + annotate the top frame with the expression start location. Expression-body
+        // arrow functions do not go through `eval_stmt`, so this is the best central capture point.
+        let source = evaluator.env.source();
+        let rel_start = expr.loc.start_u32().saturating_sub(evaluator.env.prefix_len());
+        let abs_offset = evaluator.env.base_offset().saturating_add(rel_start);
+        let (line, col) = source.line_col(abs_offset);
+
+        let mut stack = evaluator.vm.capture_stack();
+        if let Some(top) = stack.first_mut() {
+          top.source = source.name.clone();
+          top.line = line;
+          top.col = col;
+        } else {
+          stack.push(StackFrame {
+            function: None,
+            source: source.name.clone(),
+            line,
+            col,
+          });
+        }
+
+        Err(VmError::ThrowWithStack { value, stack })
+      }
+      other => other,
+    },
     FuncBody::Block(stmts) => {
       evaluator.hoist_var_decls(scope, stmts)?;
       let func_env = evaluator.env.lexical_env;
@@ -4134,7 +4224,10 @@ pub(crate) fn run_ecma_function(
       match completion {
         Completion::Normal(_) => Ok(Value::Undefined),
         Completion::Return(v) => Ok(v),
-        Completion::Throw(v) => Err(VmError::Throw(v)),
+        Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+          value: thrown.value,
+          stack: thrown.stack,
+        }),
         Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
         Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
       }

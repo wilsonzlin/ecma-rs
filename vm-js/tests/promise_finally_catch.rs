@@ -376,11 +376,11 @@ fn promise_finally_throws_on_non_object_receiver_even_if_then_exists() -> Result
     )
   };
 
-  let Err(VmError::Throw(_)) = result else {
+  if !matches!(result, Err(VmError::Throw(_)) | Err(VmError::ThrowWithStack { .. })) {
     return Err(VmError::Unimplemented(
       "expected Promise.prototype.finally to throw on non-object receiver",
     ));
-  };
+  }
 
   assert_eq!(BORROWED_THEN_CALLS.with(|c| c.get()), 0);
 

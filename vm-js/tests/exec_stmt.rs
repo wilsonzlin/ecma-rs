@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmError, VmOptions};
+use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmOptions};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -27,9 +27,9 @@ fn try_finally_preserves_throw_if_finally_is_normal() {
   let err = rt
     .exec_script(r#"try { throw "x"; } finally { }"#)
     .unwrap_err();
-  let VmError::Throw(value) = err else {
-    panic!("expected VmError::Throw, got {err:?}");
-  };
+  let value = err
+    .thrown_value()
+    .unwrap_or_else(|| panic!("expected thrown exception, got {err:?}"));
   assert_value_is_utf8(&rt, value, "x");
 }
 
@@ -39,9 +39,9 @@ fn try_catch_throw_overrides_prior_throw() {
   let err = rt
     .exec_script(r#"try { throw "x"; } catch(e){ throw "y"; }"#)
     .unwrap_err();
-  let VmError::Throw(value) = err else {
-    panic!("expected VmError::Throw, got {err:?}");
-  };
+  let value = err
+    .thrown_value()
+    .unwrap_or_else(|| panic!("expected thrown exception, got {err:?}"));
   assert_value_is_utf8(&rt, value, "y");
 }
 

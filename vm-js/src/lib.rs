@@ -167,6 +167,7 @@ pub use crate::error_object::new_syntax_error_object;
 pub use crate::error_object::new_type_error_object;
 pub use crate::error_object::throw_type_error;
 pub use crate::exec::Completion;
+pub use crate::exec::Thrown;
 pub use crate::exec::JsRuntime;
 pub use crate::execution_context::ExecutionContext;
 pub use crate::execution_context::ModuleId;

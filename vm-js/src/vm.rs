@@ -915,7 +915,9 @@ impl Vm {
   }
 
   pub fn capture_stack(&self) -> Vec<StackFrame> {
-    self.stack.clone()
+    // `self.stack` is maintained in call-stack order (outermost → innermost). Stack traces are
+    // conventionally rendered with the most recent frame first, so reverse during capture.
+    self.stack.iter().cloned().rev().collect()
   }
 
   /// Pushes an [`ExecutionContext`] onto the execution context stack.
@@ -1112,7 +1114,7 @@ impl Vm {
     // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
     vm.tick()?;
 
-    match call_handler {
+    let result = match call_handler {
       CallHandler::Native(call_id) => {
         vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
       }
@@ -1121,6 +1123,15 @@ impl Vm {
         drop(func);
         Err(VmError::Unimplemented("user-defined function call"))
       }
+    };
+
+    // Capture a stack trace for thrown exceptions before the current frame is popped.
+    match result {
+      Err(VmError::Throw(value)) => Err(VmError::ThrowWithStack {
+        value,
+        stack: vm.capture_stack(),
+      }),
+      other => other,
     }
   }
 
@@ -1252,11 +1263,20 @@ impl Vm {
     // evaluator.
     vm.tick()?;
 
-    match construct_handler {
+    let result = match construct_handler {
       ConstructHandler::Native(construct_id) => {
         vm.dispatch_native_construct(construct_id, &mut scope, host, callee_obj, args, new_target)
       }
       ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(&mut scope, code_id, callee_obj, args, new_target),
+    };
+
+    // Capture a stack trace for thrown exceptions before the current frame is popped.
+    match result {
+      Err(VmError::Throw(value)) => Err(VmError::ThrowWithStack {
+        value,
+        stack: vm.capture_stack(),
+      }),
+      other => other,
     }
   }
 

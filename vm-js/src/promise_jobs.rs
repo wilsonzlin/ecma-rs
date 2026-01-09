@@ -45,7 +45,7 @@ pub fn new_promise_reaction_job(
 
     match host.host_call_job_callback(ctx, job_callback, Value::Undefined, &[argument]) {
       Ok(_) => Ok(()),
-      Err(VmError::Throw(_)) => Err(VmError::InvariantViolation(
+      Err(VmError::Throw(_) | VmError::ThrowWithStack { .. }) => Err(VmError::InvariantViolation(
         "PromiseReactionJob handler threw while capability is undefined",
       )),
       Err(e) => Err(e),
@@ -104,7 +104,7 @@ pub fn new_promise_resolve_thenable_job(
   let job = Job::new(JobKind::Promise, move |ctx, host| {
     match host.host_call_job_callback(ctx, &then_job_callback, thenable, &[resolve, reject]) {
       Ok(_) => Ok(()),
-      Err(VmError::Throw(thrown)) => {
+      Err(VmError::Throw(thrown) | VmError::ThrowWithStack { value: thrown, .. }) => {
         // Spec: if `then` throws, call `reject` with the thrown value.
         ctx.call(host, reject, Value::Undefined, &[thrown])?;
         Ok(())

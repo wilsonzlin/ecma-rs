@@ -27,14 +27,14 @@ fn tdz_throws_on_access_before_initialization() {
   let err = rt
     .exec_script(r#"let x = 1; { x; let x = 2; }"#)
     .unwrap_err();
-  assert!(matches!(err, VmError::Throw(_)));
+  assert!(matches!(err, VmError::Throw(_) | VmError::ThrowWithStack { .. }));
 }
 
 #[test]
 fn const_assignment_throws() {
   let mut rt = new_runtime();
   let err = rt.exec_script(r#"const x = 1; x = 2;"#).unwrap_err();
-  assert!(matches!(err, VmError::Throw(_)));
+  assert!(matches!(err, VmError::Throw(_) | VmError::ThrowWithStack { .. }));
 }
 
 #[test]

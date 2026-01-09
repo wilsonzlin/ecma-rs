@@ -242,8 +242,7 @@ fn promise_constructor_throws_type_error_when_executor_not_callable() -> Result<
  
     let thrown = match err {
       Ok(v) => panic!("expected Promise constructor to throw, got {v:?}"),
-      Err(VmError::Throw(v)) => v,
-      Err(e) => return Err(e),
+      Err(e) => e.thrown_value().ok_or(e)?,
     };
  
     let Value::Object(obj) = thrown else {

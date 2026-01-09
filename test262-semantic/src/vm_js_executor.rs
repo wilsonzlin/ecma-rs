@@ -119,6 +119,17 @@ fn map_vm_error(
         stack,
       })
     }
+
+    VmError::ThrowWithStack { value: thrown, stack } => {
+      let (typ, message) = describe_thrown_value(runtime, thrown);
+      let stack = stack_from_frames(stack);
+      ExecError::Js(JsError {
+        phase: ExecPhase::Runtime,
+        typ,
+        message,
+        stack,
+      })
+    }
  
     VmError::Termination(term) => match term.reason {
       TerminationReason::Interrupted | TerminationReason::DeadlineExceeded | TerminationReason::OutOfFuel => {

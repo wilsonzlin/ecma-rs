@@ -95,14 +95,18 @@ impl Agent {
 
     // If the script executed (successfully or with a JS `throw`), the HTML script processing model
     // performs a microtask checkpoint afterwards. For now this is a host hook placeholder.
-    if matches!(result, Ok(_) | Err(VmError::Throw(_))) {
+    if matches!(
+      result,
+      Ok(_) | Err(VmError::Throw(_)) | Err(VmError::ThrowWithStack { .. })
+    ) {
       if let Some(hooks) = host_hooks.as_mut() {
         // Root the completion value across the checkpoint so a host checkpoint implementation can
         // allocate/GC without invalidating the returned value.
         let root = match &result {
           Ok(v) => self.heap_mut().add_root(*v).ok(),
-          Err(VmError::Throw(v)) => self.heap_mut().add_root(*v).ok(),
-          _ => None,
+          Err(err) => err
+            .thrown_value()
+            .and_then(|v| self.heap_mut().add_root(v).ok()),
         };
 
         // If we fail to allocate a persistent root (OOM), skip the checkpoint: running it without
@@ -141,7 +145,9 @@ impl Agent {
     let s = match self.heap_mut().to_string(value) {
       Ok(s) => s,
       // If ToString itself throws, format the thrown value.
-      Err(VmError::Throw(v)) => return self.value_to_error_string(v),
+      Err(VmError::Throw(v) | VmError::ThrowWithStack { value: v, .. }) => {
+        return self.value_to_error_string(v);
+      }
       Err(_) => return format!("{value:?}"),
     };
 
@@ -156,6 +162,14 @@ impl Agent {
   pub fn format_vm_error(&mut self, err: &VmError) -> String {
     match err {
       VmError::Throw(value) => self.value_to_error_string(*value),
+      VmError::ThrowWithStack { value, stack } => {
+        let msg = self.value_to_error_string(*value);
+        if stack.is_empty() {
+          msg
+        } else {
+          format!("{msg}\n{stack}", stack = format_stack_trace(stack))
+        }
+      }
       VmError::Termination(term) => format_termination(term),
       other => other.to_string(),
     }

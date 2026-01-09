@@ -79,7 +79,7 @@ fn call_non_callable_returns_type_error_placeholder() -> Result<(), VmError> {
   };
 
   match err {
-    VmError::Throw(_) => {}
+    VmError::Throw(_) | VmError::ThrowWithStack { .. } => {}
     VmError::NotCallable => {}
     VmError::Unimplemented(msg) => assert!(msg.contains("TypeError") || msg.contains("call")),
     other => panic!("expected throw or TypeError placeholder, got {other:?}"),

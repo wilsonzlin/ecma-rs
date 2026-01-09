@@ -916,7 +916,7 @@ fn enqueue_promise_reaction_job(
         let handler_result = if let Some(handler) = &reaction.handler {
           match host.host_call_job_callback(ctx, handler, Value::Undefined, &[argument]) {
             Ok(v) => v,
-            Err(VmError::Throw(e)) => {
+            Err(VmError::Throw(e) | VmError::ThrowWithStack { value: e, .. }) => {
               let _ = ctx.call(host, cap.reject, Value::Undefined, &[e])?;
               return Ok(());
             }
@@ -936,7 +936,7 @@ fn enqueue_promise_reaction_job(
               let _ = ctx.call(host, cap.resolve, Value::Undefined, &[v])?;
               Ok(())
             }
-            Err(VmError::Throw(e)) => {
+            Err(VmError::Throw(e) | VmError::ThrowWithStack { value: e, .. }) => {
               let _ = ctx.call(host, cap.reject, Value::Undefined, &[e])?;
               Ok(())
             }
@@ -1108,7 +1108,7 @@ fn resolve_promise(
 
   let then = match then_result {
     Ok(v) => v,
-    Err(VmError::Throw(e)) => {
+    Err(VmError::Throw(e) | VmError::ThrowWithStack { value: e, .. }) => {
       reject_promise(host, scope, promise, e, current_realm)?;
       return Ok(());
     }
@@ -1139,7 +1139,7 @@ fn resolve_promise(
   let job = Job::new(JobKind::Promise, move |ctx, host| {
     match host.host_call_job_callback(ctx, &then_job_callback, resolution, &[resolve, reject]) {
       Ok(_) => Ok(()),
-      Err(VmError::Throw(e)) => {
+      Err(VmError::Throw(e) | VmError::ThrowWithStack { value: e, .. }) => {
         let _ = ctx.call(host, reject, Value::Undefined, &[e])?;
         Ok(())
       }
@@ -1209,7 +1209,7 @@ pub fn promise_constructor_construct(
   // Invoke executor(resolve, reject).
   match vm.call_with_host(scope, host, executor, Value::Undefined, &[resolve, reject]) {
     Ok(_) => {}
-    Err(VmError::Throw(reason)) => {
+    Err(VmError::Throw(reason) | VmError::ThrowWithStack { value: reason, .. }) => {
       // If executor throws, reject the promise with the thrown value by calling the resolving
       // function (so it respects `alreadyResolved`).
       let _ = vm.call_with_host(scope, host, reject, Value::Undefined, &[reason])?;
@@ -1690,7 +1690,7 @@ pub fn promise_try(
     Ok(v) => {
       let _ = vm.call_with_host(scope, host, capability.resolve, Value::Undefined, &[v])?;
     }
-    Err(VmError::Throw(e)) => {
+    Err(VmError::Throw(e) | VmError::ThrowWithStack { value: e, .. }) => {
       let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[e])?;
     }
     Err(e) => return Err(e),
@@ -1858,7 +1858,7 @@ fn if_abrupt_reject_promise(
 ) -> Result<Value, VmError> {
   // `IfAbruptRejectPromise` (ECMA-262) (partial): only catchable `throw` values are converted into
   // rejections. VM-internal errors (OOM, unimplemented, etc.) are propagated.
-  let VmError::Throw(reason) = completion else {
+  let Some(reason) = completion.thrown_value() else {
     return Err(completion);
   };
   let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[reason])?;

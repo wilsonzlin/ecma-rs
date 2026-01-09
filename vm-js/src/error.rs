@@ -62,6 +62,12 @@ pub enum VmError {
   #[error("uncaught exception")]
   Throw(Value),
 
+  /// A JavaScript `throw` value with a captured stack trace.
+  ///
+  /// This is catchable from JS and is surfaced when an exception escapes to the host.
+  #[error("uncaught exception")]
+  ThrowWithStack { value: Value, stack: Vec<StackFrame> },
+
   /// A non-catchable termination condition (fuel exhausted, deadline exceeded, host interrupt,
   /// etc).
   #[error("{0}")]
@@ -70,6 +76,25 @@ pub enum VmError {
   /// Early (syntax/binding) errors produced before execution begins.
   #[error("syntax error")]
   Syntax(Vec<Diagnostic>),
+}
+
+impl VmError {
+  /// Returns the thrown JavaScript value if this error represents a JS exception.
+  pub fn thrown_value(&self) -> Option<Value> {
+    match self {
+      VmError::Throw(value) => Some(*value),
+      VmError::ThrowWithStack { value, .. } => Some(*value),
+      _ => None,
+    }
+  }
+
+  /// Returns the captured stack (if present) for thrown JavaScript exceptions.
+  pub fn thrown_stack(&self) -> Option<&[StackFrame]> {
+    match self {
+      VmError::ThrowWithStack { stack, .. } => Some(stack.as_slice()),
+      _ => None,
+    }
+  }
 }
 
 /// A non-catchable error that terminates execution.
