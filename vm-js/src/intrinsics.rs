@@ -188,7 +188,7 @@ impl Intrinsics {
     let object_prototype = alloc_rooted_object(scope, roots)?;
 
     let function_prototype_call = vm.register_native_call(builtins::function_prototype_call);
-    let function_prototype_name = scope.alloc_string("Function")?;
+    let function_prototype_name = scope.alloc_string("")?;
     let function_prototype = alloc_rooted_native_function(
       scope,
       roots,

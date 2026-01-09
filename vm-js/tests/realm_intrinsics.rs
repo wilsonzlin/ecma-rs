@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, Realm, Vm, VmError, VmOptions};
+use vm_js::{Heap, HeapLimits, Realm, Value, Vm, VmError, VmOptions};
 
 #[test]
 fn realm_allocates_and_roots_global_object_and_well_known_symbols() -> Result<(), VmError> {
@@ -70,5 +70,36 @@ fn realm_remove_roots_allows_collection() -> Result<(), VmError> {
   assert!(!heap.is_valid_symbol(wks.to_string_tag));
   assert!(!heap.is_valid_symbol(wks.unscopables));
 
+  Ok(())
+}
+
+#[test]
+fn realm_function_prototype_is_callable_and_has_object_prototype() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+  let mut realm = Realm::new(&mut vm, &mut heap)?;
+
+  let intr = *realm.intrinsics();
+  let function_prototype = intr.function_prototype();
+  let object_prototype = intr.object_prototype();
+
+  let result = {
+    let mut scope = heap.scope();
+    vm.call(
+      &mut scope,
+      Value::Object(function_prototype),
+      Value::Undefined,
+      &[],
+    )?
+  };
+  assert_eq!(result, Value::Undefined);
+  assert!(!heap.is_constructor(Value::Object(function_prototype))?);
+
+  assert_eq!(
+    heap.object_prototype(function_prototype)?,
+    Some(object_prototype)
+  );
+
+  realm.teardown(&mut heap);
   Ok(())
 }
