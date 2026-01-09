@@ -49,6 +49,7 @@ mod heap;
 mod import_meta;
 mod interrupt;
 mod intrinsics;
+mod iterator;
 pub mod module_graph_loader;
 mod jobs;
 mod module_loading;

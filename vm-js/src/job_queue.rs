@@ -41,6 +41,6 @@ impl JobQueue {
   }
 }
 
+// These types are used by the rejection tracker API and are re-exported through `vm_js::...`.
 pub use crate::jobs::PromiseHandle;
 pub use crate::jobs::PromiseRejectionOperation;
-

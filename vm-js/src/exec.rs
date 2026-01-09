@@ -1,4 +1,5 @@
 use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
+use crate::iterator;
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
@@ -10,16 +11,17 @@ use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::expr::{BinaryExpr, CondExpr, Expr, IdExpr, UnaryExpr};
+use parse_js::ast::expr::{BinaryExpr, CallExpr, CondExpr, Expr, IdExpr, UnaryExpr};
+use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::{literal_string_code_units, Node};
-use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode};
+use parse_js::ast::stmt::decl::{FuncDecl, PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
-  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForTripleStmt, IfStmt, LabelStmt,
-  ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
+  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForInOfLhs, ForOfStmt, ForTripleStmt,
+  IfStmt, LabelStmt, ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
 };
 use parse_js::operator::OperatorName;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// An ECMAScript completion record (ECMA-262).
 ///
@@ -67,6 +69,8 @@ impl Completion {
     }
   }
 }
+
+type FunctionRegistry<'ast> = HashMap<GcObject, &'ast FuncDecl>;
 
 fn global_var_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
@@ -330,9 +334,11 @@ impl JsRuntime {
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
 
     let mut scope = self.heap.scope();
+    let mut functions: FunctionRegistry<'_> = HashMap::new();
     let mut evaluator = Evaluator {
       vm: &mut self.vm,
       env: &mut self.env,
+      functions: &mut functions,
     };
 
     evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
@@ -389,9 +395,10 @@ impl VmJobContext for JsRuntime {
   }
 }
 
-struct Evaluator<'a> {
+struct Evaluator<'a, 'ast> {
   vm: &'a mut Vm,
   env: &'a mut RuntimeEnv,
+  functions: &'a mut FunctionRegistry<'ast>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -400,7 +407,7 @@ enum Reference<'a> {
   Property { object: GcObject, key: PropertyKey },
 }
 
-impl<'a> Evaluator<'a> {
+impl<'a, 'ast> Evaluator<'a, 'ast> {
   /// Runs one VM "tick".
   ///
   /// ## Tick policy (AST evaluator)
@@ -553,6 +560,16 @@ impl<'a> Evaluator<'a> {
           self.collect_var_names(&s.stx, out)?;
         }
       }
+      Stmt::ForOf(stmt) => {
+        if let ForInOfLhs::Decl((mode, pat_decl)) = &stmt.stx.lhs {
+          if *mode == VarDeclMode::Var {
+            self.collect_var_names_from_pat_decl(&pat_decl.stx, out)?;
+          }
+        }
+        for s in &stmt.stx.body.stx.body {
+          self.collect_var_names(&s.stx, out)?;
+        }
+      }
       Stmt::Label(stmt) => {
         self.collect_var_names(&stmt.stx.statement.stx, out)?;
       }
@@ -614,7 +631,7 @@ impl<'a> Evaluator<'a> {
   fn eval_stmt_list(
     &mut self,
     scope: &mut Scope<'_>,
-    stmts: &[Node<Stmt>],
+    stmts: &'ast [Node<Stmt>],
   ) -> Result<Completion, VmError> {
     // Root the running completion value so it cannot be collected while evaluating subsequent
     // statements (which may allocate and trigger GC).
@@ -646,7 +663,7 @@ impl<'a> Evaluator<'a> {
   fn eval_block_stmt(
     &mut self,
     scope: &mut Scope<'_>,
-    block: &BlockStmt,
+    block: &'ast BlockStmt,
   ) -> Result<Completion, VmError> {
     let outer = self.env.lexical_env;
     let block_env = scope.env_create(Some(outer))?;
@@ -660,7 +677,11 @@ impl<'a> Evaluator<'a> {
     result
   }
 
-  fn eval_stmt(&mut self, scope: &mut Scope<'_>, stmt: &Node<Stmt>) -> Result<Completion, VmError> {
+  fn eval_stmt(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &'ast Node<Stmt>,
+  ) -> Result<Completion, VmError> {
     // One tick per statement.
     self.tick()?;
 
@@ -676,10 +697,12 @@ impl<'a> Evaluator<'a> {
       Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, None),
       Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx, None),
       Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, None),
+      Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, None),
       Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
       Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx),
       Stmt::Break(stmt) => Ok(Completion::Break(stmt.stx.label.clone(), None)),
       Stmt::Continue(stmt) => Ok(Completion::Continue(stmt.stx.label.clone(), None)),
+      Stmt::FunctionDecl(stmt) => self.eval_function_decl(scope, &stmt.stx),
 
       _ => Err(VmError::Unimplemented("statement type")),
     }
@@ -798,7 +821,32 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn eval_if(&mut self, scope: &mut Scope<'_>, stmt: &IfStmt) -> Result<Completion, VmError> {
+  fn eval_function_decl(
+    &mut self,
+    scope: &mut Scope<'_>,
+    decl: &'ast FuncDecl,
+  ) -> Result<Completion, VmError> {
+    let Some(name) = &decl.name else {
+      return Err(VmError::Unimplemented("anonymous function declaration"));
+    };
+
+    // Allocate a plain object to represent the function and register it in the per-script
+    // function table. This sidesteps `Vm`'s not-yet-wired `EcmaFunctionId` support.
+    let func = scope.alloc_object()?;
+    self.functions.insert(func, decl);
+
+    // Root the function object while creating the global binding in case `set_var` allocates and
+    // triggers a GC.
+    let mut decl_scope = scope.reborrow();
+    decl_scope.push_root(Value::Object(func));
+    self
+      .env
+      .set_var(&mut decl_scope, &name.stx.name, Value::Object(func))?;
+
+    Ok(Completion::empty())
+  }
+
+  fn eval_if(&mut self, scope: &mut Scope<'_>, stmt: &'ast IfStmt) -> Result<Completion, VmError> {
     let test = self.eval_expr(scope, &stmt.test)?;
     if to_boolean(scope.heap(), test)? {
       self.eval_stmt(scope, &stmt.consequent)
@@ -814,7 +862,7 @@ impl<'a> Evaluator<'a> {
     Ok(Completion::Throw(value))
   }
 
-  fn eval_try(&mut self, scope: &mut Scope<'_>, stmt: &TryStmt) -> Result<Completion, VmError> {
+  fn eval_try(&mut self, scope: &mut Scope<'_>, stmt: &'ast TryStmt) -> Result<Completion, VmError> {
     let mut result = self.eval_block_stmt(scope, &stmt.wrapped.stx)?;
 
     if matches!(result, Completion::Throw(_)) {
@@ -849,7 +897,7 @@ impl<'a> Evaluator<'a> {
   fn eval_catch(
     &mut self,
     scope: &mut Scope<'_>,
-    catch: &CatchBlock,
+    catch: &'ast CatchBlock,
     thrown: Value,
   ) -> Result<Completion, VmError> {
     let outer = self.env.lexical_env;
@@ -910,7 +958,7 @@ impl<'a> Evaluator<'a> {
   fn eval_while(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &WhileStmt,
+    stmt: &'ast WhileStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     loop {
@@ -934,7 +982,7 @@ impl<'a> Evaluator<'a> {
   fn eval_do_while(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &DoWhileStmt,
+    stmt: &'ast DoWhileStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     loop {
@@ -958,7 +1006,7 @@ impl<'a> Evaluator<'a> {
   fn eval_for_triple(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &ForTripleStmt,
+    stmt: &'ast ForTripleStmt,
     active_label: Option<&str>,
   ) -> Result<Completion, VmError> {
     // Note: this is intentionally minimal and does not implement per-iteration lexical
@@ -1011,15 +1059,125 @@ impl<'a> Evaluator<'a> {
     Ok(Completion::empty())
   }
 
+  fn eval_for_of(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &'ast ForOfStmt,
+    active_label: Option<&str>,
+  ) -> Result<Completion, VmError> {
+    if stmt.await_ {
+      return Err(VmError::Unimplemented("for await..of"));
+    }
+
+    let iterable = self.eval_expr(scope, &stmt.rhs)?;
+
+    // Root the iterable + iterator record while evaluating the loop body, which may allocate and
+    // trigger GC.
+    let mut iter_scope = scope.reborrow();
+    iter_scope.push_root(iterable);
+
+    let mut iterator_record = iterator::get_iterator(self.vm, &mut iter_scope, iterable)?;
+    iter_scope.push_root(iterator_record.iterator);
+    iter_scope.push_root(iterator_record.next_method);
+
+    loop {
+      // Tick once per iteration so `for (x of xs) {}` is budgeted even when the body is empty.
+      self.tick()?;
+
+      let next_value = match iterator::iterator_step_value(self.vm, &mut iter_scope, &mut iterator_record)
+      {
+        Ok(v) => v,
+        Err(err) => {
+          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          return Err(err);
+        }
+      };
+
+      let Some(value) = next_value else {
+        break;
+      };
+
+      let bind_res: Result<(), VmError> = match &stmt.lhs {
+        ForInOfLhs::Decl((mode, pat_decl)) => {
+          let kind = match *mode {
+            VarDeclMode::Var => BindingKind::Var,
+            VarDeclMode::Let => BindingKind::Let,
+            VarDeclMode::Const => BindingKind::Const,
+            _ => {
+              return Err(VmError::Unimplemented(
+                "for-of loop variable declaration kind",
+              ));
+            }
+          };
+          bind_pattern(
+            self.vm,
+            &mut iter_scope,
+            self.env,
+            &pat_decl.stx.pat.stx,
+            value,
+            kind,
+            false,
+          )
+        }
+        ForInOfLhs::Assign(pat) => bind_pattern(
+          self.vm,
+          &mut iter_scope,
+          self.env,
+          &pat.stx,
+          value,
+          BindingKind::Assignment,
+          false,
+        ),
+      };
+
+      if let Err(err) = bind_res {
+        let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+        return Err(err);
+      }
+
+      let body_completion = match self.eval_for_body(&mut iter_scope, &stmt.body.stx) {
+        Ok(c) => c,
+        Err(err) => {
+          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          return Err(err);
+        }
+      };
+
+      match body_completion {
+        Completion::Normal(_) => {}
+        Completion::Continue(None, _) => {}
+        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
+        Completion::Break(None, _) => {
+          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          break;
+        }
+        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => {
+          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          break;
+        }
+        other => {
+          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          return Ok(other);
+        }
+      }
+    }
+
+    Ok(Completion::empty())
+  }
+
   fn eval_for_body(
     &mut self,
     scope: &mut Scope<'_>,
-    body: &ForBody,
+    body: &'ast ForBody,
   ) -> Result<Completion, VmError> {
     self.eval_stmt_list(scope, &body.body)
   }
 
-  fn eval_label(&mut self, scope: &mut Scope<'_>, stmt: &LabelStmt) -> Result<Completion, VmError> {
+  fn eval_label(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &'ast LabelStmt,
+  ) -> Result<Completion, VmError> {
     let label = stmt.name.as_str();
 
     // `continue <label>` is only valid when the labelled statement is a loop. We support labelled
@@ -1039,7 +1197,11 @@ impl<'a> Evaluator<'a> {
         self.tick()?;
         self.eval_for_triple(scope, &inner.stx, Some(label))?
       }
-      // TODO: ForIn/ForOf.
+      Stmt::ForOf(inner) => {
+        self.tick()?;
+        self.eval_for_of(scope, &inner.stx, Some(label))?
+      }
+      // TODO: ForIn.
       _ => self.eval_stmt(scope, &stmt.statement)?,
     };
 
@@ -1065,7 +1227,7 @@ impl<'a> Evaluator<'a> {
   fn eval_switch(
     &mut self,
     scope: &mut Scope<'_>,
-    stmt: &SwitchStmt,
+    stmt: &'ast SwitchStmt,
   ) -> Result<Completion, VmError> {
     let discriminant = self.eval_expr(scope, &stmt.test)?;
     let mut switch_scope = scope.reborrow();
@@ -1154,6 +1316,7 @@ impl<'a> Evaluator<'a> {
       Expr::LitObj(node) => self.eval_lit_obj(scope, &node.stx),
       Expr::This(_) => Ok(Value::Object(self.env.global_object)),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
+      Expr::Call(node) => self.eval_call(scope, &node.stx),
       Expr::Member(_) | Expr::ComputedMember(_) => {
         let reference = self.eval_reference(scope, expr)?;
         self.get_value_from_reference(scope, &reference)
@@ -1263,6 +1426,136 @@ impl<'a> Evaluator<'a> {
     }
   }
 
+  fn eval_call(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
+    if expr.optional_chaining {
+      return Err(VmError::Unimplemented("optional chaining"));
+    }
+
+    // Root callee + arguments while evaluating and potentially allocating/GCing.
+    let mut call_scope = scope.reborrow();
+
+    let (callee, this) = match &*expr.callee.stx {
+      Expr::Member(_) | Expr::ComputedMember(_) | Expr::Id(_) | Expr::IdPat(_) => {
+        let reference = self.eval_reference(&mut call_scope, &expr.callee)?;
+        let callee = self.get_value_from_reference(&mut call_scope, &reference)?;
+        let this = match reference {
+          Reference::Binding(_) => Value::Undefined,
+          Reference::Property { object, .. } => Value::Object(object),
+        };
+        (callee, this)
+      }
+      _ => {
+        let callee = self.eval_expr(&mut call_scope, &expr.callee)?;
+        (callee, Value::Undefined)
+      }
+    };
+
+    call_scope.push_root(callee);
+    call_scope.push_root(this);
+
+    let mut args: Vec<Value> = Vec::new();
+    for arg in &expr.arguments {
+      if arg.stx.spread {
+        let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(spread_value);
+
+        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
+        call_scope.push_root(iter.iterator);
+        call_scope.push_root(iter.next_method);
+
+        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)?
+        {
+          call_scope.push_root(value);
+          args.push(value);
+        }
+      } else {
+        let value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
+        call_scope.push_root(value);
+        args.push(value);
+      }
+    }
+
+    self.call_value(&mut call_scope, callee, this, &args)
+  }
+
+  fn call_value(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let Value::Object(obj) = callee else {
+      return Err(VmError::NotCallable);
+    };
+
+    if let Some(decl) = self.functions.get(&obj).copied() {
+      return self.call_user_function(scope, decl, this, args);
+    }
+
+    // Fall back to the VM's native-callable functions.
+    self.vm.call(scope, callee, this, args)
+  }
+
+  fn call_user_function(
+    &mut self,
+    scope: &mut Scope<'_>,
+    decl: &'ast FuncDecl,
+    _this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let func = &decl.function.stx;
+    if func.async_ || func.generator {
+      return Err(VmError::Unimplemented("async/generator functions"));
+    }
+
+    let Some(body) = &func.body else {
+      return Err(VmError::Unimplemented("function without body"));
+    };
+
+    let outer = self.env.lexical_env;
+    let func_env = scope.env_create(Some(outer))?;
+    self.env.set_lexical_env(scope.heap_mut(), func_env);
+
+    let result = (|| -> Result<Value, VmError> {
+      // Bind parameters.
+      for (idx, param) in func.parameters.iter().enumerate() {
+        if param.stx.rest || param.stx.default_value.is_some() {
+          return Err(VmError::Unimplemented("non-simple function parameters"));
+        }
+        let value = args.get(idx).copied().unwrap_or(Value::Undefined);
+        bind_pattern(
+          self.vm,
+          scope,
+          self.env,
+          &param.stx.pattern.stx.pat.stx,
+          value,
+          BindingKind::Let,
+          false,
+        )?;
+      }
+
+      match body {
+        FuncBody::Expression(expr) => self.eval_expr(scope, expr),
+        FuncBody::Block(stmts) => {
+          // Hoist `let`/`const` bindings in the function body.
+          self.hoist_lexical_decls_in_stmt_list(scope, func_env, stmts)?;
+          let completion = self.eval_stmt_list(scope, stmts)?;
+          match completion {
+            Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+            Completion::Return(v) => Ok(v),
+            Completion::Throw(v) => Err(VmError::Throw(v)),
+            Completion::Break(..) => Err(VmError::Unimplemented("break inside function body")),
+            Completion::Continue(..) => Err(VmError::Unimplemented("continue inside function body")),
+          }
+        }
+      }
+    })();
+
+    self.env.set_lexical_env(scope.heap_mut(), outer);
+    result
+  }
+
   fn eval_lit_str(
     &mut self,
     scope: &mut Scope<'_>,
@@ -1284,12 +1577,44 @@ impl<'a> Evaluator<'a> {
     let mut arr_scope = scope.reborrow();
     let arr = arr_scope.alloc_object()?;
     arr_scope.push_root(Value::Object(arr));
+    iterator::mark_array(&mut arr_scope, arr)?;
 
-    for (idx, elem) in expr.elements.iter().enumerate() {
+    let mut next_index: u32 = 0;
+    for elem in &expr.elements {
       match elem {
-        LitArrElem::Empty => {}
-        LitArrElem::Rest(_) => return Err(VmError::Unimplemented("array spread")),
+        LitArrElem::Empty => {
+          next_index = next_index.saturating_add(1);
+        }
+        LitArrElem::Rest(rest_expr) => {
+          let mut spread_scope = arr_scope.reborrow();
+          let spread_value = self.eval_expr(&mut spread_scope, rest_expr)?;
+          spread_scope.push_root(spread_value);
+
+          let mut iter = iterator::get_iterator(self.vm, &mut spread_scope, spread_value)?;
+          spread_scope.push_root(iter.iterator);
+          spread_scope.push_root(iter.next_method);
+
+          while let Some(value) =
+            iterator::iterator_step_value(self.vm, &mut spread_scope, &mut iter)?
+          {
+            let idx = next_index;
+            next_index = next_index.saturating_add(1);
+
+            let mut elem_scope = spread_scope.reborrow();
+            elem_scope.push_root(value);
+            let key_s = elem_scope.alloc_string(&idx.to_string())?;
+            elem_scope.push_root(Value::String(key_s));
+            let key = PropertyKey::from_string(key_s);
+            let ok = elem_scope.create_data_property(arr, key, value)?;
+            if !ok {
+              return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+            }
+          }
+        }
         LitArrElem::Single(elem_expr) => {
+          let idx = next_index;
+          next_index = next_index.saturating_add(1);
+
           let mut elem_scope = arr_scope.reborrow();
           let value = self.eval_expr(&mut elem_scope, elem_expr)?;
           elem_scope.push_root(value);
@@ -1309,7 +1634,7 @@ impl<'a> Evaluator<'a> {
       enumerable: false,
       configurable: false,
       kind: PropertyKind::Data {
-        value: Value::Number(expr.elements.len() as f64),
+        value: Value::Number(next_index as f64),
         writable: true,
       },
     };
@@ -1582,7 +1907,12 @@ pub(crate) fn eval_expr(
   scope: &mut Scope<'_>,
   expr: &Node<Expr>,
 ) -> Result<Value, VmError> {
-  let mut evaluator = Evaluator { vm, env };
+  let mut functions: FunctionRegistry<'_> = HashMap::new();
+  let mut evaluator = Evaluator {
+    vm,
+    env,
+    functions: &mut functions,
+  };
   evaluator.eval_expr(scope, expr)
 }
 
