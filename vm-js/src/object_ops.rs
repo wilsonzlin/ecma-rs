@@ -41,9 +41,31 @@ impl<'a> Scope<'a> {
     desc.validate()?;
 
     // Root all inputs that might be written into the heap before any allocation/GC.
-    self.push_root(Value::Object(obj))?;
-    root_property_key(self, key)?;
-    root_descriptor_patch(self, &desc)?;
+    //
+    // Important: root them *together* so if growing the root stack triggers a GC, we do not collect
+    // the property key / descriptor values before they've been pushed.
+    let mut roots = [Value::Undefined; 5];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(obj);
+    root_count += 1;
+    roots[root_count] = match key {
+      PropertyKey::String(s) => Value::String(s),
+      PropertyKey::Symbol(s) => Value::Symbol(s),
+    };
+    root_count += 1;
+    if let Some(v) = desc.value {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.get {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.set {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    self.push_roots(&roots[..root_count])?;
 
     let current = self.heap().object_get_own_property(obj, &key)?;
     let extensible = self.heap().object_is_extensible(obj)?;
@@ -186,10 +208,19 @@ impl<'a> Scope<'a> {
     value: Value,
     receiver: Value,
   ) -> Result<bool, VmError> {
-    self.push_root(Value::Object(obj))?;
-    root_property_key(self, key)?;
-    self.push_root(value)?;
-    self.push_root(receiver)?;
+    // Root inputs together so GC cannot collect `key`/`value`/`receiver` while growing the root
+    // stack (important when setting a new property on an object, where the key/value are not yet
+    // reachable from any heap object).
+    let roots = [
+      Value::Object(obj),
+      match key {
+        PropertyKey::String(s) => Value::String(s),
+        PropertyKey::Symbol(s) => Value::Symbol(s),
+      },
+      value,
+      receiver,
+    ];
+    self.push_roots(&roots)?;
 
     let mut desc = self.heap().get_property(obj, &key)?;
     if desc.is_none() {
@@ -258,8 +289,16 @@ impl<'a> Scope<'a> {
 
   /// ECMAScript `[[Delete]]` for ordinary objects.
   pub fn ordinary_delete(&mut self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
-    self.push_root(Value::Object(obj))?;
-    root_property_key(self, key)?;
+    // Root inputs together so GC cannot collect `key` while growing the root stack (important when
+    // deleting a *missing* property).
+    let roots = [
+      Value::Object(obj),
+      match key {
+        PropertyKey::String(s) => Value::String(s),
+        PropertyKey::Symbol(s) => Value::Symbol(s),
+      },
+    ];
+    self.push_roots(&roots)?;
     self.heap_mut().ordinary_delete(obj, key)
   }
 
@@ -349,9 +388,31 @@ impl<'a> Scope<'a> {
     desc.validate()?;
 
     // Root all inputs that might be written into the heap before any allocation/GC.
-    self.push_root(Value::Object(obj))?;
-    root_property_key(self, key)?;
-    root_descriptor_patch(self, &desc)?;
+    //
+    // Important: root them *together* so if growing the root stack triggers a GC, we do not collect
+    // the property key / descriptor values before they've been pushed.
+    let mut roots = [Value::Undefined; 5];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(obj);
+    root_count += 1;
+    roots[root_count] = match key {
+      PropertyKey::String(s) => Value::String(s),
+      PropertyKey::Symbol(s) => Value::Symbol(s),
+    };
+    root_count += 1;
+    if let Some(v) = desc.value {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.get {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.set {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    self.push_roots(&roots[..root_count])?;
 
     if self.heap().property_key_is_length(&key) {
       let length_key = self.heap().array_length_key(obj)?;
@@ -498,31 +559,6 @@ fn array_length_from_value(value: Value) -> Option<u32> {
     return None;
   }
   Some(n as u32)
-}
-
-fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
-  match key {
-    PropertyKey::String(s) => {
-      scope.push_root(Value::String(s))?;
-    }
-    PropertyKey::Symbol(s) => {
-      scope.push_root(Value::Symbol(s))?;
-    }
-  }
-  Ok(())
-}
-
-fn root_descriptor_patch(scope: &mut Scope<'_>, desc: &PropertyDescriptorPatch) -> Result<(), VmError> {
-  if let Some(v) = desc.value {
-    scope.push_root(v)?;
-  }
-  if let Some(v) = desc.get {
-    scope.push_root(v)?;
-  }
-  if let Some(v) = desc.set {
-    scope.push_root(v)?;
-  }
-  Ok(())
 }
 
 fn validate_and_apply_property_descriptor(
