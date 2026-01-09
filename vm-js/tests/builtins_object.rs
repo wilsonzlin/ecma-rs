@@ -56,6 +56,16 @@ fn define_enumerable_data_property(
   scope.define_property(obj, key, desc)
 }
 
+fn return_two_native(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Number(2.0))
+}
+
 #[test]
 fn object_constructor_is_callable() -> Result<(), VmError> {
   let mut rt = TestRealm::new()?;
@@ -111,9 +121,7 @@ fn object_define_property_defines_value() -> Result<(), VmError> {
 
   let x_key = PropertyKey::from_string(x);
   assert_eq!(
-    scope
-      .heap()
-      .object_get_own_data_property_value(o, &x_key)?,
+    scope.heap().object_get_own_data_property_value(o, &x_key)?,
     Some(Value::Number(1.0))
   );
 
@@ -140,9 +148,12 @@ fn object_create_sets_prototype() -> Result<(), VmError> {
   let y_key = PropertyKey::from_string(scope.alloc_string("y")?);
 
   let args = [Value::Object(p)];
-  let o = rt
-    .vm
-    .call(&mut scope, Value::Object(create), Value::Object(object), &args)?;
+  let o = rt.vm.call(
+    &mut scope,
+    Value::Object(create),
+    Value::Object(object),
+    &args,
+  )?;
   let Value::Object(o) = o else {
     panic!("Object.create should return an object");
   };
@@ -177,15 +188,129 @@ fn object_keys_returns_enumerable_string_keys() -> Result<(), VmError> {
   define_enumerable_data_property(&mut scope, o, "b", Value::Number(2.0))?;
 
   let args = [Value::Object(o)];
-  let result = rt
-    .vm
-    .call(&mut scope, Value::Object(keys), Value::Object(object), &args)?;
+  let result = rt.vm.call(
+    &mut scope,
+    Value::Object(keys),
+    Value::Object(object),
+    &args,
+  )?;
   let Value::Object(arr) = result else {
     panic!("Object.keys should return an object");
   };
 
   let length = get_own_data_property(&mut scope, arr, "length")?.expect("length exists");
   assert_eq!(length, Value::Number(2.0));
+
+  Ok(())
+}
+
+#[test]
+fn object_assign_copies_enumerable_properties_and_invokes_getters() -> Result<(), VmError> {
+  let mut rt = TestRealm::new()?;
+  let object = rt.realm.intrinsics().object_constructor();
+
+  let mut scope = rt.heap.scope();
+
+  let assign = get_own_data_property(&mut scope, object, "assign")?.expect("Object.assign exists");
+  let Value::Object(assign) = assign else {
+    panic!("Object.assign should be a function object");
+  };
+
+  let target = scope.alloc_object()?;
+  scope.push_root(Value::Object(target));
+  let source = scope.alloc_object()?;
+  scope.push_root(Value::Object(source));
+
+  // Enumerable data property.
+  define_enumerable_data_property(&mut scope, source, "a", Value::Number(1.0))?;
+
+  // Enumerable accessor property whose getter returns 2.
+  let getter_id = rt.vm.register_native_call(return_two_native)?;
+  let getter_name = scope.alloc_string("")?;
+  let getter = scope.alloc_native_function(getter_id, None, getter_name, 0)?;
+  scope.push_root(Value::Object(getter));
+
+  let key_b = PropertyKey::from_string(scope.alloc_string("b")?);
+  scope.define_property(
+    source,
+    key_b,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Accessor {
+        get: Value::Object(getter),
+        set: Value::Undefined,
+      },
+    },
+  )?;
+
+  let args = [Value::Object(target), Value::Object(source)];
+  let out = rt.vm.call(
+    &mut scope,
+    Value::Object(assign),
+    Value::Object(object),
+    &args,
+  )?;
+  assert_eq!(out, Value::Object(target));
+
+  assert_eq!(
+    get_own_data_property(&mut scope, target, "a")?,
+    Some(Value::Number(1.0))
+  );
+  assert_eq!(
+    get_own_data_property(&mut scope, target, "b")?,
+    Some(Value::Number(2.0))
+  );
+
+  Ok(())
+}
+
+#[test]
+fn object_assign_throws_when_setting_non_writable_target_property() -> Result<(), VmError> {
+  let mut rt = TestRealm::new()?;
+  let object = rt.realm.intrinsics().object_constructor();
+
+  let mut scope = rt.heap.scope();
+
+  let assign = get_own_data_property(&mut scope, object, "assign")?.expect("Object.assign exists");
+  let Value::Object(assign) = assign else {
+    panic!("Object.assign should be a function object");
+  };
+
+  let target = scope.alloc_object()?;
+  scope.push_root(Value::Object(target));
+  let source = scope.alloc_object()?;
+  scope.push_root(Value::Object(source));
+
+  // target.x is non-writable.
+  let key_x = PropertyKey::from_string(scope.alloc_string("x")?);
+  scope.define_property(
+    target,
+    key_x,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value: Value::Number(1.0),
+        writable: false,
+      },
+    },
+  )?;
+
+  // source.x = 2 (enumerable).
+  define_enumerable_data_property(&mut scope, source, "x", Value::Number(2.0))?;
+
+  let args = [Value::Object(target), Value::Object(source)];
+  let err = rt
+    .vm
+    .call(
+      &mut scope,
+      Value::Object(assign),
+      Value::Object(object),
+      &args,
+    )
+    .unwrap_err();
+  assert!(matches!(err, VmError::TypeError(_)));
 
   Ok(())
 }

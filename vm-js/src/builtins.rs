@@ -5,7 +5,12 @@ use crate::{
   PromiseState, Scope, Value, Vm, VmError,
 };
 
-fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool) -> PropertyDescriptor {
+fn data_desc(
+  value: Value,
+  writable: bool,
+  enumerable: bool,
+  configurable: bool,
+) -> PropertyDescriptor {
   PropertyDescriptor {
     enumerable,
     configurable,
@@ -14,8 +19,9 @@ fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool)
 }
 
 fn require_intrinsics(vm: &Vm) -> Result<crate::Intrinsics, VmError> {
-  vm.intrinsics()
-    .ok_or(VmError::Unimplemented("native builtins require Vm::intrinsics to be set"))
+  vm.intrinsics().ok_or(VmError::Unimplemented(
+    "native builtins require Vm::intrinsics to be set",
+  ))
 }
 
 fn require_object(value: Value) -> Result<GcObject, VmError> {
@@ -65,7 +71,11 @@ pub fn function_prototype_call(
   Ok(Value::Undefined)
 }
 
-fn object_constructor_impl(vm: &mut Vm, scope: &mut Scope<'_>, args: &[Value]) -> Result<Value, VmError> {
+fn object_constructor_impl(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  args: &[Value],
+) -> Result<Value, VmError> {
   let intr = require_intrinsics(vm)?;
 
   let arg0 = args.get(0).copied().unwrap_or(Value::Undefined);
@@ -162,7 +172,11 @@ pub fn object_create(
   let proto = match proto_val {
     Value::Object(o) => Some(o),
     Value::Null => None,
-    _ => return Err(VmError::TypeError("Object.create prototype must be an object or null")),
+    _ => {
+      return Err(VmError::TypeError(
+        "Object.create prototype must be an object or null",
+      ))
+    }
   };
 
   if let Some(properties_object) = args.get(1).copied() {
@@ -219,13 +233,17 @@ pub fn object_keys(
 }
 
 pub fn object_assign(
-  _vm: &mut Vm,
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
+  // Spec: Object.assign performs `ToObject` on the target and each source. We only support objects
+  // for now, but we still follow the `Get`/`Set` semantics (invoking accessors).
+  let mut scope = scope.reborrow();
   let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+  scope.push_root(Value::Object(target));
 
   for source_val in args.iter().copied().skip(1) {
     let source = match source_val {
@@ -243,16 +261,13 @@ pub fn object_assign(
         continue;
       }
 
-      let value = match desc.kind {
-        PropertyKind::Data { value, .. } => value,
-        PropertyKind::Accessor { .. } => {
-          return Err(VmError::Unimplemented(
-            "Object.assign does not yet support accessor properties",
-          ));
-        }
-      };
-
-      scope.define_property(target, key, data_desc(value, true, true, true))?;
+      // Spec: `Get(from, key)` (invokes getters).
+      let value = vm.get(&mut scope, source, key)?;
+      // Spec: `Set(to, key, value, true)` (invokes setters, throws on failure).
+      let ok = scope.ordinary_set(vm, target, key, value, Value::Object(target))?;
+      if !ok {
+        return Err(VmError::TypeError("Object.assign failed to set property"));
+      }
     }
   }
 
@@ -285,7 +300,11 @@ pub fn object_set_prototype_of(
   let proto = match proto_val {
     Value::Object(o) => Some(o),
     Value::Null => None,
-    _ => return Err(VmError::TypeError("Object.setPrototypeOf prototype must be an object or null")),
+    _ => {
+      return Err(VmError::TypeError(
+        "Object.setPrototypeOf prototype must be an object or null",
+      ))
+    }
   };
 
   scope.heap_mut().object_set_prototype(obj, proto)?;
@@ -310,7 +329,11 @@ fn create_array_object(vm: &mut Vm, scope: &mut Scope<'_>, len: u32) -> Result<G
   Ok(array)
 }
 
-fn array_constructor_impl(vm: &mut Vm, scope: &mut Scope<'_>, args: &[Value]) -> Result<Value, VmError> {
+fn array_constructor_impl(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  args: &[Value],
+) -> Result<Value, VmError> {
   match args {
     [] => Ok(Value::Object(create_array_object(vm, scope, 0)?)),
     [Value::Number(n)] => {
@@ -444,7 +467,11 @@ pub fn error_constructor_construct(
     .object_set_prototype(obj, Some(instance_prototype))?;
 
   let name_key = PropertyKey::from_string(scope.alloc_string("name")?);
-  scope.define_property(obj, name_key, data_desc(Value::String(name), true, false, true))?;
+  scope.define_property(
+    obj,
+    name_key,
+    data_desc(Value::String(name), true, false, true),
+  )?;
 
   let message_key = PropertyKey::from_string(scope.alloc_string("message")?);
   scope.define_property(
@@ -463,13 +490,8 @@ fn throw_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result
   let msg = scope.alloc_string(message)?;
   scope.push_root(Value::String(msg));
 
-  let err = error_constructor_construct(
-    vm,
-    scope,
-    ctor,
-    &[Value::String(msg)],
-    Value::Object(ctor),
-  )?;
+  let err =
+    error_constructor_construct(vm, scope, ctor, &[Value::String(msg)], Value::Object(ctor))?;
   Err(VmError::Throw(err))
 }
 
@@ -598,17 +620,29 @@ fn trigger_promise_reactions(
   Ok(())
 }
 
-fn fulfill_promise(vm: &mut Vm, scope: &mut Scope<'_>, promise: GcObject, value: Value) -> Result<(), VmError> {
-  let (fulfill_reactions, _reject_reactions) = scope
-    .heap_mut()
-    .promise_settle_and_take_reactions(promise, PromiseState::Fulfilled, value)?;
+fn fulfill_promise(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  promise: GcObject,
+  value: Value,
+) -> Result<(), VmError> {
+  let (fulfill_reactions, _reject_reactions) =
+    scope
+      .heap_mut()
+      .promise_settle_and_take_reactions(promise, PromiseState::Fulfilled, value)?;
   trigger_promise_reactions(vm, scope, fulfill_reactions, value)
 }
 
-fn reject_promise(vm: &mut Vm, scope: &mut Scope<'_>, promise: GcObject, reason: Value) -> Result<(), VmError> {
-  let (_fulfill_reactions, reject_reactions) = scope
-    .heap_mut()
-    .promise_settle_and_take_reactions(promise, PromiseState::Rejected, reason)?;
+fn reject_promise(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  promise: GcObject,
+  reason: Value,
+) -> Result<(), VmError> {
+  let (_fulfill_reactions, reject_reactions) =
+    scope
+      .heap_mut()
+      .promise_settle_and_take_reactions(promise, PromiseState::Rejected, reason)?;
   trigger_promise_reactions(vm, scope, reject_reactions, reason)
 }
 
@@ -662,7 +696,9 @@ pub fn promise_resolving_function_call(
   let resolution = args.get(0).copied().unwrap_or(Value::Undefined);
   let data = scope.heap().get_function_data(callee)?;
   let FunctionData::PromiseResolvingFunction { promise, is_reject } = data else {
-    return Err(VmError::Unimplemented("promise resolving function internal slots"));
+    return Err(VmError::Unimplemented(
+      "promise resolving function internal slots",
+    ));
   };
 
   if is_reject {
@@ -730,17 +766,20 @@ fn promise_then_impl(
 
   // Normalize handlers: use "empty" when not callable.
   let on_fulfilled = match on_fulfilled {
-    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => Some(JobCallback::new(obj)),
+    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => {
+      Some(JobCallback::new(obj))
+    }
     _ => None,
   };
   let on_rejected = match on_rejected {
-    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => Some(JobCallback::new(obj)),
+    Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => {
+      Some(JobCallback::new(obj))
+    }
     _ => None,
   };
 
   // Create the derived promise + capability.
-  let result_promise = scope
-    .alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
+  let result_promise = scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
   scope.push_root(Value::Object(result_promise));
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, result_promise)?;
   let capability = PromiseCapability {
@@ -766,11 +805,17 @@ fn promise_then_impl(
       scope.promise_append_reject_reaction(promise, reject_reaction)?;
     }
     PromiseState::Fulfilled => {
-      let arg = scope.heap().promise_result(promise)?.unwrap_or(Value::Undefined);
+      let arg = scope
+        .heap()
+        .promise_result(promise)?
+        .unwrap_or(Value::Undefined);
       enqueue_promise_reaction_job(vm, scope, fulfill_reaction, arg)?;
     }
     PromiseState::Rejected => {
-      let arg = scope.heap().promise_result(promise)?.unwrap_or(Value::Undefined);
+      let arg = scope
+        .heap()
+        .promise_result(promise)?
+        .unwrap_or(Value::Undefined);
       enqueue_promise_reaction_job(vm, scope, reject_reaction, arg)?;
     }
   }
