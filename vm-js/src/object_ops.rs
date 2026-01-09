@@ -272,6 +272,19 @@ impl<'a> Scope<'a> {
     }
   }
 
+  /// ECMAScript `DeletePropertyOrThrow`.
+  ///
+  /// This is a convenience wrapper around [`Scope::ordinary_delete`]. If the deletion is rejected
+  /// (`false`), this returns a `TypeError`.
+  pub fn delete_property_or_throw(&mut self, obj: GcObject, key: PropertyKey) -> Result<(), VmError> {
+    let ok = self.ordinary_delete(obj, key)?;
+    if ok {
+      Ok(())
+    } else {
+      Err(VmError::TypeError("DeletePropertyOrThrow rejected"))
+    }
+  }
+
   fn array_define_own_property(
     &mut self,
     obj: GcObject,

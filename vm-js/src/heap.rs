@@ -1291,6 +1291,16 @@ impl Heap {
     }
   }
 
+  /// ECMAScript `DeletePropertyOrThrow`.
+  pub fn delete_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+  ) -> Result<(), VmError> {
+    let mut scope = self.scope();
+    scope.delete_property_or_throw(obj, key)
+  }
+
   /// Gets a property descriptor from `obj` or its prototype chain.
   pub fn get_property(
     &self,

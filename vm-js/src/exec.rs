@@ -586,6 +586,7 @@ impl JsRuntime {
       strict,
       this: global_this,
       new_target: Value::Undefined,
+      hooks: None,
     };
 
     evaluator.instantiate_script(&mut scope, &top.stx.body)?;
@@ -732,6 +733,7 @@ struct Evaluator<'a> {
   strict: bool,
   this: Value,
   new_target: Value,
+  hooks: Option<&'a mut dyn VmHostHooks>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -777,6 +779,34 @@ impl<'a> Evaluator<'a> {
   #[inline]
   fn tick(&mut self) -> Result<(), VmError> {
     self.vm.tick()
+  }
+
+  #[inline]
+  fn call(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    match self.hooks.as_deref_mut() {
+      Some(host) => self.vm.call_with_host(scope, host, callee, this, args),
+      None => self.vm.call(scope, callee, this, args),
+    }
+  }
+
+  #[inline]
+  fn construct(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    match self.hooks.as_deref_mut() {
+      Some(host) => self.vm.construct_with_host(scope, host, callee, args, new_target),
+      None => self.vm.construct(scope, callee, args, new_target),
+    }
   }
 
   fn instantiate_script(&mut self, scope: &mut Scope<'_>, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
@@ -3037,7 +3067,7 @@ impl<'a> Evaluator<'a> {
       args.push(value);
     }
 
-    self.vm.call(&mut call_scope, callee_value, this_value, &args)
+    self.call(&mut call_scope, callee_value, this_value, &args)
   }
 
   fn create_template_object(
@@ -3744,7 +3774,7 @@ impl<'a> Evaluator<'a> {
         }
 
         // For `new`, the `newTarget` is the same as the constructor.
-        self.vm.construct(&mut new_scope, callee, &args, callee)
+        self.construct(&mut new_scope, callee, &args, callee)
       }
       _ => Err(VmError::Unimplemented("unary operator")),
     }
@@ -4266,10 +4296,10 @@ impl<'a> Evaluator<'a> {
     let has_instance_key = PropertyKey::from_symbol(has_instance_sym);
     let method = match self
       .vm
-      .get_method(&mut scope, constructor_obj, has_instance_key)
+      .get_method(&mut scope, constructor, has_instance_key)
     {
       Ok(method) => method,
-      Err(VmError::NotCallable) => {
+      Err(VmError::TypeError(_) | VmError::NotCallable) => {
         return Err(throw_type_error(
           self.vm,
           &mut scope,
@@ -4280,7 +4310,7 @@ impl<'a> Evaluator<'a> {
     };
 
     if let Some(method) = method {
-      let result = self.vm.call(
+      let result = self.call(
         &mut scope,
         method,
         Value::Object(constructor_obj),
@@ -4388,7 +4418,8 @@ impl<'a> Evaluator<'a> {
 
       let hint_s = prim_scope.alloc_string(hint.as_str())?;
       prim_scope.push_root(Value::String(hint_s))?;
-      let out = self.vm.call(&mut prim_scope, exotic, Value::Object(obj), &[Value::String(hint_s)])?;
+      let out =
+        self.call(&mut prim_scope, exotic, Value::Object(obj), &[Value::String(hint_s)])?;
       if self.is_primitive_value(out) {
         return Ok(out);
       }
@@ -4431,7 +4462,7 @@ impl<'a> Evaluator<'a> {
         continue;
       }
 
-      let result = self.vm.call(scope, method, Value::Object(obj), &[])?;
+      let result = self.call(scope, method, Value::Object(obj), &[])?;
       if self.is_primitive_value(result) {
         return Ok(result);
       }
@@ -4601,6 +4632,7 @@ pub(crate) fn run_ecma_function(
     strict,
     this,
     new_target,
+    hooks: None,
   };
   evaluator.instantiate_function(scope, func, args)?;
 
@@ -4663,6 +4695,7 @@ pub(crate) fn eval_expr(
     strict,
     this,
     new_target: Value::Undefined,
+    hooks: None,
   };
   evaluator.eval_expr(scope, expr)
 }

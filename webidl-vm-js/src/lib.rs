@@ -242,7 +242,9 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     };
 
     let key = Self::to_vm_property_key(key);
-    let method = self.vm.get_method(&mut self.scope, object, key)?;
+    let method = self
+      .vm
+      .get_method(&mut self.scope, Value::Object(object), key)?;
     if let Some(v) = method {
       self.root(v)?;
     }

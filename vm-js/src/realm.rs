@@ -31,6 +31,14 @@ pub struct Realm {
   }
 
 impl Realm {
+  /// Returns the host-facing [`RealmId`] token for this realm.
+  ///
+  /// This is used to tag Promise jobs and other host-scheduled work with the realm they should run
+  /// in.
+  pub fn id(&self) -> RealmId {
+    self.id
+  }
+
   /// Creates a new realm on `heap`.
   pub fn new(vm: &mut Vm, heap: &mut Heap) -> Result<Self, VmError> {
     let id = RealmId::from_raw(NEXT_REALM_ID.fetch_add(1, Ordering::Relaxed));

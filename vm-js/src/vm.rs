@@ -1255,8 +1255,8 @@ impl Vm {
     scope.ordinary_get(self, obj, key, Value::Object(obj))
   }
 
-  /// ECMAScript `GetMethod(O, P)` for ordinary objects.
-  pub fn get_method(
+  /// ECMAScript `GetMethod(O, P)` where `O` is already known to be an object.
+  pub fn get_method_from_object(
     &mut self,
     scope: &mut Scope<'_>,
     obj: GcObject,
@@ -1267,13 +1267,27 @@ impl Vm {
       return Ok(None);
     }
 
-    let Value::Object(func) = value else {
-      return Err(VmError::NotCallable);
-    };
-    // Validate callability. `get_function_call_handler` returns `VmError::NotCallable` if not
-    // callable.
-    let _ = scope.heap().get_function_call_handler(func)?;
+    if !scope.heap().is_callable(value)? {
+      return Err(VmError::TypeError("GetMethod: target is not callable"));
+    }
     Ok(Some(value))
+  }
+
+  /// ECMAScript `GetMethod(V, P)` (partial).
+  ///
+  /// Note: `GetMethod` uses `GetV`, which in turn uses `ToObject`. Full `ToObject` boxing semantics
+  /// are not implemented yet for `vm-js`; for now this returns
+  /// `VmError::Unimplemented(\"GetMethod on non-object\")` when `value` is not an object.
+  pub fn get_method(
+    &mut self,
+    scope: &mut Scope<'_>,
+    value: Value,
+    key: PropertyKey,
+  ) -> Result<Option<Value>, VmError> {
+    let Value::Object(obj) = value else {
+      return Err(VmError::Unimplemented("GetMethod on non-object"));
+    };
+    self.get_method_from_object(scope, obj, key)
   }
 
   /// Constructs `callee` with the provided arguments and `new_target`.

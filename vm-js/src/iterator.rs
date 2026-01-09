@@ -52,26 +52,6 @@ fn array_length(vm: &mut Vm, scope: &mut Scope<'_>, array: GcObject) -> Result<u
   }
 }
 
-fn get_method(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  obj: Value,
-  key: PropertyKey,
-) -> Result<Option<Value>, VmError> {
-  let Value::Object(obj) = obj else {
-    return Err(VmError::Unimplemented("GetMethod on non-object"));
-  };
-
-  let func = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
-  if matches!(func, Value::Undefined | Value::Null) {
-    return Ok(None);
-  }
-  if !scope.heap().is_callable(func)? {
-    return Err(VmError::NotCallable);
-  }
-  Ok(Some(func))
-}
-
 /// `GetIterator` (ECMA-262).
 ///
 /// For now, this supports:
@@ -95,7 +75,7 @@ pub fn get_iterator(vm: &mut Vm, scope: &mut Scope<'_>, iterable: Value) -> Resu
 
   // Fall back to iterator protocol: `GetMethod(iterable, @@iterator)`.
   let iterator_sym = symbol_for(scope, "Symbol.iterator")?;
-  let method = get_method(vm, scope, iterable, PropertyKey::from_symbol(iterator_sym))?
+  let method = vm.get_method(scope, iterable, PropertyKey::from_symbol(iterator_sym))?
     .ok_or(VmError::Unimplemented("GetIterator: missing @@iterator method"))?;
   get_iterator_from_method(vm, scope, iterable, method)
 }
@@ -226,7 +206,7 @@ pub fn iterator_close(
   }
 
   let return_key = string_key(scope, "return")?;
-  let Some(return_method) = get_method(vm, scope, record.iterator, return_key)? else {
+  let Some(return_method) = vm.get_method(scope, record.iterator, return_key)? else {
     return Ok(());
   };
 
