@@ -4,9 +4,12 @@ use crate::{
   RootId, Scope, Value, Vm, VmError, VmJobContext,
 };
 use diagnostics::FileId;
-use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::expr::lit::{
+  LitArrElem, LitArrExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr,
+};
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr, MemberExpr};
+use parse_js::ast::expr::{BinaryExpr, CondExpr, Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::{literal_string_code_units, Node};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
@@ -147,7 +150,9 @@ impl RuntimeEnv {
     let global_object = self.global_object;
     let mut key_scope = scope.reborrow();
     key_scope.push_root(Value::Object(global_object));
-    let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
+    let key_s = key_scope.alloc_string(name)?;
+    key_scope.push_root(Value::String(key_s));
+    let key = PropertyKey::from_string(key_s);
 
     // Distinguish between a missing property (unbound identifier) and a present property whose
     // value is actually `undefined`.
@@ -375,6 +380,12 @@ impl VmJobContext for JsRuntime {
 struct Evaluator<'a> {
   vm: &'a mut Vm,
   env: &'a mut RuntimeEnv,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Reference<'a> {
+  Binding(&'a str),
+  Property { object: GcObject, key: PropertyKey },
 }
 
 impl<'a> Evaluator<'a> {
@@ -1020,15 +1031,116 @@ impl<'a> Evaluator<'a> {
       Expr::LitNum(node) => self.eval_lit_num(&node.stx),
       Expr::LitBool(node) => self.eval_lit_bool(&node.stx),
       Expr::LitNull(_) => Ok(Value::Null),
+      Expr::LitArr(node) => self.eval_lit_arr(scope, &node.stx),
+      Expr::LitObj(node) => self.eval_lit_obj(scope, &node.stx),
+      Expr::This(_) => Ok(Value::Object(self.env.global_object)),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
-      Expr::Member(node) => self.eval_member(scope, &node.stx),
+      Expr::Member(_) | Expr::ComputedMember(_) => {
+        let reference = self.eval_reference(scope, expr)?;
+        self.get_value_from_reference(scope, &reference)
+      }
+      Expr::Unary(node) => self.eval_unary(scope, &node.stx),
       Expr::Binary(node) => self.eval_binary(scope, &node.stx),
+      Expr::Cond(node) => self.eval_cond(scope, &node.stx),
 
       // Patterns sometimes show up in expression position (e.g. assignment targets). We only
       // support simple identifier patterns for now.
       Expr::IdPat(node) => self.eval_id_pat(scope, &node.stx),
 
       _ => Err(VmError::Unimplemented("expression type")),
+    }
+  }
+
+  fn eval_reference<'b>(
+    &mut self,
+    scope: &mut Scope<'_>,
+    expr: &'b Node<Expr>,
+  ) -> Result<Reference<'b>, VmError> {
+    match &*expr.stx {
+      Expr::Id(id) => Ok(Reference::Binding(&id.stx.name)),
+      Expr::IdPat(id) => Ok(Reference::Binding(&id.stx.name)),
+      Expr::Member(member) => {
+        if member.stx.optional_chaining {
+          return Err(VmError::Unimplemented("optional chaining member access"));
+        }
+        let object = self.eval_expr(scope, &member.stx.left)?;
+        let Value::Object(object) = object else {
+          return Err(VmError::Unimplemented("member access on non-object"));
+        };
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object));
+        let key_s = key_scope.alloc_string(&member.stx.right)?;
+        Ok(Reference::Property {
+          object,
+          key: PropertyKey::from_string(key_s),
+        })
+      }
+      Expr::ComputedMember(member) => {
+        if member.stx.optional_chaining {
+          return Err(VmError::Unimplemented(
+            "optional chaining computed member access",
+          ));
+        }
+        let object = self.eval_expr(scope, &member.stx.object)?;
+        let Value::Object(object) = object else {
+          return Err(VmError::Unimplemented("computed member access on non-object"));
+        };
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object));
+        let member_value = self.eval_expr(&mut key_scope, &member.stx.member)?;
+        key_scope.push_root(member_value);
+        let key = key_scope.heap_mut().to_property_key(member_value)?;
+        Ok(Reference::Property { object, key })
+      }
+      _ => Err(VmError::Unimplemented("expression is not a reference")),
+    }
+  }
+
+  fn root_reference(&self, scope: &mut Scope<'_>, reference: &Reference<'_>) {
+    let Reference::Property { object, key } = *reference else {
+      return;
+    };
+    scope.push_root(Value::Object(object));
+    match key {
+      PropertyKey::String(s) => scope.push_root(Value::String(s)),
+      PropertyKey::Symbol(s) => scope.push_root(Value::Symbol(s)),
+    };
+  }
+
+  fn get_value_from_reference(
+    &mut self,
+    scope: &mut Scope<'_>,
+    reference: &Reference<'_>,
+  ) -> Result<Value, VmError> {
+    match *reference {
+      Reference::Binding(name) => self
+        .env
+        .get(self.vm, scope, name)?
+        .ok_or(VmError::Unimplemented("unbound identifier")),
+      Reference::Property { object, key } => {
+        let mut get_scope = scope.reborrow();
+        self.root_reference(&mut get_scope, reference);
+        get_scope.ordinary_get(self.vm, object, key, Value::Object(object))
+      }
+    }
+  }
+
+  fn put_value_to_reference(
+    &mut self,
+    scope: &mut Scope<'_>,
+    reference: &Reference<'_>,
+    value: Value,
+  ) -> Result<(), VmError> {
+    match *reference {
+      Reference::Binding(name) => self.env.set(scope, name, value, false),
+      Reference::Property { object, key } => {
+        let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
+        if ok {
+          Ok(())
+        } else {
+          Err(VmError::Unimplemented("OrdinarySet returned false"))
+        }
+      }
     }
   }
 
@@ -1049,6 +1161,100 @@ impl<'a> Evaluator<'a> {
     Ok(Value::Bool(expr.value))
   }
 
+  fn eval_lit_arr(&mut self, scope: &mut Scope<'_>, expr: &LitArrExpr) -> Result<Value, VmError> {
+    let mut arr_scope = scope.reborrow();
+    let arr = arr_scope.alloc_object()?;
+    arr_scope.push_root(Value::Object(arr));
+
+    for (idx, elem) in expr.elements.iter().enumerate() {
+      match elem {
+        LitArrElem::Empty => {}
+        LitArrElem::Rest(_) => return Err(VmError::Unimplemented("array spread")),
+        LitArrElem::Single(elem_expr) => {
+          let mut elem_scope = arr_scope.reborrow();
+          let value = self.eval_expr(&mut elem_scope, elem_expr)?;
+          elem_scope.push_root(value);
+          let key_s = elem_scope.alloc_string(&idx.to_string())?;
+          elem_scope.push_root(Value::String(key_s));
+          let key = PropertyKey::from_string(key_s);
+          let ok = elem_scope.create_data_property(arr, key, value)?;
+          if !ok {
+            return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+          }
+        }
+      }
+    }
+
+    let length_key_s = arr_scope.alloc_string("length")?;
+    let length_desc = PropertyDescriptor {
+      enumerable: false,
+      configurable: false,
+      kind: PropertyKind::Data {
+        value: Value::Number(expr.elements.len() as f64),
+        writable: true,
+      },
+    };
+    arr_scope.define_property(arr, PropertyKey::from_string(length_key_s), length_desc)?;
+
+    Ok(Value::Object(arr))
+  }
+
+  fn eval_lit_obj(&mut self, scope: &mut Scope<'_>, expr: &LitObjExpr) -> Result<Value, VmError> {
+    let mut obj_scope = scope.reborrow();
+    let obj = obj_scope.alloc_object()?;
+    obj_scope.push_root(Value::Object(obj));
+
+    for member in &expr.members {
+      let mut member_scope = obj_scope.reborrow();
+      let member = &member.stx.typ;
+
+      match member {
+        ObjMemberType::Valued { key, val } => {
+          let key = match key {
+            ClassOrObjKey::Direct(direct) => {
+              let key_s = member_scope.alloc_string(&direct.stx.key)?;
+              PropertyKey::from_string(key_s)
+            }
+            ClassOrObjKey::Computed(expr) => {
+              let value = self.eval_expr(&mut member_scope, expr)?;
+              member_scope.push_root(value);
+              member_scope.heap_mut().to_property_key(value)?
+            }
+          };
+
+          match key {
+            PropertyKey::String(s) => member_scope.push_root(Value::String(s)),
+            PropertyKey::Symbol(s) => member_scope.push_root(Value::Symbol(s)),
+          };
+
+          let ClassOrObjVal::Prop(Some(value_expr)) = val else {
+            return Err(VmError::Unimplemented("object literal member"));
+          };
+          let value = self.eval_expr(&mut member_scope, value_expr)?;
+          member_scope.push_root(value);
+          let ok = member_scope.create_data_property(obj, key, value)?;
+          if !ok {
+            return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+          }
+        }
+        ObjMemberType::Shorthand { id } => {
+          let key_s = member_scope.alloc_string(&id.stx.name)?;
+          member_scope.push_root(Value::String(key_s));
+          let key = PropertyKey::from_string(key_s);
+          let value = self.eval_id(&mut member_scope, &id.stx)?;
+          member_scope.push_root(value);
+          let ok = member_scope.create_data_property(obj, key, value)?;
+          if !ok {
+            return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+          }
+        }
+        ObjMemberType::Rest { .. } => return Err(VmError::Unimplemented("object spread")),
+      }
+    }
+
+    Ok(Value::Object(obj))
+  }
+
   fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
     self.env.get(self.vm, scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
@@ -1059,28 +1265,76 @@ impl<'a> Evaluator<'a> {
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
-  fn eval_member(&mut self, scope: &mut Scope<'_>, expr: &MemberExpr) -> Result<Value, VmError> {
-    if expr.optional_chaining {
-      return Err(VmError::Unimplemented("optional chaining"));
+  fn eval_unary(&mut self, scope: &mut Scope<'_>, expr: &UnaryExpr) -> Result<Value, VmError> {
+    match expr.operator {
+      OperatorName::LogicalNot => {
+        let argument = self.eval_expr(scope, &expr.argument)?;
+        Ok(Value::Bool(!to_boolean(scope.heap(), argument)?))
+      }
+      OperatorName::UnaryPlus => {
+        let argument = self.eval_expr(scope, &expr.argument)?;
+        Ok(Value::Number(to_number(scope.heap_mut(), argument)?))
+      }
+      OperatorName::UnaryNegation => {
+        let argument = self.eval_expr(scope, &expr.argument)?;
+        Ok(Value::Number(-to_number(scope.heap_mut(), argument)?))
+      }
+      OperatorName::Typeof => {
+        let argument = self.eval_expr(scope, &expr.argument)?;
+        let t = typeof_name(scope.heap(), argument)?;
+        let s = scope.alloc_string(t)?;
+        Ok(Value::String(s))
+      }
+      OperatorName::Void => {
+        let _ = self.eval_expr(scope, &expr.argument)?;
+        Ok(Value::Undefined)
+      }
+      _ => Err(VmError::Unimplemented("unary operator")),
     }
+  }
 
-    let object_value = self.eval_expr(scope, &expr.left)?;
-    let Value::Object(obj) = object_value else {
-      // TODO: should throw TypeError.
-      return Err(VmError::Unimplemented("member access on non-object"));
-    };
-
-    // Root the receiver across property key allocation in case it triggers GC.
-    let mut key_scope = scope.reborrow();
-    key_scope.push_root(object_value);
-    let key = PropertyKey::from_string(key_scope.alloc_string(&expr.right)?);
-
-    let receiver = object_value;
-    key_scope.ordinary_get(self.vm, obj, key, receiver)
+  fn eval_cond(&mut self, scope: &mut Scope<'_>, expr: &CondExpr) -> Result<Value, VmError> {
+    let test = self.eval_expr(scope, &expr.test)?;
+    if to_boolean(scope.heap(), test)? {
+      self.eval_expr(scope, &expr.consequent)
+    } else {
+      self.eval_expr(scope, &expr.alternate)
+    }
   }
 
   fn eval_binary(&mut self, scope: &mut Scope<'_>, expr: &BinaryExpr) -> Result<Value, VmError> {
     match expr.operator {
+      OperatorName::Assignment => {
+        let reference = self.eval_reference(scope, &expr.left)?;
+        let mut rhs_scope = scope.reborrow();
+        self.root_reference(&mut rhs_scope, &reference);
+        let value = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        rhs_scope.push_root(value);
+        self.put_value_to_reference(&mut rhs_scope, &reference, value)?;
+        Ok(value)
+      }
+      OperatorName::LogicalAnd => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        if !to_boolean(scope.heap(), left)? {
+          return Ok(left);
+        }
+        self.eval_expr(scope, &expr.right)
+      }
+      OperatorName::LogicalOr => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        if to_boolean(scope.heap(), left)? {
+          return Ok(left);
+        }
+        self.eval_expr(scope, &expr.right)
+      }
+      OperatorName::NullishCoalescing => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        if is_nullish(left) {
+          self.eval_expr(scope, &expr.right)
+        } else {
+          Ok(left)
+        }
+      }
       OperatorName::StrictEquality => {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
@@ -1125,7 +1379,14 @@ impl<'a> Evaluator<'a> {
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         add_operator(rhs_scope.heap_mut(), left, right)
       }
-      OperatorName::Subtraction => {
+      OperatorName::Subtraction
+      | OperatorName::Multiplication
+      | OperatorName::Division
+      | OperatorName::Remainder
+      | OperatorName::LessThan
+      | OperatorName::LessThanOrEqual
+      | OperatorName::GreaterThan
+      | OperatorName::GreaterThanOrEqual => {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
@@ -1136,28 +1397,17 @@ impl<'a> Evaluator<'a> {
         rhs_scope.push_root(right);
         let left_n = to_number(rhs_scope.heap_mut(), left)?;
         let right_n = to_number(rhs_scope.heap_mut(), right)?;
-        Ok(Value::Number(left_n - right_n))
-      }
-      OperatorName::Assignment => {
-        // `=` assignment expression.
-        let name = match &*expr.left.stx {
-          Expr::Id(id) => id.stx.name.as_str(),
-          Expr::IdPat(id) => id.stx.name.as_str(),
-          _ => return Err(VmError::Unimplemented("assignment target")),
-        };
-        let value = self.eval_expr(scope, &expr.right)?;
-        self.env.set(scope, name, value, false)?;
-        Ok(value)
-      }
-      OperatorName::LessThan => {
-        let left = self.eval_expr(scope, &expr.left)?;
-        let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
-        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
 
-        match (left, right) {
-          (Value::Number(a), Value::Number(b)) => Ok(Value::Bool(a < b)),
-          _ => Err(VmError::Unimplemented("less-than operands")),
+        match expr.operator {
+          OperatorName::Subtraction => Ok(Value::Number(left_n - right_n)),
+          OperatorName::Multiplication => Ok(Value::Number(left_n * right_n)),
+          OperatorName::Division => Ok(Value::Number(left_n / right_n)),
+          OperatorName::Remainder => Ok(Value::Number(left_n % right_n)),
+          OperatorName::LessThan => Ok(Value::Bool(left_n < right_n)),
+          OperatorName::LessThanOrEqual => Ok(Value::Bool(left_n <= right_n)),
+          OperatorName::GreaterThan => Ok(Value::Bool(left_n > right_n)),
+          OperatorName::GreaterThanOrEqual => Ok(Value::Bool(left_n >= right_n)),
+          _ => unreachable!(),
         }
       }
       _ => Err(VmError::Unimplemented("binary operator")),
@@ -1183,6 +1433,10 @@ fn expect_simple_binding_identifier<'a>(pat_decl: &'a PatDecl) -> Result<&'a str
   }
 }
 
+fn is_nullish(value: Value) -> bool {
+  matches!(value, Value::Undefined | Value::Null)
+}
+
 fn to_boolean(heap: &Heap, value: Value) -> Result<bool, VmError> {
   Ok(match value {
     Value::Undefined | Value::Null => false,
@@ -1190,6 +1444,22 @@ fn to_boolean(heap: &Heap, value: Value) -> Result<bool, VmError> {
     Value::Number(n) => n != 0.0 && !n.is_nan(),
     Value::String(s) => !heap.get_string(s)?.as_code_units().is_empty(),
     Value::Symbol(_) | Value::Object(_) => true,
+  })
+}
+
+fn typeof_name(heap: &Heap, value: Value) -> Result<&'static str, VmError> {
+  Ok(match value {
+    Value::Undefined => "undefined",
+    Value::Null => "object",
+    Value::Bool(_) => "boolean",
+    Value::Number(_) => "number",
+    Value::String(_) => "string",
+    Value::Symbol(_) => "symbol",
+    Value::Object(obj) => match heap.get_function_call_handler(obj) {
+      Ok(_) => "function",
+      Err(VmError::NotCallable) => "object",
+      Err(err) => return Err(err),
+    },
   })
 }
 

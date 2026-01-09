@@ -247,10 +247,8 @@ impl Heap {
           scope.alloc_string("0")
         } else {
           let mut buf = ryu::Buffer::new();
-          let formatted = buf.format(n);
-          // `ryu` formats `1.0` as `"1.0"`, but ECMAScript `ToString(1)` is `"1"`.
-          let formatted = formatted.strip_suffix(".0").unwrap_or(formatted);
-          scope.alloc_string(formatted)
+          let s = buf.format(n);
+          scope.alloc_string(s.strip_suffix(".0").unwrap_or(s))
         }
       }
       Value::String(_) => unreachable!(),
