@@ -1,5 +1,6 @@
 use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Value, VmError,
+  Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyKey, PropertyKind, Value,
+  VmError,
   MAX_PROTOTYPE_CHAIN,
 };
 
@@ -34,6 +35,24 @@ fn set_prototype_rejects_indirect_cycle() -> Result<(), VmError> {
     Err(VmError::PrototypeCycle)
   ));
 
+  Ok(())
+}
+
+#[test]
+fn set_prototype_rejects_indirect_cycle_including_functions() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  let name1 = scope.alloc_string("f1")?;
+  let name2 = scope.alloc_string("f2")?;
+  let f1 = scope.alloc_native_function(NativeFunctionId(1), None, name1, 0)?;
+  let f2 = scope.alloc_native_function(NativeFunctionId(2), None, name2, 0)?;
+
+  scope.heap_mut().object_set_prototype(f1, Some(f2))?;
+  assert!(matches!(
+    scope.heap_mut().object_set_prototype(f2, Some(f1)),
+    Err(VmError::PrototypeCycle)
+  ));
   Ok(())
 }
 
@@ -100,4 +119,3 @@ fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
 
   Ok(())
 }
-
