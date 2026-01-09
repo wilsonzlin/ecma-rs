@@ -2994,10 +2994,14 @@ impl<'a> Scope<'a> {
   ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::String(name))?;
-    for v in slots {
-      scope.push_root(*v)?;
-    }
+    // Root `name` and `slots` in a way that's robust against GC triggering while we grow the root
+    // stack.
+    //
+    // `push_root`/`push_roots` can trigger GC when growing `root_stack`, so ensure any not-yet-pushed
+    // values are treated as extra roots during that operation.
+    let name_root = [Value::String(name)];
+    scope.push_roots_with_extra_roots(&name_root, slots, &[])?;
+    scope.push_roots(slots)?;
 
     let native_slots: Option<Box<[Value]>> = if slots.is_empty() {
       None

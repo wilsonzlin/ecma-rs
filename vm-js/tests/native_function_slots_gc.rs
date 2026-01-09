@@ -16,14 +16,20 @@ fn return_first_native_slot(
 
 #[test]
 fn native_function_slots_are_traced_by_gc() -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  // Use a tiny GC threshold to force GC during root-stack growth inside
+  // `alloc_native_function_with_slots`. This ensures the allocator treats `slots` as extra roots
+  // while rooting its own inputs.
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
 
   let captured;
   let func;
   {
     let mut scope = heap.scope();
-    captured = scope.alloc_object()?;
     let name = scope.alloc_string("f")?;
+    // Root `name` across the allocation of `captured` so forced GC does not reclaim it.
+    scope.push_root(Value::String(name))?;
+
+    captured = scope.alloc_object()?;
     func = scope.alloc_native_function_with_slots(
       NativeFunctionId(1),
       None,
