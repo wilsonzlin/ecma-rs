@@ -1,0 +1,76 @@
+//! A minimal, GC-safe microtask queue for Promise jobs.
+//!
+//! This is a small host-side container suitable for unit tests and lightweight embeddings that do
+//! not yet have a full event loop. It preserves FIFO ordering and implements an HTML-style
+//! microtask checkpoint reentrancy guard.
+
+use crate::Job;
+use crate::RealmId;
+use crate::VmError;
+use crate::VmHostHooks;
+use crate::VmJobContext;
+use std::collections::VecDeque;
+
+/// A simple, VM-owned microtask queue.
+#[derive(Debug, Default)]
+pub struct MicrotaskQueue {
+  queue: VecDeque<(Option<RealmId>, Job)>,
+  performing_microtask_checkpoint: bool,
+}
+
+impl MicrotaskQueue {
+  /// Creates an empty microtask queue.
+  #[inline]
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Enqueues a Promise job in FIFO order.
+  #[inline]
+  pub fn enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>) {
+    self.queue.push_back((realm, job));
+  }
+
+  /// Performs a microtask checkpoint (HTML terminology).
+  ///
+  /// - If a checkpoint is already in progress, this is a no-op (reentrancy guard).
+  /// - Otherwise, drains the queue until it becomes empty.
+  pub fn perform_microtask_checkpoint(&mut self, ctx: &mut dyn VmJobContext) -> Result<(), VmError> {
+    if self.performing_microtask_checkpoint {
+      return Ok(());
+    }
+
+    self.performing_microtask_checkpoint = true;
+    let result = (|| {
+      loop {
+        let Some((_realm, job)) = self.queue.pop_front() else {
+          break;
+        };
+        job.run(ctx, self)?;
+      }
+      Ok(())
+    })();
+    self.performing_microtask_checkpoint = false;
+    result
+  }
+
+  /// Tears down all queued jobs without running them.
+  ///
+  /// This unregisters any persistent roots held by queued jobs. Use this when an embedding needs
+  /// to abandon the queue but still intends to reuse the heap.
+  pub fn teardown(&mut self, ctx: &mut dyn VmJobContext) {
+    while let Some((_realm, job)) = self.queue.pop_front() {
+      job.discard(ctx);
+    }
+  }
+}
+
+impl VmHostHooks for MicrotaskQueue {
+  fn host_enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>) {
+    self.enqueue_promise_job(job, realm);
+  }
+
+  fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
+    Some(self)
+  }
+}

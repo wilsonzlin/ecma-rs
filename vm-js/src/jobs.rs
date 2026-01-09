@@ -421,6 +421,14 @@ pub trait VmHostHooks {
   /// [microtask checkpoints](https://html.spec.whatwg.org/multipage/webappapis.html#perform-a-microtask-checkpoint).
   fn host_enqueue_promise_job(&mut self, job: Job, realm: Option<RealmId>);
 
+  /// Allows downcasting host hook trait objects in tests/embeddings.
+  ///
+  /// Most embeddings should ignore this. The default implementation returns `None`.
+  #[inline]
+  fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+    None
+  }
+
   /// Creates a host-defined [`JobCallback`] record.
   ///
   /// Stub hook for HTML's `HostMakeJobCallback`:
