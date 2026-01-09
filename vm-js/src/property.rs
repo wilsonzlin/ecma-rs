@@ -45,6 +45,10 @@ impl PropertyDescriptor {
   pub fn is_accessor_descriptor(&self) -> bool {
     matches!(self.kind, PropertyKind::Accessor { .. })
   }
+
+  pub fn is_generic_descriptor(&self) -> bool {
+    false
+  }
 }
 
 impl Trace for PropertyDescriptor {
@@ -104,7 +108,6 @@ impl PropertyDescriptorPatch {
   pub fn is_generic_descriptor(&self) -> bool {
     !self.is_data_descriptor() && !self.is_accessor_descriptor()
   }
-
   /// Validates that this patch does not mix data and accessor descriptor fields.
   ///
   /// Per ECMAScript, a descriptor cannot be both a Data Descriptor and an Accessor Descriptor.

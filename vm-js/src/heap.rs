@@ -1,7 +1,7 @@
 use crate::function::{
   CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId,
 };
-use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
+use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
@@ -536,6 +536,54 @@ impl Heap {
         Ok(())
       }
       PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+    }
+  }
+
+  pub fn define_own_property(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<bool, VmError> {
+    let mut scope = self.scope();
+    scope.ordinary_define_own_property(obj, key, desc)
+  }
+
+  pub fn define_own_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    desc: PropertyDescriptorPatch,
+  ) -> Result<(), VmError> {
+    let ok = self.define_own_property(obj, key, desc)?;
+    if ok {
+      Ok(())
+    } else {
+      Err(VmError::TypeError("DefineOwnProperty rejected"))
+    }
+  }
+
+  pub fn create_data_property(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+  ) -> Result<bool, VmError> {
+    let mut scope = self.scope();
+    scope.create_data_property(obj, key, value)
+  }
+
+  pub fn create_data_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+  ) -> Result<(), VmError> {
+    let ok = self.create_data_property(obj, key, value)?;
+    if ok {
+      Ok(())
+    } else {
+      Err(VmError::TypeError("CreateDataProperty rejected"))
     }
   }
 

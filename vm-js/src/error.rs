@@ -31,6 +31,9 @@ pub enum VmError {
   #[error("property is not a data property")]
   PropertyNotData,
 
+  #[error("type error: {0}")]
+  TypeError(&'static str),
+
   /// Attempted to call a non-callable value.
   #[error("value is not callable")]
   NotCallable,
