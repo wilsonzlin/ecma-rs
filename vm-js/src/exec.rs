@@ -21,8 +21,8 @@ use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
 use parse_js::ast::stmt::decl::{FuncDecl, PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
-  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForInOfLhs, ForOfStmt, ForTripleStmt,
-  IfStmt, LabelStmt, ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
+  BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForInOfLhs, ForInStmt, ForOfStmt,
+  ForTripleStmt, IfStmt, LabelStmt, ReturnStmt, Stmt, SwitchStmt, ThrowStmt, TryStmt, WhileStmt,
 };
 use parse_js::operator::OperatorName;
 use parse_js::token::TT;
@@ -690,6 +690,7 @@ impl<'a> Evaluator<'a> {
       Stmt::While(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.body.stx),
       Stmt::DoWhile(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.body.stx),
       Stmt::ForTriple(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
+      Stmt::ForIn(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
       Stmt::ForOf(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
       Stmt::Label(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.statement.stx),
       Stmt::Switch(stmt) => {
@@ -892,6 +893,16 @@ impl<'a> Evaluator<'a> {
           self.collect_var_names(&s.stx, out)?;
         }
       }
+      Stmt::ForIn(stmt) => {
+        if let ForInOfLhs::Decl((mode, pat_decl)) = &stmt.stx.lhs {
+          if *mode == VarDeclMode::Var {
+            self.collect_var_names_from_pat_decl(&pat_decl.stx, out)?;
+          }
+        }
+        for s in &stmt.stx.body.stx.body {
+          self.collect_var_names(&s.stx, out)?;
+        }
+      }
       Stmt::ForOf(stmt) => {
         if let ForInOfLhs::Decl((mode, pat_decl)) = &stmt.stx.lhs {
           if *mode == VarDeclMode::Var {
@@ -1047,6 +1058,7 @@ impl<'a> Evaluator<'a> {
       Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, label_set),
       Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx, label_set),
       Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, label_set),
+      Stmt::ForIn(stmt) => self.eval_for_in(scope, &stmt.stx, label_set),
       Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, label_set),
       Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
       Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx, label_set),
@@ -1468,6 +1480,185 @@ impl<'a> Evaluator<'a> {
         let _ = self.eval_expr(&mut scope, post)?;
       }
     }
+  }
+
+  fn eval_for_in(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ForInStmt,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    let result = self.for_in_loop_evaluation(scope, stmt, label_set)?;
+    Ok(Self::normalise_iteration_break(result))
+  }
+
+  fn for_in_loop_evaluation(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ForInStmt,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    let rhs_value = self.eval_expr(scope, &stmt.rhs)?;
+    if is_nullish(rhs_value) {
+      // Minimal semantics: legacy-ish behaviour, treat `null`/`undefined` as an empty iteration.
+      return Ok(Completion::normal(Value::Undefined));
+    }
+
+    // `for..in` uses `ToObject` on the RHS. Until we have full wrapper objects, treat the `Object`
+    // constructor as a converter for primitives.
+    let object = match rhs_value {
+      Value::Object(obj) => obj,
+      other => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let object_ctor = Value::Object(intr.object_constructor());
+
+        let mut to_obj_scope = scope.reborrow();
+        to_obj_scope.push_root(other)?;
+        to_obj_scope.push_root(object_ctor)?;
+        let args = [other];
+        let value = self
+          .vm
+          .call(&mut to_obj_scope, object_ctor, Value::Undefined, &args)?;
+        match value {
+          Value::Object(obj) => obj,
+          _ => {
+            return Err(VmError::InvariantViolation(
+              "Object(..) conversion returned non-object",
+            ));
+          }
+        }
+      }
+    };
+
+    // Root the base object across key collection + loop body evaluation, which may allocate and
+    // trigger GC.
+    let mut iter_scope = scope.reborrow();
+    iter_scope.push_root(Value::Object(object))?;
+
+    // Snapshot enumerable string keys across the prototype chain, skipping duplicates.
+    //
+    // Note: this is intentionally minimal and does not track mutations during iteration.
+    let mut keys: Vec<GcString> = Vec::new();
+    let mut visited: Vec<PropertyKey> = Vec::new();
+
+    let mut current: Option<GcObject> = Some(object);
+    while let Some(obj) = current {
+      let own_keys = iter_scope.ordinary_own_property_keys(obj)?;
+      for key in own_keys {
+        let PropertyKey::String(s) = key else {
+          continue;
+        };
+
+        let Some(desc) = iter_scope.ordinary_get_own_property(obj, key)? else {
+          continue;
+        };
+        if !desc.enumerable {
+          continue;
+        }
+
+        if visited
+          .iter()
+          .any(|seen| iter_scope.heap().property_key_eq(seen, &key))
+        {
+          continue;
+        }
+
+        visited.push(key);
+        keys.push(s);
+        // Root the key for the duration of the loop in case the property is deleted during
+        // iteration.
+        iter_scope.push_root(Value::String(s))?;
+      }
+
+      current = iter_scope.object_get_prototype(obj)?;
+    }
+
+    // Root `V` across the loop so the value can't be collected between iterations.
+    let v_root_idx = iter_scope.heap().root_stack.len();
+    iter_scope.push_root(Value::Undefined)?;
+    let mut v = Value::Undefined;
+
+    // If the loop uses a lexical declaration (`let`/`const`), we emulate per-iteration lexical
+    // environments by creating a fresh env record per iteration.
+    let outer_lex = self.env.lexical_env;
+
+    for key_s in keys {
+      // Tick once per iteration so `for (k in o) {}` is budgeted even when the body is empty.
+      self.tick()?;
+
+      let mut iter_env: Option<GcEnv> = None;
+      if let ForInOfLhs::Decl((mode, _)) = &stmt.lhs {
+        if *mode == VarDeclMode::Let || *mode == VarDeclMode::Const {
+          let env = iter_scope.env_create(Some(outer_lex))?;
+          self.env.set_lexical_env(iter_scope.heap_mut(), env);
+          iter_env = Some(env);
+        }
+      }
+
+      let value = Value::String(key_s);
+
+      let bind_res: Result<(), VmError> = match &stmt.lhs {
+        ForInOfLhs::Decl((mode, pat_decl)) => {
+          let kind = match *mode {
+            VarDeclMode::Var => BindingKind::Var,
+            VarDeclMode::Let => BindingKind::Let,
+            VarDeclMode::Const => BindingKind::Const,
+            _ => {
+              return Err(VmError::Unimplemented(
+                "for-in loop variable declaration kind",
+              ));
+            }
+          };
+          bind_pattern(
+            self.vm,
+            &mut iter_scope,
+            self.env,
+            &pat_decl.stx.pat.stx,
+            value,
+            kind,
+            self.strict,
+            self.this,
+          )
+        }
+        ForInOfLhs::Assign(pat) => bind_pattern(
+          self.vm,
+          &mut iter_scope,
+          self.env,
+          &pat.stx,
+          value,
+          BindingKind::Assignment,
+          self.strict,
+          self.this,
+        ),
+      };
+
+      if let Err(err) = bind_res {
+        if iter_env.is_some() {
+          self.env.set_lexical_env(iter_scope.heap_mut(), outer_lex);
+        }
+        return Err(err);
+      }
+
+      let body_completion = self.eval_for_body(&mut iter_scope, &stmt.body.stx)?;
+
+      if iter_env.is_some() {
+        self.env.set_lexical_env(iter_scope.heap_mut(), outer_lex);
+      }
+
+      if !Self::loop_continues(&body_completion, label_set) {
+        return Ok(body_completion.update_empty(Some(v)));
+      }
+
+      if let Some(value) = body_completion.value() {
+        v = value;
+        iter_scope.heap_mut().root_stack[v_root_idx] = value;
+      }
+    }
+
+    Ok(Completion::normal(v))
   }
 
   fn eval_for_of(
@@ -2977,6 +3168,25 @@ impl<'a> Evaluator<'a> {
           left,
           right,
         )?))
+      }
+      OperatorName::In => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left)?;
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        let Value::Object(obj) = right else {
+          return Err(throw_type_error(
+            self.vm,
+            &mut rhs_scope,
+            "Right-hand side of 'in' should be an object",
+          )?);
+        };
+
+        // Root the RHS object across `ToPropertyKey`, which may allocate and trigger GC.
+        rhs_scope.push_root(Value::Object(obj))?;
+        let key = rhs_scope.heap_mut().to_property_key(left)?;
+        Ok(Value::Bool(rhs_scope.ordinary_has_property(obj, key)?))
       }
       OperatorName::Addition => {
         let left = self.eval_expr(scope, &expr.left)?;
