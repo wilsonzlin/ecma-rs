@@ -220,4 +220,21 @@ mod tests {
       "non-strict source should not begin with directive, got: {src:?}"
     );
   }
+
+  #[test]
+  fn strict_host_mode_begins_with_use_strict_without_prepended_harness_sources() {
+    let dir = tempdir().unwrap();
+    let body = "/*body*/\n";
+
+    let src = assemble_source_with_mode(
+      dir.path(),
+      &Frontmatter::default(),
+      Variant::Strict,
+      body,
+      HarnessMode::Host,
+    )
+    .unwrap();
+
+    assert_eq!(src, format!("'use strict';\n\n{body}"));
+  }
 }
