@@ -186,3 +186,36 @@ fn new_target_is_constructor_for_new_expression() {
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
+
+#[test]
+fn try_catch_converts_not_callable_into_type_error_object() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"try { (0)(); } catch(e) { e.name }"#).unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn try_catch_converts_builtin_type_error_into_type_error_object() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { Object.setPrototypeOf(1, null); } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn type_error_object_has_message() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { (0)(); } catch(e) { e.message }"#)
+    .unwrap();
+
+  let Value::String(s) = value else {
+    panic!("expected string, got {value:?}");
+  };
+  let actual = rt.heap().get_string(s).unwrap().to_utf8_lossy();
+  assert!(
+    actual.contains("not callable"),
+    "expected message to contain 'not callable', got {actual:?}"
+  );
+}

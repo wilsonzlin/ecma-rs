@@ -1,4 +1,5 @@
 use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
+use crate::error_object::new_error;
 use crate::iterator;
 use crate::ops::{abstract_equality, to_number};
 use crate::{
@@ -1759,30 +1760,66 @@ impl<'a> Evaluator<'a> {
     //
     // This is also the central stack capture point for implicit throws (TDZ errors, TypeErrors,
     // etc) that are surfaced as `Err(VmError::Throw(..))` from lower-level helpers.
-    match res {
-      Err(VmError::Throw(value)) => {
-        let source = self.env.source();
-        let rel_start = stmt.loc.start_u32().saturating_sub(self.env.prefix_len());
-        let abs_offset = self.env.base_offset().saturating_add(rel_start);
-        let (line, col) = source.line_col(abs_offset);
+    let mut thrown_at_stmt = |value: Value| {
+      let source = self.env.source();
+      let rel_start = stmt.loc.start_u32().saturating_sub(self.env.prefix_len());
+      let abs_offset = self.env.base_offset().saturating_add(rel_start);
+      let (line, col) = source.line_col(abs_offset);
 
-        let mut stack = self.vm.capture_stack();
-        if let Some(top) = stack.first_mut() {
-          top.source = source.name.clone();
-          top.line = line;
-          top.col = col;
-        } else {
-          stack.push(StackFrame {
-            function: None,
-            source: source.name.clone(),
-            line,
-            col,
-          });
-        }
-
-        Ok(Completion::Throw(Thrown { value, stack }))
+      let mut stack = self.vm.capture_stack();
+      if let Some(top) = stack.first_mut() {
+        top.source = source.name.clone();
+        top.line = line;
+        top.col = col;
+      } else {
+        stack.push(StackFrame {
+          function: None,
+          source: source.name.clone(),
+          line,
+          col,
+        });
       }
+
+      Thrown { value, stack }
+    };
+
+    match res {
+      Err(VmError::Throw(value)) => Ok(Completion::Throw(thrown_at_stmt(value))),
       Err(VmError::ThrowWithStack { value, stack }) => Ok(Completion::Throw(Thrown { value, stack })),
+      Err(VmError::TypeError(message)) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(scope, intr.type_error_prototype(), "TypeError", message)?;
+        Ok(Completion::Throw(thrown_at_stmt(err)))
+      }
+      Err(VmError::NotCallable) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "value is not callable",
+        )?;
+        Ok(Completion::Throw(thrown_at_stmt(err)))
+      }
+      Err(VmError::NotConstructable) => {
+        let intr = self
+          .vm
+          .intrinsics()
+          .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+        let err = new_error(
+          scope,
+          intr.type_error_prototype(),
+          "TypeError",
+          "value is not a constructor",
+        )?;
+        Ok(Completion::Throw(thrown_at_stmt(err)))
+      }
       other => other,
     }
   }
