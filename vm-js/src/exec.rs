@@ -1836,7 +1836,9 @@ impl<'a> Evaluator<'a> {
 
     match result {
       Completion::Break(Some(target), value) if target == stmt.name => {
-        Ok(Completion::normal(value.unwrap_or(Value::Undefined)))
+        // ECMA-262 `LabelledEvaluation`: a labelled `break` is consumed by the matching label,
+        // preserving the completion value (which may be ~empty~).
+        Ok(Completion::Normal(value))
       }
       other => Ok(other),
     }

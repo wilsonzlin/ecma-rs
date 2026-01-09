@@ -85,6 +85,13 @@ fn nested_labels_break_outer() {
 }
 
 #[test]
+fn labelled_break_with_empty_value_does_not_clobber_prior_statement_list_value() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"1; a: { break a; }"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
 fn while_not_entered_returns_undefined() {
   let mut rt = new_runtime();
   let value = rt.exec_script(r#"1; while(false) {}"#).unwrap();
