@@ -2289,7 +2289,7 @@ struct JsPromise {
 impl JsPromise {
   fn new(prototype: Option<GcObject>) -> Self {
     Self {
-      object: JsObject::new(ObjectKind::Ordinary, prototype),
+      object: JsObject::new(prototype),
       state: PromiseState::Pending,
       result: Value::Undefined,
       fulfill_reactions: Box::default(),
