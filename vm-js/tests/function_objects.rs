@@ -34,6 +34,14 @@ fn function_objects_support_prototype_and_properties() -> Result<(), VmError> {
     },
   )?;
 
+  let Some(desc) = scope.heap().get_property(func, &key)? else {
+    panic!("expected get_property to find function's own property");
+  };
+  match desc.kind {
+    PropertyKind::Data { value, .. } => assert_eq!(value, Value::Number(1.0)),
+    PropertyKind::Accessor { .. } => panic!("expected data property"),
+  }
+
   assert_eq!(
     scope.heap().object_get_own_data_property_value(func, &key)?,
     Some(Value::Number(1.0))
@@ -72,7 +80,54 @@ fn function_property_lookups_traverse_prototype_chain() -> Result<(), VmError> {
     },
   )?;
 
+  let Some(desc) = scope.heap().get_property(func, &key)? else {
+    panic!("expected get_property to traverse function prototype chain");
+  };
+  match desc.kind {
+    PropertyKind::Data { value, .. } => assert_eq!(value, Value::Number(42.0)),
+    PropertyKind::Accessor { .. } => panic!("expected data property"),
+  }
+
   let found = scope.ordinary_get(&mut vm, func, key, Value::Object(func))?;
   assert_eq!(found, Value::Number(42.0));
+  Ok(())
+}
+
+#[test]
+fn function_prototype_chain_can_include_function_objects() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  let proto_name = scope.alloc_string("proto")?;
+  let proto = scope.alloc_native_function(NativeFunctionId(1), None, proto_name, 0)?;
+  scope.push_root(Value::Object(proto))?;
+
+  let func_name = scope.alloc_string("f")?;
+  let func = scope.alloc_native_function(NativeFunctionId(1), None, func_name, 0)?;
+  scope.push_root(Value::Object(func))?;
+
+  scope.heap_mut().object_set_prototype(func, Some(proto))?;
+
+  let key = PropertyKey::from_string(scope.alloc_string("z")?);
+  scope.define_property(
+    proto,
+    key,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value: Value::Bool(true),
+        writable: true,
+      },
+    },
+  )?;
+
+  let Some(desc) = scope.heap().get_property(func, &key)? else {
+    panic!("expected get_property to traverse function->function prototype chain");
+  };
+  match desc.kind {
+    PropertyKind::Data { value, .. } => assert_eq!(value, Value::Bool(true)),
+    PropertyKind::Accessor { .. } => panic!("expected data property"),
+  }
   Ok(())
 }

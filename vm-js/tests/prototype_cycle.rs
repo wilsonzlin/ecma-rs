@@ -70,6 +70,28 @@ fn set_prototype_rejects_indirect_cycle_including_functions() -> Result<(), VmEr
 }
 
 #[test]
+fn set_prototype_rejects_cycle_involving_function_and_object() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+  let call_id = vm.register_native_call(return_undefined)?;
+  let mut scope = heap.scope();
+
+  let func_name = scope.alloc_string("f")?;
+  let func = scope.alloc_native_function(call_id, None, func_name, 0)?;
+  scope.push_root(Value::Object(func))?;
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj))?;
+
+  scope.heap_mut().object_set_prototype(obj, Some(func))?;
+  assert!(matches!(
+    scope.heap_mut().object_set_prototype(func, Some(obj)),
+    Err(VmError::PrototypeCycle)
+  ));
+  Ok(())
+}
+
+#[test]
 fn prototype_chain_traversal_is_bounded() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(32 * 1024 * 1024, 32 * 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
