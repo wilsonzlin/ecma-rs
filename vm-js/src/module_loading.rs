@@ -487,7 +487,7 @@ pub fn start_dynamic_import(
 ///
 /// This helper implements the core spec semantics:
 /// - On a normal completion, update `referrer.[[LoadedModules]]`:
-///   - If a `ModuleRequestsEqual` match already exists, assert it resolves to the same module.
+///   - If a `ModuleRequestsEqual` match already exists, error if it resolves to a different module.
 ///   - Otherwise append a new `LoadedModuleRequest`.
 /// - Dispatch to `ContinueModuleLoading` or `ContinueDynamicImport` based on payload kind.
 pub fn finish_loading_imported_module(
@@ -505,14 +505,11 @@ pub fn finish_loading_imported_module(
       .iter()
       .find(|record| module_requests_equal(*record, &module_request))
     {
-      assert_eq!(
-        existing.module,
-        *module,
-        "FinishLoadingImportedModule invariant violation: module request {specifier:?} was previously loaded as {existing:?} but completed as {new:?}",
-        specifier = module_request.specifier,
-        existing = existing.module,
-        new = *module
-      );
+      if existing.module != *module {
+        return Err(VmError::InvariantViolation(
+          "FinishLoadingImportedModule invariant violation: module request resolved to different modules",
+        ));
+      }
     } else {
       referrer
         .loaded_modules_mut()
@@ -788,9 +785,7 @@ mod tests {
   }
 
   #[test]
-  fn finish_loading_imported_module_panics_on_duplicate_mismatch() {
-    use std::panic::AssertUnwindSafe;
-
+  fn finish_loading_imported_module_errors_on_duplicate_mismatch() {
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let request = ModuleRequest::new("./x.mjs", vec![]);
     let module_a = ModuleId::from_raw(1);
@@ -803,15 +798,14 @@ mod tests {
       Ok(module_a),
     );
 
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-      let _ = finish_loading_imported_module(
-        &mut loaded_modules,
-        request,
-        ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-        Ok(module_b),
-      );
-    }));
-    assert!(result.is_err());
+    let err = finish_loading_imported_module(
+      &mut loaded_modules,
+      request,
+      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
+      Ok(module_b),
+    )
+    .unwrap_err();
+    assert!(matches!(err, VmError::InvariantViolation(_)));
     assert_eq!(loaded_modules.len(), 1);
     assert_eq!(loaded_modules[0].module, module_a);
   }
