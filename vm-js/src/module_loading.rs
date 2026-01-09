@@ -369,6 +369,7 @@ mod tests {
   use crate::property::PropertyKind as HeapPropertyKind;
   use crate::Heap;
   use crate::HeapLimits;
+  use crate::VmOptions;
 
   fn js(s: &str) -> JsString {
     JsString::from_u16_vec(s.encode_utf16().collect())
@@ -436,9 +437,9 @@ mod tests {
 
   #[test]
   fn import_attributes_from_options_validates_and_sorts() {
-    let mut vm = crate::Vm::new(crate::VmOptions::default());
     let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
     let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
 
     let options = scope.alloc_object().unwrap();
     let attributes = scope.alloc_object().unwrap();
@@ -483,7 +484,8 @@ mod tests {
 
     let supported = vec![js("a"), js("type")];
     let attrs =
-      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported).unwrap();
+      import_attributes_from_options(&mut vm, &mut scope, Value::Object(options), &supported)
+        .unwrap();
 
     let keys: Vec<String> = attrs.iter().map(|a| a.key.to_utf8_lossy()).collect();
     assert_eq!(keys, vec!["a", "type"]);
@@ -491,9 +493,9 @@ mod tests {
 
   #[test]
   fn import_attributes_from_options_rejects_invalid_types() {
-    let mut vm = crate::Vm::new(crate::VmOptions::default());
     let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
     let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
 
     let supported = vec![js("type")];
     let err =
