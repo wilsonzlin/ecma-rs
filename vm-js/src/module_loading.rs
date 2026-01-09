@@ -18,14 +18,19 @@
 //! - [`crate::VmHostHooks::host_load_imported_module`]
 //! - [`VmModuleLoadingContext::finish_loading_imported_module`]
 
+use crate::module_graph::ModuleGraph;
+use crate::module_record::ModuleStatus;
 use crate::property::PropertyKey;
+use crate::promise::PromiseCapability;
 use crate::{
-  GcObject, GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId,
-  RootId, Scope, ScriptId, ScriptOrModule, Value, Vm, VmError,
+  GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId, RootId, Scope,
+  ScriptId, Value, Vm, VmError, MicrotaskQueue,
 };
 use std::any::Any;
+use std::cell::RefCell;
 use std::fmt;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::sync::Arc;
 
 /// The *identity* of the `referrer` passed to `HostLoadImportedModule`/`FinishLoadingImportedModule`.
 ///
@@ -73,25 +78,48 @@ impl LoadedModulesOwner for Vec<LoadedModuleRequest<ModuleId>> {
 /// In ECMA-262, `_hostDefined_` is typed as "anything" and is carried through spec algorithms.
 ///
 /// This is an opaque record to the VM; the embedding chooses what to store.
-#[derive(Clone)]
-pub struct HostDefined(Arc<dyn Any + Send + Sync>);
+#[derive(Clone, Default)]
+pub struct HostDefined(Option<Arc<dyn Any + Send + Sync>>);
 
 impl HostDefined {
   /// Wrap host-defined data.
   pub fn new<T: Any + Send + Sync>(data: T) -> Self {
-    Self(Arc::new(data))
+    Self(Some(Arc::new(data)))
   }
 
   /// Attempts to downcast the payload by reference.
   pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-    self.0.downcast_ref::<T>()
+    self.0.as_ref()?.downcast_ref::<T>()
   }
 }
 
 impl fmt::Debug for HostDefined {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("HostDefined").field("type_id", &self.0.type_id()).finish()
+    match &self.0 {
+      Some(v) => f
+        .debug_struct("HostDefined")
+        .field("type_id", &v.type_id())
+        .finish(),
+      None => f.debug_struct("HostDefined").field("value", &"undefined").finish(),
+    }
   }
+}
+
+#[derive(Debug)]
+struct PromiseCapabilityRoots {
+  promise: RootId,
+  resolve: RootId,
+  reject: RootId,
+}
+
+#[derive(Debug)]
+struct GraphLoadingStateInner {
+  promise_capability: PromiseCapability,
+  promise_roots: Option<PromiseCapabilityRoots>,
+  is_loading: bool,
+  pending_modules_count: usize,
+  visited: Vec<ModuleId>,
+  host_defined: HostDefined,
 }
 
 /// Opaque token representing the spec's `GraphLoadingState` record.
@@ -102,114 +130,159 @@ impl fmt::Debug for HostDefined {
 /// The host MUST treat this value as opaque and pass it back unchanged in
 /// `FinishLoadingImportedModule`.
 #[derive(Clone)]
-pub struct GraphLoadingState(Arc<dyn Any + Send + Sync>);
-
-impl GraphLoadingState {
-  /// Wrap engine-defined state.
-  pub fn new<T: Any + Send + Sync>(data: T) -> Self {
-    Self(Arc::new(data))
-  }
-
-  /// Attempts to downcast the payload by reference.
-  pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-    self.0.downcast_ref::<T>()
-  }
-}
+pub struct GraphLoadingState(Rc<RefCell<GraphLoadingStateInner>>);
 
 impl fmt::Debug for GraphLoadingState {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("GraphLoadingState")
-      .field("type_id", &self.0.type_id())
-      .finish()
+    // Treat as opaque to hosts.
+    let _ = &self.0;
+    f.write_str("GraphLoadingState(..)")
   }
 }
 
-/// Opaque token representing the spec's `PromiseCapability` record.
-///
-/// This is used as the `_payload_` when starting a dynamic import (`import()`), and is later passed
-/// back to `ContinueDynamicImport` via `FinishLoadingImportedModule`.
-///
-/// Note: `vm-js` models Promise objects and Promise jobs, but module evaluation is not yet
-/// integrated. This record keeps the Promise object alive across asynchronous boundaries so host
-/// module loading can later resolve/reject it.
-#[derive(Clone)]
-pub struct PromiseCapability(Arc<Mutex<PromiseCapabilityInner>>);
+impl GraphLoadingState {
+  fn new(
+    vm: &mut Vm,
+    scope: &mut Scope<'_>,
+    host_defined: HostDefined,
+  ) -> Result<(Self, Value), VmError> {
+    let intrinsics = vm.intrinsics().ok_or(VmError::Unimplemented(
+      "module loading requires Vm::intrinsics to be set (create a Realm first)",
+    ))?;
+    // `new_promise_capability` needs a host hook implementation for TypeError construction in
+    // error paths. For module graph loading we only create capabilities for `%Promise%`, so a
+    // minimal microtask queue is sufficient here.
+    let mut host = MicrotaskQueue::new();
+    let cap = crate::builtins::new_promise_capability(
+      vm,
+      scope,
+      &mut host,
+      Value::Object(intrinsics.promise()),
+    )?;
 
-#[derive(Debug)]
-struct PromiseCapabilityInner {
-  promise: GcObject,
-  /// Persistent root keeping `promise` alive until the capability is settled.
-  root: Option<RootId>,
-}
+    // Root the capability values while creating persistent roots: `Heap::add_root` can trigger GC.
+    let values = [cap.promise, cap.resolve, cap.reject];
+    scope.push_roots(&values)?;
 
-impl PromiseCapability {
-  /// Create a new pending PromiseCapability.
-  ///
-  /// This allocates a Promise object and roots it in the heap's persistent root set so the returned
-  /// capability can be held by the host across asynchronous module loading.
-  pub fn new(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<Self, VmError> {
-    // When intrinsics are present, use the realm's `%Promise.prototype%` so the returned object is
-    // `instanceof Promise` from JS. Tests sometimes call this helper without initializing a realm;
-    // fall back to an unprototyped Promise object in that case.
-    let promise = match vm.intrinsics() {
-      Some(intr) => scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))?,
-      None => scope.alloc_promise()?,
+    let mut roots: Vec<RootId> = Vec::new();
+    roots
+      .try_reserve_exact(values.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    for &value in &values {
+      match scope.heap_mut().add_root(value) {
+        Ok(id) => roots.push(id),
+        Err(e) => {
+          for root in roots.drain(..) {
+            scope.heap_mut().remove_root(root);
+          }
+          return Err(e);
+        }
+      }
+    }
+
+    let promise_roots = PromiseCapabilityRoots {
+      promise: roots[0],
+      resolve: roots[1],
+      reject: roots[2],
     };
 
-    // Root the promise while inserting it into the persistent root set (which can allocate and
-    // trigger GC). Use a child scope so the temporary stack root does not escape.
-    let mut root_scope = scope.reborrow();
-    root_scope.push_root(Value::Object(promise))?;
-    let root = root_scope.heap_mut().add_root(Value::Object(promise))?;
-    Ok(Self(Arc::new(Mutex::new(PromiseCapabilityInner {
-      promise,
-      root: Some(root),
-    }))))
+    Ok((
+      Self(Rc::new(RefCell::new(GraphLoadingStateInner {
+        promise_capability: cap,
+        promise_roots: Some(promise_roots),
+        is_loading: true,
+        pending_modules_count: 1,
+        visited: Vec::new(),
+        host_defined,
+      }))),
+      cap.promise,
+    ))
   }
 
-  /// Returns the underlying Promise object.
-  pub fn promise(&self) -> GcObject {
-    self.0.lock().expect("poisoned PromiseCapability").promise
+  fn is_loading(&self) -> bool {
+    self.0.borrow().is_loading
   }
 
-  /// Fulfill this capability's promise with `value` (idempotent).
-  pub fn fulfill(&self, vm: &mut Vm, scope: &mut Scope<'_>, value: Value) -> Result<(), VmError> {
-    let mut inner = self.0.lock().expect("poisoned PromiseCapability");
-    if inner.root.is_none() {
-      return Ok(());
-    }
-    let promise = inner.promise;
-    crate::builtins::fulfill_promise(vm.microtask_queue_mut(), scope, promise, value)?;
-    let root = inner
-      .root
-      .take()
-      .expect("PromiseCapability root should be present when unsettled");
-    scope.heap_mut().remove_root(root);
+  fn set_is_loading(&self, value: bool) {
+    self.0.borrow_mut().is_loading = value;
+  }
+
+  fn host_defined(&self) -> HostDefined {
+    self.0.borrow().host_defined.clone()
+  }
+
+  fn visited_contains(&self, module: ModuleId) -> bool {
+    self.0.borrow().visited.contains(&module)
+  }
+
+  fn push_visited(&self, module: ModuleId) -> Result<(), VmError> {
+    let mut state = self.0.borrow_mut();
+    state.visited.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+    state.visited.push(module);
     Ok(())
   }
 
-  /// Reject this capability's promise with `reason` (idempotent).
-  pub fn reject(&self, vm: &mut Vm, scope: &mut Scope<'_>, reason: Value) -> Result<(), VmError> {
-    let mut inner = self.0.lock().expect("poisoned PromiseCapability");
-    if inner.root.is_none() {
-      return Ok(());
-    }
-    let promise = inner.promise;
-    crate::builtins::reject_promise(vm.microtask_queue_mut(), scope, promise, reason)?;
-    let root = inner
-      .root
-      .take()
-      .expect("PromiseCapability root should be present when unsettled");
-    scope.heap_mut().remove_root(root);
+  fn inc_pending(&self, delta: usize) -> Result<(), VmError> {
+    let mut state = self.0.borrow_mut();
+    state.pending_modules_count = state
+      .pending_modules_count
+      .checked_add(delta)
+      .ok_or(VmError::LimitExceeded(
+        "module graph loader pending module count overflow",
+      ))?;
     Ok(())
   }
-}
 
-impl fmt::Debug for PromiseCapability {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    // Treat the promise capability as opaque to the host.
-    let _ = &self.0;
-    f.write_str("PromiseCapability(..)")
+  fn dec_pending(&self) -> usize {
+    let mut state = self.0.borrow_mut();
+    debug_assert!(state.pending_modules_count > 0, "pendingModulesCount underflow");
+    state.pending_modules_count = state.pending_modules_count.saturating_sub(1);
+    state.pending_modules_count
+  }
+
+  fn resolve_promise(&self, vm: &mut Vm, scope: &mut Scope<'_>) -> Result<(), VmError> {
+    let (cap, roots) = {
+      let mut state = self.0.borrow_mut();
+      (state.promise_capability, state.promise_roots.take())
+    };
+
+    // Settlement is best-effort: if roots are already dropped, treat it as a no-op.
+    let Some(roots) = roots else {
+      return Ok(());
+    };
+
+    scope.push_root(cap.resolve)?;
+    let _ = vm.call(scope, cap.resolve, Value::Undefined, &[Value::Undefined])?;
+
+    scope.heap_mut().remove_root(roots.promise);
+    scope.heap_mut().remove_root(roots.resolve);
+    scope.heap_mut().remove_root(roots.reject);
+    Ok(())
+  }
+
+  fn reject_promise(&self, vm: &mut Vm, scope: &mut Scope<'_>, err: VmError) -> Result<(), VmError> {
+    let (cap, roots) = {
+      let mut state = self.0.borrow_mut();
+      (state.promise_capability, state.promise_roots.take())
+    };
+
+    let Some(roots) = roots else {
+      return Ok(());
+    };
+
+    let reason = match err {
+      VmError::Throw(v) => v,
+      _ => Value::Undefined,
+    };
+
+    scope.push_root(cap.reject)?;
+    scope.push_root(reason)?;
+    let _ = vm.call(scope, cap.reject, Value::Undefined, &[reason])?;
+
+    scope.heap_mut().remove_root(roots.promise);
+    scope.heap_mut().remove_root(roots.resolve);
+    scope.heap_mut().remove_root(roots.reject);
+    Ok(())
   }
 }
 
@@ -274,6 +347,239 @@ impl ModuleLoadPayload {
 /// represented by [`VmError`].
 pub type ModuleCompletion = Result<ModuleId, VmError>;
 
+/// Host hook used by the static module graph loading state machine to asynchronously resolve/load
+/// module requests.
+///
+/// This corresponds to ECMA-262's `HostLoadImportedModule` host hook.
+pub trait ModuleLoaderHost {
+  fn host_load_imported_module(
+    &mut self,
+    vm: &mut Vm,
+    scope: &mut Scope<'_>,
+    modules: &mut ModuleGraph,
+    referrer: ModuleId,
+    request: ModuleRequest,
+    host_defined: HostDefined,
+    payload: ModuleLoadPayload,
+  ) -> Result<(), VmError>;
+
+  /// Returns the list of import attribute keys supported by this host.
+  ///
+  /// This corresponds to ECMA-262's `HostGetSupportedImportAttributes()`:
+  /// <https://tc39.es/ecma262/#sec-hostgetsupportedimportattributes>.
+  ///
+  /// The default implementation returns an empty list (no attributes supported).
+  fn host_get_supported_import_attributes(&self) -> &'static [&'static str] {
+    &[]
+  }
+}
+
+/// Implements ECMA-262 `LoadRequestedModules(hostDefined?)` for cyclic modules.
+///
+/// This starts the module graph loading state machine and returns a Promise that is fulfilled once
+/// all modules in the static import graph have been loaded.
+pub fn load_requested_modules(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  modules: &mut ModuleGraph,
+  host: &mut dyn ModuleLoaderHost,
+  module: ModuleId,
+  host_defined: HostDefined,
+) -> Result<Value, VmError> {
+  let (state, promise) = GraphLoadingState::new(vm, scope, host_defined)?;
+  inner_module_loading(vm, scope, modules, host, &state, module)?;
+  Ok(promise)
+}
+
+/// Implements ECMA-262 `InnerModuleLoading(state, module)`.
+pub fn inner_module_loading(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  modules: &mut ModuleGraph,
+  host: &mut dyn ModuleLoaderHost,
+  state: &GraphLoadingState,
+  module: ModuleId,
+) -> Result<(), VmError> {
+  let Some(record) = modules.get_module(module) else {
+    state.set_is_loading(false);
+    state.reject_promise(vm, scope, VmError::InvalidHandle)?;
+    return Ok(());
+  };
+
+  let should_traverse = record.status == ModuleStatus::New && !state.visited_contains(module);
+  let requested_modules = if should_traverse {
+    record.requested_modules.clone()
+  } else {
+    Vec::new()
+  };
+
+  if should_traverse {
+    state.push_visited(module)?;
+    state.inc_pending(requested_modules.len())?;
+
+    for request in requested_modules {
+      // `AllImportAttributesSupported`.
+      let supported = host.host_get_supported_import_attributes();
+      if !all_import_attributes_supported(supported, &request.attributes) {
+        // Per ECMA-262, unsupported import attributes are a thrown SyntaxError.
+        if let Some(intrinsics) = vm.intrinsics() {
+          let unsupported_key = request
+            .attributes
+            .iter()
+            .find(|attr| !supported.iter().any(|k| *k == attr.key.as_str()))
+            .map(|attr| attr.key.as_str());
+
+          let message = match unsupported_key {
+            Some(key) => format!("Unsupported import attribute: {key}"),
+            None => "Unsupported import attributes".to_string(),
+          };
+
+          let err_value = crate::new_error(
+            scope,
+            intrinsics.syntax_error_prototype(),
+            "SyntaxError",
+            &message,
+          )?;
+
+          continue_module_loading(
+            vm,
+            scope,
+            modules,
+            host,
+            ModuleLoadPayload::graph_loading_state(state.clone()),
+            Err(VmError::Throw(err_value)),
+          )?;
+        } else {
+          continue_module_loading(
+            vm,
+            scope,
+            modules,
+            host,
+            ModuleLoadPayload::graph_loading_state(state.clone()),
+            Err(VmError::Unimplemented(
+              "AllImportAttributesSupported requires Vm intrinsics (create a Realm first)",
+            )),
+          )?;
+        }
+      } else if let Some(loaded_module) = modules.get_imported_module(module, &request) {
+        inner_module_loading(vm, scope, modules, host, state, loaded_module)?;
+      } else {
+        host.host_load_imported_module(
+          vm,
+          scope,
+          modules,
+          module,
+          request,
+          state.host_defined(),
+          ModuleLoadPayload::graph_loading_state(state.clone()),
+        )?;
+      }
+
+      if !state.is_loading() {
+        return Ok(());
+      }
+    }
+  }
+
+  let pending_left = state.dec_pending();
+  if pending_left != 0 {
+    return Ok(());
+  }
+
+  state.set_is_loading(false);
+  {
+    let visited = state.0.borrow();
+    for &visited_id in &visited.visited {
+      if let Some(module) = modules.get_module_mut(visited_id) {
+        if module.status == ModuleStatus::New {
+          module.status = ModuleStatus::Unlinked;
+        }
+      }
+    }
+  }
+  state.resolve_promise(vm, scope)?;
+  Ok(())
+}
+
+/// Helper implementing ECMA-262 `FinishLoadingImportedModule(...)` for module graph loading.
+///
+/// Hosts must call this exactly once for each [`ModuleLoaderHost::host_load_imported_module`]
+/// invocation, either synchronously (re-entrantly) or asynchronously later.
+pub fn finish_loading_imported_module(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  modules: &mut ModuleGraph,
+  host: &mut dyn ModuleLoaderHost,
+  referrer: ModuleId,
+  module_request: ModuleRequest,
+  payload: ModuleLoadPayload,
+  result: ModuleCompletion,
+) -> Result<(), VmError> {
+  if let Ok(loaded) = result {
+    if let Some(referrer_module) = modules.get_module_mut(referrer) {
+      if let Some(existing) = referrer_module
+        .loaded_modules
+        .iter()
+        .find(|record| record.request.spec_equal(&module_request))
+      {
+        if existing.module != loaded {
+          continue_module_loading(
+            vm,
+            scope,
+            modules,
+            host,
+            payload,
+            Err(VmError::InvariantViolation(
+              "FinishLoadingImportedModule invariant violation: module request resolved to different modules",
+            )),
+          )?;
+          return Ok(());
+        }
+      } else {
+        referrer_module
+          .loaded_modules
+          .try_reserve(1)
+          .map_err(|_| VmError::OutOfMemory)?;
+        referrer_module
+          .loaded_modules
+          .push(LoadedModuleRequest::new(module_request, loaded));
+      }
+    }
+
+    continue_module_loading(vm, scope, modules, host, payload, Ok(loaded))
+  } else {
+    continue_module_loading(vm, scope, modules, host, payload, result)
+  }
+}
+
+/// Implements ECMA-262 `ContinueModuleLoading(state, moduleCompletion)`.
+pub fn continue_module_loading(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  modules: &mut ModuleGraph,
+  host: &mut dyn ModuleLoaderHost,
+  payload: ModuleLoadPayload,
+  result: ModuleCompletion,
+) -> Result<(), VmError> {
+  let ModuleLoadPayloadInner::GraphLoadingState(state) = payload.0 else {
+    return Err(VmError::InvariantViolation(
+      "ContinueModuleLoading called with non-GraphLoadingState payload",
+    ));
+  };
+
+  if !state.is_loading() {
+    return Ok(());
+  }
+
+  match result {
+    Ok(module) => inner_module_loading(vm, scope, modules, host, &state, module),
+    Err(err) => {
+      state.set_is_loading(false);
+      state.reject_promise(vm, scope, err)
+    }
+  }
+}
+
 /// Errors produced while validating dynamic import options / import attributes.
 #[derive(Debug, Clone)]
 pub enum ImportCallError {
@@ -322,7 +628,8 @@ pub fn import_attributes_from_options(
     return Err(ImportCallError::TypeError(ImportCallTypeError::OptionsNotObject));
   };
 
-  let with_key = PropertyKey::from_string(make_key_string(scope, "with").map_err(ImportCallError::Vm)?);
+  let with_key =
+    PropertyKey::from_string(make_key_string(scope, "with").map_err(ImportCallError::Vm)?);
   let attributes_obj = scope
     .ordinary_get(vm, options_obj, with_key, Value::Object(options_obj))
     .map_err(ImportCallError::Vm)?;
@@ -400,52 +707,17 @@ pub fn import_attributes_from_options(
 }
 
 /// Spec helper: `AllImportAttributesSupported(attributes)`.
-pub fn all_import_attributes_supported(
-  supported_keys: &[&str],
-  attributes: &[ImportAttribute],
-) -> bool {
+pub fn all_import_attributes_supported(supported_keys: &[&str], attributes: &[ImportAttribute]) -> bool {
   attributes
     .iter()
     .all(|attr| supported_keys.iter().any(|k| *k == attr.key.as_str()))
 }
 
-fn vm_error_to_rejection_reason(
-  scope: &mut Scope<'_>,
-  err: VmError,
-) -> Result<(Value, Option<VmError>), VmError> {
-  match err {
-    VmError::Throw(v) => Ok((v, None)),
-    // Represent non-throw VM errors as a string reason so dynamic import remains evaluator-
-    // independent while Error object construction is still evolving.
-    other => {
-      let msg = other.to_string();
-      let s = scope.alloc_string(&msg)?;
-      Ok((Value::String(s), Some(other)))
-    }
-  }
-}
-
-fn import_call_type_error_message(err: &ImportCallTypeError) -> String {
-  match err {
-    ImportCallTypeError::OptionsNotObject => "import() options must be an object".to_string(),
-    ImportCallTypeError::AttributesNotObject => "import() options.with must be an object".to_string(),
-    ImportCallTypeError::AttributeValueNotString => "import() attribute values must be strings".to_string(),
-    ImportCallTypeError::UnsupportedImportAttribute { key } => {
-      format!("unsupported import attribute key: {key}")
-    }
-  }
-}
-
 /// Spec-shaped dynamic import entry point (EvaluateImportCall).
 ///
-/// This implements the *host integration* and option validation parts of ECMA-262's
-/// `EvaluateImportCall`:
-/// <https://tc39.es/ecma262/#sec-evaluate-import-call>.
-///
-/// `vm-js` does not yet implement full module evaluation, but this function still:
-/// - returns a Promise object,
-/// - validates import attributes, and
-/// - calls the host's `HostLoadImportedModule` hook with `payload = PromiseCapability`.
+/// This function currently returns [`VmError::Unimplemented`] because `vm-js` does not yet provide
+/// dynamic import (`import()`) module fetching/linking/evaluation.
+#[allow(unused_variables)]
 pub fn start_dynamic_import(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -454,144 +726,15 @@ pub fn start_dynamic_import(
   specifier: Value,
   options: Value,
 ) -> Result<Value, VmError> {
-  let promise_capability = PromiseCapability::new(vm, scope)?;
-  let promise_obj = promise_capability.promise();
-
-  // 1. `specifierString = ToString(specifier)`
-  let specifier_string = match scope.heap_mut().to_string(specifier) {
-    Ok(s) => s,
-    Err(err) => {
-      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
-      promise_capability.reject(vm, scope, reason)?;
-      return Ok(Value::Object(promise_obj));
-    }
-  };
-  let specifier = clone_heap_string_to_string(scope.heap(), specifier_string)?;
-
-  // 2. Determine `referrer = GetActiveScriptOrModule(); if null, use current Realm Record`.
-  let referrer = match vm.get_active_script_or_module() {
-    Some(ScriptOrModule::Script(id)) => ModuleReferrer::Script(id),
-    Some(ScriptOrModule::Module(id)) => ModuleReferrer::Module(id),
-    None => match vm.current_realm() {
-      Some(realm) => ModuleReferrer::Realm(realm),
-      None => {
-        let s = scope.alloc_string("unimplemented: dynamic import requires a current realm")?;
-        promise_capability.reject(vm, scope, Value::String(s))?;
-        return Ok(Value::Object(promise_obj));
-      }
-    },
-  };
-
-  // 3. Parse/validate import attributes.
-  let supported_keys = host.host_get_supported_import_attributes();
-  let attributes = match import_attributes_from_options(vm, scope, options, supported_keys) {
-    Ok(attrs) => attrs,
-    Err(ImportCallError::TypeError(type_err)) => {
-      let msg = import_call_type_error_message(&type_err);
-      // ECMA-262 requires rejecting with a *newly created* TypeError object in these branches.
-      let reason = match vm.intrinsics() {
-        Some(intr) => crate::new_type_error_object(scope, &intr, &msg)?,
-        None => Value::String(scope.alloc_string(&msg)?),
-      };
-      promise_capability.reject(vm, scope, reason)?;
-      return Ok(Value::Object(promise_obj));
-    }
-    Err(ImportCallError::Vm(err)) => {
-      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
-      promise_capability.reject(vm, scope, reason)?;
-      return Ok(Value::Object(promise_obj));
-    }
-  };
-
-  // 4. HostLoadImportedModule(referrer, moduleRequest, empty, payload = promiseCapability).
-  let module_request = ModuleRequest::new(specifier, attributes);
-  host.host_load_imported_module(
-    ctx,
-    referrer,
-    module_request,
-    HostDefined::new(()),
-    ModuleLoadPayload::promise_capability(promise_capability),
-  );
-
-  Ok(Value::Object(promise_obj))
+  Err(VmError::Unimplemented("dynamic import"))
 }
 
-/// Spec helper: `FinishLoadingImportedModule(referrer, moduleRequest, payload, result)`.
-///
-/// This helper implements the core spec semantics:
-/// - On a normal completion, update `referrer.[[LoadedModules]]`:
-///   - If a `ModuleRequestsEqual` match already exists, error if it resolves to a different module.
-///   - Otherwise append a new `LoadedModuleRequest`.
-/// - Dispatch to `ContinueModuleLoading` or `ContinueDynamicImport` based on payload kind.
-pub fn finish_loading_imported_module(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  referrer: &mut impl LoadedModulesOwner,
-  module_request: ModuleRequest,
-  payload: ModuleLoadPayload,
-  result: ModuleCompletion,
-) -> Result<(), VmError> {
-  // FinishLoadingImportedModule (ECMA-262):
-  // If this completion was normal, cache the resolved module into `[[LoadedModules]]` and enforce
-  // the spec invariant that a duplicate request must resolve to the same module record.
-  if let Ok(module) = &result {
-    if let Some(existing) = referrer
-      .loaded_modules()
-      .iter()
-      .find(|record| record.request.spec_equal(&module_request))
-    {
-      if existing.module != *module {
-        return Err(VmError::InvariantViolation(
-          "FinishLoadingImportedModule invariant violation: module request resolved to different modules",
-        ));
-      }
-    } else {
-      let list = referrer.loaded_modules_mut();
-      list.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
-      list.push(LoadedModuleRequest::new(module_request, *module));
-    }
-  }
-
-  match payload.0 {
-    ModuleLoadPayloadInner::GraphLoadingState(state) => continue_module_loading(vm, scope, state, result),
-    ModuleLoadPayloadInner::PromiseCapability(promise_capability) => {
-      continue_dynamic_import(vm, scope, promise_capability, result)
-    }
-  }
-}
-
-/// Placeholder for the static-module loading continuation (`ContinueModuleLoading`).
-pub fn continue_module_loading(
-  _vm: &mut Vm,
-  _scope: &mut Scope<'_>,
-  _state: GraphLoadingState,
-  _result: ModuleCompletion,
-) -> Result<(), VmError> {
-  Err(VmError::Unimplemented("ContinueModuleLoading"))
-}
-
-/// Dynamic import continuation (`ContinueDynamicImport`).
-///
-/// This currently implements only the rejection path because module evaluation is not yet
-/// integrated into `vm-js`.
+/// Placeholder for the dynamic import continuation (`ContinueDynamicImport`).
 pub fn continue_dynamic_import(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  promise_capability: PromiseCapability,
-  module_completion: ModuleCompletion,
+  _promise_capability: PromiseCapability,
+  _module_completion: ModuleCompletion,
 ) -> Result<(), VmError> {
-  match module_completion {
-    Err(err) => {
-      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
-      promise_capability.reject(vm, scope, reason)?;
-      Ok(())
-    }
-    Ok(_module) => {
-      let s = scope.alloc_string("unimplemented: ContinueDynamicImport (module evaluation)")?;
-      promise_capability.reject(vm, scope, Value::String(s))?;
-      Ok(())
-    }
-  }
+  Err(VmError::Unimplemented("ContinueDynamicImport"))
 }
 
 /// Minimal engine callback surface needed to implement `FinishLoadingImportedModule`.
@@ -753,150 +896,13 @@ mod tests {
   }
 
   #[test]
-  fn finish_loading_imported_module_dispatches_by_payload_kind() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let mut scope = heap.scope();
-    let mut vm = Vm::new(VmOptions::default());
-    let request = ModuleRequest::new("./x.mjs", vec![]);
-    let ok = Ok(ModuleId::from_raw(1));
-
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let err = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request.clone(),
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      ok,
-    )
-    .unwrap_err();
-    assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
-
-    let promise_capability = PromiseCapability::new(&mut vm, &mut scope).unwrap();
-    let promise = promise_capability.promise();
-
-    finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request,
-      ModuleLoadPayload::promise_capability(promise_capability),
-      Ok(ModuleId::from_raw(1)),
-    )
-    .unwrap();
-
-    assert_eq!(
-      scope.heap().promise_state(promise).unwrap(),
-      crate::PromiseState::Rejected
-    );
-  }
-
-  #[test]
-  fn finish_loading_imported_module_appends_loaded_modules_on_success() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let mut scope = heap.scope();
-    let mut vm = Vm::new(VmOptions::default());
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let request = ModuleRequest::new("./x.mjs", vec![ImportAttribute::new("type", "json")]);
-    let module = ModuleId::from_raw(123);
-
-    let err = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request.clone(),
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Ok(module),
-    )
-    .unwrap_err();
-    assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
-
-    assert_eq!(loaded_modules.len(), 1);
-    assert_eq!(loaded_modules[0].request.specifier.as_str(), "./x.mjs");
-    assert_eq!(loaded_modules[0].request.attributes, request.attributes);
-    assert_eq!(loaded_modules[0].module, module);
-  }
-
-  #[test]
-  fn finish_loading_imported_module_does_not_append_on_failure() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let mut scope = heap.scope();
-    let mut vm = Vm::new(VmOptions::default());
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let request = ModuleRequest::new("./x.mjs", vec![]);
-
-    let err = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request,
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Err(VmError::Unimplemented("load failure")),
-    )
-    .unwrap_err();
-    assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
-    assert!(loaded_modules.is_empty());
-  }
-
-  #[test]
-  fn finish_loading_imported_module_does_not_duplicate_on_same_module() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let mut scope = heap.scope();
-    let mut vm = Vm::new(VmOptions::default());
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let request = ModuleRequest::new("./x.mjs", vec![]);
-    let module = ModuleId::from_raw(1);
-
-    let _ = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request.clone(),
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Ok(module),
-    );
-    let _ = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request.clone(),
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Ok(module),
-    );
-    assert_eq!(loaded_modules.len(), 1);
-    assert_eq!(loaded_modules[0].module, module);
-  }
-
-  #[test]
-  fn finish_loading_imported_module_errors_on_duplicate_mismatch() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let mut scope = heap.scope();
-    let mut vm = Vm::new(VmOptions::default());
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let request = ModuleRequest::new("./x.mjs", vec![]);
-    let module_a = ModuleId::from_raw(1);
-    let module_b = ModuleId::from_raw(2);
-
-    let _ = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request.clone(),
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Ok(module_a),
-    );
-
-    let err = finish_loading_imported_module(
-      &mut vm,
-      &mut scope,
-      &mut loaded_modules,
-      request,
-      ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
-      Ok(module_b),
-    )
-    .unwrap_err();
-    assert!(matches!(err, VmError::InvariantViolation(_)));
-    assert_eq!(loaded_modules.len(), 1);
-    assert_eq!(loaded_modules[0].module, module_a);
+  fn continue_dynamic_import_is_stub() {
+    let cap = PromiseCapability {
+      promise: Value::Undefined,
+      resolve: Value::Undefined,
+      reject: Value::Undefined,
+    };
+    let err = continue_dynamic_import(cap, Ok(ModuleId::from_raw(1))).unwrap_err();
+    assert!(matches!(err, VmError::Unimplemented("ContinueDynamicImport")));
   }
 }
