@@ -1,11 +1,14 @@
 use crate::error::Termination;
 use crate::error::TerminationReason;
 use crate::error::VmError;
+use crate::execution_context::ExecutionContext;
+use crate::execution_context::ScriptOrModule;
 use crate::function::NativeConstructId;
 use crate::function::NativeFunctionId;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
+use crate::RealmId;
 use crate::Scope;
 use crate::Value;
 use std::sync::atomic::AtomicBool;
@@ -94,6 +97,7 @@ pub struct Vm {
   interrupt_handle: InterruptHandle,
   budget: BudgetState,
   stack: Vec<StackFrame>,
+  execution_context_stack: Vec<ExecutionContext>,
   native_calls: Vec<NativeCall>,
   native_constructs: Vec<NativeConstruct>,
 }
@@ -128,6 +132,53 @@ impl Drop for BudgetGuard<'_> {
   }
 }
 
+/// RAII helper that pushes an [`ExecutionContext`] on creation and pops it on drop.
+///
+/// This is intended to prevent mismatched `push_execution_context` / `pop_execution_context`
+/// sequences when running nested evaluator/host work.
+#[derive(Debug)]
+pub struct ExecutionContextGuard<'vm> {
+  vm: &'vm mut Vm,
+  expected_len: usize,
+}
+
+impl<'vm> ExecutionContextGuard<'vm> {
+  fn new(vm: &'vm mut Vm, ctx: ExecutionContext) -> Self {
+    vm.push_execution_context(ctx);
+    let expected_len = vm.execution_context_stack.len();
+    Self { vm, expected_len }
+  }
+}
+
+impl ops::Deref for ExecutionContextGuard<'_> {
+  type Target = Vm;
+
+  fn deref(&self) -> &Self::Target {
+    &*self.vm
+  }
+}
+
+impl ops::DerefMut for ExecutionContextGuard<'_> {
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    &mut *self.vm
+  }
+}
+
+impl Drop for ExecutionContextGuard<'_> {
+  fn drop(&mut self) {
+    debug_assert_eq!(
+      self.vm.execution_context_stack.len(),
+      self.expected_len,
+      "ExecutionContextGuard dropped after stack length changed (did you manually pop?)"
+    );
+    let popped = self.vm.pop_execution_context();
+    debug_assert!(
+      popped.is_some(),
+      "ExecutionContextGuard dropped with empty execution context stack"
+    );
+  }
+}
+
 impl Vm {
   pub fn new(options: VmOptions) -> Self {
     let (interrupt, interrupt_handle) = match &options.interrupt_flag {
@@ -142,6 +193,7 @@ impl Vm {
       // Placeholder; immediately overwritten by `reset_budget_to_default`.
       budget: BudgetState::new(Budget::unlimited(check_time_every)),
       stack: Vec::new(),
+      execution_context_stack: Vec::new(),
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
     };
@@ -245,6 +297,48 @@ impl Vm {
 
   pub fn capture_stack(&self) -> Vec<StackFrame> {
     self.stack.clone()
+  }
+
+  /// Pushes an [`ExecutionContext`] onto the execution context stack.
+  pub fn push_execution_context(&mut self, ctx: ExecutionContext) {
+    self.execution_context_stack.push(ctx);
+  }
+
+  /// Pops the top [`ExecutionContext`] from the execution context stack.
+  pub fn pop_execution_context(&mut self) -> Option<ExecutionContext> {
+    self.execution_context_stack.pop()
+  }
+
+  /// Pushes an [`ExecutionContext`] and returns an RAII guard that will pop it on drop.
+  pub fn execution_context_guard(&mut self, ctx: ExecutionContext) -> ExecutionContextGuard<'_> {
+    ExecutionContextGuard::new(self, ctx)
+  }
+
+  /// Returns the active script or module, if any.
+  ///
+  /// This implements ECMA-262's
+  /// [`GetActiveScriptOrModule`](https://tc39.es/ecma262/#sec-getactivescriptormodule) abstract
+  /// operation.
+  ///
+  /// FastRender also vendors an offline copy of the spec at:
+  /// [`specs/tc39-ecma262/spec.html#sec-getactivescriptormodule`](specs/tc39-ecma262/spec.html#sec-getactivescriptormodule)
+  ///
+  /// The scan skips execution contexts whose `script_or_module` is `None` (for example, host work
+  /// such as Promise jobs or embedder callbacks).
+  ///
+  /// This will be used by module features such as `import.meta` and dynamic `import()` once the
+  /// module system is implemented.
+  pub fn get_active_script_or_module(&self) -> Option<ScriptOrModule> {
+    self
+      .execution_context_stack
+      .iter()
+      .rev()
+      .find_map(|ctx| ctx.script_or_module)
+  }
+
+  /// Returns the realm of the currently-running execution context, if any.
+  pub fn current_realm(&self) -> Option<RealmId> {
+    self.execution_context_stack.last().map(|ctx| ctx.realm)
   }
 
   fn terminate(&self, reason: TerminationReason) -> VmError {
