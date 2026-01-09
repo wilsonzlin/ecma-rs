@@ -15,6 +15,14 @@ pub enum VmError {
   #[error("invalid handle")]
   InvalidHandle,
 
+  /// An attempted prototype mutation would introduce a cycle in the `[[Prototype]]` chain.
+  #[error("prototype cycle")]
+  PrototypeCycle,
+
+  /// A prototype chain traversal exceeded a hard upper bound.
+  #[error("prototype chain too deep")]
+  PrototypeChainTooDeep,
+
   /// A stubbed/unfinished codepath.
   #[error("unimplemented: {0}")]
   Unimplemented(&'static str),

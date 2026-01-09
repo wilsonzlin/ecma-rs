@@ -39,6 +39,10 @@ pub(crate) enum ConstructHandler {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) struct JsFunction {
+  /// `[[Prototype]]` internal slot (functions are ordinary objects).
+  pub(crate) prototype: Option<GcObject>,
+  /// `[[Extensible]]` internal slot.
+  pub(crate) extensible: bool,
   /// The function's `[[Call]]` internal method.
   pub(crate) call: CallHandler,
   /// The function's `[[Construct]]` internal method (if present).
@@ -67,6 +71,8 @@ impl JsFunction {
     length: u32,
   ) -> Self {
     Self {
+      prototype: None,
+      extensible: true,
       call: CallHandler::Native(call),
       construct: construct.map(ConstructHandler::Native),
       name,
@@ -80,6 +86,7 @@ impl JsFunction {
     }
   }
 
+  #[allow(dead_code)]
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
     Self::heap_size_bytes_for_bound_args_len_and_property_count(bound_args_len, self.properties.len())
@@ -104,6 +111,9 @@ impl JsFunction {
 
 impl Trace for JsFunction {
   fn trace(&self, tracer: &mut Tracer<'_>) {
+    if let Some(proto) = self.prototype {
+      tracer.trace_value(Value::Object(proto));
+    }
     tracer.trace_value(Value::String(self.name));
     for prop in self.properties.iter() {
       prop.trace(tracer);

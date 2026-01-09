@@ -5,7 +5,13 @@ use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
+/// Hard upper bound for `[[Prototype]]` chain traversals.
+///
+/// This is a DoS resistance measure. Even though `object_set_prototype` prevents cycles,
+/// embeddings (or unsafe internal helpers) can violate invariants.
+pub const MAX_PROTOTYPE_CHAIN: usize = 10_000;
 
 /// Heap configuration and memory limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -438,6 +444,7 @@ impl Heap {
     }
   }
 
+  #[allow(dead_code)]
   fn get_object_mut(&mut self, obj: GcObject) -> Result<&mut JsObject, VmError> {
     match self.get_heap_object_mut(obj.0)? {
       HeapObject::Object(o) => Ok(o),
@@ -461,7 +468,11 @@ impl Heap {
 
   /// Gets an object's `[[Prototype]]`.
   pub fn object_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
-    Ok(self.get_object(obj)?.prototype)
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Object(o) => Ok(o.prototype),
+      HeapObject::Function(f) => Ok(f.prototype),
+      _ => Err(VmError::InvalidHandle),
+    }
   }
 
   /// Sets an object's `[[Prototype]]`.
@@ -470,12 +481,77 @@ impl Heap {
     obj: GcObject,
     prototype: Option<GcObject>,
   ) -> Result<(), VmError> {
-    self.get_object_mut(obj)?.prototype = prototype;
+    // Validate `obj` early so we don't silently accept stale handles.
+    let _ = self.object_prototype(obj)?;
+
+    // Direct self-cycle.
+    if prototype == Some(obj) {
+      return Err(VmError::PrototypeCycle);
+    }
+
+    // Reject indirect cycles by walking `prototype`'s chain and checking whether it contains `obj`.
+    //
+    // Also guard against hostile chains (very deep or cyclic) even if an invariant was violated.
+    let mut current = prototype;
+    let mut steps = 0usize;
+    let mut visited: HashSet<GcObject> = HashSet::new();
+    while let Some(p) = current {
+      if steps >= MAX_PROTOTYPE_CHAIN {
+        return Err(VmError::PrototypeChainTooDeep);
+      }
+      steps += 1;
+
+      if !visited.insert(p) {
+        return Err(VmError::PrototypeCycle);
+      }
+      if p == obj {
+        return Err(VmError::PrototypeCycle);
+      }
+
+      current = self.object_prototype(p)?;
+    }
+
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Object(o) => {
+        o.prototype = prototype;
+      }
+      HeapObject::Function(f) => {
+        f.prototype = prototype;
+      }
+      _ => return Err(VmError::InvalidHandle),
+    }
+    Ok(())
+  }
+
+  /// Forcefully sets an object's `[[Prototype]]` without cycle checks.
+  ///
+  /// # Safety
+  ///
+  /// This can violate VM invariants (create prototype cycles, etc). Intended for low-level host
+  /// embeddings and tests.
+  pub unsafe fn object_set_prototype_unchecked(
+    &mut self,
+    obj: GcObject,
+    prototype: Option<GcObject>,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Object(o) => {
+        o.prototype = prototype;
+      }
+      HeapObject::Function(f) => {
+        f.prototype = prototype;
+      }
+      _ => return Err(VmError::InvalidHandle),
+    }
     Ok(())
   }
 
   pub(crate) fn object_is_extensible(&self, obj: GcObject) -> Result<bool, VmError> {
-    Ok(self.get_object(obj)?.extensible)
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Object(o) => Ok(o.extensible),
+      HeapObject::Function(f) => Ok(f.extensible),
+      _ => Err(VmError::InvalidHandle),
+    }
   }
 
   pub(crate) fn object_set_extensible(
@@ -483,7 +559,11 @@ impl Heap {
     obj: GcObject,
     extensible: bool,
   ) -> Result<(), VmError> {
-    self.get_object_mut(obj)?.extensible = extensible;
+    match self.get_heap_object_mut(obj.0)? {
+      HeapObject::Object(o) => o.extensible = extensible,
+      HeapObject::Function(f) => f.extensible = extensible,
+      _ => return Err(VmError::InvalidHandle),
+    }
     Ok(())
   }
 
@@ -493,13 +573,25 @@ impl Heap {
     obj: GcObject,
     key: &PropertyKey,
   ) -> Result<Option<PropertyDescriptor>, VmError> {
-    let obj = self.get_object(obj)?;
-    for prop in obj.properties.iter() {
-      if self.property_key_eq(&prop.key, key) {
-        return Ok(Some(prop.desc));
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Object(obj) => {
+        for prop in obj.properties.iter() {
+          if self.property_key_eq(&prop.key, key) {
+            return Ok(Some(prop.desc));
+          }
+        }
+        Ok(None)
       }
+      HeapObject::Function(func) => {
+        for prop in func.properties.iter() {
+          if self.property_key_eq(&prop.key, key) {
+            return Ok(Some(prop.desc));
+          }
+        }
+        Ok(None)
+      }
+      _ => Err(VmError::InvalidHandle),
     }
-    Ok(None)
   }
 
   pub(crate) fn object_delete_own_property(
@@ -616,31 +708,53 @@ impl Heap {
     key: &PropertyKey,
     value: Value,
   ) -> Result<(), VmError> {
-    // Two-phase borrow to avoid holding `&mut JsObject` while calling back into `&self` for string
-    // comparisons in `property_key_eq`.
-    let idx = {
-      let obj = self.get_object(obj)?;
-      obj
+    // Two-phase borrow to avoid holding `&mut HeapObject` while calling back into `&self` for
+    // string comparisons in `property_key_eq`.
+    let idx = match self.get_heap_object(obj.0)? {
+      HeapObject::Object(obj) => obj
         .properties
         .iter()
-        .position(|prop| self.property_key_eq(&prop.key, key))
+        .position(|prop| self.property_key_eq(&prop.key, key)),
+      HeapObject::Function(func) => func
+        .properties
+        .iter()
+        .position(|prop| self.property_key_eq(&prop.key, key)),
+      _ => return Err(VmError::InvalidHandle),
     };
 
     let Some(idx) = idx else {
       return Err(VmError::PropertyNotFound);
     };
 
-    let obj = self.get_object_mut(obj)?;
-    let prop = obj
-      .properties
-      .get_mut(idx)
-      .expect("idx came from iterating properties");
-    match &mut prop.desc.kind {
-      PropertyKind::Data { value: slot, .. } => {
-        *slot = value;
-        Ok(())
+    let obj = self.get_heap_object_mut(obj.0)?;
+    match obj {
+      HeapObject::Object(obj) => {
+        let prop = obj
+          .properties
+          .get_mut(idx)
+          .expect("idx came from iterating properties");
+        match &mut prop.desc.kind {
+          PropertyKind::Data { value: slot, .. } => {
+            *slot = value;
+            Ok(())
+          }
+          PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+        }
       }
-      PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+      HeapObject::Function(func) => {
+        let prop = func
+          .properties
+          .get_mut(idx)
+          .expect("idx came from iterating properties");
+        match &mut prop.desc.kind {
+          PropertyKind::Data { value: slot, .. } => {
+            *slot = value;
+            Ok(())
+          }
+          PropertyKind::Accessor { .. } => Err(VmError::PropertyNotData),
+        }
+      }
+      _ => Err(VmError::InvalidHandle),
     }
   }
 
@@ -690,6 +804,131 @@ impl Heap {
     } else {
       Err(VmError::TypeError("CreateDataProperty rejected"))
     }
+  }
+
+  /// Gets a property descriptor from `obj` or its prototype chain.
+  pub fn get_property(
+    &self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<Option<PropertyDescriptor>, VmError> {
+    let mut current = Some(obj);
+    let mut steps = 0usize;
+    let mut visited: HashSet<GcObject> = HashSet::new();
+
+    while let Some(obj) = current {
+      if steps >= MAX_PROTOTYPE_CHAIN {
+        return Err(VmError::PrototypeChainTooDeep);
+      }
+      steps += 1;
+
+      if !visited.insert(obj) {
+        return Err(VmError::PrototypeCycle);
+      }
+
+      if let Some(desc) = self.object_get_own_property(obj, key)? {
+        return Ok(Some(desc));
+      }
+
+      current = self.object_prototype(obj)?;
+    }
+
+    Ok(None)
+  }
+
+  /// Returns whether a property exists on `obj` or its prototype chain.
+  pub fn has_property(&self, obj: GcObject, key: &PropertyKey) -> Result<bool, VmError> {
+    Ok(self.get_property(obj, key)?.is_some())
+  }
+
+  /// Implements a minimal `[[Get]]` internal method for objects.
+  ///
+  /// This is currently limited to data properties (sufficient for WebIDL sequence/record
+  /// conversions and early scaffolding). Accessor properties return
+  /// [`VmError::Unimplemented`], except that an accessor with an `undefined` getter returns
+  /// `undefined`.
+  pub fn get(&self, obj: GcObject, key: &PropertyKey) -> Result<Value, VmError> {
+    let Some(desc) = self.get_property(obj, key)? else {
+      return Ok(Value::Undefined);
+    };
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(value),
+      PropertyKind::Accessor { get, .. } => {
+        if matches!(get, Value::Undefined) {
+          Ok(Value::Undefined)
+        } else {
+          Err(VmError::Unimplemented(
+            "Heap::get accessor properties require a VM to call getters",
+          ))
+        }
+      }
+    }
+  }
+
+  /// Implements the `OwnPropertyKeys` internal method (ECMA-262) for ordinary objects.
+  ///
+  /// This orders keys as:
+  /// 1. array index keys, in ascending numeric order,
+  /// 2. other string keys, in insertion order,
+  /// 3. symbol keys, in insertion order.
+  pub fn own_property_keys(&self, obj: GcObject) -> Result<Vec<PropertyKey>, VmError> {
+    let props: &[PropertyEntry] = match self.get_heap_object(obj.0)? {
+      HeapObject::Object(obj) => &obj.properties,
+      HeapObject::Function(func) => &func.properties,
+      _ => return Err(VmError::InvalidHandle),
+    };
+
+    let mut array_keys: Vec<(u32, PropertyKey)> = Vec::new();
+    let mut string_keys: Vec<PropertyKey> = Vec::new();
+    let mut symbol_keys: Vec<PropertyKey> = Vec::new();
+
+    for prop in props.iter() {
+      match prop.key {
+        PropertyKey::String(s) => {
+          if let Some(idx) = self.string_to_array_index(s) {
+            array_keys.push((idx, prop.key));
+          } else {
+            string_keys.push(prop.key);
+          }
+        }
+        PropertyKey::Symbol(_) => symbol_keys.push(prop.key),
+      }
+    }
+
+    array_keys.sort_by_key(|(idx, _)| *idx);
+
+    let mut out = Vec::with_capacity(array_keys.len() + string_keys.len() + symbol_keys.len());
+    out.extend(array_keys.into_iter().map(|(_, k)| k));
+    out.extend(string_keys);
+    out.extend(symbol_keys);
+    Ok(out)
+  }
+
+  fn string_to_array_index(&self, s: GcString) -> Option<u32> {
+    let js = self.get_string(s).ok()?;
+    let units = js.as_code_units();
+    if units.is_empty() {
+      return None;
+    }
+    if units.len() > 1 && units[0] == b'0' as u16 {
+      return None;
+    }
+    let mut n: u64 = 0;
+    for &u in units {
+      if !(b'0' as u16..=b'9' as u16).contains(&u) {
+        return None;
+      }
+      n = n.checked_mul(10)?;
+      n = n.checked_add((u - b'0' as u16) as u64)?;
+      if n > u32::MAX as u64 {
+        return None;
+      }
+    }
+    // Array index is uint32 < 2^32 - 1.
+    if n == u32::MAX as u64 {
+      return None;
+    }
+    Some(n as u32)
   }
 
   /// Implements `Symbol.for`-like behaviour using a deterministic global registry.

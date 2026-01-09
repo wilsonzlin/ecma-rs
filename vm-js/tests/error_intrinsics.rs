@@ -1,6 +1,7 @@
-use vm_js::{GcObject, Heap, HeapLimits, PropertyKey, Realm, Value, VmError};
+use vm_js::{GcObject, Heap, HeapLimits, PropertyKey, Realm, Value, Vm, VmError, VmOptions};
 
 struct TestRealm {
+  _vm: Vm,
   heap: Heap,
   realm: Realm,
 }
@@ -8,8 +9,9 @@ struct TestRealm {
 impl TestRealm {
   fn new(limits: HeapLimits) -> Result<Self, VmError> {
     let mut heap = Heap::new(limits);
-    let realm = Realm::new(&mut heap)?;
-    Ok(Self { heap, realm })
+    let mut vm = Vm::new(VmOptions::default());
+    let realm = Realm::new(&mut vm, &mut heap)?;
+    Ok(Self { _vm: vm, heap, realm })
   }
 }
 
@@ -122,4 +124,3 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
 
   Ok(())
 }
-

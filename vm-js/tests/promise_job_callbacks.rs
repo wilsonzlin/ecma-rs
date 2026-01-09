@@ -6,6 +6,7 @@ use vm_js::Heap;
 use vm_js::HeapLimits;
 use vm_js::Job;
 use vm_js::JobCallback;
+use vm_js::RootId;
 use vm_js::Scope;
 use vm_js::Value;
 use vm_js::Vm;
@@ -81,7 +82,28 @@ impl VmHostHooks for TestHost {
 #[derive(Default)]
 struct TestContext;
 
-impl VmJobContext for TestContext {}
+impl VmJobContext for TestContext {
+  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("TestContext::call"))
+  }
+
+  fn construct(
+    &mut self,
+    _callee: Value,
+    _args: &[Value],
+    _new_target: Value,
+  ) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("TestContext::construct"))
+  }
+
+  fn add_root(&mut self, _value: Value) -> RootId {
+    panic!("TestContext::add_root should not be called in this test")
+  }
+
+  fn remove_root(&mut self, _id: RootId) {
+    panic!("TestContext::remove_root should not be called in this test")
+  }
+}
 
 #[test]
 fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {

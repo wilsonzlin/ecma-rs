@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, GcSymbol, RootId, Scope, Value, VmError};
+use crate::{builtins, GcObject, GcSymbol, RootId, Scope, Value, Vm, VmError};
 
 /// ECMAScript well-known symbols (ECMA-262 "Well-known Symbols" table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -30,6 +30,9 @@ pub struct Intrinsics {
   object_prototype: GcObject,
   function_prototype: GcObject,
   array_prototype: GcObject,
+  object_constructor: GcObject,
+  function_constructor: GcObject,
+  array_constructor: GcObject,
 
   error: GcObject,
   error_prototype: GcObject,
@@ -79,6 +82,19 @@ fn alloc_rooted_object(
   Ok(obj)
 }
 
+fn alloc_rooted_native_function(
+  scope: &mut Scope<'_>,
+  roots: &mut Vec<RootId>,
+  call: crate::NativeFunctionId,
+  construct: Option<crate::NativeConstructId>,
+  name: crate::GcString,
+  length: u32,
+) -> Result<GcObject, VmError> {
+  let func = scope.alloc_native_function(call, construct, name, length)?;
+  roots.push(scope.heap_mut().add_root(Value::Object(func)));
+  Ok(func)
+}
+
 fn alloc_rooted_symbol(
   scope: &mut Scope<'_>,
   roots: &mut Vec<RootId>,
@@ -91,11 +107,14 @@ fn alloc_rooted_symbol(
 }
 
 fn init_native_error(
+  _vm: &mut Vm,
   scope: &mut Scope<'_>,
   roots: &mut Vec<RootId>,
   common: CommonKeys,
   function_prototype: GcObject,
   base_prototype: GcObject,
+  call: crate::NativeFunctionId,
+  construct: crate::NativeConstructId,
   name: &str,
   length: f64,
 ) -> Result<(GcObject, GcObject), VmError> {
@@ -106,14 +125,21 @@ fn init_native_error(
     .object_set_prototype(prototype, Some(base_prototype))?;
 
   // `%X%`
-  let constructor = alloc_rooted_object(scope, roots)?;
-  scope
-    .heap_mut()
-    .object_set_prototype(constructor, Some(function_prototype))?;
-
   // Create (and store) the name string early so it is kept alive by the rooted objects before any
   // subsequent allocations/GC.
   let name_string = scope.alloc_string(name)?;
+
+  let constructor = alloc_rooted_native_function(
+    scope,
+    roots,
+    call,
+    Some(construct),
+    name_string,
+    length as u32,
+  )?;
+  scope
+    .heap_mut()
+    .object_set_prototype(constructor, Some(function_prototype))?;
 
   // X.prototype.constructor
   scope.define_property(
@@ -151,13 +177,26 @@ fn init_native_error(
 }
 
 impl Intrinsics {
-  pub(crate) fn init(scope: &mut Scope<'_>, roots: &mut Vec<RootId>) -> Result<Self, VmError> {
+  pub(crate) fn init(
+    vm: &mut Vm,
+    scope: &mut Scope<'_>,
+    roots: &mut Vec<RootId>,
+  ) -> Result<Self, VmError> {
     let well_known_symbols = WellKnownSymbols::init(scope, roots)?;
 
     // --- Base prototypes ---
     let object_prototype = alloc_rooted_object(scope, roots)?;
 
-    let function_prototype = alloc_rooted_object(scope, roots)?;
+    let function_prototype_call = vm.register_native_call(builtins::function_prototype_call);
+    let function_prototype_name = scope.alloc_string("Function")?;
+    let function_prototype = alloc_rooted_native_function(
+      scope,
+      roots,
+      function_prototype_call,
+      None,
+      function_prototype_name,
+      0,
+    )?;
     scope
       .heap_mut()
       .object_set_prototype(function_prototype, Some(object_prototype))?;
@@ -187,83 +226,218 @@ impl Intrinsics {
       length: PropertyKey::from_string(length_key_s),
     };
 
+    // --- Baseline constructors ---
+    // `%Object%`
+    let object_call = vm.register_native_call(builtins::object_constructor_call);
+    let object_construct = vm.register_native_construct(builtins::object_constructor_construct);
+    let object_name = scope.alloc_string("Object")?;
+    let object_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      object_call,
+      Some(object_construct),
+      object_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(object_constructor, Some(function_prototype))?;
+    scope.define_property(
+      object_constructor,
+      common.prototype,
+      data_desc(Value::Object(object_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      object_constructor,
+      common.name,
+      data_desc(Value::String(object_name), false, false, true),
+    )?;
+    scope.define_property(
+      object_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      object_prototype,
+      common.constructor,
+      data_desc(Value::Object(object_constructor), true, false, true),
+    )?;
+
+    // `%Function%`
+    let function_call = vm.register_native_call(builtins::function_constructor_call);
+    let function_construct = vm.register_native_construct(builtins::function_constructor_construct);
+    let function_name = scope.alloc_string("Function")?;
+    let function_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      function_call,
+      Some(function_construct),
+      function_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(function_constructor, Some(function_prototype))?;
+    scope.define_property(
+      function_constructor,
+      common.prototype,
+      data_desc(Value::Object(function_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      function_constructor,
+      common.name,
+      data_desc(Value::String(function_name), false, false, true),
+    )?;
+    scope.define_property(
+      function_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      function_prototype,
+      common.constructor,
+      data_desc(Value::Object(function_constructor), true, false, true),
+    )?;
+
+    // `%Array%`
+    let array_call = vm.register_native_call(builtins::array_constructor_call);
+    let array_construct = vm.register_native_construct(builtins::array_constructor_construct);
+    let array_name = scope.alloc_string("Array")?;
+    let array_constructor = alloc_rooted_native_function(
+      scope,
+      roots,
+      array_call,
+      Some(array_construct),
+      array_name,
+      1,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(array_constructor, Some(function_prototype))?;
+    scope.define_property(
+      array_constructor,
+      common.prototype,
+      data_desc(Value::Object(array_prototype), false, false, false),
+    )?;
+    scope.define_property(
+      array_constructor,
+      common.name,
+      data_desc(Value::String(array_name), false, false, true),
+    )?;
+    scope.define_property(
+      array_constructor,
+      common.length,
+      data_desc(Value::Number(1.0), false, false, true),
+    )?;
+    scope.define_property(
+      array_prototype,
+      common.constructor,
+      data_desc(Value::Object(array_constructor), true, false, true),
+    )?;
+
     // --- Error + subclasses ---
+    let error_call = vm.register_native_call(builtins::error_constructor_call);
+    let error_construct = vm.register_native_construct(builtins::error_constructor_construct);
     let (error, error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       object_prototype,
+      error_call,
+      error_construct,
       "Error",
       1.0,
     )?;
 
     let (type_error, type_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "TypeError",
       1.0,
     )?;
 
     let (range_error, range_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "RangeError",
       1.0,
     )?;
 
     let (reference_error, reference_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "ReferenceError",
       1.0,
     )?;
 
     let (syntax_error, syntax_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "SyntaxError",
       1.0,
     )?;
 
     let (eval_error, eval_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "EvalError",
       1.0,
     )?;
 
     let (uri_error, uri_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "URIError",
       1.0,
     )?;
 
     let (aggregate_error, aggregate_error_prototype) = init_native_error(
+      vm,
       scope,
       roots,
       common,
       function_prototype,
       error_prototype,
+      error_call,
+      error_construct,
       "AggregateError",
       2.0,
     )?;
@@ -272,6 +446,9 @@ impl Intrinsics {
       object_prototype,
       function_prototype,
       array_prototype,
+      object_constructor,
+      function_constructor,
+      array_constructor,
       error,
       error_prototype,
       type_error,
@@ -304,6 +481,18 @@ impl Intrinsics {
 
   pub fn array_prototype(&self) -> GcObject {
     self.array_prototype
+  }
+
+  pub fn object_constructor(&self) -> GcObject {
+    self.object_constructor
+  }
+
+  pub fn function_constructor(&self) -> GcObject {
+    self.function_constructor
+  }
+
+  pub fn array_constructor(&self) -> GcObject {
+    self.array_constructor
   }
 
   pub fn error(&self) -> GcObject {

@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Heap, Intrinsics, RootId, Value, VmError, WellKnownSymbols};
+use crate::{GcObject, Heap, Intrinsics, RootId, Value, Vm, VmError, WellKnownSymbols};
 
 /// An ECMAScript realm: global object + intrinsics.
 ///
@@ -28,7 +28,7 @@ fn global_data_desc(value: Value) -> PropertyDescriptor {
 
 impl Realm {
   /// Creates a new realm on `heap`.
-  pub fn new(heap: &mut Heap) -> Result<Self, VmError> {
+  pub fn new(vm: &mut Vm, heap: &mut Heap) -> Result<Self, VmError> {
     let mut roots = Vec::new();
 
     let mut scope = heap.scope();
@@ -36,7 +36,7 @@ impl Realm {
     scope.push_root(Value::Object(global_object));
     roots.push(scope.heap_mut().add_root(Value::Object(global_object)));
 
-    let intrinsics = match Intrinsics::init(&mut scope, &mut roots) {
+    let intrinsics = match Intrinsics::init(vm, &mut scope, &mut roots) {
       Ok(intrinsics) => intrinsics,
       Err(err) => {
         // Avoid leaking persistent roots when realm initialization fails.
@@ -82,6 +82,34 @@ impl Realm {
       )?;
 
       // Install the standard native Error constructors as non-enumerable global properties.
+      let global_this_key = PropertyKey::from_string(scope.alloc_string("globalThis")?);
+      scope.define_property(
+        global_object,
+        global_this_key,
+        global_data_desc(Value::Object(global_object)),
+      )?;
+
+      let object_key = PropertyKey::from_string(scope.alloc_string("Object")?);
+      scope.define_property(
+        global_object,
+        object_key,
+        global_data_desc(Value::Object(intrinsics.object_constructor())),
+      )?;
+
+      let function_key = PropertyKey::from_string(scope.alloc_string("Function")?);
+      scope.define_property(
+        global_object,
+        function_key,
+        global_data_desc(Value::Object(intrinsics.function_constructor())),
+      )?;
+
+      let array_key = PropertyKey::from_string(scope.alloc_string("Array")?);
+      scope.define_property(
+        global_object,
+        array_key,
+        global_data_desc(Value::Object(intrinsics.array_constructor())),
+      )?;
+
       let error_key = PropertyKey::from_string(scope.alloc_string("Error")?);
       scope.define_property(
         global_object,
@@ -147,6 +175,8 @@ impl Realm {
       }
       return Err(err);
     }
+
+    vm.set_intrinsics(intrinsics);
 
     Ok(Self {
       global_object,

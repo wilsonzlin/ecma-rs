@@ -10,6 +10,7 @@ use crate::function::NativeFunctionId;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
+use crate::Intrinsics;
 use crate::RealmId;
 use crate::Scope;
 use crate::Value;
@@ -102,6 +103,11 @@ pub struct Vm {
   execution_context_stack: Vec<ExecutionContext>,
   native_calls: Vec<NativeCall>,
   native_constructs: Vec<NativeConstruct>,
+  // Per-realm intrinsic graph used by built-in native function implementations.
+  //
+  // For now `vm-js` assumes a single active realm per `Vm`. When multiple realms are supported,
+  // this will likely become realm-indexed state.
+  intrinsics: Option<Intrinsics>,
 }
 
 /// RAII guard returned by [`Vm::push_budget`].
@@ -198,9 +204,18 @@ impl Vm {
       execution_context_stack: Vec::new(),
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
+      intrinsics: None,
     };
     vm.reset_budget_to_default();
     vm
+  }
+
+  pub(crate) fn set_intrinsics(&mut self, intrinsics: Intrinsics) {
+    self.intrinsics = Some(intrinsics);
+  }
+
+  pub(crate) fn intrinsics(&self) -> Option<Intrinsics> {
+    self.intrinsics
   }
 
   pub fn interrupt_handle(&self) -> InterruptHandle {

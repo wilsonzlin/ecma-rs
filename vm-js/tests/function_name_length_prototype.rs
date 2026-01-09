@@ -1,6 +1,6 @@
 use vm_js::{
   set_function_name, Heap, HeapLimits, NativeConstructId, NativeFunctionId, PropertyKey,
-  PropertyKind, Realm, Value, VmError,
+  PropertyKind, Realm, Value, Vm, VmError, VmOptions,
 };
 
 #[test]
@@ -122,7 +122,8 @@ fn constructible_native_function_gets_prototype_and_constructor_properties() -> 
 #[test]
 fn intrinsic_error_constructor_prototype_property_is_writable() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-  let mut realm = Realm::new(&mut heap)?;
+  let mut vm = Vm::new(VmOptions::default());
+  let mut realm = Realm::new(&mut vm, &mut heap)?;
 
   let error = realm.intrinsics().error();
   let error_prototype = realm.intrinsics().error_prototype();

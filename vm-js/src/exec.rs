@@ -279,8 +279,9 @@ pub struct JsRuntime {
 
 impl JsRuntime {
   pub fn new(vm: Vm, heap: Heap) -> Result<Self, VmError> {
+    let mut vm = vm;
     let mut heap = heap;
-    let realm = Realm::new(&mut heap)?;
+    let realm = Realm::new(&mut vm, &mut heap)?;
     let env = RuntimeEnv::new(&mut heap, realm.global_object())?;
     Ok(Self {
       vm,
@@ -1055,16 +1056,12 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
-    self
-      .env
-      .get(self.vm, scope, &expr.name)?
+    self.env.get(self.vm, scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
   fn eval_id_pat(&mut self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
-    self
-      .env
-      .get(self.vm, scope, &expr.name)?
+    self.env.get(self.vm, scope, &expr.name)?
       .ok_or(VmError::Unimplemented("unbound identifier"))
   }
 
