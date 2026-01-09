@@ -3418,7 +3418,7 @@ impl<'a> Scope<'a> {
     Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
-  pub(crate) fn env_create_mutable_binding(
+  pub fn env_create_mutable_binding(
     &mut self,
     env: GcEnv,
     name: &str,
