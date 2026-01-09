@@ -3,9 +3,12 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use vm_js::Job;
+use vm_js::JobCallback;
 use vm_js::JobKind;
+use vm_js::Value;
 use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
+use vm_js::VmError;
 
 #[derive(Default)]
 struct TestHost {
@@ -52,3 +55,21 @@ fn promise_jobs_can_be_run_in_fifo_order() {
   assert_eq!(&*sink.lock().unwrap(), &[1, 2, 3]);
 }
 
+#[test]
+fn host_call_job_callback_stub_is_present_and_object_safe() {
+  let mut host = TestHost::default();
+  let mut ctx = TestContext::default();
+  let callback = JobCallback::new(());
+
+  // Not implementing `host_call_job_callback` should still compile; the default impl is a stub.
+  let err = (&mut host as &mut dyn VmHostHooks).host_call_job_callback(
+    &mut ctx,
+    &callback,
+    Value::Undefined,
+    &[],
+  );
+  assert!(matches!(
+    err,
+    Err(VmError::Unimplemented("HostCallJobCallback"))
+  ));
+}
