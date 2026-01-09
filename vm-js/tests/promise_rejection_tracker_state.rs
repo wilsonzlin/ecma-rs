@@ -101,3 +101,23 @@ fn outstanding_rejected_promises_is_weak_and_drives_rejectionhandled_queueing() 
   assert_eq!(weak.upgrade(&heap), None);
 }
 
+#[test]
+fn outstanding_rejected_promises_weak_set_does_not_keep_promise_live() {
+  let mut heap = new_test_heap();
+
+  let promise: PromiseHandle;
+  let weak: WeakGcObject;
+  {
+    let mut scope = heap.scope();
+    let obj = scope.alloc_object().unwrap();
+    promise = PromiseHandle::from(obj);
+    weak = WeakGcObject::from(obj);
+  }
+
+  let mut tracker = PromiseRejectionTracker::new();
+  tracker.after_unhandledrejection_dispatch(promise, false);
+
+  // The tracker must not keep the promise alive once no strong roots remain.
+  heap.collect_garbage();
+  assert_eq!(weak.upgrade(&heap), None);
+}
