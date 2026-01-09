@@ -1736,7 +1736,7 @@ fn write_internal_record_value(
   scope.define_property(record, value_key, data_desc(value, true, false, true))
 }
 
-fn invoke_then(
+fn invoke_thenable_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
   host: &mut dyn VmHostHooks,
@@ -1893,7 +1893,7 @@ fn perform_promise_all(
       .object_set_prototype(resolve_element, Some(intr.function_prototype()))?;
 
     // ? Invoke(nextPromise, "then", « resolveElement, capability.reject »).
-    invoke_then(
+    invoke_thenable_then(
       vm,
       &mut step_scope,
       host,
@@ -1973,7 +1973,7 @@ fn perform_promise_race(
     };
 
     let next_promise = vm.call_with_host(scope, host, promise_resolve, constructor, &[next_value])?;
-    invoke_then(vm, scope, host, next_promise, capability.resolve, capability.reject)?;
+    invoke_thenable_then(vm, scope, host, next_promise, capability.resolve, capability.reject)?;
   }
 }
 
@@ -2146,7 +2146,7 @@ fn perform_promise_all_settled(
       .heap_mut()
       .object_set_prototype(on_rejected, Some(intr.function_prototype()))?;
 
-    invoke_then(
+    invoke_thenable_then(
       vm,
       &mut step_scope,
       host,
@@ -2311,7 +2311,7 @@ fn perform_promise_any(
       .object_set_prototype(reject_element, Some(intr.function_prototype()))?;
 
     // Use resultCapability.[[Resolve]] directly for fulfillment.
-    invoke_then(
+    invoke_thenable_then(
       vm,
       &mut step_scope,
       host,
