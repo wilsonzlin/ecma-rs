@@ -122,46 +122,12 @@ impl<'a> Scope<'a> {
   pub fn ordinary_delete(&mut self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
     self.push_root(Value::Object(obj));
     root_property_key(self, key);
-
-    let Some(current) = self.heap().object_get_own_property(obj, &key)? else {
-      return Ok(true);
-    };
-
-    if !current.configurable {
-      return Ok(false);
-    }
-
-    let _ = self
-      .heap_mut()
-      .object_delete_own_property(obj, &key)?;
-    Ok(true)
+    self.heap_mut().ordinary_delete(obj, key)
   }
 
   /// ECMAScript `[[OwnPropertyKeys]]` for ordinary objects.
   pub fn ordinary_own_property_keys(&self, obj: GcObject) -> Result<Vec<PropertyKey>, VmError> {
-    let keys = self.heap().object_keys_in_insertion_order(obj)?;
-
-    let mut index_keys: Vec<(u32, PropertyKey)> = Vec::new();
-    let mut string_keys: Vec<PropertyKey> = Vec::new();
-    let mut symbol_keys: Vec<PropertyKey> = Vec::new();
-
-    for key in keys {
-      match key {
-        PropertyKey::String(_) => match array_index(self.heap(), &key) {
-          Some(idx) => index_keys.push((idx, key)),
-          None => string_keys.push(key),
-        },
-        PropertyKey::Symbol(_) => symbol_keys.push(key),
-      }
-    }
-
-    index_keys.sort_by_key(|(idx, _)| *idx);
-
-    let mut out = Vec::with_capacity(index_keys.len() + string_keys.len() + symbol_keys.len());
-    out.extend(index_keys.into_iter().map(|(_, k)| k));
-    out.extend(string_keys);
-    out.extend(symbol_keys);
-    Ok(out)
+    self.heap().ordinary_own_property_keys(obj)
   }
 
   pub fn create_data_property(
@@ -449,41 +415,4 @@ fn ordinary_set_with_own_descriptor(
       Ok(true)
     }
   }
-}
-
-fn array_index(heap: &crate::Heap, key: &PropertyKey) -> Option<u32> {
-  let PropertyKey::String(s) = key else {
-    return None;
-  };
-  let s = heap.get_string(*s).ok()?;
-  let units = s.as_code_units();
-  if units.is_empty() {
-    return None;
-  }
-
-  const U0: u16 = b'0' as u16;
-  const U9: u16 = b'9' as u16;
-
-  // `ToString(ToUint32(P)) === P` implies no leading zeros (except the single "0").
-  if units.len() > 1 && units[0] == U0 {
-    return None;
-  }
-
-  let mut value: u64 = 0;
-  for &u in units {
-    if !(U0..=U9).contains(&u) {
-      return None;
-    }
-    value = value.checked_mul(10)?;
-    value = value.checked_add((u - U0) as u64)?;
-    if value > u32::MAX as u64 {
-      return None;
-    }
-  }
-
-  // Exclude 2^32-1.
-  if value == u32::MAX as u64 {
-    return None;
-  }
-  Some(value as u32)
 }

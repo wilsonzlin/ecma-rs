@@ -502,14 +502,6 @@ impl Heap {
     Ok(None)
   }
 
-  pub(crate) fn object_keys_in_insertion_order(
-    &self,
-    obj: GcObject,
-  ) -> Result<Vec<PropertyKey>, VmError> {
-    let obj = self.get_object(obj)?;
-    Ok(obj.properties.iter().map(|p| p.key).collect())
-  }
-
   pub(crate) fn object_delete_own_property(
     &mut self,
     obj: GcObject,
@@ -517,39 +509,49 @@ impl Heap {
   ) -> Result<bool, VmError> {
     let slot_idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
 
-    // Two-phase borrow to avoid holding `&mut JsObject` while calling back into `&self` for string
-    // comparisons in `property_key_eq`.
-    let idx = {
-      let obj = self.get_object(obj)?;
-      obj
-        .properties
-        .iter()
-        .position(|prop| self.property_key_eq(&prop.key, key))
+    // Two-phase borrow to avoid holding `&mut HeapObject` while calling back into `&self` for
+    // string comparisons in `property_key_eq`.
+    let (idx, is_function, bound_args_len, property_count) = {
+      let slot = &self.slots[slot_idx];
+      let Some(obj) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      match obj {
+        HeapObject::Object(obj) => (
+          obj
+            .properties
+            .iter()
+            .position(|prop| self.property_key_eq(&prop.key, key)),
+          false,
+          0usize,
+          obj.properties.len(),
+        ),
+        HeapObject::Function(func) => (
+          func
+            .properties
+            .iter()
+            .position(|prop| self.property_key_eq(&prop.key, key)),
+          true,
+          func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0),
+          func.properties.len(),
+        ),
+        _ => return Err(VmError::InvalidHandle),
+      }
     };
 
     let Some(idx) = idx else {
       return Ok(false);
     };
 
-    let property_count = {
-      let slot = &self.slots[slot_idx];
-      let Some(obj) = slot.value.as_ref() else {
-        return Err(VmError::InvalidHandle);
-      };
-      let HeapObject::Object(obj) = obj else {
-        return Err(VmError::InvalidHandle);
-      };
-      obj.properties.len()
-    };
-
-    debug_assert_eq!(
-      property_count,
-      self.get_object(obj)?.properties.len(),
-      "property count should be stable across the two-phase borrow"
-    );
-
     let new_property_count = property_count.saturating_sub(1);
-    let new_bytes = JsObject::heap_size_bytes_for_property_count(new_property_count);
+    let new_bytes = if is_function {
+      JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
+        bound_args_len,
+        new_property_count,
+      )
+    } else {
+      JsObject::heap_size_bytes_for_property_count(new_property_count)
+    };
 
     // Allocate the new property table fallibly so hostile inputs cannot abort the host process
     // on allocator OOM (even though this is a net-shrinking operation).
@@ -560,18 +562,28 @@ impl Heap {
 
     {
       let slot = &self.slots[slot_idx];
-      let Some(HeapObject::Object(obj)) = slot.value.as_ref() else {
-        return Err(VmError::InvalidHandle);
-      };
-      buf.extend_from_slice(&obj.properties[..idx]);
-      buf.extend_from_slice(&obj.properties[idx + 1..]);
+      match slot.value.as_ref() {
+        Some(HeapObject::Object(obj)) => {
+          buf.extend_from_slice(&obj.properties[..idx]);
+          buf.extend_from_slice(&obj.properties[idx + 1..]);
+        }
+        Some(HeapObject::Function(func)) => {
+          buf.extend_from_slice(&func.properties[..idx]);
+          buf.extend_from_slice(&func.properties[idx + 1..]);
+        }
+        _ => return Err(VmError::InvalidHandle),
+      }
     }
 
     let properties = buf.into_boxed_slice();
-    let Some(HeapObject::Object(obj)) = self.slots[slot_idx].value.as_mut() else {
+    let Some(obj) = self.slots[slot_idx].value.as_mut() else {
       return Err(VmError::InvalidHandle);
     };
-    obj.properties = properties;
+    match obj {
+      HeapObject::Object(obj) => obj.properties = properties,
+      HeapObject::Function(func) => func.properties = properties,
+      _ => return Err(VmError::InvalidHandle),
+    }
 
     // This is a net-shrinking operation, so no `ensure_can_allocate` call is needed.
     self.update_slot_bytes(slot_idx, new_bytes);
@@ -728,6 +740,77 @@ impl Heap {
       }
       _ => Err(VmError::InvalidHandle),
     }
+  }
+
+  /// ECMAScript `OrdinaryDelete` / `[[Delete]]` for ordinary objects.
+  ///
+  /// Spec: https://tc39.es/ecma262/#sec-ordinarydelete
+  pub fn ordinary_delete(&mut self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
+    let Some(current) = self.get_own_property(obj, key)? else {
+      return Ok(true);
+    };
+
+    if !current.configurable {
+      return Ok(false);
+    }
+
+    let _deleted = self.object_delete_own_property(obj, &key)?;
+    Ok(true)
+  }
+
+  /// ECMAScript `OrdinaryOwnPropertyKeys` / `[[OwnPropertyKeys]]` for ordinary objects.
+  ///
+  /// Spec: https://tc39.es/ecma262/#sec-ordinaryownpropertykeys
+  pub fn ordinary_own_property_keys(&self, obj: GcObject) -> Result<Vec<PropertyKey>, VmError> {
+    let properties: &[PropertyEntry] = match self.get_heap_object(obj.0)? {
+      HeapObject::Object(obj) => &obj.properties,
+      HeapObject::Function(func) => &func.properties,
+      _ => return Err(VmError::InvalidHandle),
+    };
+
+    let property_count = properties.len();
+
+    // 1. Array indices (String keys that are array indices) in ascending numeric order.
+    let mut index_keys: Vec<(u32, PropertyKey)> = Vec::new();
+    index_keys
+      .try_reserve_exact(property_count)
+      .map_err(|_| VmError::OutOfMemory)?;
+    for prop in properties.iter() {
+      if matches!(prop.key, PropertyKey::String(_)) {
+        if let Some(idx) = self.array_index(&prop.key) {
+          index_keys.push((idx, prop.key));
+        }
+      }
+    }
+    index_keys.sort_by_key(|(idx, _)| *idx);
+
+    // 2. String keys that are not array indices, in chronological creation order.
+    // 3. Symbol keys, in chronological creation order.
+    let mut out: Vec<PropertyKey> = Vec::new();
+    out
+      .try_reserve_exact(property_count)
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    for (_, key) in index_keys.iter() {
+      out.push(*key);
+    }
+
+    for prop in properties.iter() {
+      let PropertyKey::String(_) = prop.key else {
+        continue;
+      };
+      if self.array_index(&prop.key).is_none() {
+        out.push(prop.key);
+      }
+    }
+
+    for prop in properties.iter() {
+      if matches!(prop.key, PropertyKey::Symbol(_)) {
+        out.push(prop.key);
+      }
+    }
+
+    Ok(out)
   }
 
   pub(crate) fn set_function_name_metadata(
