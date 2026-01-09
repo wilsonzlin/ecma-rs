@@ -648,14 +648,21 @@ impl JsRuntime {
       let mut vm_frame = vm_ctx.enter_frame(frame)?;
 
       let mut scope = self.heap.scope();
-      let global_this = Value::Object(global_object);
+      // Strict-mode scripts evaluate with `this === undefined` (unlike sloppy scripts where `this`
+      // is the global object). This affects arrow-function lexical `this` capture at script top
+      // level.
+      let global_this = if strict {
+        Value::Undefined
+      } else {
+        Value::Object(global_object)
+      };
       let mut evaluator = Evaluator {
         vm: &mut *vm_frame,
-        hooks: None,
         env: &mut self.env,
         strict,
         this: global_this,
         new_target: Value::Undefined,
+        hooks: None,
       };
 
       evaluator.instantiate_script(&mut scope, &top.stx.body)?;
@@ -674,6 +681,12 @@ impl JsRuntime {
     })();
 
     vm_ctx.pop_active_host_hooks(prev_host);
+    // As a safety net, drain any Promise jobs that were enqueued onto the VM-owned microtask queue
+    // into the embedding's host hook implementation.
+    while let Some((realm, job)) = vm_ctx.microtask_queue_mut().pop_front() {
+      host.host_enqueue_promise_job(job, realm);
+    }
+
     result
   }
 }
@@ -2202,7 +2215,6 @@ impl<'a> Evaluator<'a> {
         to_obj_scope.push_root(object_ctor)?;
         let args = [other];
         let value = self
-          .vm
           .call(&mut to_obj_scope, object_ctor, Value::Undefined, &args)?;
         match value {
           Value::Object(obj) => obj,
@@ -4675,6 +4687,7 @@ fn function_length(func: &parse_js::ast::func::Func) -> u32 {
 pub(crate) fn run_ecma_function(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   env: &mut RuntimeEnv,
   source: Arc<SourceText>,
   base_offset: u32,
@@ -4700,7 +4713,7 @@ pub(crate) fn run_ecma_function(
     strict,
     this,
     new_target,
-    hooks: None,
+    hooks: Some(host),
   };
   evaluator.instantiate_function(scope, func, args)?;
 

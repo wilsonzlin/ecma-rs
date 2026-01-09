@@ -162,7 +162,6 @@ impl<'a> Scope<'a> {
     let Some(desc) = self.heap().get_property(obj, &key)? else {
       return Ok(Value::Undefined);
     };
-
     match desc.kind {
       PropertyKind::Data { value, .. } => Ok(value),
       PropertyKind::Accessor { get, .. } => {

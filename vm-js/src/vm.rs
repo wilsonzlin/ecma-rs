@@ -1270,7 +1270,7 @@ impl Vm {
       CallHandler::Native(call_id) => {
         vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
       }
-      CallHandler::Ecma(code_id) => vm.call_ecma_function(&mut scope, code_id, callee_obj, this, args),
+      CallHandler::Ecma(code_id) => vm.call_ecma_function(&mut scope, host, code_id, callee_obj, this, args),
       CallHandler::User(func) => {
         drop(func);
         Err(VmError::Unimplemented("user-defined function call"))
@@ -1467,7 +1467,7 @@ impl Vm {
       ConstructHandler::Native(construct_id) => {
         vm.dispatch_native_construct(construct_id, &mut scope, host, callee_obj, args, new_target)
       }
-      ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(&mut scope, code_id, callee_obj, args, new_target),
+      ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(&mut scope, host, code_id, callee_obj, args, new_target),
     };
 
     // Capture a stack trace for thrown exceptions before the current frame is popped.
@@ -1483,6 +1483,7 @@ impl Vm {
   fn call_ecma_function(
     &mut self,
     scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
     code_id: EcmaFunctionId,
     callee: crate::GcObject,
     this: Value,
@@ -1538,6 +1539,7 @@ impl Vm {
     let result = crate::exec::run_ecma_function(
       self,
       scope,
+      host,
       &mut env,
       code_meta.source.clone(),
       code_meta.span_start,
@@ -1556,6 +1558,7 @@ impl Vm {
   fn construct_ecma_function(
     &mut self,
     scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
     code_id: EcmaFunctionId,
     callee: crate::GcObject,
     args: &[Value],
@@ -1608,6 +1611,7 @@ impl Vm {
     let result = crate::exec::run_ecma_function(
       self,
       &mut this_scope,
+      host,
       &mut env,
       code_meta.source.clone(),
       code_meta.span_start,
