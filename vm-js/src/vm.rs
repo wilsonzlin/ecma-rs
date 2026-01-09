@@ -405,7 +405,12 @@ impl Vm {
     self.intrinsics = Some(intrinsics);
   }
 
-  pub(crate) fn intrinsics(&self) -> Option<Intrinsics> {
+  /// Returns the VM's initialized intrinsics, if any.
+  ///
+  /// Intrinsics are installed when creating a [`crate::Realm`]. Some host operations (e.g. WebIDL
+  /// conversions or native builtins) may require access to well-known symbols or prototypes, and
+  /// should treat `None` as "realm not initialized".
+  pub fn intrinsics(&self) -> Option<Intrinsics> {
     self.intrinsics
   }
 
