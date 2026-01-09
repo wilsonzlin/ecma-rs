@@ -166,27 +166,48 @@ fn to_string_and_to_number_cover_webidl_primitives() -> Result<(), VmError> {
   assert_eq!(heap.to_number(Value::Bool(true))?, 1.0);
   assert_eq!(heap.to_number(Value::Bool(false))?, 0.0);
 
-  let mut scope = heap.scope();
-  let s = scope.alloc_string("  123  ")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
-  let s = scope.alloc_string("")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 0.0);
-  let s = scope.alloc_string("   ")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 0.0);
-  let s = scope.alloc_string("Infinity")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::INFINITY);
-  let s = scope.alloc_string("+Infinity")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::INFINITY);
-  let s = scope.alloc_string("-Infinity")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::NEG_INFINITY);
-  let s = scope.alloc_string("NaN")?;
-  assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
-  let s = scope.alloc_string("0x10")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 16.0);
-  let s = scope.alloc_string("0b10")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 2.0);
-  let s = scope.alloc_string("0o10")?;
-  assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 8.0);
+  {
+    let mut scope = heap.scope();
+    let s = scope.alloc_string("  123  ")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 123.0);
+    let s = scope.alloc_string("")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 0.0);
+    let s = scope.alloc_string("   ")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 0.0);
+    let s = scope.alloc_string("Infinity")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::INFINITY);
+    let s = scope.alloc_string("+Infinity")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::INFINITY);
+    let s = scope.alloc_string("-Infinity")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, f64::NEG_INFINITY);
+    let s = scope.alloc_string("inf")?;
+    assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
+    let s = scope.alloc_string("infinity")?;
+    assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
+    let s = scope.alloc_string("+infinity")?;
+    assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
+    let s = scope.alloc_string("NaN")?;
+    assert!(scope.heap_mut().to_number(Value::String(s))?.is_nan());
+    let s = scope.alloc_string("0x10")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 16.0);
+    let s = scope.alloc_string("0b10")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 2.0);
+    let s = scope.alloc_string("0o10")?;
+    assert_eq!(scope.heap_mut().to_number(Value::String(s))?, 8.0);
+  }
+
+  let sym = {
+    let mut scope = heap.scope();
+    scope.alloc_symbol(None)?
+  };
+  let err = heap.to_number(Value::Symbol(sym)).unwrap_err();
+  assert!(matches!(err, VmError::TypeError(_)));
+
+  let obj = {
+    let mut scope = heap.scope();
+    scope.alloc_object()?
+  };
+  assert!(heap.to_number(Value::Object(obj))?.is_nan());
 
   Ok(())
 }

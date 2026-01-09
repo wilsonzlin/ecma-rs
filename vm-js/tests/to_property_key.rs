@@ -85,3 +85,18 @@ fn to_property_key_number_avoids_exponent_for_common_ranges() -> Result<(), VmEr
 
   Ok(())
 }
+
+#[test]
+fn to_property_key_object_is_string_placeholder() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let obj = {
+    let mut scope = heap.scope();
+    scope.alloc_object()?
+  };
+
+  let key = heap.to_property_key(Value::Object(obj))?;
+  assert_string_key(&heap, key, "[object Object]");
+
+  Ok(())
+}
