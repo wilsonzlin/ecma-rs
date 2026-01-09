@@ -6,13 +6,17 @@ use crate::ModuleRequest;
 use crate::RootId;
 use crate::VmError;
 use diagnostics::{Diagnostic, FileId};
-use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::lit::{LitArrElem, LitTemplatePart};
 use parse_js::ast::import_export::ExportNames;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
+use parse_js::operator::OperatorName;
 use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::collections::HashSet;
@@ -84,6 +88,8 @@ pub(crate) struct ModuleNamespaceCache {
 pub struct SourceTextModuleRecord {
   pub requested_modules: Vec<ModuleRequest>,
   pub status: ModuleStatus,
+  /// `[[HasTLA]]` – whether this module contains top-level `await`.
+  pub has_tla: bool,
   pub local_export_entries: Vec<LocalExportEntry>,
   pub indirect_export_entries: Vec<IndirectExportEntry>,
   pub star_export_entries: Vec<StarExportEntry>,
@@ -118,6 +124,7 @@ impl SourceTextModuleRecord {
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
 
     let mut record = SourceTextModuleRecord::default();
+    record.has_tla = module_contains_top_level_await(&top);
 
     for stmt in &top.stx.body {
       match &*stmt.stx {
@@ -439,6 +446,311 @@ impl SourceTextModuleRecord {
       Some(binding) => ResolveExportResult::Resolved(binding),
       None => ResolveExportResult::NotFound,
     }
+  }
+}
+
+fn module_contains_top_level_await(top: &Node<TopLevel>) -> bool {
+  stmt_list_contains_top_level_await(&top.stx.body)
+}
+
+fn stmt_list_contains_top_level_await(stmts: &[Node<Stmt>]) -> bool {
+  stmts.iter().any(stmt_contains_top_level_await)
+}
+
+fn stmt_contains_top_level_await(stmt: &Node<Stmt>) -> bool {
+  match &*stmt.stx {
+    Stmt::Expr(expr_stmt) => expr_contains_top_level_await(&expr_stmt.stx.expr),
+    Stmt::Block(block) => stmt_list_contains_top_level_await(&block.stx.body),
+    Stmt::DoWhile(stmt) => {
+      expr_contains_top_level_await(&stmt.stx.condition) || stmt_contains_top_level_await(&stmt.stx.body)
+    }
+    Stmt::If(stmt) => {
+      expr_contains_top_level_await(&stmt.stx.test)
+        || stmt_contains_top_level_await(&stmt.stx.consequent)
+        || stmt
+          .stx
+          .alternate
+          .as_ref()
+          .is_some_and(stmt_contains_top_level_await)
+    }
+    Stmt::While(stmt) => {
+      expr_contains_top_level_await(&stmt.stx.condition) || stmt_contains_top_level_await(&stmt.stx.body)
+    }
+    Stmt::ForTriple(stmt) => {
+      (match &stmt.stx.init {
+        parse_js::ast::stmt::ForTripleStmtInit::None => false,
+        parse_js::ast::stmt::ForTripleStmtInit::Expr(expr) => expr_contains_top_level_await(expr),
+        parse_js::ast::stmt::ForTripleStmtInit::Decl(decl) => var_decl_contains_top_level_await(&decl.stx),
+      }) || stmt.stx.cond.as_ref().is_some_and(expr_contains_top_level_await)
+        || stmt.stx.post.as_ref().is_some_and(expr_contains_top_level_await)
+        || stmt_list_contains_top_level_await(&stmt.stx.body.stx.body)
+    }
+    Stmt::ForIn(stmt) => {
+      for_in_of_lhs_contains_top_level_await(&stmt.stx.lhs)
+        || expr_contains_top_level_await(&stmt.stx.rhs)
+        || stmt_list_contains_top_level_await(&stmt.stx.body.stx.body)
+    }
+    Stmt::ForOf(stmt) => {
+      if stmt.stx.await_ {
+        return true;
+      }
+      for_in_of_lhs_contains_top_level_await(&stmt.stx.lhs)
+        || expr_contains_top_level_await(&stmt.stx.rhs)
+        || stmt_list_contains_top_level_await(&stmt.stx.body.stx.body)
+    }
+    Stmt::Label(stmt) => stmt_contains_top_level_await(&stmt.stx.statement),
+    Stmt::Switch(stmt) => {
+      expr_contains_top_level_await(&stmt.stx.test)
+        || stmt
+          .stx
+          .branches
+          .iter()
+          .any(|branch| {
+            branch.stx.case.as_ref().is_some_and(expr_contains_top_level_await)
+              || stmt_list_contains_top_level_await(&branch.stx.body)
+          })
+    }
+    Stmt::Throw(stmt) => expr_contains_top_level_await(&stmt.stx.value),
+    Stmt::Try(stmt) => {
+      stmt_list_contains_top_level_await(&stmt.stx.wrapped.stx.body)
+        || stmt
+          .stx
+          .catch
+          .as_ref()
+          .is_some_and(|catch| stmt_list_contains_top_level_await(&catch.stx.body))
+        || stmt
+          .stx
+          .finally
+          .as_ref()
+          .is_some_and(|finally| stmt_list_contains_top_level_await(&finally.stx.body))
+    }
+    Stmt::With(stmt) => {
+      expr_contains_top_level_await(&stmt.stx.object) || stmt_contains_top_level_await(&stmt.stx.body)
+    }
+
+    // Import/export statements.
+    Stmt::ExportDefaultExpr(stmt) => expr_contains_top_level_await(&stmt.stx.expression),
+    Stmt::ExportList(stmt) => stmt
+      .stx
+      .attributes
+      .as_ref()
+      .is_some_and(expr_contains_top_level_await),
+    Stmt::Import(stmt) => stmt
+      .stx
+      .attributes
+      .as_ref()
+      .is_some_and(expr_contains_top_level_await),
+
+    // Declarations.
+    Stmt::ClassDecl(stmt) => class_decl_contains_top_level_await(&stmt.stx),
+    Stmt::VarDecl(stmt) => var_decl_contains_top_level_await(&stmt.stx),
+
+    // Function-like boundaries: do not descend.
+    Stmt::FunctionDecl(_) => false,
+
+    // Everything else cannot contain `await` (or is syntax-error in modules).
+    _ => false,
+  }
+}
+
+fn var_decl_contains_top_level_await(decl: &parse_js::ast::stmt::decl::VarDecl) -> bool {
+  decl.declarators.iter().any(|d| {
+    pat_contains_top_level_await(&d.pattern.stx.pat)
+      || d
+        .initializer
+        .as_ref()
+        .is_some_and(expr_contains_top_level_await)
+  })
+}
+
+fn for_in_of_lhs_contains_top_level_await(lhs: &ForInOfLhs) -> bool {
+  match lhs {
+    ForInOfLhs::Assign(pat) => pat_contains_top_level_await(pat),
+    ForInOfLhs::Decl((_mode, pat_decl)) => pat_contains_top_level_await(&pat_decl.stx.pat),
+  }
+}
+
+fn expr_contains_top_level_await(expr: &Node<Expr>) -> bool {
+  match &*expr.stx {
+    Expr::Unary(unary) => {
+      if unary.stx.operator == OperatorName::Await {
+        return true;
+      }
+      expr_contains_top_level_await(&unary.stx.argument)
+    }
+    Expr::UnaryPostfix(unary) => expr_contains_top_level_await(&unary.stx.argument),
+    Expr::Binary(binary) => {
+      expr_contains_top_level_await(&binary.stx.left) || expr_contains_top_level_await(&binary.stx.right)
+    }
+    Expr::Call(call) => {
+      expr_contains_top_level_await(&call.stx.callee)
+        || call
+          .stx
+          .arguments
+          .iter()
+          .any(|arg| expr_contains_top_level_await(&arg.stx.value))
+    }
+    Expr::ComputedMember(member) => {
+      expr_contains_top_level_await(&member.stx.object) || expr_contains_top_level_await(&member.stx.member)
+    }
+    Expr::Cond(cond) => {
+      expr_contains_top_level_await(&cond.stx.test)
+        || expr_contains_top_level_await(&cond.stx.consequent)
+        || expr_contains_top_level_await(&cond.stx.alternate)
+    }
+    Expr::Import(expr) => {
+      expr_contains_top_level_await(&expr.stx.module)
+        || expr
+          .stx
+          .attributes
+          .as_ref()
+          .is_some_and(expr_contains_top_level_await)
+    }
+    Expr::Member(member) => expr_contains_top_level_await(&member.stx.left),
+    Expr::TaggedTemplate(template) => {
+      expr_contains_top_level_await(&template.stx.function)
+        || template
+          .stx
+          .parts
+          .iter()
+          .any(|part| matches!(part, LitTemplatePart::Substitution(expr) if expr_contains_top_level_await(expr)))
+    }
+
+    Expr::LitArr(arr) => arr.stx.elements.iter().any(|elem| match elem {
+      LitArrElem::Single(expr) | LitArrElem::Rest(expr) => expr_contains_top_level_await(expr),
+      LitArrElem::Empty => false,
+    }),
+    Expr::LitObj(obj) => obj.stx.members.iter().any(obj_member_contains_top_level_await),
+    Expr::LitTemplate(template) => template.stx.parts.iter().any(|part| match part {
+      LitTemplatePart::Substitution(expr) => expr_contains_top_level_await(expr),
+      LitTemplatePart::String(_) => false,
+    }),
+
+    // Class expressions are not function boundaries: only method bodies are.
+    Expr::Class(class) => class_expr_contains_top_level_await(&class.stx),
+
+    // Patterns (can contain expressions via default values).
+    Expr::ArrPat(arr) => arr_pat_contains_top_level_await(&arr.stx),
+    Expr::IdPat(_) => false,
+    Expr::ObjPat(obj) => obj_pat_contains_top_level_await(&obj.stx),
+
+    // TypeScript wrappers around expressions.
+    Expr::Instantiation(expr) => expr_contains_top_level_await(&expr.stx.expression),
+    Expr::TypeAssertion(expr) => expr_contains_top_level_await(&expr.stx.expression),
+    Expr::NonNullAssertion(expr) => expr_contains_top_level_await(&expr.stx.expression),
+    Expr::SatisfiesExpr(expr) => expr_contains_top_level_await(&expr.stx.expression),
+
+    // Function-like boundaries: do not descend.
+    Expr::ArrowFunc(_) | Expr::Func(_) => false,
+
+    // Everything else is leaf-like for our purposes.
+    _ => false,
+  }
+}
+
+fn pat_contains_top_level_await(pat: &Node<Pat>) -> bool {
+  match &*pat.stx {
+    Pat::Arr(arr) => arr_pat_contains_top_level_await(&arr.stx),
+    Pat::Obj(obj) => obj_pat_contains_top_level_await(&obj.stx),
+    Pat::AssignTarget(expr) => expr_contains_top_level_await(expr),
+    Pat::Id(_) => false,
+  }
+}
+
+fn arr_pat_contains_top_level_await(pat: &parse_js::ast::expr::pat::ArrPat) -> bool {
+  pat.elements.iter().any(|elem| match elem {
+    None => false,
+    Some(elem) => {
+      pat_contains_top_level_await(&elem.target)
+        || elem
+          .default_value
+          .as_ref()
+          .is_some_and(expr_contains_top_level_await)
+    }
+  }) || pat.rest.as_ref().is_some_and(pat_contains_top_level_await)
+}
+
+fn obj_pat_contains_top_level_await(pat: &parse_js::ast::expr::pat::ObjPat) -> bool {
+  pat.properties.iter().any(|prop| {
+    class_or_obj_key_contains_top_level_await(&prop.stx.key)
+      || pat_contains_top_level_await(&prop.stx.target)
+      || prop
+        .stx
+        .default_value
+        .as_ref()
+        .is_some_and(expr_contains_top_level_await)
+  }) || pat.rest.as_ref().is_some_and(pat_contains_top_level_await)
+}
+
+fn class_decl_contains_top_level_await(class: &parse_js::ast::stmt::decl::ClassDecl) -> bool {
+  class
+    .decorators
+    .iter()
+    .any(|d| expr_contains_top_level_await(&d.stx.expression))
+    || class
+      .extends
+      .as_ref()
+      .is_some_and(expr_contains_top_level_await)
+    || class
+      .implements
+      .iter()
+      .any(expr_contains_top_level_await)
+    || class
+      .members
+      .iter()
+      .any(class_member_contains_top_level_await)
+}
+
+fn class_expr_contains_top_level_await(class: &parse_js::ast::expr::ClassExpr) -> bool {
+  class
+    .decorators
+    .iter()
+    .any(|d| expr_contains_top_level_await(&d.stx.expression))
+    || class
+      .extends
+      .as_ref()
+      .is_some_and(expr_contains_top_level_await)
+    || class
+      .members
+      .iter()
+      .any(class_member_contains_top_level_await)
+}
+
+fn class_member_contains_top_level_await(member: &Node<ClassMember>) -> bool {
+  member
+    .stx
+    .decorators
+    .iter()
+    .any(|d| expr_contains_top_level_await(&d.stx.expression))
+    || class_or_obj_key_contains_top_level_await(&member.stx.key)
+    || class_or_obj_val_contains_top_level_await(&member.stx.val)
+}
+
+fn obj_member_contains_top_level_await(member: &Node<ObjMember>) -> bool {
+  match &member.stx.typ {
+    ObjMemberType::Valued { key, val } => {
+      class_or_obj_key_contains_top_level_await(key) || class_or_obj_val_contains_top_level_await(val)
+    }
+    ObjMemberType::Shorthand { .. } => false,
+    ObjMemberType::Rest { val } => expr_contains_top_level_await(val),
+  }
+}
+
+fn class_or_obj_key_contains_top_level_await(key: &ClassOrObjKey) -> bool {
+  match key {
+    ClassOrObjKey::Direct(_) => false,
+    ClassOrObjKey::Computed(expr) => expr_contains_top_level_await(expr),
+  }
+}
+
+fn class_or_obj_val_contains_top_level_await(val: &ClassOrObjVal) -> bool {
+  match val {
+    // Function-like boundaries: do not descend.
+    ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) | ClassOrObjVal::Method(_) => false,
+    ClassOrObjVal::Prop(expr) => expr.as_ref().is_some_and(expr_contains_top_level_await),
+    ClassOrObjVal::IndexSignature(_) => false,
+    // Class static blocks are syntax-errors for `await`; don't scan them.
+    ClassOrObjVal::StaticBlock(_) => false,
   }
 }
 
