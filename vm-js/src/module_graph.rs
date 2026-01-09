@@ -1,5 +1,5 @@
 use crate::execution_context::ModuleId;
-use crate::module_loading::ModuleRequest;
+use crate::ModuleRequest;
 use crate::module_record::SourceTextModuleRecord;
 
 /// Minimal in-memory module graph used to exercise ECMA-262 module record algorithms.

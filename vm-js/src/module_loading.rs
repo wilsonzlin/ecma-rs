@@ -386,7 +386,7 @@ pub fn finish_loading_imported_module(
     if let Some(existing) = referrer
       .loaded_modules()
       .iter()
-      .find(|record| module_requests_equal(*record, &module_request))
+      .find(|record| record.request.spec_equal(&module_request))
     {
       if existing.module != *module {
         return Err(VmError::InvariantViolation(
@@ -624,8 +624,8 @@ mod tests {
     assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
 
     assert_eq!(loaded_modules.len(), 1);
-    assert_eq!(loaded_modules[0].specifier.as_ref(), "./x.mjs");
-    assert_eq!(loaded_modules[0].attributes, request.attributes);
+    assert_eq!(loaded_modules[0].request.specifier.as_str(), "./x.mjs");
+    assert_eq!(loaded_modules[0].request.attributes, request.attributes);
     assert_eq!(loaded_modules[0].module, module);
   }
 

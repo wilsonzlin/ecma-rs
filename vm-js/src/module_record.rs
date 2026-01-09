@@ -1,6 +1,6 @@
 use crate::execution_context::ModuleId;
 use crate::module_graph::ModuleGraph;
-use crate::module_loading::ModuleRequest;
+use crate::ModuleRequest;
 use crate::VmError;
 use diagnostics::FileId;
 use parse_js::ast::expr::pat::Pat;

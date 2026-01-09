@@ -2211,7 +2211,8 @@ impl<'a> Evaluator<'a> {
       OperatorName::Delete => match &*expr.argument.stx {
         Expr::Id(id) => {
           if self.strict {
-            return Err(VmError::Throw(self.env.new_reference_error(scope)?));
+            let msg = format!("{name} is not defined", name = id.stx.name);
+            return Err(new_reference_error(scope, self.realm, &msg)?);
           }
 
           // Sloppy-mode: deleting an unqualified identifier returns `true` if the reference is
@@ -2240,7 +2241,8 @@ impl<'a> Evaluator<'a> {
         }
         Expr::IdPat(id) => {
           if self.strict {
-            return Err(VmError::Throw(self.env.new_reference_error(scope)?));
+            let msg = format!("{name} is not defined", name = id.stx.name);
+            return Err(new_reference_error(scope, self.realm, &msg)?);
           }
 
           if self
