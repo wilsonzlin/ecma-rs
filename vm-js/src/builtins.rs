@@ -1553,11 +1553,11 @@ pub fn function_prototype_bind(
   // Extract function metadata without holding a heap borrow across allocations.
   let (target_call, target_construct, target_len, target_name) = {
     let f = scope.heap().get_function(target)?;
-    let target_call = match f.call {
-      CallHandler::Native(id) => id,
-      CallHandler::Ecma(_) => {
+    let target_call = match &f.call {
+      CallHandler::Native(id) => *id,
+      CallHandler::Ecma(_) | CallHandler::User(_) => {
         return Err(VmError::Unimplemented(
-          "Function.prototype.bind: ECMAScript target functions",
+          "Function.prototype.bind: non-native target functions",
         ))
       }
     };

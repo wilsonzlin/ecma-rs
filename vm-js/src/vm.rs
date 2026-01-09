@@ -970,7 +970,6 @@ impl Vm {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotCallable),
     };
-
     // Bound function dispatch: if the callee has `[[BoundTargetFunction]]`, forward the call to
     // the target with the bound `this` and arguments.
     if let Ok(func) = scope.heap().get_function(callee_obj) {
@@ -1003,7 +1002,7 @@ impl Vm {
       .filter(|name| !name.is_empty())
       .map(Arc::<str>::from);
 
-    let (source, line, col) = match call_handler {
+    let (source, line, col) = match &call_handler {
       CallHandler::Native(_) => (Arc::<str>::from("<native>"), 0, 0),
       CallHandler::Ecma(code_id) => match self.ecma_functions.get(code_id.0 as usize) {
         Some(code) => {
@@ -1012,6 +1011,7 @@ impl Vm {
         }
         None => (Arc::<str>::from("<call>"), 0, 0),
       },
+      CallHandler::User(_) => (Arc::<str>::from("<user>"), 0, 0),
     };
     let frame = StackFrame { function: function_name, source, line, col };
 
@@ -1024,6 +1024,10 @@ impl Vm {
         vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
       }
       CallHandler::Ecma(code_id) => vm.call_ecma_function(&mut scope, code_id, callee_obj, this, args),
+      CallHandler::User(func) => {
+        drop(func);
+        Err(VmError::Unimplemented("user-defined function call"))
+      }
     }
   }
 

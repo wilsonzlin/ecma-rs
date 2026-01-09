@@ -7,6 +7,7 @@ use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, 
 use crate::promise::{PromiseReaction, PromiseReactionType, PromiseState};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
+use crate::CompiledFunctionRef;
 use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
 use std::collections::HashSet;
@@ -2420,7 +2421,7 @@ impl Heap {
 
   pub(crate) fn get_function_call_handler(&self, func: GcObject) -> Result<CallHandler, VmError> {
     match self.get_heap_object(func.0)? {
-      HeapObject::Function(f) => Ok(f.call),
+      HeapObject::Function(f) => Ok(f.call.clone()),
       _ => Err(VmError::NotCallable),
     }
   }
@@ -3221,6 +3222,36 @@ impl<'a> Scope<'a> {
 
     let obj = HeapObject::Function(func);
     Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
+  }
+
+  /// Allocates a user-defined JavaScript function object on the heap.
+  pub fn alloc_user_function(
+    &mut self,
+    func: CompiledFunctionRef,
+    name: GcString,
+    length: u32,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::String(name))?;
+
+    let func = JsFunction::new_user(func, name, length);
+    let new_bytes = func.heap_size_bytes();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Function(func);
+    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?);
+
+    // Define standard function metadata properties (`name`, `length`).
+    crate::function_properties::set_function_name(
+      &mut scope,
+      func,
+      PropertyKey::String(name),
+      None,
+    )?;
+    crate::function_properties::set_function_length(&mut scope, func, length)?;
+
+    Ok(func)
   }
 }
 

@@ -37,6 +37,7 @@
 
 mod agent;
 mod builtins;
+mod code;
 mod env;
 mod error;
 mod error_object;
@@ -80,6 +81,8 @@ pub use crate::agent::HostHooks;
 pub use crate::error::Termination;
 pub use crate::error::TerminationReason;
 pub use crate::error::VmError;
+pub use crate::code::CompiledFunctionRef;
+pub use crate::code::CompiledScript;
 pub use crate::error_object::new_error;
 pub use crate::error_object::new_range_error;
 pub use crate::error_object::new_reference_error;
