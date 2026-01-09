@@ -1642,7 +1642,15 @@ impl<'a> Evaluator<'a> {
         return Err(err);
       }
 
-      let body_completion = self.eval_for_body(&mut iter_scope, &stmt.body.stx)?;
+      let body_completion = match self.eval_for_body(&mut iter_scope, &stmt.body.stx) {
+        Ok(c) => c,
+        Err(err) => {
+          if iter_env.is_some() {
+            self.env.set_lexical_env(iter_scope.heap_mut(), outer_lex);
+          }
+          return Err(err);
+        }
+      };
 
       if iter_env.is_some() {
         self.env.set_lexical_env(iter_scope.heap_mut(), outer_lex);

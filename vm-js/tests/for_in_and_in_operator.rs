@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmOptions};
+use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmError, VmOptions};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -43,3 +43,18 @@ fn in_operator_walks_prototype_chain() {
   assert_eq!(value, Value::Bool(true));
 }
 
+#[test]
+fn for_in_restores_lexical_env_on_uncatchable_error() {
+  let mut rt = new_runtime();
+  let err = rt
+    .exec_script(r#"for (let k in {a:1}) { debugger; }"#)
+    .unwrap_err();
+  assert!(matches!(err, VmError::Unimplemented(_)));
+
+  // If the loop's per-iteration lexical environment is not restored when the body returns an
+  // uncatchable error, the loop variable binding would leak into subsequent script executions.
+  let value = rt
+    .exec_script(r#"try { k; "leaked" } catch(e) { "ok" }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "ok");
+}
