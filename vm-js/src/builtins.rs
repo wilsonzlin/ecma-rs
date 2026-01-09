@@ -1194,14 +1194,30 @@ pub fn promise_constructor_construct(
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
-  _new_target: Value,
+  new_target: Value,
 ) -> Result<Value, VmError> {
   let executor = args.get(0).copied().unwrap_or(Value::Undefined);
   if !scope.heap().is_callable(executor)? {
     return throw_type_error(vm, scope, host, "Promise executor is not callable");
   }
 
-  let promise = new_promise(vm, scope)?;
+  // Promise constructor:
+  // `promise = OrdinaryCreateFromConstructor(NewTarget, "%Promise.prototype%", ...)`.
+  let intr = require_intrinsics(vm)?;
+  let promise = crate::spec_ops::ordinary_create_from_constructor(
+    vm,
+    scope,
+    new_target,
+    intr.promise_prototype(),
+    &[
+      "[[PromiseState]]",
+      "[[PromiseResult]]",
+      "[[PromiseFulfillReactions]]",
+      "[[PromiseRejectReactions]]",
+      "[[PromiseIsHandled]]",
+    ],
+    |scope| scope.alloc_promise(),
+  )?;
   scope.push_root(Value::Object(promise))?;
 
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
