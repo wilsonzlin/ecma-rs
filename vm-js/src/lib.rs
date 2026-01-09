@@ -138,7 +138,7 @@ pub use crate::module_loading::ModuleLoadPayload;
 pub use crate::module_loading::ModuleReferrer;
 pub use crate::module_loading::ModuleRequest;
 pub use crate::module_loading::ModuleRequestLike;
-pub use crate::module_loading::PromiseCapability;
+pub use crate::module_loading::PromiseCapability as ImportPromiseCapability;
 pub use crate::module_loading::VmModuleLoadingContext;
 pub use crate::microtasks::MicrotaskQueue;
 pub use crate::native::alloc_native_function_name;
