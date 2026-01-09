@@ -147,6 +147,7 @@ impl Drop for BudgetGuard<'_> {
 /// This is intended to prevent mismatched `push_execution_context` / `pop_execution_context`
 /// sequences when running nested evaluator/host work.
 #[derive(Debug)]
+#[must_use = "dropping the guard pops the execution context; bind it to keep the context active"]
 pub struct ExecutionContextGuard<'vm> {
   vm: &'vm mut Vm,
   ctx: ExecutionContext,
