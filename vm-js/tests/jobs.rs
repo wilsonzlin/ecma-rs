@@ -351,3 +351,61 @@ fn job_callback_callback_can_be_rooted_by_host() -> Result<(), VmError> {
 
   Ok(())
 }
+
+#[derive(Default)]
+struct CallbackRecordingHost {
+  queue: VecDeque<Job>,
+  calls: Vec<(u32, Value, Vec<Value>)>,
+}
+
+impl VmHostHooks for CallbackRecordingHost {
+  fn host_enqueue_promise_job(&mut self, job: Job, _realm: Option<vm_js::RealmId>) {
+    self.queue.push_back(job);
+  }
+
+  fn host_call_job_callback(
+    &mut self,
+    _ctx: &mut dyn VmJobContext,
+    callback: &JobCallback,
+    this_argument: Value,
+    arguments: &[Value],
+  ) -> Result<Value, VmError> {
+    let callback_id = *callback
+      .downcast_ref::<u32>()
+      .expect("unexpected JobCallback payload type");
+    self
+      .calls
+      .push((callback_id, this_argument, arguments.to_vec()));
+    Ok(Value::Undefined)
+  }
+}
+
+#[test]
+fn job_can_invoke_host_call_job_callback() -> Result<(), VmError> {
+  let mut ctx = RootingContext::default();
+  let callback_obj = {
+    let mut scope = ctx.heap.scope();
+    scope.alloc_object()?
+  };
+  let callback = JobCallback::new_with_data(callback_obj, 42u32);
+  let this_argument = Value::Null;
+  let arguments = vec![Value::Bool(true), Value::Number(1.0)];
+  let expected_arguments = arguments.clone();
+
+  let mut job = Job::new(JobKind::Promise, move |ctx, host| {
+    host.host_call_job_callback(ctx, &callback, this_argument, &arguments)?;
+    Ok(())
+  });
+  // Ensure the callback stays live until the job runs.
+  job.add_root(&mut ctx, Value::Object(callback_obj))?;
+
+  let mut host = CallbackRecordingHost::default();
+  host.host_enqueue_promise_job(job, None);
+
+  while let Some(job) = host.queue.pop_front() {
+    job.run(&mut ctx, &mut host)?;
+  }
+
+  assert_eq!(host.calls, vec![(42, this_argument, expected_arguments)]);
+  Ok(())
+}

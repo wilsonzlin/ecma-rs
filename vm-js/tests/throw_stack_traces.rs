@@ -1,4 +1,6 @@
-use vm_js::{GcObject, Heap, HeapLimits, JsRuntime, Scope, Value, Vm, VmError, VmHostHooks, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, JsRuntime, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions,
+};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -9,7 +11,8 @@ fn new_runtime() -> JsRuntime {
 fn inner_throw(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -20,26 +23,28 @@ fn inner_throw(
 fn call_single_arg(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let callee = args.get(0).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, host, callee, Value::Undefined, &[])
+  vm.call_with_host(scope, hooks, callee, Value::Undefined, &[])
 }
 
 fn call_two_args(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let callee = args.get(0).copied().unwrap_or(Value::Undefined);
   let arg0 = args.get(1).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, host, callee, Value::Undefined, &[arg0])
+  vm.call_with_host(scope, hooks, callee, Value::Undefined, &[arg0])
 }
 
 #[test]
