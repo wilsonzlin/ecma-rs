@@ -2,8 +2,8 @@ use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
 use crate::iterator;
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
-  EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
-  RootId, Scope, Value, Vm, VmError, VmJobContext,
+  EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyDescriptorPatch,
+  PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm, VmError, VmJobContext,
 };
 use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
 use diagnostics::FileId;
@@ -1533,7 +1533,7 @@ impl<'a> Evaluator<'a> {
       Reference::Property { object, key } => {
         let mut get_scope = scope.reborrow();
         self.root_reference(&mut get_scope, reference);
-        get_scope.ordinary_get(self.vm, object, key, Value::Object(object))
+        self.ordinary_get(&mut get_scope, object, key, Value::Object(object))
       }
     }
   }
@@ -1547,12 +1547,204 @@ impl<'a> Evaluator<'a> {
     match *reference {
       Reference::Binding(name) => self.env.set(scope, name, value, self.strict),
       Reference::Property { object, key } => {
-        let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
+        let ok = self.ordinary_set(scope, object, key, value, Value::Object(object))?;
         if ok {
           Ok(())
         } else {
           Err(VmError::Unimplemented("OrdinarySet returned false"))
         }
+      }
+    }
+  }
+
+  fn call_value(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    // Root `callee`, `this`, and arguments for the duration of the call. This mirrors `Vm::call`
+    // rooting semantics, but also supports interpreted ECMAScript functions (which the VM's call
+    // path does not yet execute directly).
+    let mut call_scope = scope.reborrow();
+    let callee = call_scope.push_root(callee);
+    let this = call_scope.push_root(this);
+    for &arg in args {
+      call_scope.push_root(arg);
+    }
+
+    let callee_obj = match callee {
+      Value::Object(obj) => obj,
+      _ => return Err(VmError::NotCallable),
+    };
+
+    // Extract function metadata without holding a heap borrow across allocations.
+    let (call_handler, this_mode, is_strict, closure_env) = {
+      let f = call_scope.heap().get_function(callee_obj)?;
+      (f.call, f.this_mode, f.is_strict, f.closure_env)
+    };
+
+    // Compute the effective `this` binding. This depends on callee `[[ThisMode]]`, not caller
+    // strictness.
+    let mut this_arg = match this_mode {
+      ThisMode::Lexical => self.this,
+      _ => this,
+    };
+    if matches!(this_mode, ThisMode::Global) && matches!(this_arg, Value::Undefined | Value::Null) {
+      this_arg = Value::Object(self.env.global_object);
+      // Keep the coerced `this` value rooted across the call.
+      call_scope.push_root(this_arg);
+    }
+
+    match call_handler {
+      CallHandler::Native(_) => self.vm.call(&mut call_scope, callee, this_arg, args),
+      CallHandler::Ecma(code) => self.call_ecma_function(
+        &mut call_scope,
+        code,
+        this_mode,
+        is_strict,
+        closure_env,
+        this_arg,
+        args,
+      ),
+    }
+  }
+
+  fn ordinary_get(
+    &mut self,
+    scope: &mut Scope<'_>,
+    mut obj: GcObject,
+    key: PropertyKey,
+    receiver: Value,
+  ) -> Result<Value, VmError> {
+    // Minimal `[[Get]]` used by the AST evaluator.
+    loop {
+      let desc = scope.ordinary_get_own_property(obj, key)?;
+      let Some(desc) = desc else {
+        match scope.object_get_prototype(obj)? {
+          Some(parent) => {
+            obj = parent;
+            continue;
+          }
+          None => return Ok(Value::Undefined),
+        }
+      };
+
+      return match desc.kind {
+        PropertyKind::Data { value, .. } => Ok(value),
+        PropertyKind::Accessor { get, .. } => {
+          if matches!(get, Value::Undefined) {
+            Ok(Value::Undefined)
+          } else {
+            self.call_value(scope, get, receiver, &[])
+          }
+        }
+      };
+    }
+  }
+
+  fn ordinary_set(
+    &mut self,
+    scope: &mut Scope<'_>,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+    receiver: Value,
+  ) -> Result<bool, VmError> {
+    // Mirror `Scope::ordinary_set`, but route accessor calls through `Evaluator::call_value` so
+    // interpreted ECMAScript functions can run (the VM's `CallHandler::Ecma` path is not wired yet).
+    scope.push_root(Value::Object(obj));
+    match key {
+      PropertyKey::String(s) => scope.push_root(Value::String(s)),
+      PropertyKey::Symbol(s) => scope.push_root(Value::Symbol(s)),
+    };
+    scope.push_root(value);
+    scope.push_root(receiver);
+
+    let own_desc = scope.ordinary_get_own_property(obj, key)?;
+    self.ordinary_set_with_own_descriptor(scope, obj, key, value, receiver, own_desc)
+  }
+
+  fn ordinary_set_with_own_descriptor(
+    &mut self,
+    scope: &mut Scope<'_>,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+    receiver: Value,
+    own_desc: Option<PropertyDescriptor>,
+  ) -> Result<bool, VmError> {
+    // Adapted from `object_ops::ordinary_set_with_own_descriptor`.
+    let mut own_desc = own_desc;
+
+    if own_desc.is_none() {
+      match scope.object_get_prototype(obj)? {
+        Some(parent) => return self.ordinary_set(scope, parent, key, value, receiver),
+        None => {
+          own_desc = Some(PropertyDescriptor {
+            enumerable: true,
+            configurable: true,
+            kind: PropertyKind::Data {
+              value: Value::Undefined,
+              writable: true,
+            },
+          });
+        }
+      }
+    }
+
+    let Some(own_desc) = own_desc else {
+      return Err(VmError::InvariantViolation(
+        "internal error: ordinary_set missing own property descriptor",
+      ));
+    };
+
+    match own_desc.kind {
+      PropertyKind::Data { writable, .. } => {
+        if !writable {
+          return Ok(false);
+        }
+        let Value::Object(receiver_obj) = receiver else {
+          return Ok(false);
+        };
+
+        let existing_desc = scope.ordinary_get_own_property(receiver_obj, key)?;
+        if let Some(existing_desc) = existing_desc {
+          if existing_desc.is_accessor_descriptor() {
+            return Ok(false);
+          }
+          let receiver_writable = match existing_desc.kind {
+            PropertyKind::Data { writable, .. } => writable,
+            PropertyKind::Accessor { .. } => return Ok(false),
+          };
+          if !receiver_writable {
+            return Ok(false);
+          }
+
+          return scope.ordinary_define_own_property(
+            receiver_obj,
+            key,
+            PropertyDescriptorPatch {
+              value: Some(value),
+              ..Default::default()
+            },
+          );
+        }
+
+        scope.create_data_property(receiver_obj, key, value)
+      }
+      PropertyKind::Accessor { set, .. } => {
+        if matches!(set, Value::Undefined) {
+          return Ok(false);
+        }
+        if !scope.heap().is_callable(set)? {
+          return Err(VmError::Unimplemented(
+            "TypeError: accessor setter is not callable",
+          ));
+        }
+        let _ = self.call_value(scope, set, receiver, &[value])?;
+        Ok(true)
       }
     }
   }
@@ -1676,14 +1868,219 @@ impl<'a> Evaluator<'a> {
             PropertyKey::Symbol(s) => member_scope.push_root(Value::Symbol(s)),
           };
 
-          let ClassOrObjVal::Prop(Some(value_expr)) = val else {
-            return Err(VmError::Unimplemented("object literal member"));
-          };
-          let value = self.eval_expr(&mut member_scope, value_expr)?;
-          member_scope.push_root(value);
-          let ok = member_scope.create_data_property(obj, key, value)?;
-          if !ok {
-            return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+          match val {
+            ClassOrObjVal::Prop(Some(value_expr)) => {
+              let value = self.eval_expr(&mut member_scope, value_expr)?;
+              member_scope.push_root(value);
+              let ok = member_scope.create_data_property(obj, key, value)?;
+              if !ok {
+                return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+              }
+            }
+            ClassOrObjVal::Prop(None) => {
+              return Err(VmError::Unimplemented(
+                "object literal property without initializer",
+              ));
+            }
+            ClassOrObjVal::Method(method) => {
+              let func_node = &method.stx.func;
+              let func_ptr: *const Func = &*func_node.stx;
+
+              let code_u32 = u32::try_from(self.ecma_functions.len())
+                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
+              self
+                .ecma_functions
+                .try_reserve_exact(1)
+                .map_err(|_| VmError::OutOfMemory)?;
+              self.ecma_functions.push(InterpretedEcmaFunction {
+                script: self.script.clone(),
+                func: func_ptr,
+              });
+              let code = EcmaFunctionId(code_u32);
+
+              let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
+              let arrow = func_node.stx.arrow;
+
+              let is_strict = self.strict
+                || match &func_node.stx.body {
+                  Some(FuncBody::Block(stmts)) => detect_use_strict_directive(stmts),
+                  Some(FuncBody::Expression(_)) => false,
+                  None => return Err(VmError::Unimplemented("method without body")),
+                };
+
+              let this_mode = if arrow {
+                ThisMode::Lexical
+              } else if is_strict {
+                ThisMode::Strict
+              } else {
+                ThisMode::Global
+              };
+
+              let closure_env = Some(self.env.lexical_env);
+
+              let name_string = match key {
+                PropertyKey::String(s) => s,
+                PropertyKey::Symbol(_) => member_scope.alloc_string("")?,
+              };
+
+              let func_obj = member_scope.alloc_ecma_function(
+                code,
+                /* is_constructable */ !arrow,
+                name_string,
+                length,
+                this_mode,
+                is_strict,
+                closure_env,
+              )?;
+              member_scope.push_root(Value::Object(func_obj));
+
+              // Methods use the property key as the function `name` if possible.
+              if !matches!(key, PropertyKey::String(_)) {
+                crate::function_properties::set_function_name(
+                  &mut member_scope,
+                  func_obj,
+                  key,
+                  None,
+                )?;
+              }
+
+              let ok = member_scope.create_data_property(obj, key, Value::Object(func_obj))?;
+              if !ok {
+                return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+              }
+            }
+            ClassOrObjVal::Getter(getter) => {
+              let func_node = &getter.stx.func;
+              let func_ptr: *const Func = &*func_node.stx;
+
+              let code_u32 = u32::try_from(self.ecma_functions.len())
+                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
+              self
+                .ecma_functions
+                .try_reserve_exact(1)
+                .map_err(|_| VmError::OutOfMemory)?;
+              self.ecma_functions.push(InterpretedEcmaFunction {
+                script: self.script.clone(),
+                func: func_ptr,
+              });
+              let code = EcmaFunctionId(code_u32);
+
+              let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
+              let arrow = func_node.stx.arrow;
+
+              let is_strict = self.strict
+                || match &func_node.stx.body {
+                  Some(FuncBody::Block(stmts)) => detect_use_strict_directive(stmts),
+                  Some(FuncBody::Expression(_)) => false,
+                  None => return Err(VmError::Unimplemented("getter without body")),
+                };
+
+              let this_mode = if arrow {
+                ThisMode::Lexical
+              } else if is_strict {
+                ThisMode::Strict
+              } else {
+                ThisMode::Global
+              };
+
+              let closure_env = Some(self.env.lexical_env);
+
+              let name_string = member_scope.alloc_string("")?;
+              let func_obj = member_scope.alloc_ecma_function(
+                code,
+                /* is_constructable */ false,
+                name_string,
+                length,
+                this_mode,
+                is_strict,
+                closure_env,
+              )?;
+              member_scope.push_root(Value::Object(func_obj));
+              crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("get"))?;
+
+              let ok = member_scope.ordinary_define_own_property(
+                obj,
+                key,
+                PropertyDescriptorPatch {
+                  get: Some(Value::Object(func_obj)),
+                  enumerable: Some(true),
+                  configurable: Some(true),
+                  ..Default::default()
+                },
+              )?;
+              if !ok {
+                return Err(VmError::Unimplemented("DefineOwnProperty returned false"));
+              }
+            }
+            ClassOrObjVal::Setter(setter) => {
+              let func_node = &setter.stx.func;
+              let func_ptr: *const Func = &*func_node.stx;
+
+              let code_u32 = u32::try_from(self.ecma_functions.len())
+                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
+              self
+                .ecma_functions
+                .try_reserve_exact(1)
+                .map_err(|_| VmError::OutOfMemory)?;
+              self.ecma_functions.push(InterpretedEcmaFunction {
+                script: self.script.clone(),
+                func: func_ptr,
+              });
+              let code = EcmaFunctionId(code_u32);
+
+              let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
+              let arrow = func_node.stx.arrow;
+
+              let is_strict = self.strict
+                || match &func_node.stx.body {
+                  Some(FuncBody::Block(stmts)) => detect_use_strict_directive(stmts),
+                  Some(FuncBody::Expression(_)) => false,
+                  None => return Err(VmError::Unimplemented("setter without body")),
+                };
+
+              let this_mode = if arrow {
+                ThisMode::Lexical
+              } else if is_strict {
+                ThisMode::Strict
+              } else {
+                ThisMode::Global
+              };
+
+              let closure_env = Some(self.env.lexical_env);
+
+              let name_string = member_scope.alloc_string("")?;
+              let func_obj = member_scope.alloc_ecma_function(
+                code,
+                /* is_constructable */ false,
+                name_string,
+                length,
+                this_mode,
+                is_strict,
+                closure_env,
+              )?;
+              member_scope.push_root(Value::Object(func_obj));
+              crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("set"))?;
+
+              let ok = member_scope.ordinary_define_own_property(
+                obj,
+                key,
+                PropertyDescriptorPatch {
+                  set: Some(Value::Object(func_obj)),
+                  enumerable: Some(true),
+                  configurable: Some(true),
+                  ..Default::default()
+                },
+              )?;
+              if !ok {
+                return Err(VmError::Unimplemented("DefineOwnProperty returned false"));
+              }
+            }
+            ClassOrObjVal::IndexSignature(_) => {
+              return Err(VmError::Unimplemented("object literal index signature"));
+            }
+            ClassOrObjVal::StaticBlock(_) => {
+              return Err(VmError::Unimplemented("object literal static block"));
+            }
           }
         }
         ObjMemberType::Shorthand { id } => {
@@ -1697,7 +2094,41 @@ impl<'a> Evaluator<'a> {
             return Err(VmError::Unimplemented("CreateDataProperty returned false"));
           }
         }
-        ObjMemberType::Rest { .. } => return Err(VmError::Unimplemented("object spread")),
+        ObjMemberType::Rest { val } => {
+          let src_value = self.eval_expr(&mut member_scope, val)?;
+          member_scope.push_root(src_value);
+
+          let src_obj = match src_value {
+            Value::Undefined | Value::Null => continue,
+            Value::Object(o) => o,
+            _ => return Err(VmError::Unimplemented("object spread source type")),
+          };
+
+          let keys = member_scope.ordinary_own_property_keys(src_obj)?;
+          for key in keys {
+            let mut key_scope = member_scope.reborrow();
+            key_scope.push_root(Value::Object(src_obj));
+            match key {
+              PropertyKey::String(s) => key_scope.push_root(Value::String(s)),
+              PropertyKey::Symbol(s) => key_scope.push_root(Value::Symbol(s)),
+            };
+
+            let Some(desc) = key_scope.ordinary_get_own_property(src_obj, key)? else {
+              continue;
+            };
+            if !desc.enumerable {
+              continue;
+            }
+
+            let value =
+              self.ordinary_get(&mut key_scope, src_obj, key, Value::Object(src_obj))?;
+            key_scope.push_root(value);
+            let ok = key_scope.create_data_property(obj, key, value)?;
+            if !ok {
+              return Err(VmError::Unimplemented("CreateDataProperty returned false"));
+            }
+          }
+        }
       }
     }
 
