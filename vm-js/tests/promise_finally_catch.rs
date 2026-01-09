@@ -149,6 +149,18 @@ fn borrowed_then_returns_123(
   Ok(Value::Number(123.0))
 }
 
+fn borrowed_then_should_not_be_called(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  BORROWED_THEN_CALLS.with(|c| c.set(c.get() + 1));
+  Ok(Value::Number(123.0))
+}
+
 fn on_finally_increments(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
@@ -305,6 +317,66 @@ fn promise_catch_is_borrowable_and_boxes_primitives_for_then_lookup() -> Result<
 
   assert_eq!(result, Value::Number(123.0));
   assert_eq!(BORROWED_THEN_CALLS.with(|c| c.get()), 1);
+
+  realm.teardown(&mut ctx.heap);
+  Ok(())
+}
+
+#[test]
+fn promise_finally_throws_on_non_object_receiver_even_if_then_exists() -> Result<(), VmError> {
+  reset_thread_locals();
+
+  let mut ctx = TestContext::new();
+  let mut host = TestHost::default();
+  let mut realm = Realm::new(&mut ctx.vm, &mut ctx.heap)?;
+
+  let promise_proto = realm.intrinsics().promise_prototype();
+  let promise_finally = get_own_data_function(&mut ctx.heap, promise_proto, "finally")?;
+  let number_proto = realm.intrinsics().number_prototype();
+
+  let result = {
+    let mut scope = ctx.heap.scope();
+    scope.push_root(Value::Object(number_proto))?;
+
+    // Number.prototype.then is callable, but `Promise.prototype.finally` should still throw because
+    // it requires an Object receiver (ECMA-262).
+    let call_id = ctx.vm.register_native_call(borrowed_then_should_not_be_called)?;
+    let name = scope.alloc_string("then")?;
+    let then_fn = scope.alloc_native_function(call_id, None, name, 2)?;
+    scope.push_root(Value::Object(then_fn))?;
+
+    let key_s = scope.alloc_string("then")?;
+    scope.push_root(Value::String(key_s))?;
+    let key = PropertyKey::from_string(key_s);
+    scope.define_property(
+      number_proto,
+      key,
+      PropertyDescriptor {
+        enumerable: true,
+        configurable: true,
+        kind: PropertyKind::Data {
+          value: Value::Object(then_fn),
+          writable: true,
+        },
+      },
+    )?;
+
+    ctx.vm.call_with_host(
+      &mut scope,
+      &mut host,
+      Value::Object(promise_finally),
+      Value::Number(1.0),
+      &[Value::Undefined],
+    )
+  };
+
+  let Err(VmError::Throw(_)) = result else {
+    return Err(VmError::Unimplemented(
+      "expected Promise.prototype.finally to throw on non-object receiver",
+    ));
+  };
+
+  assert_eq!(BORROWED_THEN_CALLS.with(|c| c.get()), 0);
 
   realm.teardown(&mut ctx.heap);
   Ok(())

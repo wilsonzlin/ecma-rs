@@ -1404,12 +1404,22 @@ pub fn promise_prototype_finally(
   let intr = require_intrinsics(vm)?;
   let on_finally = args.get(0).copied().unwrap_or(Value::Undefined);
 
+  // Per ECMA-262, `Promise.prototype.finally` throws if the receiver is not an Object
+  // (even though the subsequent `Invoke(promise, "then", ...)` would box primitives).
+  let Value::Object(promise) = this else {
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise.prototype.finally called on non-object",
+    ));
+  };
+
   if !scope.heap().is_callable(on_finally)? {
     return invoke_then(
       vm,
       scope,
       host,
-      this,
+      Value::Object(promise),
       on_finally,
       on_finally,
       "Promise.prototype.finally called on non-object",
@@ -1418,14 +1428,6 @@ pub fn promise_prototype_finally(
 
   // Temporary `%Promise%`-only fallback: we do not yet implement `SpeciesConstructor` for promises.
   let constructor = Value::Object(intr.promise());
-
-  let Value::Object(promise) = this else {
-    return Err(crate::throw_type_error(
-      scope,
-      intr,
-      "Promise.prototype.finally called on non-object",
-    ));
-  };
 
   scope.push_root(Value::Object(promise))?;
   scope.push_root(on_finally)?;
@@ -1469,7 +1471,7 @@ pub fn promise_prototype_finally(
     vm,
     scope,
     host,
-    this,
+    Value::Object(promise),
     Value::Object(then_finally),
     Value::Object(catch_finally),
     "Promise.prototype.finally called on non-object",
