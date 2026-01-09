@@ -34,7 +34,7 @@ fn string_literal_preserves_surrogate_and_bmp_ordering() -> Result<(), VmError> 
 
 #[test]
 fn object_literal_string_key_preserves_unpaired_surrogate() -> Result<(), VmError> {
-  let mut rt = new_runtime();
+  let mut rt = new_runtime()?;
   let value = rt.exec_script(r#"var o = {"\uD800": 1}; o["\uD800"]"#)?;
   assert_eq!(value, Value::Number(1.0));
   Ok(())
