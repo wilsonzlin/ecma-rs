@@ -519,8 +519,16 @@ fn new_promise_capability(
   let intr = require_intrinsics(vm)?;
 
   let Value::Object(c) = constructor else {
-    throw_type_error(vm, scope, "Promise capability constructor must be an object")?;
-    unreachable!("throw_type_error always throws");
+    // `throw_type_error` always returns `Err(VmError::Throw(_))`, but avoid relying on that
+    // implementation detail to keep this path panic-free if it ever changes.
+    match throw_type_error(vm, scope, "Promise capability constructor must be an object") {
+      Ok(_) => {
+        return Err(VmError::InvariantViolation(
+          "throw_type_error unexpectedly returned Ok",
+        ));
+      }
+      Err(err) => return Err(err),
+    }
   };
 
   // Temporary `%Promise%`-only fallback: the VM does not yet support Promise subclassing /
