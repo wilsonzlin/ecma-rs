@@ -988,6 +988,20 @@ impl<'a> Evaluator<'a> {
     scope: &mut Scope<'_>,
     stmt: &Node<Stmt>,
   ) -> Result<Completion, VmError> {
+    self.eval_stmt_labelled(scope, stmt, &[])
+  }
+
+  /// Evaluates a statement with an associated label set.
+  ///
+  /// This models ECMA-262 `LabelledEvaluation` / `LoopEvaluation` label propagation:
+  /// nested label statements extend `label_set`, and iteration statements use it to determine which
+  /// labelled `continue` completions are consumed by the loop.
+  fn eval_stmt_labelled(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &Node<Stmt>,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
     // One tick per statement.
     self.tick()?;
 
@@ -1000,12 +1014,12 @@ impl<'a> Evaluator<'a> {
       Stmt::Throw(stmt) => self.eval_throw(scope, &stmt.stx),
       Stmt::Try(stmt) => self.eval_try(scope, &stmt.stx),
       Stmt::Return(stmt) => self.eval_return(scope, &stmt.stx),
-      Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, None),
-      Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx, None),
-      Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, None),
-      Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, None),
+      Stmt::While(stmt) => self.eval_while(scope, &stmt.stx, label_set),
+      Stmt::DoWhile(stmt) => self.eval_do_while(scope, &stmt.stx, label_set),
+      Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, label_set),
+      Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, label_set),
       Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
-      Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx),
+      Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx, label_set),
       // Function declarations are instantiated during hoisting.
       Stmt::FunctionDecl(_) => Ok(Completion::empty()),
       Stmt::Break(stmt) => Ok(Completion::Break(stmt.stx.label.clone(), None)),
@@ -1253,69 +1267,139 @@ impl<'a> Evaluator<'a> {
     Ok(Completion::Return(value))
   }
 
+  /// ECMA-262 `LoopContinues(completion, labelSet)`.
+  fn loop_continues(completion: &Completion, label_set: &[String]) -> bool {
+    match completion {
+      Completion::Normal(_) => true,
+      Completion::Continue(None, _) => true,
+      Completion::Continue(Some(target), _) => label_set.iter().any(|l| l == target),
+      _ => false,
+    }
+  }
+
+  /// Converts an unlabelled `break` completion from an iteration statement into a normal
+  /// completion (ECMA-262 `BreakableStatement` / `LabelledEvaluation` semantics).
+  fn normalise_iteration_break(completion: Completion) -> Completion {
+    match completion {
+      Completion::Break(None, value) => Completion::normal(value.unwrap_or(Value::Undefined)),
+      other => other,
+    }
+  }
+
   fn eval_while(
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &WhileStmt,
-    active_label: Option<&str>,
+    label_set: &[String],
   ) -> Result<Completion, VmError> {
+    let result = self.while_loop_evaluation(scope, stmt, label_set)?;
+    Ok(Self::normalise_iteration_break(result))
+  }
+
+  /// ECMA-262 `WhileLoopEvaluation`.
+  fn while_loop_evaluation(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &WhileStmt,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    // Root `V` across the loop so the value can't be collected between iterations.
+    let mut scope = scope.reborrow();
+    let v_root_idx = scope.heap().root_stack.len();
+    scope.push_root(Value::Undefined)?;
+    let mut v = Value::Undefined;
+
     loop {
-      let test = self.eval_expr(scope, &stmt.condition)?;
+      let test = self.eval_expr(&mut scope, &stmt.condition)?;
       if !to_boolean(scope.heap(), test)? {
-        break;
+        return Ok(Completion::normal(v));
       }
 
-      match self.eval_stmt(scope, &stmt.body)? {
-        Completion::Normal(_) => {}
-        Completion::Continue(None, _) => continue,
-        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => continue,
-        Completion::Break(None, _) => break,
-        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
-        other => return Ok(other),
+      let stmt_result = self.eval_stmt(&mut scope, &stmt.body)?;
+      if !Self::loop_continues(&stmt_result, label_set) {
+        return Ok(stmt_result.update_empty(Some(v)));
+      }
+
+      if let Some(value) = stmt_result.value() {
+        v = value;
+        scope.heap_mut().root_stack[v_root_idx] = value;
       }
     }
-    Ok(Completion::empty())
   }
 
   fn eval_do_while(
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &DoWhileStmt,
-    active_label: Option<&str>,
+    label_set: &[String],
   ) -> Result<Completion, VmError> {
+    let result = self.do_while_loop_evaluation(scope, stmt, label_set)?;
+    Ok(Self::normalise_iteration_break(result))
+  }
+
+  /// ECMA-262 `DoWhileLoopEvaluation`.
+  fn do_while_loop_evaluation(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &DoWhileStmt,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    // Root `V` across the loop so the value can't be collected between iterations.
+    let mut scope = scope.reborrow();
+    let v_root_idx = scope.heap().root_stack.len();
+    scope.push_root(Value::Undefined)?;
+    let mut v = Value::Undefined;
+
     loop {
-      match self.eval_stmt(scope, &stmt.body)? {
-        Completion::Normal(_) => {}
-        Completion::Continue(None, _) => {}
-        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
-        Completion::Break(None, _) => break,
-        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
-        other => return Ok(other),
+      let stmt_result = self.eval_stmt(&mut scope, &stmt.body)?;
+      if !Self::loop_continues(&stmt_result, label_set) {
+        return Ok(stmt_result.update_empty(Some(v)));
       }
 
-      let test = self.eval_expr(scope, &stmt.condition)?;
+      if let Some(value) = stmt_result.value() {
+        v = value;
+        scope.heap_mut().root_stack[v_root_idx] = value;
+      }
+
+      let test = self.eval_expr(&mut scope, &stmt.condition)?;
       if !to_boolean(scope.heap(), test)? {
-        break;
+        return Ok(Completion::normal(v));
       }
     }
-    Ok(Completion::empty())
   }
 
   fn eval_for_triple(
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &ForTripleStmt,
-    active_label: Option<&str>,
+    label_set: &[String],
   ) -> Result<Completion, VmError> {
     // Note: this is intentionally minimal and does not implement per-iteration lexical
     // environments for `let`/`const`.
+    let result = self.for_triple_loop_evaluation(scope, stmt, label_set)?;
+    Ok(Self::normalise_iteration_break(result))
+  }
+
+  /// ECMA-262 `ForLoopEvaluation` for `for (init; cond; post) { ... }`.
+  fn for_triple_loop_evaluation(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ForTripleStmt,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    // Root `V` across the loop so the value can't be collected between iterations.
+    let mut scope = scope.reborrow();
+    let v_root_idx = scope.heap().root_stack.len();
+    scope.push_root(Value::Undefined)?;
+    let mut v = Value::Undefined;
+
     match &stmt.init {
       parse_js::ast::stmt::ForTripleStmtInit::None => {}
       parse_js::ast::stmt::ForTripleStmtInit::Expr(expr) => {
-        let _ = self.eval_expr(scope, expr)?;
+        let _ = self.eval_expr(&mut scope, expr)?;
       }
       parse_js::ast::stmt::ForTripleStmtInit::Decl(decl) => {
-        let _ = self.eval_var_decl(scope, &decl.stx)?;
+        let _ = self.eval_var_decl(&mut scope, &decl.stx)?;
       }
     }
 
@@ -1334,34 +1418,43 @@ impl<'a> Evaluator<'a> {
       }
 
       if let Some(cond) = &stmt.cond {
-        let test = self.eval_expr(scope, cond)?;
+        let test = self.eval_expr(&mut scope, cond)?;
         if !to_boolean(scope.heap(), test)? {
-          break;
+          return Ok(Completion::normal(v));
         }
       }
 
-      match self.eval_for_body(scope, &stmt.body.stx)? {
-        Completion::Normal(_) => {}
-        Completion::Continue(None, _) => {}
-        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
-        Completion::Break(None, _) => break,
-        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => break,
-        other => return Ok(other),
+      let stmt_result = self.eval_for_body(&mut scope, &stmt.body.stx)?;
+      if !Self::loop_continues(&stmt_result, label_set) {
+        return Ok(stmt_result.update_empty(Some(v)));
+      }
+
+      if let Some(value) = stmt_result.value() {
+        v = value;
+        scope.heap_mut().root_stack[v_root_idx] = value;
       }
 
       if let Some(post) = &stmt.post {
-        let _ = self.eval_expr(scope, post)?;
+        let _ = self.eval_expr(&mut scope, post)?;
       }
     }
-
-    Ok(Completion::empty())
   }
 
   fn eval_for_of(
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &ForOfStmt,
-    active_label: Option<&str>,
+    label_set: &[String],
+  ) -> Result<Completion, VmError> {
+    let result = self.for_of_loop_evaluation(scope, stmt, label_set)?;
+    Ok(Self::normalise_iteration_break(result))
+  }
+
+  fn for_of_loop_evaluation(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmt: &ForOfStmt,
+    label_set: &[String],
   ) -> Result<Completion, VmError> {
     if stmt.await_ {
       return Err(VmError::Unimplemented("for await..of"));
@@ -1377,6 +1470,11 @@ impl<'a> Evaluator<'a> {
     let mut iterator_record = iterator::get_iterator(self.vm, &mut iter_scope, iterable)?;
     iter_scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
+    // Root `V` across the loop so the value can't be collected between iterations.
+    let v_root_idx = iter_scope.heap().root_stack.len();
+    iter_scope.push_root(Value::Undefined)?;
+    let mut v = Value::Undefined;
+
     loop {
       // Tick once per iteration so `for (x of xs) {}` is budgeted even when the body is empty.
       self.tick()?;
@@ -1391,7 +1489,7 @@ impl<'a> Evaluator<'a> {
       };
 
       let Some(value) = next_value else {
-        break;
+        return Ok(Completion::normal(v));
       };
 
       let bind_res: Result<(), VmError> = match &stmt.lhs {
@@ -1442,26 +1540,16 @@ impl<'a> Evaluator<'a> {
         }
       };
 
-      match body_completion {
-        Completion::Normal(_) => {}
-        Completion::Continue(None, _) => {}
-        Completion::Continue(Some(ref l), _) if active_label == Some(l.as_str()) => {}
-        Completion::Break(None, _) => {
-          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
-          break;
-        }
-        Completion::Break(Some(ref l), _) if active_label == Some(l.as_str()) => {
-          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
-          break;
-        }
-        other => {
-          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
-          return Ok(other);
-        }
+      if !Self::loop_continues(&body_completion, label_set) {
+        let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+        return Ok(body_completion.update_empty(Some(v)));
+      }
+
+      if let Some(value) = body_completion.value() {
+        v = value;
+        iter_scope.heap_mut().root_stack[v_root_idx] = value;
       }
     }
-
-    Ok(Completion::empty())
   }
 
   fn eval_for_body(
@@ -1476,48 +1564,16 @@ impl<'a> Evaluator<'a> {
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &LabelStmt,
+    label_set: &[String],
   ) -> Result<Completion, VmError> {
-    let label = stmt.name.as_str();
+    let mut new_label_set = label_set.to_vec();
+    new_label_set.push(stmt.name.clone());
 
-    // `continue <label>` is only valid when the labelled statement is a loop. We support labelled
-    // loops by passing the active label through to the loop evaluator.
-    let completion = match &*stmt.statement.stx {
-      Stmt::While(inner) => {
-        // One tick for evaluating the labelled loop statement itself (normally done by
-        // `eval_stmt`).
-        self.tick()?;
-        self.eval_while(scope, &inner.stx, Some(label))?
-      }
-      Stmt::DoWhile(inner) => {
-        self.tick()?;
-        self.eval_do_while(scope, &inner.stx, Some(label))?
-      }
-      Stmt::ForTriple(inner) => {
-        self.tick()?;
-        self.eval_for_triple(scope, &inner.stx, Some(label))?
-      }
-      Stmt::ForOf(inner) => {
-        self.tick()?;
-        self.eval_for_of(scope, &inner.stx, Some(label))?
-      }
-      // TODO: ForIn.
-      _ => self.eval_stmt(scope, &stmt.statement)?,
-    };
+    let result = self.eval_stmt_labelled(scope, &stmt.statement, &new_label_set)?;
 
-    match completion {
-      Completion::Break(Some(target), v) => {
-        if target == label {
-          Ok(Completion::Normal(v))
-        } else {
-          Ok(Completion::Break(Some(target), v))
-        }
-      }
-      Completion::Continue(Some(target), v) => {
-        if target == label {
-          Err(VmError::Unimplemented("continue to non-loop label"))
-        } else {
-          Ok(Completion::Continue(Some(target), v))
-        }
+    match result {
+      Completion::Break(Some(target), value) if target == stmt.name => {
+        Ok(Completion::normal(value.unwrap_or(Value::Undefined)))
       }
       other => Ok(other),
     }

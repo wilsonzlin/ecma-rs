@@ -69,3 +69,58 @@ fn var_initializer_assigns_to_var_env_even_when_catch_param_shadows() {
     .unwrap();
   assert_eq!(value, Value::Number(3.0));
 }
+
+#[test]
+fn labelled_block_break_consumes_break() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"a: { 1; break a; }"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn nested_labels_break_outer() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"a: b: { 1; break a; 2; }"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn while_not_entered_returns_undefined() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"1; while(false) {}"#).unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn while_empty_statement_does_not_clobber_later_value() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"while(false) {} 1"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn while_break_propagates_value() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"while(true) { 1; break; }"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn labelled_continue_targets_outer_loop() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        var x = 0;
+        outer: while (x === 0) {
+          while (true) {
+            x = 1;
+            continue outer;
+          }
+        }
+        x
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
