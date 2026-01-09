@@ -72,17 +72,17 @@ fn get_method_invokes_getter_once() -> Result<(), VmError> {
   let method_fn = cx
     .scope
     .alloc_native_function(method_id, None, method_name, 0)?;
-  cx.scope.push_root(Value::Object(method_fn));
+  cx.scope.push_root(Value::Object(method_fn))?;
   METHOD_FN.with(|m| m.set(Some(method_fn)));
 
   let getter_name = cx.scope.alloc_string("get")?;
   let getter_fn = cx
     .scope
     .alloc_native_function(getter_id, None, getter_name, 0)?;
-  cx.scope.push_root(Value::Object(getter_fn));
+  cx.scope.push_root(Value::Object(getter_fn))?;
 
   let obj = cx.scope.alloc_object()?;
-  cx.scope.push_root(Value::Object(obj));
+  cx.scope.push_root(Value::Object(obj))?;
 
   let key_s = cx.scope.alloc_string("m")?;
   let key = VmPropertyKey::from_string(key_s);

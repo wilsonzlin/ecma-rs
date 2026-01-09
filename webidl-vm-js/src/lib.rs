@@ -51,8 +51,9 @@ impl<'a> VmJsWebIdlCx<'a> {
     self.hooks.implements_interface(value, interface)
   }
 
-  fn root(&mut self, value: Value) {
-    self.scope.push_root(value);
+  fn root(&mut self, value: Value) -> Result<(), VmError> {
+    self.scope.push_root(value)?;
+    Ok(())
   }
 
   fn to_vm_property_key(key: PropertyKey<GcString, GcSymbol>) -> VmPropertyKey {
@@ -200,7 +201,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
 
   fn to_string(&mut self, value: Self::Value) -> Result<Self::String, Self::Error> {
     let s = self.scope.heap_mut().to_string(value)?;
-    self.root(Value::String(s));
+    self.root(Value::String(s))?;
     Ok(s)
   }
 
@@ -218,15 +219,15 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     object: Self::Object,
     key: PropertyKey<Self::String, Self::Symbol>,
   ) -> Result<Self::Value, Self::Error> {
-    self.root(Value::Object(object));
+    self.root(Value::Object(object))?;
     match key {
-      PropertyKey::String(s) => self.root(Value::String(s)),
-      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
+      PropertyKey::String(s) => self.root(Value::String(s))?,
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s))?,
     };
 
     let key = Self::to_vm_property_key(key);
     let value = self.vm.get(&mut self.scope, object, key)?;
-    self.root(value);
+    self.root(value)?;
     Ok(value)
   }
 
@@ -235,16 +236,16 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     object: Self::Object,
     key: PropertyKey<Self::String, Self::Symbol>,
   ) -> Result<Option<Self::Value>, Self::Error> {
-    self.root(Value::Object(object));
+    self.root(Value::Object(object))?;
     match key {
-      PropertyKey::String(s) => self.root(Value::String(s)),
-      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
+      PropertyKey::String(s) => self.root(Value::String(s))?,
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s))?,
     };
 
     let key = Self::to_vm_property_key(key);
     let method = self.vm.get_method(&mut self.scope, object, key)?;
     if let Some(v) = method {
-      self.root(v);
+      self.root(v)?;
     }
     Ok(method)
   }
@@ -253,32 +254,32 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     &mut self,
     object: Self::Object,
   ) -> Result<Vec<PropertyKey<Self::String, Self::Symbol>>, Self::Error> {
-    self.root(Value::Object(object));
+    self.root(Value::Object(object))?;
     let keys = self.scope.heap().ordinary_own_property_keys(object)?;
     Ok(keys.into_iter().map(Self::from_vm_property_key).collect())
   }
 
   fn alloc_string_from_code_units(&mut self, units: &[u16]) -> Result<Self::String, Self::Error> {
     let s = self.scope.alloc_string_from_code_units(units)?;
-    self.root(Value::String(s));
+    self.root(Value::String(s))?;
     Ok(s)
   }
 
   fn alloc_object(&mut self) -> Result<Self::Object, Self::Error> {
     let obj = self.scope.alloc_object()?;
-    self.root(Value::Object(obj));
+    self.root(Value::Object(obj))?;
     Ok(obj)
   }
 
   fn alloc_array(&mut self, len: usize) -> Result<Self::Object, Self::Error> {
     let obj = self.scope.alloc_array(len)?;
-    self.root(Value::Object(obj));
+    self.root(Value::Object(obj))?;
 
     // When a realm is initialized, prefer `%Array.prototype%` so the result behaves like a normal
     // JavaScript array (e.g. is iterable, has standard methods).
     if let Some(intrinsics) = self.vm.intrinsics() {
       let proto = intrinsics.array_prototype();
-      self.root(Value::Object(proto));
+      self.root(Value::Object(proto))?;
       self.scope.object_set_prototype(obj, Some(proto))?;
     }
 
@@ -291,12 +292,12 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     key: PropertyKey<Self::String, Self::Symbol>,
     value: Self::Value,
   ) -> Result<(), Self::Error> {
-    self.root(Value::Object(object));
+    self.root(Value::Object(object))?;
     match key {
-      PropertyKey::String(s) => self.root(Value::String(s)),
-      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
+      PropertyKey::String(s) => self.root(Value::String(s))?,
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s))?,
     };
-    self.root(value);
+    self.root(value)?;
 
     let key = Self::to_vm_property_key(key);
     self.scope.create_data_property_or_throw(object, key, value)?;
@@ -324,8 +325,8 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     object: Self::Object,
     method: Self::Value,
   ) -> Result<Self::Object, Self::Error> {
-    self.root(Value::Object(object));
-    self.root(method);
+    self.root(Value::Object(object))?;
+    self.root(method)?;
 
     let iterator = self
       .vm
@@ -333,7 +334,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     let Value::Object(iterator) = iterator else {
       return Err(self.type_error("Iterator method did not return an object"));
     };
-    self.root(Value::Object(iterator));
+    self.root(Value::Object(iterator))?;
     Ok(iterator)
   }
 
@@ -341,7 +342,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     &mut self,
     iterator: Self::Object,
   ) -> Result<IteratorResult<Self::Value>, Self::Error> {
-    self.root(Value::Object(iterator));
+    self.root(Value::Object(iterator))?;
 
     let next_key = PropertyKey::String(self.scope.alloc_string("next")?);
     let Some(next_method) = self.get_method(iterator, next_key)? else {
@@ -354,7 +355,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     let Value::Object(result_obj) = result else {
       return Err(self.type_error("IteratorNext(iterator): next() did not return an object"));
     };
-    self.root(Value::Object(result_obj));
+    self.root(Value::Object(result_obj))?;
 
     let done_key = PropertyKey::String(self.scope.alloc_string("done")?);
     let done_value = self.get(result_obj, done_key)?;
@@ -362,7 +363,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
 
     let value_key = PropertyKey::String(self.scope.alloc_string("value")?);
     let value = self.get(result_obj, value_key)?;
-    self.root(value);
+    self.root(value)?;
 
     Ok(IteratorResult { value, done })
   }
@@ -659,7 +660,7 @@ mod tests {
     let hooks = NoHooks;
     let limits = WebIdlLimits::default();
     let mut cx = VmJsWebIdlCx::new(&mut vm, &mut heap, limits, &hooks);
-    cx.scope.push_root(Value::Object(obj));
+    cx.scope.push_root(Value::Object(obj))?;
 
     let key = WebIdlPropertyKey::String(cx.scope.alloc_string("m")?);
     let got = cx.get_method(obj, key)?;
@@ -696,7 +697,7 @@ mod tests {
 
     // Create iterator object: { items, index: 0, next: <native fn> }.
     let iter_obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(iter_obj));
+    scope.push_root(Value::Object(iter_obj))?;
 
     // items
     scope.define_property(
@@ -820,7 +821,7 @@ mod tests {
 
     // Return result object { value, done }.
     let result_obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(result_obj));
+    scope.push_root(Value::Object(result_obj))?;
 
     let value_key = VmPropertyKey::from_string(scope.alloc_string("value")?);
     let done_key = VmPropertyKey::from_string(scope.alloc_string("done")?);
@@ -871,7 +872,7 @@ mod tests {
     let iterable;
     {
       iterable = cx.scope.alloc_object()?;
-      cx.scope.push_root(Value::Object(iterable));
+      cx.scope.push_root(Value::Object(iterable))?;
 
       let items_key = VmPropertyKey::from_string(cx.scope.alloc_string("items")?);
       cx.scope.define_property(
