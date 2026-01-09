@@ -250,6 +250,53 @@ fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {
 }
 
 #[test]
+fn promise_reaction_job_throw_is_invariant_violation_when_capability_is_undefined(
+) -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+
+  let mut scope = heap.scope();
+  let call_id = vm.register_native_call(noop)?;
+  let name = scope.alloc_string("onFulfilled")?;
+  let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1)?;
+
+  let argument_obj = scope.alloc_object()?;
+  let argument = Value::Object(argument_obj);
+
+  // Create a fulfill reaction with a callable handler.
+  let mut host = ThrowingHost::default();
+  let (fulfill_reaction, _reject_reaction) = normalize_promise_then_handlers(
+    &mut host,
+    scope.heap(),
+    Value::Object(on_fulfilled),
+    Value::Undefined,
+  )?;
+  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument)?;
+
+  drop(scope);
+
+  // The job must keep both the callback and argument alive until it runs.
+  heap.collect_garbage();
+  assert!(heap.is_valid_object(on_fulfilled));
+  assert!(heap.is_valid_object(argument_obj));
+
+  let mut ctx = RootingContext { heap: &mut heap };
+
+  // Critical: per spec, PromiseReactionJob with undefined capability has an assertion that the
+  // handler result is not abrupt; a thrown completion indicates an invariant violation.
+  match job.run(&mut ctx, &mut host) {
+    Err(VmError::InvariantViolation(_)) => {}
+    other => panic!("expected invariant violation, got {other:?}"),
+  }
+
+  // After job execution, the persistent roots should be removed.
+  ctx.heap.collect_garbage();
+  assert!(!ctx.heap.is_valid_object(on_fulfilled));
+  assert!(!ctx.heap.is_valid_object(argument_obj));
+  Ok(())
+}
+
+#[test]
 fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
@@ -300,49 +347,6 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   assert!(!ctx.heap.is_valid_object(thenable));
   assert!(!ctx.heap.is_valid_object(resolve));
   assert!(!ctx.heap.is_valid_object(reject));
-  Ok(())
-}
-
-  #[test]
-fn promise_reaction_job_throw_is_invariant_violation_when_capability_is_undefined(
-) -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-  let mut vm = Vm::new(VmOptions::default());
-
-  let mut scope = heap.scope();
-  let call_id = vm.register_native_call(noop)?;
-  let name = scope.alloc_string("onFulfilled")?;
-  let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1)?;
-
-  let argument_obj = scope.alloc_object()?;
-  let argument = Value::Object(argument_obj);
-
-  // Create a fulfill reaction with a callable handler.
-  let mut host = ThrowingHost::default();
-  let (fulfill_reaction, _reject_reaction) =
-    perform_promise_then(&mut host, scope.heap(), Value::Object(on_fulfilled), Value::Undefined)?;
-  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument)?;
-
-  drop(scope);
-
-  // The job must keep both the callback and argument alive until it runs.
-  heap.collect_garbage();
-  assert!(heap.is_valid_object(on_fulfilled));
-  assert!(heap.is_valid_object(argument_obj));
-
-  let mut ctx = RootingContext { heap: &mut heap };
-
-  // Critical: per spec, PromiseReactionJob with undefined capability has an assertion that the
-  // handler result is not abrupt; a thrown completion indicates an invariant violation.
-  match job.run(&mut ctx, &mut host) {
-    Err(VmError::InvariantViolation(_)) => {}
-    other => panic!("expected invariant violation, got {other:?}"),
-  }
-
-  // After job execution, the persistent roots should be removed.
-  ctx.heap.collect_garbage();
-  assert!(!ctx.heap.is_valid_object(on_fulfilled));
-  assert!(!ctx.heap.is_valid_object(argument_obj));
   Ok(())
 }
 
