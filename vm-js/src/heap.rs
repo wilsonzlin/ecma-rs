@@ -4,7 +4,13 @@ use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
 use core::mem;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+
+/// Hard upper bound for `[[Prototype]]` chain traversals.
+///
+/// This is a DoS resistance measure. Even though `object_set_prototype` prevents cycles,
+/// embeddings (or unsafe internal helpers) can violate invariants.
+pub const MAX_PROTOTYPE_CHAIN: usize = 10_000;
 
 /// Heap configuration and memory limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,6 +321,51 @@ impl Heap {
     obj: GcObject,
     prototype: Option<GcObject>,
   ) -> Result<(), VmError> {
+    // Validate `obj` early so we don't silently accept stale handles.
+    let _ = self.get_object(obj)?;
+
+    // Direct self-cycle.
+    if prototype == Some(obj) {
+      return Err(VmError::PrototypeCycle);
+    }
+
+    // Reject indirect cycles by walking `prototype`'s chain and checking whether it contains `obj`.
+    //
+    // Also guard against hostile chains (very deep or cyclic) even if an invariant was violated.
+    let mut current = prototype;
+    let mut steps = 0usize;
+    let mut visited: HashSet<GcObject> = HashSet::new();
+    while let Some(p) = current {
+      if steps >= MAX_PROTOTYPE_CHAIN {
+        return Err(VmError::PrototypeChainTooDeep);
+      }
+      steps += 1;
+
+      if !visited.insert(p) {
+        return Err(VmError::PrototypeCycle);
+      }
+      if p == obj {
+        return Err(VmError::PrototypeCycle);
+      }
+
+      current = self.object_prototype(p)?;
+    }
+
+    self.get_object_mut(obj)?.prototype = prototype;
+    Ok(())
+  }
+
+  /// Forcefully sets an object's `[[Prototype]]` without cycle checks.
+  ///
+  /// # Safety
+  ///
+  /// This can violate VM invariants (create prototype cycles, etc). Intended for low-level host
+  /// embeddings and tests.
+  pub unsafe fn object_set_prototype_unchecked(
+    &mut self,
+    obj: GcObject,
+    prototype: Option<GcObject>,
+  ) -> Result<(), VmError> {
     self.get_object_mut(obj)?.prototype = prototype;
     Ok(())
   }
@@ -332,6 +383,41 @@ impl Heap {
       }
     }
     Ok(None)
+  }
+
+  /// Gets a property descriptor from `obj` or its prototype chain.
+  pub fn get_property(
+    &self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<Option<PropertyDescriptor>, VmError> {
+    let mut current = Some(obj);
+    let mut steps = 0usize;
+    let mut visited: HashSet<GcObject> = HashSet::new();
+
+    while let Some(obj) = current {
+      if steps >= MAX_PROTOTYPE_CHAIN {
+        return Err(VmError::PrototypeChainTooDeep);
+      }
+      steps += 1;
+
+      if !visited.insert(obj) {
+        return Err(VmError::PrototypeCycle);
+      }
+
+      if let Some(desc) = self.object_get_own_property(obj, key)? {
+        return Ok(Some(desc));
+      }
+
+      current = self.object_prototype(obj)?;
+    }
+
+    Ok(None)
+  }
+
+  /// Returns whether a property exists on `obj` or its prototype chain.
+  pub fn has_property(&self, obj: GcObject, key: &PropertyKey) -> Result<bool, VmError> {
+    Ok(self.get_property(obj, key)?.is_some())
   }
 
   /// Convenience: returns the value of an own data property, if present.

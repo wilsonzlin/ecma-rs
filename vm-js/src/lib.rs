@@ -61,6 +61,7 @@ pub use crate::handle::RootId;
 pub use crate::handle::WeakGcObject;
 pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
+pub use crate::heap::MAX_PROTOTYPE_CHAIN;
 pub use crate::heap::Scope;
 pub use crate::intrinsics::Intrinsics;
 pub use crate::intrinsics::WellKnownSymbols;
