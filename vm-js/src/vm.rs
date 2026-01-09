@@ -171,6 +171,19 @@ pub struct Vm {
   /// embedding-specific type via [`Vm::user_data`] / [`Vm::user_data_mut`].
   user_data: Option<Box<dyn Any>>,
   microtasks: MicrotaskQueue,
+  /// Optional host hook override used by embedding entry points such as
+  /// [`crate::JsRuntime::exec_script_source_with_host`].
+  ///
+  /// When set, [`Vm::call`] / [`Vm::construct`] will route through this host hook implementation
+  /// instead of the VM-owned [`MicrotaskQueue`].
+  ///
+  /// ## Safety contract
+  ///
+  /// This raw pointer is only written by [`Vm::with_host_hooks_override`], which borrows the host
+  /// hooks mutably for the duration of the provided closure. All uses of this pointer must be
+  /// scoped within that closure, and must treat the pointer as a reborrow of the original `&mut`
+  /// reference.
+  host_hooks_override: Option<*mut (dyn VmHostHooks + 'static)>,
   ecma_functions: Vec<EcmaFunctionCode>,
   ecma_function_cache: HashMap<EcmaFunctionKey, EcmaFunctionId>,
   // Per-realm intrinsic graph used by built-in native function implementations.
@@ -197,6 +210,7 @@ impl std::fmt::Debug for Vm {
     ds.field("native_constructs", &self.native_constructs.len());
     ds.field("user_data", &self.user_data.as_ref().map(|_| "<opaque>"));
     ds.field("microtasks", &self.microtasks);
+    ds.field("host_hooks_override", &self.host_hooks_override.is_some());
     ds.field("ecma_functions", &self.ecma_functions.len());
     ds.field("ecma_function_cache", &self.ecma_function_cache.len());
     ds.field("intrinsics", &self.intrinsics);
@@ -362,6 +376,7 @@ impl Vm {
       native_constructs: Vec::new(),
       user_data: None,
       microtasks: MicrotaskQueue::new(),
+      host_hooks_override: None,
       ecma_functions: Vec::new(),
       ecma_function_cache: HashMap::new(),
       intrinsics: None,
@@ -386,6 +401,41 @@ impl Vm {
   #[inline]
   pub fn microtask_queue_mut(&mut self) -> &mut MicrotaskQueue {
     &mut self.microtasks
+  }
+
+  /// Temporarily override the host hook implementation used by [`Vm::call`] / [`Vm::construct`].
+  ///
+  /// This is primarily used by embedding entry points that need `vm-js` evaluation to enqueue
+  /// Promise jobs onto a host-owned microtask queue (HTML `HostEnqueuePromiseJob`) instead of the
+  /// VM-owned [`MicrotaskQueue`].
+  pub fn with_host_hooks_override<R>(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    f: impl FnOnce(&mut Vm) -> R,
+  ) -> R {
+    struct Guard<'a> {
+      vm: &'a mut Vm,
+      prev: Option<*mut (dyn VmHostHooks + 'static)>,
+    }
+
+    impl Drop for Guard<'_> {
+      fn drop(&mut self) {
+        self.vm.host_hooks_override = self.prev;
+      }
+    }
+
+    let prev = self.host_hooks_override;
+    // Store the host hook pointer with an erased lifetime. This is safe because:
+    // - the pointer is only used while `host` is mutably borrowed for the duration of this method,
+    // - and the override is restored on drop of `Guard` before `host` can be used again.
+    let host_ptr: *mut dyn VmHostHooks = host;
+    // SAFETY: `dyn Trait + 'a` and `dyn Trait + 'static` have the same runtime representation; the
+    // lifetime is purely a type-system constraint. The `Guard` ensures the pointer is not used
+    // outside the dynamic extent of this call.
+    let host_ptr: *mut (dyn VmHostHooks + 'static) = unsafe { std::mem::transmute(host_ptr) };
+    self.host_hooks_override = Some(host_ptr);
+    let guard = Guard { vm: self, prev };
+    f(&mut *guard.vm)
   }
 
   /// Performs a microtask checkpoint, draining the VM's microtask queue.
@@ -1018,6 +1068,14 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
+    if let Some(host_ptr) = self.host_hooks_override {
+      // SAFETY: `host_hooks_override` is only set by `with_host_hooks_override`, which borrows the
+      // host hook implementation mutably for the duration of its closure. This is treated as a
+      // reborrow of that original `&mut dyn VmHostHooks`.
+      let host = unsafe { &mut *host_ptr };
+      return self.call_with_host(scope, host, callee, this, args);
+    }
+
     // `call_with_host` requires `&mut self` plus an independent `&mut host`, but `Vm` stores a
     // default microtask queue inside itself. Temporarily move it out so it can serve as the host
     // hook implementation for this call.
@@ -1083,7 +1141,7 @@ impl Vm {
         combined.extend_from_slice(bound_args);
         combined.extend_from_slice(args);
 
-        return self.call(&mut scope, Value::Object(bound_target), bound_this, &combined);
+        return self.call_with_host(&mut scope, host, Value::Object(bound_target), bound_this, &combined);
       }
     }
     let call_handler = scope.heap().get_function_call_handler(callee_obj)?;
@@ -1185,6 +1243,11 @@ impl Vm {
     args: &[Value],
     new_target: Value,
   ) -> Result<Value, VmError> {
+    if let Some(host_ptr) = self.host_hooks_override {
+      // SAFETY: see `Vm::call`.
+      let host = unsafe { &mut *host_ptr };
+      return self.construct_with_host(scope, host, callee, args, new_target);
+    }
     let mut host = mem::take(&mut self.microtasks);
     let result = self.construct_with_host(scope, &mut host, callee, args, new_target);
     self.microtasks = host;
@@ -1229,7 +1292,7 @@ impl Vm {
         combined.extend_from_slice(bound_args);
         combined.extend_from_slice(args);
 
-        return self.construct(&mut scope, Value::Object(bound_target), &combined, new_target);
+        return self.construct_with_host(&mut scope, host, Value::Object(bound_target), &combined, new_target);
       }
     }
     let construct_handler = scope

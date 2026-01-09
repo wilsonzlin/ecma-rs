@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
-use crate::{GcObject, Scope, Value, Vm, VmError};
+use crate::{GcObject, Scope, Value, Vm, VmError, VmHostHooks};
 
 impl<'a> Scope<'a> {
   pub fn object_get_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
@@ -112,6 +112,37 @@ impl<'a> Scope<'a> {
             return Err(VmError::TypeError("accessor getter is not callable"));
           }
           vm.call(self, get, receiver, &[])
+        }
+      }
+    }
+  }
+
+  /// ECMAScript `[[Get]]` for ordinary objects, using an explicit host hook implementation.
+  ///
+  /// This behaves like [`Scope::ordinary_get`], but threads `host` through accessor invocations so
+  /// Promise jobs created by getters are routed via the embedding's [`VmHostHooks`] implementation.
+  pub fn ordinary_get_with_host(
+    &mut self,
+    vm: &mut Vm,
+    host: &mut dyn VmHostHooks,
+    obj: GcObject,
+    key: PropertyKey,
+    receiver: Value,
+  ) -> Result<Value, VmError> {
+    let Some(desc) = self.heap().get_property(obj, &key)? else {
+      return Ok(Value::Undefined);
+    };
+
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(value),
+      PropertyKind::Accessor { get, .. } => {
+        if matches!(get, Value::Undefined) {
+          Ok(Value::Undefined)
+        } else {
+          if !self.heap().is_callable(get)? {
+            return Err(VmError::TypeError("accessor getter is not callable"));
+          }
+          vm.call_with_host(self, host, get, receiver, &[])
         }
       }
     }

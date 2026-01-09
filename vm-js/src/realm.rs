@@ -1,5 +1,8 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Heap, Intrinsics, RootId, Value, Vm, VmError, WellKnownSymbols};
+use crate::{GcObject, Heap, Intrinsics, RealmId, RootId, Value, Vm, VmError, WellKnownSymbols};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_REALM_ID: AtomicU64 = AtomicU64::new(1);
 
 /// An ECMAScript realm: global object + intrinsics.
 ///
@@ -9,6 +12,7 @@ use crate::{GcObject, Heap, Intrinsics, RootId, Value, Vm, VmError, WellKnownSym
 /// single heap).
 #[derive(Debug)]
 pub struct Realm {
+  id: RealmId,
   global_object: GcObject,
   intrinsics: Intrinsics,
   roots: Vec<RootId>,
@@ -29,6 +33,7 @@ pub struct Realm {
 impl Realm {
   /// Creates a new realm on `heap`.
   pub fn new(vm: &mut Vm, heap: &mut Heap) -> Result<Self, VmError> {
+    let id = RealmId::from_raw(NEXT_REALM_ID.fetch_add(1, Ordering::Relaxed));
     let mut roots = Vec::new();
 
     let mut scope = heap.scope();
@@ -258,11 +263,16 @@ impl Realm {
     vm.set_intrinsics(intrinsics);
 
     Ok(Self {
+      id,
       global_object,
       intrinsics,
       roots,
       torn_down: false,
     })
+  }
+
+  pub fn id(&self) -> RealmId {
+    self.id
   }
 
   /// The realm's global object.

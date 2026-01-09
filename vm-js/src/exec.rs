@@ -614,19 +614,8 @@ impl JsRuntime {
       dialect: Dialect::Ecma,
       source_type: SourceType::Script,
     };
-    let mut top = parse_with_options(&source.text, opts)
+    let top = parse_with_options(&source.text, opts)
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
-    let (sem, diagnostics) = bind_js_for_runtime(&mut top, TopLevelMode::Script, FileId(0));
-    if !diagnostics.is_empty() {
-      return Err(VmError::Syntax(diagnostics));
-    }
-    if sem
-      .scopes
-      .values()
-      .any(|s| s.is_dynamic || s.has_direct_eval)
-    {
-      return Err(VmError::Unimplemented("with/eval dynamic scope"));
-    }
     let strict = detect_use_strict_directive(&top.stx.body);
 
     let global_object = self.realm.global_object();
@@ -640,44 +629,47 @@ impl JsRuntime {
       col,
     };
 
-    let exec_ctx = crate::ExecutionContext {
-      realm: self.realm.id(),
-      script_or_module: None,
-    };
-    self.vm.push_execution_context(exec_ctx);
+    let exec_ctx = crate::ExecutionContext { realm: self.realm.id(), script_or_module: None };
+    let vm = &mut self.vm;
+    vm.push_execution_context(exec_ctx);
+
+    // Bind the runtime fields we need so we can borrow-split `(vm, heap, env)` cleanly.
+    let heap = &mut self.heap;
+    let env = &mut self.env;
 
     let result = (|| {
-      let mut vm_frame = self.vm.enter_frame(frame)?;
+      // Route all internal `vm.call` / `vm.construct` uses through `host` for the duration of script
+      // execution so Promise jobs are enqueued onto the embedding's microtask queue.
+      vm.with_host_hooks_override(host, |vm| -> Result<Value, VmError> {
+        let mut vm_frame = vm.enter_frame(frame)?;
 
-      let mut scope = self.heap.scope();
-      let global_this = Value::Object(global_object);
-      let mut evaluator = Evaluator {
-        vm: &mut *vm_frame,
-        hooks: host,
-        env: &mut self.env,
-        sem: Arc::new(sem),
-        strict,
-        this: global_this,
-        new_target: Value::Undefined,
-        current_scope: ScopeId::from_raw(0),
-        scope_stack: Vec::new(),
-      };
+        let mut scope = heap.scope();
+        let global_this = Value::Object(global_object);
+        let mut evaluator = Evaluator {
+          vm: &mut *vm_frame,
+          env,
+          strict,
+          this: global_this,
+          new_target: Value::Undefined,
+        };
 
-      (|| {
-        evaluator.enter_script(&mut scope, &top)?;
+        evaluator.instantiate_script(&mut scope, &top.stx.body)?;
 
         let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
         match completion {
           Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-          Completion::Throw(v) => Err(VmError::Throw(v)),
+          Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+            value: thrown.value,
+            stack: thrown.stack,
+          }),
           Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
           Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
           Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
         }
-      })()
+      })
     })();
 
-    let popped = self.vm.pop_execution_context();
+    let popped = vm.pop_execution_context();
     debug_assert_eq!(
       popped,
       Some(exec_ctx),
