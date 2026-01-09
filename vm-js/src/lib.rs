@@ -28,29 +28,17 @@
 //!   dropped, all stack roots created within it are popped.
 //! - **Persistent roots**: managed by [`Heap::add_root`] / [`Heap::remove_root`], intended for host
 //!   embeddings.
-//!
-//! # WebIDL / host objects
-//!
-//! If you are embedding `vm-js` in a browser-style host and need to expose Web APIs (constructors,
-//! `prototype` objects, native methods/attributes, wrapper identity caches), see
-//! [`docs::webidl_host_objects`](crate::docs::webidl_host_objects).
 
 mod error;
-mod env;
 mod exec;
 mod function;
-mod function_properties;
 mod handle;
 mod heap;
 mod intrinsics;
 mod interrupt;
-mod execution_context;
-mod object_ops;
 mod jobs;
-mod module_loading;
-mod native;
-mod promise;
-mod promise_jobs;
+mod job_queue;
+mod promise_rejection_tracker;
 mod property;
 mod realm;
 mod source;
@@ -66,69 +54,34 @@ pub use crate::exec::Completion;
 pub use crate::exec::JsRuntime;
 pub use crate::function::NativeConstructId;
 pub use crate::function::NativeFunctionId;
-pub use crate::function_properties::make_constructor;
-pub use crate::function_properties::set_function_length;
-pub use crate::function_properties::set_function_name;
 pub use crate::handle::GcObject;
-pub(crate) use crate::handle::GcEnv;
 pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;
 pub use crate::handle::HeapId;
-pub(crate) use crate::handle::EnvRootId;
 pub use crate::handle::RootId;
 pub use crate::handle::WeakGcObject;
 pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
+pub use crate::heap::MAX_PROTOTYPE_CHAIN;
 pub use crate::heap::Scope;
 pub use crate::intrinsics::Intrinsics;
 pub use crate::intrinsics::WellKnownSymbols;
 pub use crate::interrupt::InterruptHandle;
 pub use crate::interrupt::InterruptToken;
-pub use crate::execution_context::ExecutionContext;
-pub use crate::execution_context::ModuleId;
-pub use crate::execution_context::ScriptId;
-pub use crate::execution_context::ScriptOrModule;
 pub use crate::jobs::Job;
 pub use crate::jobs::JobCallback;
 pub use crate::jobs::JobKind;
 pub use crate::jobs::JobResult;
-pub use crate::jobs::PromiseHandle;
-pub use crate::jobs::PromiseRejectionOperation;
 pub use crate::jobs::RealmId;
 pub use crate::jobs::VmHostHooks;
 pub use crate::jobs::VmJobContext;
-pub use crate::module_loading::all_import_attributes_supported;
-pub use crate::module_loading::continue_dynamic_import;
-pub use crate::module_loading::continue_module_loading;
-pub use crate::module_loading::finish_loading_imported_module;
-pub use crate::module_loading::import_attributes_from_options;
-pub use crate::module_loading::GraphLoadingState;
-pub use crate::module_loading::ImportAttribute;
-pub use crate::module_loading::ImportCallError;
-pub use crate::module_loading::ImportCallTypeError;
-pub use crate::module_loading::ModuleCompletion;
-pub use crate::module_loading::ModuleLoadPayload;
-pub use crate::module_loading::ModuleRecord;
-pub use crate::module_loading::ModuleReferrer;
-pub use crate::module_loading::ModuleRequest;
-pub use crate::module_loading::PromiseCapability;
-pub use crate::module_loading::ScriptOrModuleId;
-pub use crate::module_loading::VmModuleHostHooks;
-pub use crate::module_loading::start_dynamic_import;
-pub use crate::native::alloc_native_function_name;
-pub use crate::native::dispatch_native_call;
-pub use crate::native::dispatch_native_construct;
-pub use crate::native::native_construct_id;
-pub use crate::native::native_function_meta;
-pub use crate::native::NativeCallFn;
-pub use crate::native::NativeConstructFn;
-pub use crate::native::NativeFunctionMeta;
-pub use crate::promise::create_promise_resolve_thenable_job;
-pub use crate::promise::perform_promise_then;
-pub use crate::promise::PromiseReactionRecord;
-pub use crate::promise::PromiseReactionType;
-pub use crate::promise_jobs::new_promise_reaction_job;
-pub use crate::promise_jobs::new_promise_resolve_thenable_job;
+pub use crate::job_queue::JobQueue;
+pub use crate::job_queue::MicrotaskJob;
+pub use crate::job_queue::PromiseHandle;
+pub use crate::job_queue::PromiseRejectionOperation;
+pub use crate::promise_rejection_tracker::AboutToBeNotifiedBatch;
+pub use crate::promise_rejection_tracker::PromiseRejectionHandleAction;
+pub use crate::promise_rejection_tracker::PromiseRejectionTracker;
 pub use crate::property::PropertyDescriptor;
 pub use crate::property::PropertyDescriptorPatch;
 pub use crate::property::PropertyKey;
@@ -143,14 +96,5 @@ pub use crate::value::Value;
 pub use crate::vm::NativeCall;
 pub use crate::vm::NativeConstruct;
 pub use crate::vm::Budget;
-pub use crate::vm::BudgetGuard;
-pub use crate::vm::ExecutionContextGuard;
 pub use crate::vm::Vm;
 pub use crate::vm::VmOptions;
-
-/// Long-form guides and embedding documentation.
-pub mod docs {
-  /// WebIDL binding initialization patterns (constructors, prototypes, host objects).
-  #[doc = include_str!("../docs/webidl_host_objects.md")]
-  pub mod webidl_host_objects {}
-}
