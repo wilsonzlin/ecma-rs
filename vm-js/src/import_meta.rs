@@ -85,7 +85,7 @@ pub fn create_import_meta_object(
 
   // OrdinaryObjectCreate(null).
   let import_meta = scope.alloc_object()?;
-  scope.push_root(Value::Object(import_meta));
+  scope.push_root(Value::Object(import_meta))?;
 
   let properties = hooks.host_get_import_meta_properties(vm, &mut scope, module)?;
 
@@ -93,13 +93,13 @@ pub fn create_import_meta_object(
   for prop in &properties {
     match prop.key {
       PropertyKey::String(s) => {
-        scope.push_root(Value::String(s));
+        scope.push_root(Value::String(s))?;
       }
       PropertyKey::Symbol(s) => {
-        scope.push_root(Value::Symbol(s));
+        scope.push_root(Value::Symbol(s))?;
       }
     }
-    scope.push_root(prop.value);
+    scope.push_root(prop.value)?;
   }
 
   for prop in properties {
@@ -109,4 +109,3 @@ pub fn create_import_meta_object(
   hooks.host_finalize_import_meta(vm, &mut scope, import_meta, module)?;
   Ok(import_meta)
 }
-

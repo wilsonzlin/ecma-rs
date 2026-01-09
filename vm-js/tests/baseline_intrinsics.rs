@@ -139,7 +139,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     let Value::Object(obj) = obj_value else {
       panic!("Object() should return an object");
     };
-    scope.push_root(Value::Object(obj));
+    scope.push_root(Value::Object(obj))?;
     assert_eq!(scope.heap().object_prototype(obj)?, Some(intr.object_prototype()));
 
     // `%Object%` construct
@@ -152,12 +152,12 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     let Value::Object(obj2) = obj_value else {
       panic!("new Object() should return an object");
     };
-    scope.push_root(Value::Object(obj2));
+    scope.push_root(Value::Object(obj2))?;
     assert_eq!(scope.heap().object_prototype(obj2)?, Some(intr.object_prototype()));
 
     // `%Object%` called with an object returns the same object.
     let arg_obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(arg_obj));
+    scope.push_root(Value::Object(arg_obj))?;
     let out = vm.call(
       &mut scope,
       Value::Object(intr.object_constructor()),
@@ -185,7 +185,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     let Value::Object(arr) = arr_value else {
       panic!("Array() should return an object");
     };
-    scope.push_root(Value::Object(arr));
+    scope.push_root(Value::Object(arr))?;
     assert_eq!(scope.heap().object_prototype(arr)?, Some(intr.array_prototype()));
 
     // `%Array%` construct
@@ -198,7 +198,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     let Value::Object(arr2) = arr_value else {
       panic!("new Array() should return an object");
     };
-    scope.push_root(Value::Object(arr2));
+    scope.push_root(Value::Object(arr2))?;
     assert_eq!(scope.heap().object_prototype(arr2)?, Some(intr.array_prototype()));
   }
 
@@ -226,7 +226,7 @@ fn array_get_and_own_property_keys_are_sufficient_for_webidl_sequences() -> Resu
     let Value::Object(arr) = arr_value else {
       panic!("Array(len) should return an object");
     };
-    scope.push_root(Value::Object(arr));
+    scope.push_root(Value::Object(arr))?;
 
     // Define elements 0..2 in the way WebIDL `sequence_to_js_array` expects (CreateDataPropertyOrThrow).
     for (i, v) in [10.0, 20.0, 30.0].into_iter().enumerate() {

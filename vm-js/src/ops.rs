@@ -13,7 +13,7 @@ pub fn to_primitive(heap: &mut Heap, value: Value) -> Result<Value, VmError> {
       // Returning a string matches `Object.prototype.toString` for plain objects and makes
       // `Number({})` produce `NaN`, and `({}) + "x"` produce "[object Object]x".
       let mut scope = heap.scope();
-      scope.push_root(Value::Object(obj));
+      scope.push_root(Value::Object(obj))?;
       let s = scope.alloc_string("[object Object]")?;
       Ok(Value::String(s))
     }
@@ -45,8 +45,8 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
   // `==` can allocate when converting objects to primitives (via `ToPrimitive`), so root operands
   // for the duration of the comparison.
   let mut scope = heap.scope();
-  let mut a = scope.push_root(a);
-  let mut b = scope.push_root(b);
+  let mut a = scope.push_root(a)?;
+  let mut b = scope.push_root(b)?;
 
   loop {
     match (a, b) {
@@ -65,31 +65,31 @@ pub fn abstract_equality(heap: &mut Heap, a: Value, b: Value) -> Result<bool, Vm
       // Number/string conversions.
       (Number(_), String(_)) => {
         let bn = to_number(scope.heap_mut(), b)?;
-        b = scope.push_root(Number(bn));
+        b = scope.push_root(Number(bn))?;
       }
       (String(_), Number(_)) => {
         let an = to_number(scope.heap_mut(), a)?;
-        a = scope.push_root(Number(an));
+        a = scope.push_root(Number(an))?;
       }
 
       // Boolean conversions.
       (Bool(_), _) => {
         let an = to_number(scope.heap_mut(), a)?;
-        a = scope.push_root(Number(an));
+        a = scope.push_root(Number(an))?;
       }
       (_, Bool(_)) => {
         let bn = to_number(scope.heap_mut(), b)?;
-        b = scope.push_root(Number(bn));
+        b = scope.push_root(Number(bn))?;
       }
 
       // Object-to-primitive conversions.
       (Object(_), String(_) | Number(_) | Symbol(_)) => {
         let prim = to_primitive(scope.heap_mut(), a)?;
-        a = scope.push_root(prim);
+        a = scope.push_root(prim)?;
       }
       (String(_) | Number(_) | Symbol(_), Object(_)) => {
         let prim = to_primitive(scope.heap_mut(), b)?;
-        b = scope.push_root(prim);
+        b = scope.push_root(prim)?;
       }
 
       _ => return Ok(false),
@@ -102,20 +102,20 @@ pub fn add_operator(heap: &mut Heap, a: Value, b: Value) -> Result<Value, VmErro
   // Root inputs and any intermediate heap values for the duration of the operation: `+` may
   // allocate (string concatenation) and thus trigger GC.
   let mut scope = heap.scope();
-  scope.push_root(a);
-  scope.push_root(b);
+  scope.push_root(a)?;
+  scope.push_root(b)?;
 
   let a = to_primitive(scope.heap_mut(), a)?;
-  scope.push_root(a);
+  scope.push_root(a)?;
   let b = to_primitive(scope.heap_mut(), b)?;
-  scope.push_root(b);
+  scope.push_root(b)?;
 
   let should_concat = matches!(a, Value::String(_)) || matches!(b, Value::String(_));
   if should_concat {
     let a_str = scope.heap_mut().to_string(a)?;
-    scope.push_root(Value::String(a_str));
+    scope.push_root(Value::String(a_str))?;
     let b_str = scope.heap_mut().to_string(b)?;
-    scope.push_root(Value::String(b_str));
+    scope.push_root(Value::String(b_str))?;
 
     let a_units = scope.heap().get_string(a_str)?.as_code_units();
     let b_units = scope.heap().get_string(b_str)?.as_code_units();

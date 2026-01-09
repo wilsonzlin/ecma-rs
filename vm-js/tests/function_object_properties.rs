@@ -30,7 +30,7 @@ fn native_function_can_define_and_get_own_property_via_object_get_own_data_prope
     let call_id = vm.register_native_call(return_undefined)?;
     let name = scope.alloc_string("f")?;
     func = scope.alloc_native_function(call_id, None, name, 0)?;
-    scope.push_root(Value::Object(func));
+    scope.push_root(Value::Object(func))?;
 
     child = scope.alloc_object()?;
     dead = scope.alloc_object()?;

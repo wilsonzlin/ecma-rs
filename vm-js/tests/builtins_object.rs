@@ -30,7 +30,7 @@ fn get_own_data_property(
   name: &str,
 ) -> Result<Option<Value>, VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
   let key = PropertyKey::from_string(scope.alloc_string(name)?);
   scope.heap().object_get_own_data_property_value(obj, &key)
 }
@@ -42,8 +42,8 @@ fn define_enumerable_data_property(
   value: Value,
 ) -> Result<(), VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(obj));
-  scope.push_root(value);
+  scope.push_root(Value::Object(obj))?;
+  scope.push_root(value)?;
   let key = PropertyKey::from_string(scope.alloc_string(name)?);
   let desc = PropertyDescriptor {
     enumerable: true,
@@ -102,11 +102,11 @@ fn object_define_property_defines_value() -> Result<(), VmError> {
   };
 
   let o = scope.alloc_object()?;
-  scope.push_root(Value::Object(o));
+  scope.push_root(Value::Object(o))?;
 
   // { value: 1 }
   let desc = scope.alloc_object()?;
-  scope.push_root(Value::Object(desc));
+  scope.push_root(Value::Object(desc))?;
   define_enumerable_data_property(&mut scope, desc, "value", Value::Number(1.0))?;
 
   let x = scope.alloc_string("x")?;
@@ -142,7 +142,7 @@ fn object_create_sets_prototype() -> Result<(), VmError> {
 
   // { y: 2 }
   let p = scope.alloc_object()?;
-  scope.push_root(Value::Object(p));
+  scope.push_root(Value::Object(p))?;
   define_enumerable_data_property(&mut scope, p, "y", Value::Number(2.0))?;
 
   let y_key = PropertyKey::from_string(scope.alloc_string("y")?);
@@ -183,7 +183,7 @@ fn object_keys_returns_enumerable_string_keys() -> Result<(), VmError> {
 
   // { a: 1, b: 2 }
   let o = scope.alloc_object()?;
-  scope.push_root(Value::Object(o));
+  scope.push_root(Value::Object(o))?;
   define_enumerable_data_property(&mut scope, o, "a", Value::Number(1.0))?;
   define_enumerable_data_property(&mut scope, o, "b", Value::Number(2.0))?;
 
@@ -217,9 +217,9 @@ fn object_assign_copies_enumerable_properties_and_invokes_getters() -> Result<()
   };
 
   let target = scope.alloc_object()?;
-  scope.push_root(Value::Object(target));
+  scope.push_root(Value::Object(target))?;
   let source = scope.alloc_object()?;
-  scope.push_root(Value::Object(source));
+  scope.push_root(Value::Object(source))?;
 
   // Enumerable data property.
   define_enumerable_data_property(&mut scope, source, "a", Value::Number(1.0))?;
@@ -228,7 +228,7 @@ fn object_assign_copies_enumerable_properties_and_invokes_getters() -> Result<()
   let getter_id = rt.vm.register_native_call(return_two_native)?;
   let getter_name = scope.alloc_string("")?;
   let getter = scope.alloc_native_function(getter_id, None, getter_name, 0)?;
-  scope.push_root(Value::Object(getter));
+  scope.push_root(Value::Object(getter))?;
 
   let key_b = PropertyKey::from_string(scope.alloc_string("b")?);
   scope.define_property(
@@ -278,9 +278,9 @@ fn object_assign_throws_when_setting_non_writable_target_property() -> Result<()
   };
 
   let target = scope.alloc_object()?;
-  scope.push_root(Value::Object(target));
+  scope.push_root(Value::Object(target))?;
   let source = scope.alloc_object()?;
-  scope.push_root(Value::Object(source));
+  scope.push_root(Value::Object(source))?;
 
   // target.x is non-writable.
   let key_x = PropertyKey::from_string(scope.alloc_string("x")?);

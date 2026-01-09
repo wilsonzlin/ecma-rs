@@ -1,6 +1,4 @@
-use std::mem;
-
-use vm_js::{Heap, HeapLimits, JsString, VmError};
+use vm_js::{Heap, HeapLimits, VmError};
 
 #[test]
 fn utf8_to_utf16_roundtrip_bmp_and_astral() {
@@ -59,19 +57,31 @@ fn equality_compares_code_units() {
 #[test]
 fn heap_limit_is_enforced() {
   let units = vec![0u16; 10];
-  let bytes = mem::size_of::<JsString>() + units.len() * 2;
+  let payload_bytes = units.len() * 2;
+
+  // Determine the exact total budget required for this allocation, including heap metadata.
+  let required_total = {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    scope.alloc_string_from_code_units(&units).unwrap();
+    scope.heap().estimated_total_bytes()
+  };
 
   {
-    let mut heap = Heap::new(HeapLimits::new(bytes - 1, bytes - 1));
+    let mut heap = Heap::new(HeapLimits::new(required_total - 1, required_total - 1));
     let mut scope = heap.scope();
     let err = scope.alloc_string_from_code_units(&units).unwrap_err();
     assert!(matches!(err, VmError::OutOfMemory));
   }
 
   {
-    let mut heap = Heap::new(HeapLimits::new(bytes, bytes));
+    let mut heap = Heap::new(HeapLimits::new(required_total, required_total));
     let mut scope = heap.scope();
     scope.alloc_string_from_code_units(&units).unwrap();
-    assert_eq!(scope.heap().used_bytes(), bytes);
+    assert_eq!(scope.heap().used_bytes(), payload_bytes);
+    assert!(
+      scope.heap().estimated_total_bytes() <= required_total,
+      "expected heap.estimated_total_bytes() <= configured max_bytes"
+    );
   }
 }

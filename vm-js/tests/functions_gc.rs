@@ -29,7 +29,7 @@ fn gc_preserves_stack_rooted_functions() -> Result<(), VmError> {
     let mut scope = heap.scope();
     let name = scope.alloc_string("rooted")?;
     func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
-    scope.push_root(Value::Object(func));
+    scope.push_root(Value::Object(func))?;
 
     scope.heap_mut().collect_garbage();
     assert!(scope.heap().is_valid_object(func));
@@ -50,7 +50,7 @@ fn function_traces_its_name_string() -> Result<(), VmError> {
     let mut scope = heap.scope();
     name = scope.alloc_string("my_func")?;
     func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
-    scope.push_root(Value::Object(func));
+    scope.push_root(Value::Object(func))?;
 
     scope.heap_mut().collect_garbage();
     assert_eq!(scope.heap().get_string(name)?.to_utf8_lossy(), "my_func");
@@ -73,7 +73,7 @@ fn gc_traces_closure_env_from_ecma_function() -> Result<(), VmError> {
     let mut scope = heap.scope();
     let name = scope.alloc_string("closure")?;
     // Root the name across environment allocation in case it triggers a GC.
-    scope.push_root(Value::String(name));
+    scope.push_root(Value::String(name))?;
 
     env = scope.env_create(None)?;
     func = scope.alloc_ecma_function(
@@ -87,7 +87,7 @@ fn gc_traces_closure_env_from_ecma_function() -> Result<(), VmError> {
     )?;
 
     // Only root the function; if it doesn't trace `closure_env`, `env` would be collected.
-    scope.push_root(Value::Object(func));
+    scope.push_root(Value::Object(func))?;
 
     scope.heap_mut().collect_garbage();
     assert!(scope.heap().is_valid_object(func));

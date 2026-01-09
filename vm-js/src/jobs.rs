@@ -110,7 +110,7 @@ pub trait VmJobContext {
   ) -> Result<Value, VmError>;
 
   /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
-  fn add_root(&mut self, value: Value) -> RootId;
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError>;
 
   /// Removes a persistent root previously created by [`VmJobContext::add_root`].
   fn remove_root(&mut self, id: RootId);
@@ -154,10 +154,14 @@ impl Job {
   }
 
   /// Adds a persistent root that will be automatically removed when the job is run or discarded.
-  pub fn add_root(&mut self, ctx: &mut dyn VmJobContext, value: Value) -> RootId {
-    let id = ctx.add_root(value);
+  pub fn add_root(&mut self, ctx: &mut dyn VmJobContext, value: Value) -> Result<RootId, VmError> {
+    let id = ctx.add_root(value)?;
+    if self.roots.try_reserve_exact(1).is_err() {
+      ctx.remove_root(id);
+      return Err(VmError::OutOfMemory);
+    }
     self.roots.push(id);
-    id
+    Ok(id)
   }
 
   /// Records an existing persistent root so it will be automatically removed when the job is run
@@ -271,6 +275,7 @@ impl Drop for Job {
 ///
 /// ```no_run
 /// # use vm_js::{GcObject, Job, JobKind, JobResult, JobCallback, RealmId, RootId, Value, VmError, VmHostHooks, VmJobContext};
+/// # fn main() -> Result<(), VmError> {
 /// # struct Host;
 /// # impl VmHostHooks for Host {
 /// #   fn host_enqueue_promise_job(&mut self, _job: Job, _realm: Option<RealmId>) {}
@@ -279,7 +284,7 @@ impl Drop for Job {
 /// # impl VmJobContext for Ctx {
 /// #   fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> { unimplemented!() }
 /// #   fn construct(&mut self, _callee: Value, _args: &[Value], _new_target: Value) -> Result<Value, VmError> { unimplemented!() }
-/// #   fn add_root(&mut self, _value: Value) -> RootId { unimplemented!() }
+/// #   fn add_root(&mut self, _value: Value) -> Result<RootId, VmError> { unimplemented!() }
 /// #   fn remove_root(&mut self, _id: RootId) { unimplemented!() }
 /// # }
 /// # let mut host = Host;
@@ -294,8 +299,10 @@ impl Drop for Job {
 /// });
 ///
 /// // IMPORTANT: keep `callback_obj` alive until the queued job runs.
-/// job.add_root(&mut ctx, Value::Object(callback_obj));
+/// job.add_root(&mut ctx, Value::Object(callback_obj))?;
 /// host.host_enqueue_promise_job(job, None);
+/// # Ok(())
+/// # }
 /// ```
 #[derive(Clone)]
 pub struct JobCallback {

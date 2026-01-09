@@ -49,11 +49,11 @@ fn import_meta_hooks_are_called_and_object_is_spec_shaped() {
   let mut scope = heap.scope();
 
   let url_key_s = scope.alloc_string("url").unwrap();
-  scope.push_root(Value::String(url_key_s));
+  scope.push_root(Value::String(url_key_s)).unwrap();
   let url_value_s = scope
     .alloc_string("https://example.invalid/module.js")
     .unwrap();
-  scope.push_root(Value::String(url_value_s));
+  scope.push_root(Value::String(url_value_s)).unwrap();
 
   let mut hooks = TestHooks {
     url_key: PropertyKey::from_string(url_key_s),
@@ -79,4 +79,3 @@ fn import_meta_hooks_are_called_and_object_is_spec_shaped() {
 
   assert_eq!(hooks.finalize_calls, 1);
 }
-

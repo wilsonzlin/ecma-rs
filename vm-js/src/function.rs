@@ -169,10 +169,12 @@ impl JsFunction {
       .checked_mul(mem::size_of::<Value>())
       .unwrap_or(usize::MAX);
     let props_bytes = ObjectBase::properties_heap_size_bytes_for_count(property_count);
-    mem::size_of::<Self>()
-      .checked_add(bound_args_bytes)
-      .and_then(|size| size.checked_add(props_bytes))
-      .unwrap_or(usize::MAX)
+    // Payload bytes owned by this function allocation.
+    //
+    // Note: `JsFunction` headers are stored inline in the heap slot table, so this size
+    // intentionally excludes `mem::size_of::<JsFunction>()` and only counts heap-owned payload
+    // allocations.
+    bound_args_bytes.checked_add(props_bytes).unwrap_or(usize::MAX)
   }
 }
 

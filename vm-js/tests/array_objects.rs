@@ -19,7 +19,7 @@ fn array_length_updates_on_index_definitions() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let a = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(a));
+  scope.push_root(Value::Object(a))?;
 
   let length_key = PropertyKey::from_string(scope.alloc_string("length")?);
   assert_eq!(
@@ -63,7 +63,7 @@ fn own_property_keys_orders_array_indices_first() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let a = scope.alloc_array(0)?;
-  scope.push_root(Value::Object(a));
+  scope.push_root(Value::Object(a))?;
 
   // Define out of order; `own_property_keys` should sort indices.
   let k5 = PropertyKey::from_string(scope.alloc_string("5")?);
@@ -83,4 +83,3 @@ fn own_property_keys_orders_array_indices_first() -> Result<(), VmError> {
   assert_eq!(names, vec!["0", "5", "length"]);
   Ok(())
 }
-

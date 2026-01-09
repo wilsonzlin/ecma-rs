@@ -135,7 +135,7 @@ pub fn get_iterator_from_method(
   // Root the iterator object while allocating/reading the `next` method in case those operations
   // trigger GC.
   let mut next_scope = scope.reborrow();
-  next_scope.push_root(iterator);
+  next_scope.push_root(iterator)?;
 
   let next_key = string_key(&mut next_scope, "next")?;
   let next = next_scope.ordinary_get(vm, iterator_obj, next_key, Value::Object(iterator_obj))?;

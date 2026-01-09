@@ -56,7 +56,16 @@ impl PromiseRejectionTracker {
   ///
   /// This roots `promise` and appends it to the about-to-be-notified list.
   pub fn on_reject(&mut self, heap: &mut Heap, promise: PromiseHandle) {
-    let root = heap.add_root(Value::Object(promise.into()));
+    // Best-effort: if we cannot allocate the persistent root or grow the internal queue, skip
+    // tracking. Under OOM conditions the host is unlikely to be able to dispatch the corresponding
+    // `unhandledrejection` event anyway.
+    let Ok(root) = heap.add_root(Value::Object(promise.into())) else {
+      return;
+    };
+    if self.about_to_be_notified.try_reserve_exact(1).is_err() {
+      heap.remove_root(root);
+      return;
+    }
     self.about_to_be_notified.push(AboutToBeNotifiedEntry { promise, root });
   }
 
@@ -102,9 +111,19 @@ impl PromiseRejectionTracker {
       }
     }
 
+    let len = self.about_to_be_notified.len();
+    let mut promises = Vec::new();
+    let mut roots = Vec::new();
+    if promises.try_reserve_exact(len).is_err() || roots.try_reserve_exact(len).is_err() {
+      return AboutToBeNotifiedBatch {
+        promises,
+        roots,
+        // Empty batch: nothing to tear down.
+        torn_down: true,
+      };
+    }
+
     let entries = mem::take(&mut self.about_to_be_notified);
-    let mut promises = Vec::with_capacity(entries.len());
-    let mut roots = Vec::with_capacity(entries.len());
     for entry in entries {
       promises.push(entry.promise);
       roots.push(entry.root);

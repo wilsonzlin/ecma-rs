@@ -88,7 +88,7 @@ fn property_descriptor_tracing_keeps_native_functions_alive() -> Result<(), VmEr
       },
     };
     scope.define_property(owner, PropertyKey::from_string(key), desc)?;
-    owner_root = scope.heap_mut().add_root(Value::Object(owner));
+    owner_root = scope.heap_mut().add_root(Value::Object(owner))?;
   }
 
   heap.collect_garbage();

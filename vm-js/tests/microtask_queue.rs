@@ -38,7 +38,7 @@ impl VmJobContext for TestContext {
     Err(VmError::Unimplemented("TestContext::construct"))
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.add_root(value)
   }
 
@@ -158,7 +158,7 @@ fn jobs_keep_values_alive_until_run_when_rooted() -> Result<(), VmError> {
   let weak = WeakGcObject::from(obj);
 
   let mut job = Job::new(JobKind::Promise, |_ctx, _host| Ok(()));
-  job.add_root(&mut ctx, Value::Object(obj));
+  job.add_root(&mut ctx, Value::Object(obj))?;
 
   queue.enqueue_promise_job(job, None);
 

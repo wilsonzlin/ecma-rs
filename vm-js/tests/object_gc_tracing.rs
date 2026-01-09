@@ -13,7 +13,7 @@ fn object_prototype_tracing_keeps_prototype_alive() -> Result<(), VmError> {
     dead = scope.alloc_object()?;
 
     child = scope.alloc_object_with_properties(Some(proto), &[])?;
-    scope.push_root(Value::Object(child));
+    scope.push_root(Value::Object(child))?;
 
     scope.heap_mut().collect_garbage();
 
@@ -27,4 +27,3 @@ fn object_prototype_tracing_keeps_prototype_alive() -> Result<(), VmError> {
 
   Ok(())
 }
-

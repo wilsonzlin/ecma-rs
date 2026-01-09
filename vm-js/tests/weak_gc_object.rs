@@ -8,7 +8,7 @@ fn weak_gc_object_upgrade_reflects_liveness() -> Result<(), VmError> {
   {
     let mut scope = heap.scope();
     let obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(obj));
+    scope.push_root(Value::Object(obj))?;
 
     weak = WeakGcObject::from(obj);
     assert!(weak.upgrade(scope.heap()).is_some());
@@ -30,4 +30,3 @@ fn weak_gc_object_upgrade_reflects_liveness() -> Result<(), VmError> {
 
   Ok(())
 }
-

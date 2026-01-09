@@ -26,7 +26,7 @@ fn symbol_description_is_traced_through_gc() -> Result<(), VmError> {
     garbage = scope.alloc_string("garbage")?;
     desc_string = scope.alloc_string("hello")?;
     sym = scope.new_symbol(Some(desc_string))?;
-    scope.push_root(Value::Symbol(sym));
+    scope.push_root(Value::Symbol(sym))?;
 
     scope.heap_mut().collect_garbage();
 
@@ -78,4 +78,3 @@ fn symbol_for_returns_same_symbol_for_same_key() -> Result<(), VmError> {
 
   Ok(())
 }
-

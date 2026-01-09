@@ -166,7 +166,7 @@ pub fn create_promise_resolve_thenable_job(
     then_job_callback,
     resolve,
     reject,
-  )))
+  )?))
 }
 
 /// Minimal state for the engine-internal [`Promise`] record.
@@ -248,7 +248,7 @@ impl Promise {
     }
 
     for reaction in reactions {
-      host.host_enqueue_promise_job(new_promise_reaction_job(heap, reaction, reason), None);
+      host.host_enqueue_promise_job(new_promise_reaction_job(heap, reaction, reason)?, None);
     }
 
     Ok(())
@@ -282,10 +282,10 @@ impl Promise {
         inner.reject_reactions.push(reject_reaction);
       }
       PromiseRecordState::Fulfilled(v) => {
-        host.host_enqueue_promise_job(new_promise_reaction_job(heap, fulfill_reaction, v), None);
+        host.host_enqueue_promise_job(new_promise_reaction_job(heap, fulfill_reaction, v)?, None);
       }
       PromiseRecordState::Rejected(r) => {
-        host.host_enqueue_promise_job(new_promise_reaction_job(heap, reject_reaction, r), None);
+        host.host_enqueue_promise_job(new_promise_reaction_job(heap, reject_reaction, r)?, None);
       }
     }
 

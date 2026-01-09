@@ -361,7 +361,7 @@ fn make_key_string(scope: &mut Scope<'_>, s: &str) -> Result<GcString, VmError> 
   // Root the key string for the duration of the algorithm so it can't be collected if a later
   // allocation triggers GC.
   let key = scope.alloc_string(s)?;
-  scope.push_root(Value::String(key));
+  scope.push_root(Value::String(key))?;
   Ok(key)
 }
 

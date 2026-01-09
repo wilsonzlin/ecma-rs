@@ -16,7 +16,10 @@ fn strict_directive_makes_unbound_assignment_throw_reference_error() {
   };
 
   // Root the thrown value across any subsequent allocations / script runs.
-  let root: RootId = rt.heap_mut().add_root(thrown);
+  let root: RootId = rt
+    .heap_mut()
+    .add_root(thrown)
+    .expect("root thrown value");
 
   let Value::Object(thrown_obj) = thrown else {
     panic!("expected thrown value to be an object, got {thrown:?}");
@@ -55,4 +58,3 @@ fn strict_function_plain_call_has_undefined_this() {
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }
-

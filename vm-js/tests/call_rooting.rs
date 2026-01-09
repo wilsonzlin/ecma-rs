@@ -77,7 +77,7 @@ fn call_return_value_survives_when_rooted_by_caller() -> Result<(), VmError> {
     returned_obj = obj;
 
     // Root the object before any further allocations/GC.
-    scope.push_root(Value::Object(returned_obj));
+    scope.push_root(Value::Object(returned_obj))?;
 
     scope.heap_mut().collect_garbage();
     assert!(scope.heap().is_valid_object(returned_obj));
@@ -143,7 +143,7 @@ fn construct_return_value_survives_when_rooted_by_caller() -> Result<(), VmError
     returned_obj = obj;
 
     // Root the object before any further allocations/GC.
-    scope.push_root(Value::Object(returned_obj));
+    scope.push_root(Value::Object(returned_obj))?;
 
     scope.heap_mut().collect_garbage();
     assert!(scope.heap().is_valid_object(returned_obj));

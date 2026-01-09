@@ -26,7 +26,7 @@ fn persistent_root_raii_releases_root() -> Result<(), VmError> {
   };
 
   {
-    let mut root = PersistentRoot::new(&mut heap, Value::String(s));
+    let mut root = PersistentRoot::new(&mut heap, Value::String(s))?;
     root.heap_mut().collect_garbage();
     assert!(root.heap().is_valid_string(s));
   }
@@ -74,4 +74,3 @@ fn run_script_restores_budget_after_success_and_termination() {
   }
   assert_eq!(agent.vm().budget(), initial);
 }
-

@@ -3,7 +3,7 @@ use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, 
 use crate::string::JsString;
 use crate::{
   GcObject, Job, JobCallback, JobKind, PromiseCapability, PromiseReaction, PromiseReactionType,
-  PromiseState, Scope, Value, Vm, VmError,
+  PromiseState, RootId, Scope, Value, Vm, VmError,
 };
 
 fn data_desc(
@@ -32,15 +32,16 @@ fn require_object(value: Value) -> Result<GcObject, VmError> {
   }
 }
 
-fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) {
+fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
   match key {
     PropertyKey::String(s) => {
-      scope.push_root(Value::String(s));
+      scope.push_root(Value::String(s))?;
     }
     PropertyKey::Symbol(s) => {
-      scope.push_root(Value::Symbol(s));
+      scope.push_root(Value::Symbol(s))?;
     }
   }
+  Ok(())
 }
 
 fn get_own_data_property_value_by_name(
@@ -49,7 +50,7 @@ fn get_own_data_property_value_by_name(
   name: &str,
 ) -> Result<Option<Value>, VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
   let key = PropertyKey::from_string(scope.alloc_string(name)?);
   let Some(desc) = scope.heap().object_get_own_property(obj, &key)? else {
     return Ok(None);
@@ -123,14 +124,14 @@ pub fn object_define_property(
   let mut scope = scope.reborrow();
 
   let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
-  scope.push_root(Value::Object(target));
+  scope.push_root(Value::Object(target))?;
 
   let prop = args.get(1).copied().unwrap_or(Value::Undefined);
   let key = scope.heap_mut().to_property_key(prop)?;
-  root_property_key(&mut scope, key);
+  root_property_key(&mut scope, key)?;
 
   let desc_obj = require_object(args.get(2).copied().unwrap_or(Value::Undefined))?;
-  scope.push_root(Value::Object(desc_obj));
+  scope.push_root(Value::Object(desc_obj))?;
 
   let value = get_own_data_property_value_by_name(&mut scope, desc_obj, "value")?;
   let writable = get_own_data_property_value_by_name(&mut scope, desc_obj, "writable")?
@@ -223,8 +224,8 @@ pub fn object_keys(
 
   for (i, name) in names.iter().copied().enumerate() {
     let mut idx_scope = scope.reborrow();
-    idx_scope.push_root(Value::Object(array));
-    idx_scope.push_root(Value::String(name));
+    idx_scope.push_root(Value::Object(array))?;
+    idx_scope.push_root(Value::String(name))?;
 
     let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
     idx_scope.define_property(array, key, data_desc(Value::String(name), true, true, true))?;
@@ -244,7 +245,7 @@ pub fn object_assign(
   // for now, but we still follow the `Get`/`Set` semantics (invoking accessors).
   let mut scope = scope.reborrow();
   let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
-  scope.push_root(Value::Object(target));
+  scope.push_root(Value::Object(target))?;
 
   for source_val in args.iter().copied().skip(1) {
     let source = match source_val {
@@ -352,8 +353,8 @@ fn array_constructor_impl(
       for (i, el) in args.iter().copied().enumerate() {
         // Root `array` and `el` during string allocation.
         let mut idx_scope = scope.reborrow();
-        idx_scope.push_root(Value::Object(array));
-        idx_scope.push_root(el);
+        idx_scope.push_root(Value::Object(array))?;
+        idx_scope.push_root(el)?;
 
         let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
         idx_scope.define_property(array, key, data_desc(el, true, true, true))?;
@@ -459,10 +460,10 @@ pub fn error_constructor_construct(
     Some(Value::Undefined) | None => scope.alloc_string("")?,
     Some(other) => scope.heap_mut().to_string(other)?,
   };
-  scope.push_root(Value::String(message_string));
+  scope.push_root(Value::String(message_string))?;
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
   scope
     .heap_mut()
     .object_set_prototype(obj, Some(instance_prototype))?;
@@ -489,7 +490,7 @@ fn throw_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result
   let ctor = intr.type_error();
 
   let msg = scope.alloc_string(message)?;
-  scope.push_root(Value::String(msg));
+  scope.push_root(Value::String(msg))?;
 
   let err =
     error_constructor_construct(vm, scope, ctor, &[Value::String(msg)], Value::Object(ctor))?;
@@ -501,7 +502,7 @@ fn create_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Resul
   let ctor = intr.type_error();
 
   let msg = scope.alloc_string(message)?;
-  scope.push_root(Value::String(msg));
+  scope.push_root(Value::String(msg))?;
 
   let err = error_constructor_construct(
     vm,
@@ -539,7 +540,7 @@ fn new_promise_capability(
   }
 
   let promise = new_promise(vm, scope)?;
-  scope.push_root(Value::Object(promise));
+  scope.push_root(Value::Object(promise))?;
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
   Ok(PromiseCapability {
     promise,
@@ -557,7 +558,7 @@ fn create_promise_resolving_functions(
   let call_id = intr.promise_resolving_function_call();
 
   // Root the promise while allocating the resolving functions.
-  scope.push_root(Value::Object(promise));
+  scope.push_root(Value::Object(promise))?;
 
   let resolve_name = scope.alloc_string("resolve")?;
   let resolve = scope.alloc_native_function(call_id, None, resolve_name, 1)?;
@@ -597,7 +598,7 @@ fn enqueue_promise_reaction_job(
   let handler_callback_object = reaction.handler.as_ref().map(|h| h.callback_object());
   let capability = reaction.capability;
 
-  let mut job = Job::new(JobKind::Promise, move |ctx, host| {
+  let job = Job::new(JobKind::Promise, move |ctx, host| {
     let Some(cap) = reaction.capability else {
       return Ok(());
     };
@@ -641,17 +642,45 @@ fn enqueue_promise_reaction_job(
     }
   });
 
-  // Root captured GC values for the lifetime of the queued job.
-  job.push_root(scope.heap_mut().add_root(argument));
+  // Root captured GC values while creating persistent roots: `Heap::add_root` can trigger a GC.
+  // The resulting `RootId`s are transferred to the job so it can clean them up on run/discard.
+  let mut root_scope = scope.reborrow();
+  let mut values = [Value::Undefined; 5];
+  let mut value_count = 0usize;
+  values[value_count] = argument;
+  value_count += 1;
   if let Some(handler) = handler_callback_object {
-    job.push_root(scope.heap_mut().add_root(Value::Object(handler)));
+    values[value_count] = Value::Object(handler);
+    value_count += 1;
   }
   if let Some(cap) = capability {
-    job.push_root(scope.heap_mut().add_root(Value::Object(cap.promise)));
-    job.push_root(scope.heap_mut().add_root(cap.resolve));
-    job.push_root(scope.heap_mut().add_root(cap.reject));
+    values[value_count] = Value::Object(cap.promise);
+    value_count += 1;
+    values[value_count] = cap.resolve;
+    value_count += 1;
+    values[value_count] = cap.reject;
+    value_count += 1;
+  }
+  root_scope.push_roots(&values[..value_count])?;
+
+  let mut roots: Vec<RootId> = Vec::new();
+  roots
+    .try_reserve_exact(value_count)
+    .map_err(|_| VmError::OutOfMemory)?;
+  for value in values[..value_count].iter().copied() {
+    let id = match root_scope.heap_mut().add_root(value) {
+      Ok(id) => id,
+      Err(e) => {
+        for root in roots.drain(..) {
+          root_scope.heap_mut().remove_root(root);
+        }
+        return Err(e);
+      }
+    };
+    roots.push(id);
   }
 
+  let job = job.with_roots(roots);
   vm.microtask_queue_mut().enqueue_promise_job(job, None);
   Ok(())
 }
@@ -717,7 +746,7 @@ pub fn promise_constructor_construct(
   }
 
   let promise = new_promise(vm, scope)?;
-  scope.push_root(Value::Object(promise));
+  scope.push_root(Value::Object(promise))?;
 
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
 
@@ -759,7 +788,7 @@ pub fn promise_resolving_function_call(
       if scope.heap().is_promise_object(resolution_obj) {
         if resolution_obj == promise {
           let err = create_type_error(vm, scope, "Cannot resolve a promise with itself")?;
-          scope.push_root(err);
+          scope.push_root(err)?;
           reject_promise(vm, scope, promise, err)?;
           return Ok(Value::Undefined);
         }
@@ -767,7 +796,7 @@ pub fn promise_resolving_function_call(
         match scope.heap().promise_state(resolution_obj)? {
           PromiseState::Pending => {
             // Attach reactions that settle `promise` once `resolution_obj` settles.
-            scope.push_root(Value::Object(promise));
+            scope.push_root(Value::Object(promise))?;
             let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
             let capability = PromiseCapability {
               promise,
@@ -883,8 +912,9 @@ fn promise_then_impl(
   };
 
   // Create the derived promise + capability.
-  let result_promise = scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
-  scope.push_root(Value::Object(result_promise));
+  let result_promise = scope
+    .alloc_promise_with_prototype(Some(intr.promise_prototype()))?;
+  scope.push_root(Value::Object(result_promise))?;
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, result_promise)?;
   let capability = PromiseCapability {
     promise: result_promise,
@@ -971,8 +1001,8 @@ pub fn promise_prototype_finally(
     return promise_then_impl(vm, scope, this, on_finally, on_finally);
   }
 
-  scope.push_root(Value::Object(promise));
-  scope.push_root(on_finally);
+  scope.push_root(Value::Object(promise))?;
+  scope.push_root(on_finally)?;
 
   let call_id = intr.promise_finally_handler_call();
 
@@ -1003,8 +1033,8 @@ pub fn promise_prototype_finally(
   )?;
 
   // Root the closure functions before calling `promise_then_impl`, which may allocate/GC.
-  scope.push_root(Value::Object(then_finally));
-  scope.push_root(Value::Object(catch_finally));
+  scope.push_root(Value::Object(then_finally))?;
+  scope.push_root(Value::Object(catch_finally))?;
 
   promise_then_impl(
     vm,
@@ -1035,7 +1065,7 @@ pub fn promise_finally_handler_call(
 
   // Call onFinally() with no arguments.
   let result = vm.call(scope, on_finally, Value::Undefined, &[])?;
-  let result = scope.push_root(result);
+  let result = scope.push_root(result)?;
 
   // `PromiseResolve(%Promise%, result)`
   let promise_ctor = intr.promise();
@@ -1045,8 +1075,8 @@ pub fn promise_finally_handler_call(
   };
 
   // Create `valueThunk` or `thrower`.
-  scope.push_root(Value::Object(promise_obj));
-  scope.push_root(captured);
+  scope.push_root(Value::Object(promise_obj))?;
+  scope.push_root(captured)?;
   let thunk_call = intr.promise_finally_thunk_call();
   let thunk_name = if is_reject { "thrower" } else { "valueThunk" };
   let thunk_name = scope.alloc_string(thunk_name)?;
@@ -1063,7 +1093,7 @@ pub fn promise_finally_handler_call(
   )?;
 
   // Return `p.then(valueThunk)` / `p.then(thrower)`.
-  scope.push_root(Value::Object(thunk));
+  scope.push_root(Value::Object(thunk))?;
   promise_then_impl(vm, scope, Value::Object(promise_obj), Value::Object(thunk), Value::Undefined)
 }
 
@@ -1102,9 +1132,9 @@ pub fn promise_try(
   let capability = new_promise_capability(vm, scope, this)?;
 
   // Root the promise + resolving functions for the duration of the callback call.
-  scope.push_root(Value::Object(capability.promise));
-  scope.push_root(capability.resolve);
-  scope.push_root(capability.reject);
+  scope.push_root(Value::Object(capability.promise))?;
+  scope.push_root(capability.resolve)?;
+  scope.push_root(capability.reject)?;
 
   let callback_args = args.get(1..).unwrap_or(&[]);
   match vm.call(scope, callback, Value::Undefined, callback_args) {
@@ -1131,12 +1161,12 @@ pub fn promise_with_resolvers(
 
   let capability = new_promise_capability(vm, scope, this)?;
   // Root the new promise and resolving functions before allocating the result object.
-  scope.push_root(Value::Object(capability.promise));
-  scope.push_root(capability.resolve);
-  scope.push_root(capability.reject);
+  scope.push_root(Value::Object(capability.promise))?;
+  scope.push_root(capability.resolve)?;
+  scope.push_root(capability.reject)?;
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
   scope
     .heap_mut()
     .object_set_prototype(obj, Some(intr.object_prototype()))?;
@@ -1167,7 +1197,7 @@ pub fn promise_with_resolvers(
 
 fn string_key(scope: &mut Scope<'_>, s: &str) -> Result<PropertyKey, VmError> {
   let key_s = scope.alloc_string(s)?;
-  scope.push_root(Value::String(key_s));
+  scope.push_root(Value::String(key_s))?;
   Ok(PropertyKey::from_string(key_s))
 }
 
@@ -1291,7 +1321,7 @@ pub fn array_prototype_map(
 
   let intr = require_intrinsics(vm)?;
   let out = scope.alloc_object()?;
-  scope.push_root(Value::Object(out));
+  scope.push_root(Value::Object(out))?;
   scope
     .heap_mut()
     .object_set_prototype(out, Some(intr.array_prototype()))?;
@@ -1333,7 +1363,7 @@ pub fn array_prototype_join(
     None | Some(Value::Undefined) => scope.alloc_string(",")?,
     Some(v) => scope.heap_mut().to_string(v)?,
   };
-  scope.push_root(Value::String(sep));
+  scope.push_root(Value::String(sep))?;
   let sep_slice = scope.heap().get_string(sep)?.as_code_units();
   let mut sep_units: Vec<u16> = Vec::new();
   sep_units
@@ -1342,7 +1372,7 @@ pub fn array_prototype_join(
   vec_try_extend_from_slice(&mut sep_units, sep_slice)?;
 
   let empty = scope.alloc_string("")?;
-  scope.push_root(Value::String(empty));
+  scope.push_root(Value::String(empty))?;
 
   let mut out: Vec<u16> = Vec::new();
   let max_bytes = scope.heap().limits().max_bytes;
@@ -1405,10 +1435,10 @@ pub fn string_constructor_construct(
     None => scope.alloc_string("")?,
     Some(v) => scope.heap_mut().to_string(v)?,
   };
-  scope.push_root(Value::String(prim));
+  scope.push_root(Value::String(prim))?;
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
   scope
     .heap_mut()
     .object_set_prototype(obj, Some(intr.string_prototype()))?;
@@ -1509,13 +1539,13 @@ pub fn error_prototype_to_string(
     Value::Undefined => scope.alloc_string("Error")?,
     other => scope.heap_mut().to_string(other)?,
   };
-  scope.push_root(Value::String(name));
+  scope.push_root(Value::String(name))?;
 
   let message = match message_value {
     Value::Undefined => scope.alloc_string("")?,
     other => scope.heap_mut().to_string(other)?,
   };
-  scope.push_root(Value::String(message));
+  scope.push_root(Value::String(message))?;
 
   let name_units = scope.heap().get_string(name)?.as_code_units();
   let message_units = scope.heap().get_string(message)?.as_code_units();

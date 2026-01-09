@@ -48,12 +48,12 @@ fn get_invokes_accessor_getter_once_with_receiver() -> Result<(), VmError> {
   let getter_fn = scope.alloc_native_function(call_id, None, name, 0)?;
   // Root the getter function across subsequent allocations; GC is forced before every allocation in
   // this test.
-  scope.push_root(Value::Object(getter_fn));
+  scope.push_root(Value::Object(getter_fn))?;
 
   let proto = scope.alloc_object()?;
-  scope.push_root(Value::Object(proto));
+  scope.push_root(Value::Object(proto))?;
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   scope.heap_mut().object_set_prototype(obj, Some(proto))?;
 
@@ -82,7 +82,7 @@ fn own_property_keys_orders_indices_then_strings_then_symbols() -> Result<(), Vm
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   // Insert properties in a deliberately mixed order.
   let k_b = PropertyKey::from_string(scope.alloc_string("b")?);

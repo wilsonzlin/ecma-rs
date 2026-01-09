@@ -140,10 +140,10 @@ impl RuntimeEnv {
   ) -> Result<Self, VmError> {
     // Root the global object across env allocation in case it triggers GC.
     let mut scope = heap.scope();
-    scope.push_root(Value::Object(global_object));
+    scope.push_root(Value::Object(global_object))?;
 
     let lexical_env = scope.env_create(None)?;
-    let lexical_root = scope.heap_mut().add_env_root(lexical_env);
+    let lexical_root = scope.heap_mut().add_env_root(lexical_env)?;
 
     Ok(Self {
       global_object,
@@ -188,7 +188,7 @@ impl RuntimeEnv {
 
     // Root the global object across property-key allocation in case it triggers GC.
     let mut key_scope = scope.reborrow();
-    key_scope.push_root(Value::Object(global_object));
+    key_scope.push_root(Value::Object(global_object))?;
 
     let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
     if key_scope
@@ -213,9 +213,9 @@ impl RuntimeEnv {
     // Fall back to global object property lookup.
     let global_object = self.global_object;
     let mut key_scope = scope.reborrow();
-    key_scope.push_root(Value::Object(global_object));
+    key_scope.push_root(Value::Object(global_object))?;
     let key_s = key_scope.alloc_string(name)?;
-    key_scope.push_root(Value::String(key_s));
+    key_scope.push_root(Value::String(key_s))?;
     let key = PropertyKey::from_string(key_s);
 
     // Distinguish between a missing property (unbound identifier) and a present property whose
@@ -244,9 +244,9 @@ impl RuntimeEnv {
     // Assignment to global (var) bindings is backed by the global object.
     let global_object = self.global_object;
     let mut key_scope = scope.reborrow();
-    key_scope.push_root(Value::Object(global_object));
+    key_scope.push_root(Value::Object(global_object))?;
     // Root `value` across key allocation and property definition in case they trigger GC.
-    key_scope.push_root(value);
+    key_scope.push_root(value)?;
     let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
 
     let has_binding = key_scope.ordinary_has_property(global_object, key)?;
@@ -301,13 +301,13 @@ impl RuntimeEnv {
     //
     // Root the initializer value across global-binding creation in case it triggers GC.
     let mut outer_scope = scope.reborrow();
-    outer_scope.push_root(value);
+    outer_scope.push_root(value)?;
     self.declare_var(&mut outer_scope, name)?;
 
     let global_object = self.global_object;
     let mut key_scope = outer_scope.reborrow();
-    key_scope.push_root(Value::Object(global_object));
-    key_scope.push_root(value);
+    key_scope.push_root(Value::Object(global_object))?;
+    key_scope.push_root(value)?;
     let key = PropertyKey::from_string(key_scope.alloc_string(name)?);
 
     if let Some(desc) = key_scope
@@ -447,7 +447,7 @@ impl VmJobContext for JsRuntime {
     vm.construct(&mut scope, callee, args, new_target)
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.add_root(value)
   }
 
@@ -699,7 +699,7 @@ impl<'a> Evaluator<'a> {
   ) -> Result<Completion, VmError> {
     // Root the running completion value so it cannot be collected while evaluating subsequent
     // statements (which may allocate and trigger GC).
-    let last_root = scope.heap_mut().add_root(Value::Undefined);
+    let last_root = scope.heap_mut().add_root(Value::Undefined)?;
     let mut last_value: Option<Value> = None;
 
     for stmt in stmts {
@@ -1000,7 +1000,10 @@ impl<'a> Evaluator<'a> {
     if let Some(finally) = &stmt.finally {
       // Root the pending completion's value (if any) while evaluating `finally`, which may
       // allocate and trigger GC.
-      let pending_root = result.value().map(|v| scope.heap_mut().add_root(v));
+      let pending_root = result
+        .value()
+        .map(|v| scope.heap_mut().add_root(v))
+        .transpose()?;
       let finally_result = self.eval_block_stmt(scope, &finally.stx)?;
       if let Some(root) = pending_root {
         scope.heap_mut().remove_root(root);
@@ -1029,7 +1032,7 @@ impl<'a> Evaluator<'a> {
     let result = {
       // Root the thrown value across catch binding instantiation, which may allocate.
       let mut catch_scope = scope.reborrow();
-      catch_scope.push_root(thrown);
+      catch_scope.push_root(thrown)?;
 
       self
         .hoist_lexical_decls_in_stmt_list(&mut catch_scope, catch_env, &catch.body)
@@ -1199,11 +1202,10 @@ impl<'a> Evaluator<'a> {
     // Root the iterable + iterator record while evaluating the loop body, which may allocate and
     // trigger GC.
     let mut iter_scope = scope.reborrow();
-    iter_scope.push_root(iterable);
+    iter_scope.push_root(iterable)?;
 
     let mut iterator_record = iterator::get_iterator(self.vm, &mut iter_scope, iterable)?;
-    iter_scope.push_root(iterator_record.iterator);
-    iter_scope.push_root(iterator_record.next_method);
+    iter_scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
     loop {
       // Tick once per iteration so `for (x of xs) {}` is budgeted even when the body is empty.
@@ -1362,7 +1364,7 @@ impl<'a> Evaluator<'a> {
   ) -> Result<Completion, VmError> {
     let discriminant = self.eval_expr(scope, &stmt.test)?;
     let mut switch_scope = scope.reborrow();
-    switch_scope.push_root(discriminant);
+    switch_scope.push_root(discriminant)?;
 
     let outer = self.env.lexical_env;
     let switch_env = switch_scope.env_create(Some(outer))?;
@@ -1400,7 +1402,7 @@ impl<'a> Evaluator<'a> {
       };
 
       // Evaluate statement lists from the selected clause until a break or abrupt completion.
-      let last_root = switch_scope.heap_mut().add_root(Value::Undefined);
+      let last_root = switch_scope.heap_mut().add_root(Value::Undefined)?;
       let mut last_value: Option<Value> = None;
 
       for branch in stmt.branches.iter().skip(start_idx) {
@@ -1481,7 +1483,7 @@ impl<'a> Evaluator<'a> {
           return Err(VmError::Unimplemented("member access on non-object"));
         };
         let mut key_scope = scope.reborrow();
-        key_scope.push_root(Value::Object(object));
+        key_scope.push_root(Value::Object(object))?;
         let key_s = key_scope.alloc_string(&member.stx.right)?;
         Ok(Reference::Property {
           object,
@@ -1499,9 +1501,9 @@ impl<'a> Evaluator<'a> {
           return Err(VmError::Unimplemented("computed member access on non-object"));
         };
         let mut key_scope = scope.reborrow();
-        key_scope.push_root(Value::Object(object));
+        key_scope.push_root(Value::Object(object))?;
         let member_value = self.eval_expr(&mut key_scope, &member.stx.member)?;
-        key_scope.push_root(member_value);
+        key_scope.push_root(member_value)?;
         let key = key_scope.heap_mut().to_property_key(member_value)?;
         Ok(Reference::Property { object, key })
       }
@@ -1509,15 +1511,16 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn root_reference(&self, scope: &mut Scope<'_>, reference: &Reference<'_>) {
+  fn root_reference(&self, scope: &mut Scope<'_>, reference: &Reference<'_>) -> Result<(), VmError> {
     let Reference::Property { object, key } = *reference else {
-      return;
+      return Ok(());
     };
-    scope.push_root(Value::Object(object));
+    scope.push_root(Value::Object(object))?;
     match key {
-      PropertyKey::String(s) => scope.push_root(Value::String(s)),
-      PropertyKey::Symbol(s) => scope.push_root(Value::Symbol(s)),
+      PropertyKey::String(s) => scope.push_root(Value::String(s))?,
+      PropertyKey::Symbol(s) => scope.push_root(Value::Symbol(s))?,
     };
+    Ok(())
   }
 
   fn get_value_from_reference(
@@ -1532,7 +1535,7 @@ impl<'a> Evaluator<'a> {
       },
       Reference::Property { object, key } => {
         let mut get_scope = scope.reborrow();
-        self.root_reference(&mut get_scope, reference);
+        self.root_reference(&mut get_scope, reference)?;
         self.ordinary_get(&mut get_scope, object, key, Value::Object(object))
       }
     }
@@ -1568,11 +1571,14 @@ impl<'a> Evaluator<'a> {
     // rooting semantics, but also supports interpreted ECMAScript functions (which the VM's call
     // path does not yet execute directly).
     let mut call_scope = scope.reborrow();
-    let callee = call_scope.push_root(callee);
-    let this = call_scope.push_root(this);
-    for &arg in args {
-      call_scope.push_root(arg);
-    }
+    let mut roots: Vec<Value> = Vec::new();
+    roots
+      .try_reserve_exact(args.len().saturating_add(2))
+      .map_err(|_| VmError::OutOfMemory)?;
+    roots.push(callee);
+    roots.push(this);
+    roots.extend_from_slice(args);
+    call_scope.push_roots(&roots)?;
 
     let callee_obj = match callee {
       Value::Object(obj) => obj,
@@ -1594,7 +1600,7 @@ impl<'a> Evaluator<'a> {
     if matches!(this_mode, ThisMode::Global) && matches!(this_arg, Value::Undefined | Value::Null) {
       this_arg = Value::Object(self.env.global_object);
       // Keep the coerced `this` value rooted across the call.
-      call_scope.push_root(this_arg);
+      call_scope.push_root(this_arg)?;
     }
 
     match call_handler {
@@ -1654,13 +1660,20 @@ impl<'a> Evaluator<'a> {
   ) -> Result<bool, VmError> {
     // Mirror `Scope::ordinary_set`, but route accessor calls through `Evaluator::call_value` so
     // interpreted ECMAScript functions can run (the VM's `CallHandler::Ecma` path is not wired yet).
-    scope.push_root(Value::Object(obj));
-    match key {
-      PropertyKey::String(s) => scope.push_root(Value::String(s)),
-      PropertyKey::Symbol(s) => scope.push_root(Value::Symbol(s)),
+    let mut roots = [Value::Undefined; 4];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(obj);
+    root_count += 1;
+    roots[root_count] = match key {
+      PropertyKey::String(s) => Value::String(s),
+      PropertyKey::Symbol(s) => Value::Symbol(s),
     };
-    scope.push_root(value);
-    scope.push_root(receiver);
+    root_count += 1;
+    roots[root_count] = value;
+    root_count += 1;
+    roots[root_count] = receiver;
+    root_count += 1;
+    scope.push_roots(&roots[..root_count])?;
 
     let own_desc = scope.ordinary_get_own_property(obj, key)?;
     self.ordinary_set_with_own_descriptor(scope, obj, key, value, receiver, own_desc)
@@ -1769,7 +1782,7 @@ impl<'a> Evaluator<'a> {
   fn eval_lit_arr(&mut self, scope: &mut Scope<'_>, expr: &LitArrExpr) -> Result<Value, VmError> {
     let mut arr_scope = scope.reborrow();
     let arr = arr_scope.alloc_object()?;
-    arr_scope.push_root(Value::Object(arr));
+    arr_scope.push_root(Value::Object(arr))?;
     iterator::mark_array(&mut arr_scope, arr)?;
     let intr = self
       .vm
@@ -1788,11 +1801,10 @@ impl<'a> Evaluator<'a> {
         LitArrElem::Rest(rest_expr) => {
           let mut spread_scope = arr_scope.reborrow();
           let spread_value = self.eval_expr(&mut spread_scope, rest_expr)?;
-          spread_scope.push_root(spread_value);
+          spread_scope.push_root(spread_value)?;
 
           let mut iter = iterator::get_iterator(self.vm, &mut spread_scope, spread_value)?;
-          spread_scope.push_root(iter.iterator);
-          spread_scope.push_root(iter.next_method);
+          spread_scope.push_roots(&[iter.iterator, iter.next_method])?;
 
           while let Some(value) =
             iterator::iterator_step_value(self.vm, &mut spread_scope, &mut iter)?
@@ -1801,9 +1813,9 @@ impl<'a> Evaluator<'a> {
             next_index = next_index.saturating_add(1);
 
             let mut elem_scope = spread_scope.reborrow();
-            elem_scope.push_root(value);
+            elem_scope.push_root(value)?;
             let key_s = elem_scope.alloc_string(&idx.to_string())?;
-            elem_scope.push_root(Value::String(key_s));
+            elem_scope.push_root(Value::String(key_s))?;
             let key = PropertyKey::from_string(key_s);
             let ok = elem_scope.create_data_property(arr, key, value)?;
             if !ok {
@@ -1817,9 +1829,9 @@ impl<'a> Evaluator<'a> {
 
           let mut elem_scope = arr_scope.reborrow();
           let value = self.eval_expr(&mut elem_scope, elem_expr)?;
-          elem_scope.push_root(value);
+          elem_scope.push_root(value)?;
           let key_s = elem_scope.alloc_string(&idx.to_string())?;
-          elem_scope.push_root(Value::String(key_s));
+          elem_scope.push_root(Value::String(key_s))?;
           let key = PropertyKey::from_string(key_s);
           let ok = elem_scope.create_data_property(arr, key, value)?;
           if !ok {
@@ -1846,7 +1858,7 @@ impl<'a> Evaluator<'a> {
   fn eval_lit_obj(&mut self, scope: &mut Scope<'_>, expr: &LitObjExpr) -> Result<Value, VmError> {
     let mut obj_scope = scope.reborrow();
     let obj = obj_scope.alloc_object()?;
-    obj_scope.push_root(Value::Object(obj));
+    obj_scope.push_root(Value::Object(obj))?;
     let intr = self
       .vm
       .intrinsics()
@@ -1872,20 +1884,20 @@ impl<'a> Evaluator<'a> {
             }
             ClassOrObjKey::Computed(expr) => {
               let value = self.eval_expr(&mut member_scope, expr)?;
-              member_scope.push_root(value);
+              member_scope.push_root(value)?;
               member_scope.heap_mut().to_property_key(value)?
             }
           };
 
           match key {
-            PropertyKey::String(s) => member_scope.push_root(Value::String(s)),
-            PropertyKey::Symbol(s) => member_scope.push_root(Value::Symbol(s)),
+            PropertyKey::String(s) => member_scope.push_root(Value::String(s))?,
+            PropertyKey::Symbol(s) => member_scope.push_root(Value::Symbol(s))?,
           };
 
           match val {
             ClassOrObjVal::Prop(Some(value_expr)) => {
               let value = self.eval_expr(&mut member_scope, value_expr)?;
-              member_scope.push_root(value);
+              member_scope.push_root(value)?;
               let ok = member_scope.create_data_property(obj, key, value)?;
               if !ok {
                 return Err(VmError::Unimplemented("CreateDataProperty returned false"));
@@ -1946,7 +1958,7 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
-              member_scope.push_root(Value::Object(func_obj));
+              member_scope.push_root(Value::Object(func_obj))?;
 
               // Methods use the property key as the function `name` if possible.
               if !matches!(key, PropertyKey::String(_)) {
@@ -2009,7 +2021,7 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
-              member_scope.push_root(Value::Object(func_obj));
+              member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("get"))?;
 
               let ok = member_scope.ordinary_define_own_property(
@@ -2072,7 +2084,7 @@ impl<'a> Evaluator<'a> {
                 is_strict,
                 closure_env,
               )?;
-              member_scope.push_root(Value::Object(func_obj));
+              member_scope.push_root(Value::Object(func_obj))?;
               crate::function_properties::set_function_name(&mut member_scope, func_obj, key, Some("set"))?;
 
               let ok = member_scope.ordinary_define_own_property(
@@ -2099,10 +2111,10 @@ impl<'a> Evaluator<'a> {
         }
         ObjMemberType::Shorthand { id } => {
           let key_s = member_scope.alloc_string(&id.stx.name)?;
-          member_scope.push_root(Value::String(key_s));
+          member_scope.push_root(Value::String(key_s))?;
           let key = PropertyKey::from_string(key_s);
           let value = self.eval_id(&mut member_scope, &id.stx)?;
-          member_scope.push_root(value);
+          member_scope.push_root(value)?;
           let ok = member_scope.create_data_property(obj, key, value)?;
           if !ok {
             return Err(VmError::Unimplemented("CreateDataProperty returned false"));
@@ -2110,7 +2122,7 @@ impl<'a> Evaluator<'a> {
         }
         ObjMemberType::Rest { val } => {
           let src_value = self.eval_expr(&mut member_scope, val)?;
-          member_scope.push_root(src_value);
+          member_scope.push_root(src_value)?;
 
           let src_obj = match src_value {
             Value::Undefined | Value::Null => continue,
@@ -2121,10 +2133,10 @@ impl<'a> Evaluator<'a> {
           let keys = member_scope.ordinary_own_property_keys(src_obj)?;
           for key in keys {
             let mut key_scope = member_scope.reborrow();
-            key_scope.push_root(Value::Object(src_obj));
+            key_scope.push_root(Value::Object(src_obj))?;
             match key {
-              PropertyKey::String(s) => key_scope.push_root(Value::String(s)),
-              PropertyKey::Symbol(s) => key_scope.push_root(Value::Symbol(s)),
+              PropertyKey::String(s) => key_scope.push_root(Value::String(s))?,
+              PropertyKey::Symbol(s) => key_scope.push_root(Value::Symbol(s))?,
             };
 
             let Some(desc) = key_scope.ordinary_get_own_property(src_obj, key)? else {
@@ -2136,7 +2148,7 @@ impl<'a> Evaluator<'a> {
 
             let value =
               self.ordinary_get(&mut key_scope, src_obj, key, Value::Object(src_obj))?;
-            key_scope.push_root(value);
+            key_scope.push_root(value)?;
             let ok = key_scope.create_data_property(obj, key, value)?;
             if !ok {
               return Err(VmError::Unimplemented("CreateDataProperty returned false"));
@@ -2184,9 +2196,9 @@ impl<'a> Evaluator<'a> {
 
           let global_object = self.env.global_object;
           let mut key_scope = scope.reborrow();
-          key_scope.push_root(Value::Object(global_object));
+          key_scope.push_root(Value::Object(global_object))?;
           let key_s = key_scope.alloc_string(&id.stx.name)?;
-          key_scope.push_root(Value::String(key_s));
+          key_scope.push_root(Value::String(key_s))?;
           let key = PropertyKey::from_string(key_s);
 
           if !key_scope.ordinary_has_property(global_object, key)? {
@@ -2210,9 +2222,9 @@ impl<'a> Evaluator<'a> {
 
           let global_object = self.env.global_object;
           let mut key_scope = scope.reborrow();
-          key_scope.push_root(Value::Object(global_object));
+          key_scope.push_root(Value::Object(global_object))?;
           let key_s = key_scope.alloc_string(&id.stx.name)?;
-          key_scope.push_root(Value::String(key_s));
+          key_scope.push_root(Value::String(key_s))?;
           let key = PropertyKey::from_string(key_s);
 
           if !key_scope.ordinary_has_property(global_object, key)? {
@@ -2276,7 +2288,7 @@ impl<'a> Evaluator<'a> {
         };
 
         let mut callee_scope = scope.reborrow();
-        self.root_reference(&mut callee_scope, &reference);
+        self.root_reference(&mut callee_scope, &reference)?;
         let callee_value = self.get_value_from_reference(&mut callee_scope, &reference)?;
         (callee_value, this_value)
       }
@@ -2288,8 +2300,7 @@ impl<'a> Evaluator<'a> {
 
     // Root callee/this/args for the duration of the call.
     let mut call_scope = scope.reborrow();
-    let callee_value = call_scope.push_root(callee_value);
-    let this_value = call_scope.push_root(this_value);
+    call_scope.push_roots(&[callee_value, this_value])?;
 
     let mut args: Vec<Value> = Vec::new();
     args
@@ -2298,21 +2309,20 @@ impl<'a> Evaluator<'a> {
     for arg in &expr.arguments {
       if arg.stx.spread {
         let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
-        call_scope.push_root(spread_value);
+        call_scope.push_root(spread_value)?;
 
         let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
-        call_scope.push_root(iter.iterator);
-        call_scope.push_root(iter.next_method);
+        call_scope.push_roots(&[iter.iterator, iter.next_method])?;
 
         while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)?
         {
-          call_scope.push_root(value);
+          call_scope.push_root(value)?;
           args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
           args.push(value);
         }
       } else {
         let value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
-        call_scope.push_root(value);
+        call_scope.push_root(value)?;
         args.push(value);
       }
     }
@@ -2337,7 +2347,7 @@ impl<'a> Evaluator<'a> {
     if matches!(this_mode, ThisMode::Global) && matches!(this_arg, Value::Undefined | Value::Null) {
       this_arg = Value::Object(self.env.global_object);
       // Keep the coerced `this` value rooted across the call.
-      call_scope.push_root(this_arg);
+      call_scope.push_root(this_arg)?;
     }
 
     match call_handler {
@@ -2414,9 +2424,7 @@ impl<'a> Evaluator<'a> {
       }
 
       // Root args during body execution in case user code stores them into env bindings.
-      for &arg in args {
-        scope.push_root(arg);
-      }
+      scope.push_roots(args)?;
 
       let Some(body) = &func.body else {
         return Err(VmError::Unimplemented("function without body"));
@@ -2488,9 +2496,9 @@ impl<'a> Evaluator<'a> {
           _ => {
             let reference = self.eval_reference(scope, &expr.left)?;
             let mut rhs_scope = scope.reborrow();
-            self.root_reference(&mut rhs_scope, &reference);
+            self.root_reference(&mut rhs_scope, &reference)?;
             let value = self.eval_expr(&mut rhs_scope, &expr.right)?;
-            rhs_scope.push_root(value);
+            rhs_scope.push_root(value)?;
             self.put_value_to_reference(&mut rhs_scope, &reference, value)?;
             Ok(value)
           }
@@ -2522,7 +2530,7 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         Ok(Value::Bool(strict_equal(rhs_scope.heap(), left, right)?))
       }
@@ -2530,7 +2538,7 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         Ok(Value::Bool(!strict_equal(rhs_scope.heap(), left, right)?))
       }
@@ -2538,7 +2546,7 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         Ok(Value::Bool(abstract_equality(rhs_scope.heap_mut(), left, right)?))
       }
@@ -2546,7 +2554,7 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         Ok(Value::Bool(!abstract_equality(
           rhs_scope.heap_mut(),
@@ -2558,7 +2566,7 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         add_operator(rhs_scope.heap_mut(), left, right)
       }
@@ -2573,11 +2581,11 @@ impl<'a> Evaluator<'a> {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
         let mut rhs_scope = scope.reborrow();
-        rhs_scope.push_root(left);
+        rhs_scope.push_root(left)?;
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         // Root `right` for the duration of numeric conversion: `ToNumber` may allocate when called
         // on objects (via `ToPrimitive`).
-        rhs_scope.push_root(right);
+        rhs_scope.push_root(right)?;
         let left_n = to_number(rhs_scope.heap_mut(), left)?;
         let right_n = to_number(rhs_scope.heap_mut(), right)?;
 

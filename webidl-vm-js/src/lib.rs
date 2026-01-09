@@ -381,7 +381,7 @@ mod tests {
         .alloc_string_from_code_units(&units)
         .expect("alloc string")
     };
-    let _root = heap.add_root(Value::String(s));
+    let _root = heap.add_root(Value::String(s)).expect("add_root");
 
     let hooks = NoHooks;
     let limits = WebIdlLimits::default();

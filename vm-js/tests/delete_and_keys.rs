@@ -19,7 +19,7 @@ fn ordinary_delete_configurable_removes_property_and_updates_used_bytes() -> Res
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   let key = PropertyKey::from_string(scope.alloc_string("x")?);
   scope.define_property(obj, key, enumerable_configurable_data(Value::Null))?;
@@ -43,7 +43,7 @@ fn ordinary_delete_non_configurable_returns_false_and_keeps_property() -> Result
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   let key = PropertyKey::from_string(scope.alloc_string("x")?);
   scope.define_property(
@@ -70,7 +70,7 @@ fn ordinary_own_property_keys_orders_indices_strings_and_symbols() -> Result<(),
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   let k_2 = PropertyKey::from_string(scope.alloc_string("2")?);
   let k_1 = PropertyKey::from_string(scope.alloc_string("1")?);
@@ -100,7 +100,7 @@ fn ordinary_own_property_keys_array_index_edge_cases() -> Result<(), VmError> {
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   let k_00 = PropertyKey::from_string(scope.alloc_string("00")?);
   let k_max_minus_1 = PropertyKey::from_string(scope.alloc_string("4294967294")?);
@@ -118,4 +118,3 @@ fn ordinary_own_property_keys_array_index_edge_cases() -> Result<(), VmError> {
   assert_eq!(keys, vec![k_0, k_max_minus_1, k_00, k_max]);
   Ok(())
 }
-

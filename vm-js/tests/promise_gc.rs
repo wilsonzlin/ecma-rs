@@ -11,7 +11,7 @@ fn promise_result_value_is_traced() -> Result<(), VmError> {
   {
     let mut scope = heap.scope();
     promise = scope.alloc_promise()?;
-    scope.push_root(Value::Object(promise));
+    scope.push_root(Value::Object(promise))?;
 
     result_string = scope.alloc_string("result")?;
     scope
@@ -40,7 +40,7 @@ fn promise_reaction_handler_traced_while_pending_and_collectable_after_settlemen
 
     promise = scope.alloc_promise()?;
     assert!(scope.heap().is_promise(promise));
-    scope.push_root(Value::Object(promise));
+    scope.push_root(Value::Object(promise))?;
 
     let handler_name = scope.alloc_string("handler")?;
     handler = scope.alloc_native_function(NativeFunctionId(1), None, handler_name, 0)?;
@@ -67,4 +67,3 @@ fn promise_reaction_handler_traced_while_pending_and_collectable_after_settlemen
 
   Ok(())
 }
-

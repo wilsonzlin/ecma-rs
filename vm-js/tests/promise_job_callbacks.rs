@@ -103,7 +103,7 @@ impl VmJobContext for RootingContext<'_> {
     Err(VmError::Unimplemented("RootingContext::construct"))
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.add_root(value)
   }
 
@@ -137,7 +137,7 @@ fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {
   // Use heap objects so we can validate GC safety for job captures.
   let argument_obj = scope.alloc_object()?;
   let argument = Value::Object(argument_obj);
-  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument);
+  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument)?;
   host.expected = Some(ExpectedCall {
     callback: on_fulfilled,
     this_argument: Value::Undefined,

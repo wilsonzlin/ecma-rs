@@ -33,8 +33,8 @@ impl Realm {
 
     let mut scope = heap.scope();
     let global_object = scope.alloc_object()?;
-    scope.push_root(Value::Object(global_object));
-    roots.push(scope.heap_mut().add_root(Value::Object(global_object)));
+    scope.push_root(Value::Object(global_object))?;
+    roots.push(scope.heap_mut().add_root(Value::Object(global_object))?);
 
     let intrinsics = match Intrinsics::init(vm, &mut scope, &mut roots) {
       Ok(intrinsics) => intrinsics,

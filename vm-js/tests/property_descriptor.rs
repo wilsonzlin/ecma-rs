@@ -92,7 +92,7 @@ fn object_property_tracing_keeps_referenced_objects_alive() -> Result<(), VmErro
     };
 
     owner = scope.alloc_object_with_properties(None, &[(key, desc)])?;
-    scope.push_root(Value::Object(owner));
+    scope.push_root(Value::Object(owner))?;
 
     scope.heap_mut().collect_garbage();
 
@@ -140,7 +140,7 @@ fn define_property_works_on_native_function_objects() -> Result<(), VmError> {
 
   let name = scope.alloc_string("f")?;
   let func = scope.alloc_native_function(call_id, None, name, 0)?;
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let key_str = scope.alloc_string("x")?;
   let key = PropertyKey::from_string(key_str);

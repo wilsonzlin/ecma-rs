@@ -238,7 +238,7 @@ impl Heap {
 
     // Allocate via a scope so we can root `value` across a GC triggered by the string allocation.
     let mut scope = self.scope();
-    scope.push_root(value);
+    scope.push_root(value)?;
 
     match value {
       Value::Undefined => scope.alloc_string("undefined"),
@@ -252,7 +252,7 @@ impl Heap {
         // Per spec: ToPrimitive, then ToString.
         // `to_primitive` currently returns a placeholder string for objects.
         let prim = crate::ops::to_primitive(scope.heap_mut(), value)?;
-        scope.push_root(prim);
+        scope.push_root(prim)?;
         scope.heap_mut().to_string(prim)
       }
     }

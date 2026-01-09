@@ -317,7 +317,7 @@ impl Vm {
         self.vm.construct(&mut scope, callee, args, new_target)
       }
 
-      fn add_root(&mut self, value: Value) -> RootId {
+      fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
         self.heap.add_root(value)
       }
 
@@ -652,11 +652,13 @@ impl Vm {
     args: &[Value],
   ) -> Result<Value, VmError> {
     let mut scope = scope.reborrow();
-    let callee = scope.push_root(callee);
-    let this = scope.push_root(this);
-    for &arg in args {
-      scope.push_root(arg);
-    }
+    // Root all inputs in a way that is robust against GC triggering while we grow the root stack.
+    //
+    // `push_root`/`push_roots` can trigger GC when growing `root_stack`, so ensure any not-yet-pushed
+    // values are treated as extra roots during that operation.
+    let roots = [callee, this];
+    scope.push_roots_with_extra_roots(&roots, args, &[])?;
+    scope.push_roots(args)?;
 
     let callee_obj = match callee {
       Value::Object(obj) => obj,
@@ -747,11 +749,10 @@ impl Vm {
     new_target: Value,
   ) -> Result<Value, VmError> {
     let mut scope = scope.reborrow();
-    let callee = scope.push_root(callee);
-    let new_target = scope.push_root(new_target);
-    for &arg in args {
-      scope.push_root(arg);
-    }
+    // Root all inputs robustly; see `Vm::call` for rationale.
+    let roots = [callee, new_target];
+    scope.push_roots_with_extra_roots(&roots, args, &[])?;
+    scope.push_roots(args)?;
 
     let callee_obj = match callee {
       Value::Object(obj) => obj,

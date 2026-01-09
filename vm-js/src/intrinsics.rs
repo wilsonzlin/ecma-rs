@@ -92,7 +92,7 @@ fn alloc_rooted_object(
   roots: &mut Vec<RootId>,
 ) -> Result<GcObject, VmError> {
   let obj = scope.alloc_object()?;
-  roots.push(scope.heap_mut().add_root(Value::Object(obj)));
+  roots.push(scope.heap_mut().add_root(Value::Object(obj))?);
   Ok(obj)
 }
 
@@ -105,7 +105,7 @@ fn alloc_rooted_native_function(
   length: u32,
 ) -> Result<GcObject, VmError> {
   let func = scope.alloc_native_function(call, construct, name, length)?;
-  roots.push(scope.heap_mut().add_root(Value::Object(func)));
+  roots.push(scope.heap_mut().add_root(Value::Object(func))?);
   Ok(func)
 }
 
@@ -116,7 +116,7 @@ fn alloc_rooted_symbol(
 ) -> Result<GcSymbol, VmError> {
   let desc_string = scope.alloc_string(description)?;
   let sym = scope.new_symbol(Some(desc_string))?;
-  roots.push(scope.heap_mut().add_root(Value::Symbol(sym)));
+  roots.push(scope.heap_mut().add_root(Value::Symbol(sym))?);
   Ok(sym)
 }
 
@@ -330,13 +330,13 @@ impl Intrinsics {
     // Root these key strings for the duration of intrinsic initialization: subsequent allocations
     // may trigger GC before we store the keys on any rooted object.
     let constructor_key_s = scope.alloc_string("constructor")?;
-    scope.push_root(Value::String(constructor_key_s));
+    scope.push_root(Value::String(constructor_key_s))?;
     let prototype_key_s = scope.alloc_string("prototype")?;
-    scope.push_root(Value::String(prototype_key_s));
+    scope.push_root(Value::String(prototype_key_s))?;
     let name_key_s = scope.alloc_string("name")?;
-    scope.push_root(Value::String(name_key_s));
+    scope.push_root(Value::String(name_key_s))?;
     let length_key_s = scope.alloc_string("length")?;
-    scope.push_root(Value::String(length_key_s));
+    scope.push_root(Value::String(length_key_s))?;
 
     let common = CommonKeys {
       constructor: PropertyKey::from_string(constructor_key_s),
@@ -395,16 +395,16 @@ impl Intrinsics {
 
     install_object_static_methods(vm, scope, roots, function_prototype, object_constructor)?;
 
-    // Object.prototype.toString
-    {
-      let to_string_s = scope.alloc_string("toString")?;
-      scope.push_root(Value::String(to_string_s));
-      let key = PropertyKey::from_string(to_string_s);
-      let func = scope.alloc_native_function(object_prototype_to_string, None, to_string_s, 0)?;
-      scope.push_root(Value::Object(func));
-      scope
-        .heap_mut()
-        .object_set_prototype(func, Some(function_prototype))?;
+      // Object.prototype.toString
+      {
+        let to_string_s = scope.alloc_string("toString")?;
+        scope.push_root(Value::String(to_string_s))?;
+        let key = PropertyKey::from_string(to_string_s);
+        let func = scope.alloc_native_function(object_prototype_to_string, None, to_string_s, 0)?;
+        scope.push_root(Value::Object(func))?;
+        scope
+          .heap_mut()
+          .object_set_prototype(func, Some(function_prototype))?;
       scope.define_property(
         object_prototype,
         key,
@@ -449,17 +449,17 @@ impl Intrinsics {
       data_desc(Value::Object(function_constructor), true, false, true),
     )?;
 
-    // Function.prototype.call
-    {
-      let call_s = scope.alloc_string("call")?;
-      scope.push_root(Value::String(call_s));
-      let key = PropertyKey::from_string(call_s);
-      let func =
-        scope.alloc_native_function(function_prototype_call_method, None, call_s, 1)?;
-      scope.push_root(Value::Object(func));
-      scope
-        .heap_mut()
-        .object_set_prototype(func, Some(function_prototype))?;
+      // Function.prototype.call
+      {
+        let call_s = scope.alloc_string("call")?;
+        scope.push_root(Value::String(call_s))?;
+        let key = PropertyKey::from_string(call_s);
+        let func =
+          scope.alloc_native_function(function_prototype_call_method, None, call_s, 1)?;
+        scope.push_root(Value::Object(func))?;
+        scope
+          .heap_mut()
+          .object_set_prototype(func, Some(function_prototype))?;
       scope.define_property(
         function_prototype,
         key,
@@ -503,30 +503,30 @@ impl Intrinsics {
       data_desc(Value::Object(array_constructor), true, false, true),
     )?;
 
-    // Array.prototype.map / join
-    {
-      let map_s = scope.alloc_string("map")?;
-      scope.push_root(Value::String(map_s));
-      let map_key = PropertyKey::from_string(map_s);
-      let map_fn = scope.alloc_native_function(array_prototype_map, None, map_s, 1)?;
-      scope.push_root(Value::Object(map_fn));
-      scope
-        .heap_mut()
-        .object_set_prototype(map_fn, Some(function_prototype))?;
+      // Array.prototype.map / join
+      {
+        let map_s = scope.alloc_string("map")?;
+        scope.push_root(Value::String(map_s))?;
+        let map_key = PropertyKey::from_string(map_s);
+        let map_fn = scope.alloc_native_function(array_prototype_map, None, map_s, 1)?;
+        scope.push_root(Value::Object(map_fn))?;
+        scope
+          .heap_mut()
+          .object_set_prototype(map_fn, Some(function_prototype))?;
       scope.define_property(
         array_prototype,
         map_key,
         data_desc(Value::Object(map_fn), true, false, true),
       )?;
 
-      let join_s = scope.alloc_string("join")?;
-      scope.push_root(Value::String(join_s));
-      let join_key = PropertyKey::from_string(join_s);
-      let join_fn = scope.alloc_native_function(array_prototype_join, None, join_s, 1)?;
-      scope.push_root(Value::Object(join_fn));
-      scope
-        .heap_mut()
-        .object_set_prototype(join_fn, Some(function_prototype))?;
+        let join_s = scope.alloc_string("join")?;
+        scope.push_root(Value::String(join_s))?;
+        let join_key = PropertyKey::from_string(join_s);
+        let join_fn = scope.alloc_native_function(array_prototype_join, None, join_s, 1)?;
+        scope.push_root(Value::Object(join_fn))?;
+        scope
+          .heap_mut()
+          .object_set_prototype(join_fn, Some(function_prototype))?;
       scope.define_property(
         array_prototype,
         join_key,
@@ -570,17 +570,17 @@ impl Intrinsics {
       data_desc(Value::Object(string_constructor), true, false, true),
     )?;
 
-    // String.prototype.toString
-    {
-      let to_string_s = scope.alloc_string("toString")?;
-      scope.push_root(Value::String(to_string_s));
-      let key = PropertyKey::from_string(to_string_s);
-      let func =
-        scope.alloc_native_function(string_prototype_to_string, None, to_string_s, 0)?;
-      scope.push_root(Value::Object(func));
-      scope
-        .heap_mut()
-        .object_set_prototype(func, Some(function_prototype))?;
+      // String.prototype.toString
+      {
+        let to_string_s = scope.alloc_string("toString")?;
+        scope.push_root(Value::String(to_string_s))?;
+        let key = PropertyKey::from_string(to_string_s);
+        let func =
+          scope.alloc_native_function(string_prototype_to_string, None, to_string_s, 0)?;
+        scope.push_root(Value::Object(func))?;
+        scope
+          .heap_mut()
+          .object_set_prototype(func, Some(function_prototype))?;
       scope.define_property(
         string_prototype,
         key,
@@ -637,7 +637,7 @@ impl Intrinsics {
       ];
       for (name, sym) in cases {
         let key_s = scope.alloc_string(name)?;
-        scope.push_root(Value::String(key_s));
+        scope.push_root(Value::String(key_s))?;
         let key = PropertyKey::from_string(key_s);
         scope.define_property(
           symbol_constructor,
@@ -654,10 +654,10 @@ impl Intrinsics {
       .object_set_prototype(json, Some(object_prototype))?;
     {
       let stringify_s = scope.alloc_string("stringify")?;
-      scope.push_root(Value::String(stringify_s));
+      scope.push_root(Value::String(stringify_s))?;
       let key = PropertyKey::from_string(stringify_s);
       let func = scope.alloc_native_function(json_stringify, None, stringify_s, 1)?;
-      scope.push_root(Value::Object(func));
+      scope.push_root(Value::Object(func))?;
       scope
         .heap_mut()
         .object_set_prototype(func, Some(function_prototype))?;
@@ -683,10 +683,10 @@ impl Intrinsics {
     // Error.prototype.toString
     {
       let to_string_s = scope.alloc_string("toString")?;
-      scope.push_root(Value::String(to_string_s));
+      scope.push_root(Value::String(to_string_s))?;
       let key = PropertyKey::from_string(to_string_s);
       let func = scope.alloc_native_function(error_prototype_to_string, None, to_string_s, 0)?;
-      scope.push_root(Value::Object(func));
+      scope.push_root(Value::Object(func))?;
       scope
         .heap_mut()
         .object_set_prototype(func, Some(function_prototype))?;

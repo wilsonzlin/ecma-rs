@@ -84,7 +84,7 @@ impl VmJobContext for RootingContext<'_> {
     Err(VmError::Unimplemented("RootingContext::construct"))
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.add_root(value)
   }
 

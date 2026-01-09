@@ -28,7 +28,7 @@ fn weak_handle_upgrades_while_object_is_rooted() -> Result<(), VmError> {
     let mut scope = heap.scope();
     obj = scope.alloc_object()?;
     weak = WeakGcObject::from(obj);
-    root = scope.heap_mut().add_root(Value::Object(obj));
+    root = scope.heap_mut().add_root(Value::Object(obj))?;
   }
 
   heap.collect_garbage();
@@ -40,4 +40,3 @@ fn weak_handle_upgrades_while_object_is_rooted() -> Result<(), VmError> {
 
   Ok(())
 }
-

@@ -41,9 +41,9 @@ impl<'a> Scope<'a> {
     desc.validate()?;
 
     // Root all inputs that might be written into the heap before any allocation/GC.
-    self.push_root(Value::Object(obj));
-    root_property_key(self, key);
-    root_descriptor_patch(self, &desc);
+    self.push_root(Value::Object(obj))?;
+    root_property_key(self, key)?;
+    root_descriptor_patch(self, &desc)?;
 
     let current = self.heap().object_get_own_property(obj, &key)?;
     let extensible = self.heap().object_is_extensible(obj)?;
@@ -127,10 +127,10 @@ impl<'a> Scope<'a> {
     value: Value,
     receiver: Value,
   ) -> Result<bool, VmError> {
-    self.push_root(Value::Object(obj));
-    root_property_key(self, key);
-    self.push_root(value);
-    self.push_root(receiver);
+    self.push_root(Value::Object(obj))?;
+    root_property_key(self, key)?;
+    self.push_root(value)?;
+    self.push_root(receiver)?;
 
     let own_desc = self.ordinary_get_own_property(obj, key)?;
     ordinary_set_with_own_descriptor(vm, self, obj, key, value, receiver, own_desc)
@@ -138,8 +138,8 @@ impl<'a> Scope<'a> {
 
   /// ECMAScript `[[Delete]]` for ordinary objects.
   pub fn ordinary_delete(&mut self, obj: GcObject, key: PropertyKey) -> Result<bool, VmError> {
-    self.push_root(Value::Object(obj));
-    root_property_key(self, key);
+    self.push_root(Value::Object(obj))?;
+    root_property_key(self, key)?;
     self.heap_mut().ordinary_delete(obj, key)
   }
 
@@ -182,27 +182,29 @@ impl<'a> Scope<'a> {
   }
 }
 
-fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) {
+fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
   match key {
     PropertyKey::String(s) => {
-      scope.push_root(Value::String(s));
+      scope.push_root(Value::String(s))?;
     }
     PropertyKey::Symbol(s) => {
-      scope.push_root(Value::Symbol(s));
+      scope.push_root(Value::Symbol(s))?;
     }
   }
+  Ok(())
 }
 
-fn root_descriptor_patch(scope: &mut Scope<'_>, desc: &PropertyDescriptorPatch) {
+fn root_descriptor_patch(scope: &mut Scope<'_>, desc: &PropertyDescriptorPatch) -> Result<(), VmError> {
   if let Some(v) = desc.value {
-    scope.push_root(v);
+    scope.push_root(v)?;
   }
   if let Some(v) = desc.get {
-    scope.push_root(v);
+    scope.push_root(v)?;
   }
   if let Some(v) = desc.set {
-    scope.push_root(v);
+    scope.push_root(v)?;
   }
+  Ok(())
 }
 
 fn validate_and_apply_property_descriptor(

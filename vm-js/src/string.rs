@@ -49,13 +49,11 @@ impl JsString {
   }
 
   pub(crate) fn heap_size_bytes_for_len(units_len: usize) -> usize {
-    // Use checked arithmetic to avoid debug-build panics on hostile (very large)
-    // inputs. If the size overflows `usize`, clamp to `usize::MAX` so the caller
-    // will treat the allocation as impossible (OOM).
-    let units_bytes = units_len.checked_mul(2).unwrap_or(usize::MAX);
-    std::mem::size_of::<Self>()
-      .checked_add(units_bytes)
-      .unwrap_or(usize::MAX)
+    // Payload bytes owned by this string allocation.
+    //
+    // Note: `JsString` headers are stored inline in the heap slot table, so this size intentionally
+    // excludes `mem::size_of::<JsString>()` and only counts the backing UTF-16 buffer.
+    units_len.checked_mul(2).unwrap_or(usize::MAX)
   }
 }
 

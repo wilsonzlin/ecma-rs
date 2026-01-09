@@ -9,7 +9,7 @@ use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 /// Hard upper bound for `[[Prototype]]` chain traversals.
 ///
@@ -17,13 +17,22 @@ use std::collections::{BTreeMap, HashSet};
 /// embeddings (or unsafe internal helpers) can violate invariants.
 pub const MAX_PROTOTYPE_CHAIN: usize = 10_000;
 
+/// Minimum non-zero capacity for heap-internal vectors that can grow due to hostile input.
+///
+/// Keeping a small floor avoids pathological "grow by 1" patterns while still being conservative
+/// about over-allocation.
+const MIN_VEC_CAPACITY: usize = 1;
+
 /// Heap configuration and memory limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapLimits {
-  /// Hard memory limit for live heap allocations, in bytes.
+  /// Hard memory limit for heap memory usage, in bytes.
+  ///
+  /// This is enforced against [`Heap::estimated_total_bytes`], which includes both live object
+  /// payload sizes and GC/heap metadata overhead (slot table, mark bits, root stacks, etc).
   pub max_bytes: usize,
-  /// When an allocation would cause `used_bytes` to exceed this threshold, the heap will trigger a
-  /// GC cycle before attempting the allocation.
+  /// When an allocation would cause [`Heap::estimated_total_bytes`] to exceed this threshold, the
+  /// heap will trigger a GC cycle before attempting the allocation.
   pub gc_threshold: usize,
 }
 
@@ -37,6 +46,12 @@ impl HeapLimits {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SymbolRegistryEntry {
+  key: GcString,
+  sym: GcSymbol,
+}
+
 /// A non-moving mark/sweep GC heap.
 ///
 /// The heap stores objects in a `Vec` of slots. GC handles store the slot `index` and a
@@ -45,7 +60,10 @@ impl HeapLimits {
 pub struct Heap {
   limits: HeapLimits,
 
-  /// Bytes used by live allocations.
+  /// Bytes used by live heap object payloads.
+  ///
+  /// This intentionally excludes heap metadata overhead (slot table, mark bits, roots, etc) which
+  /// is tracked via [`Heap::estimated_total_bytes`].
   used_bytes: usize,
   gc_runs: u64,
 
@@ -53,6 +71,10 @@ pub struct Heap {
   slots: Vec<Slot>,
   marks: Vec<u8>,
   free_list: Vec<u32>,
+  /// Worklist used during GC marking.
+  ///
+  /// Stored on the heap (rather than allocated per-GC) so collection does not need to allocate.
+  gc_worklist: Vec<HeapId>,
 
   next_symbol_id: u64,
 
@@ -68,7 +90,7 @@ pub struct Heap {
   //
   // The registry is scanned during GC (as an additional root set) to keep
   // interned symbols alive.
-  symbol_registry: BTreeMap<JsString, GcSymbol>,
+  symbol_registry: Vec<SymbolRegistryEntry>,
 }
 
 /// RAII wrapper for a persistent GC root created by [`Heap::add_root`].
@@ -85,9 +107,9 @@ pub struct PersistentRoot<'a> {
 
 impl<'a> PersistentRoot<'a> {
   /// Adds `value` to the heap's persistent root set and returns a guard that removes it on drop.
-  pub fn new(heap: &'a mut Heap, value: Value) -> Self {
-    let id = heap.add_root(value);
-    Self { heap, id }
+  pub fn new(heap: &'a mut Heap, value: Value) -> Result<Self, VmError> {
+    let id = heap.add_root(value)?;
+    Ok(Self { heap, id })
   }
 
   /// The underlying [`RootId`].
@@ -142,6 +164,7 @@ impl Heap {
       slots: Vec::new(),
       marks: Vec::new(),
       free_list: Vec::new(),
+      gc_worklist: Vec::new(),
       next_symbol_id: 1,
       root_stack: Vec::new(),
       env_root_stack: Vec::new(),
@@ -149,7 +172,7 @@ impl Heap {
       persistent_roots_free: Vec::new(),
       persistent_env_roots: Vec::new(),
       persistent_env_roots_free: Vec::new(),
-      symbol_registry: BTreeMap::new(),
+      symbol_registry: Vec::new(),
     }
   }
 
@@ -177,9 +200,22 @@ impl Heap {
   ///
   /// Stack roots are traced during GC until removed (typically via
   /// [`Heap::truncate_stack_roots`]).
-  pub fn push_stack_root(&mut self, value: Value) {
+  pub fn push_stack_root(&mut self, value: Value) -> Result<(), VmError> {
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
+    let new_len = self
+      .root_stack
+      .len()
+      .checked_add(1)
+      .ok_or(VmError::OutOfMemory)?;
+    let growth_bytes = vec_capacity_growth_bytes::<Value>(self.root_stack.capacity(), new_len);
+    if growth_bytes != 0 {
+      // Ensure `value` is treated as a root if this triggers a GC while we grow `root_stack`.
+      let values = [value];
+      self.ensure_can_allocate_with_extra_roots(|_| growth_bytes, &values, &[], &[], &[])?;
+      reserve_vec_to_len::<Value>(&mut self.root_stack, new_len)?;
+    }
     self.root_stack.push(value);
+    Ok(())
   }
 
   /// Truncates the value stack root set.
@@ -187,7 +223,9 @@ impl Heap {
     self.root_stack.truncate(len);
   }
 
-  /// Bytes currently used by live heap allocations.
+  /// Bytes currently used by live heap object payloads.
+  ///
+  /// This excludes heap metadata overhead; see [`Heap::estimated_total_bytes`].
   pub fn used_bytes(&self) -> usize {
     self.used_bytes
   }
@@ -195,6 +233,77 @@ impl Heap {
   /// The heap's configured memory limits.
   pub fn limits(&self) -> HeapLimits {
     self.limits
+  }
+
+  /// Estimated total bytes used by the heap, including GC metadata overhead.
+  ///
+  /// This is the value used to enforce [`HeapLimits::max_bytes`] and trigger collection at
+  /// [`HeapLimits::gc_threshold`].
+  pub fn estimated_total_bytes(&self) -> usize {
+    let mut total = 0usize;
+
+    // Live payload bytes (dynamic allocations owned by live heap objects).
+    total = total.saturating_add(self.used_bytes);
+
+    // Slot table + mark bits + free lists + GC worklist.
+    total = total.saturating_add(self.slots.capacity().saturating_mul(mem::size_of::<Slot>()));
+    total = total.saturating_add(self.marks.capacity()); // Vec<u8>
+    total = total.saturating_add(self.free_list.capacity().saturating_mul(mem::size_of::<u32>()));
+    total = total.saturating_add(
+      self
+        .gc_worklist
+        .capacity()
+        .saturating_mul(mem::size_of::<HeapId>()),
+    );
+
+    // Root sets.
+    total = total.saturating_add(
+      self
+        .root_stack
+        .capacity()
+        .saturating_mul(mem::size_of::<Value>()),
+    );
+    total = total.saturating_add(
+      self
+        .env_root_stack
+        .capacity()
+        .saturating_mul(mem::size_of::<GcEnv>()),
+    );
+    total = total.saturating_add(
+      self
+        .persistent_roots
+        .capacity()
+        .saturating_mul(mem::size_of::<Option<Value>>()),
+    );
+    total = total.saturating_add(
+      self
+        .persistent_roots_free
+        .capacity()
+        .saturating_mul(mem::size_of::<u32>()),
+    );
+    total = total.saturating_add(
+      self
+        .persistent_env_roots
+        .capacity()
+        .saturating_mul(mem::size_of::<Option<GcEnv>>()),
+    );
+    total = total.saturating_add(
+      self
+        .persistent_env_roots_free
+        .capacity()
+        .saturating_mul(mem::size_of::<u32>()),
+    );
+
+    // Symbol registry overhead. (The key payload bytes are already included because the registry
+    // stores `GcString` handles to heap strings.)
+    total = total.saturating_add(
+      self
+        .symbol_registry
+        .capacity()
+        .saturating_mul(mem::size_of::<SymbolRegistryEntry>()),
+    );
+
+    total
   }
 
   #[cfg(debug_assertions)]
@@ -223,6 +332,16 @@ impl Heap {
 
   /// Explicitly runs a GC cycle.
   pub fn collect_garbage(&mut self) {
+    self.collect_garbage_with_extra_roots(&[], &[], &[], &[]);
+  }
+
+  fn collect_garbage_with_extra_roots(
+    &mut self,
+    extra_value_roots_a: &[Value],
+    extra_value_roots_b: &[Value],
+    extra_env_roots_a: &[GcEnv],
+    extra_env_roots_b: &[GcEnv],
+  ) {
     self.gc_runs += 1;
 
     // Mark.
@@ -232,7 +351,20 @@ impl Heap {
       let slots = &self.slots;
       let marks = &mut self.marks[..];
 
-      let mut tracer = Tracer::new(slots, marks);
+      self.gc_worklist.clear();
+      let mut tracer = Tracer::new(slots, marks, &mut self.gc_worklist);
+      for value in extra_value_roots_a {
+        tracer.trace_value(*value);
+      }
+      for value in extra_value_roots_b {
+        tracer.trace_value(*value);
+      }
+      for env in extra_env_roots_a {
+        tracer.trace_env(*env);
+      }
+      for env in extra_env_roots_b {
+        tracer.trace_env(*env);
+      }
       for value in &self.root_stack {
         tracer.trace_value(*value);
       }
@@ -245,18 +377,20 @@ impl Heap {
       for env in self.persistent_env_roots.iter().flatten() {
         tracer.trace_env(*env);
       }
-      for sym in self.symbol_registry.values().copied() {
-        tracer.trace_value(Value::Symbol(sym));
+      for entry in &self.symbol_registry {
+        // The registry roots both the key (string) and the interned symbol.
+        tracer.trace_value(Value::String(entry.key));
+        tracer.trace_value(Value::Symbol(entry.sym));
       }
 
       while let Some(id) = tracer.pop_work() {
         let Some(idx) = tracer.validate(id) else {
           continue;
         };
-        if tracer.marks[idx] != 0 {
+        if tracer.marks[idx] == 2 {
           continue;
         }
-        tracer.marks[idx] = 1;
+        tracer.marks[idx] = 2;
 
         let Some(obj) = tracer.slots[idx].value.as_ref() else {
           debug_assert!(false, "validated heap id points to a free slot: {id:?}");
@@ -295,25 +429,36 @@ impl Heap {
 
   /// Adds a persistent root and returns an RAII guard that removes it on drop.
   #[inline]
-  pub fn persistent_root(&mut self, value: Value) -> PersistentRoot<'_> {
+  pub fn persistent_root(&mut self, value: Value) -> Result<PersistentRoot<'_>, VmError> {
     PersistentRoot::new(self, value)
   }
 
   /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
-  pub fn add_root(&mut self, value: Value) -> RootId {
+  pub fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     // Root sets should not contain stale handles; detect issues early in debug builds.
     debug_assert!(self.debug_value_is_valid_or_primitive(value));
 
-    let idx = match self.persistent_roots_free.pop() {
-      Some(idx) => idx as usize,
-      None => {
-        self.persistent_roots.push(None);
-        self.persistent_roots.len() - 1
-      }
+    // Fast path: reuse a previously-freed root slot.
+    let idx = if let Some(idx) = self.persistent_roots_free.pop() {
+      idx as usize
+    } else {
+      // Slow path: grow the root table (and ensure the free list is large enough that
+      // `remove_root` never needs to allocate).
+      let extra_roots = [value];
+      self.ensure_can_allocate_with_extra_roots(
+        |heap| heap.additional_bytes_for_new_persistent_root_slot(),
+        &extra_roots,
+        &[],
+        &[],
+        &[],
+      )?;
+      self.reserve_for_new_persistent_root_slot()?;
+      self.persistent_roots.push(None);
+      self.persistent_roots.len() - 1
     };
     debug_assert!(self.persistent_roots[idx].is_none());
     self.persistent_roots[idx] = Some(value);
-    RootId(idx as u32)
+    Ok(RootId(idx as u32))
   }
 
   /// Returns the current value of a persistent root.
@@ -361,19 +506,29 @@ impl Heap {
     }
   }
 
-  pub(crate) fn add_env_root(&mut self, env: GcEnv) -> EnvRootId {
+  pub(crate) fn add_env_root(&mut self, env: GcEnv) -> Result<EnvRootId, VmError> {
     debug_assert!(self.is_valid_env(env));
 
-    let idx = match self.persistent_env_roots_free.pop() {
-      Some(idx) => idx as usize,
-      None => {
-        self.persistent_env_roots.push(None);
-        self.persistent_env_roots.len() - 1
-      }
+    // Root `env` during allocation in case growing the env-root table triggers GC.
+    let mut scope = self.scope();
+    scope.push_env_root(env)?;
+
+    // Fast path: reuse a previously-freed root slot.
+    let idx = if let Some(idx) = scope.heap.persistent_env_roots_free.pop() {
+      idx as usize
+    } else {
+      // Slow path: grow the env-root table (and ensure the free list is large enough that
+      // `remove_env_root` never needs to allocate).
+      scope
+        .heap
+        .ensure_can_allocate_with(|heap| heap.additional_bytes_for_new_persistent_env_root_slot())?;
+      scope.heap.reserve_for_new_persistent_env_root_slot()?;
+      scope.heap.persistent_env_roots.push(None);
+      scope.heap.persistent_env_roots.len() - 1
     };
-    debug_assert!(self.persistent_env_roots[idx].is_none());
-    self.persistent_env_roots[idx] = Some(env);
-    EnvRootId(idx as u32)
+    debug_assert!(scope.heap.persistent_env_roots[idx].is_none());
+    scope.heap.persistent_env_roots[idx] = Some(env);
+    Ok(EnvRootId(idx as u32))
   }
 
   #[allow(dead_code)]
@@ -1358,19 +1513,32 @@ impl Heap {
   /// The registry is scanned by the GC, so registered symbols remain live even if they are not
   /// referenced from the stack or persistent roots.
   pub fn symbol_for(&mut self, key: GcString) -> Result<GcSymbol, VmError> {
-    let key_contents = self.get_string(key)?.clone();
-    if let Some(sym) = self.symbol_registry.get(&key_contents).copied() {
+    let key_contents = self.get_string(key)?;
+    if let Some(sym) = self.symbol_registry_get(key_contents)? {
       return Ok(sym);
     }
 
-    // Root `key` for the duration of allocation in case `ensure_can_allocate` triggers a GC.
-    let sym = {
-      let mut scope = self.scope();
-      scope.push_root(Value::String(key));
-      scope.new_symbol(Some(key))?
-    };
+    // Pre-flight the allocation: creating a new registry entry may require growing both the heap
+    // (new symbol allocation) and the registry vector itself.
+    let extra_roots = [Value::String(key)];
+    self.ensure_can_allocate_with_extra_roots(|heap| {
+      let mut bytes = 0usize;
+      // New symbol allocation: payload size is 0 (symbols have no external payload bytes), but may
+      // require growing the heap slot table.
+      bytes = bytes.saturating_add(heap.additional_bytes_for_heap_alloc(0));
+      // Registry entry vector growth.
+      bytes = bytes.saturating_add(heap.additional_bytes_for_symbol_registry_insert(1));
+      bytes
+    }, &extra_roots, &[], &[], &[])?;
 
-    self.symbol_registry.insert(key_contents, sym);
+    // Root `key` and the newly-created symbol while inserting into the registry in case the
+    // allocation paths trigger GC.
+    let mut scope = self.scope();
+    scope.push_root(Value::String(key))?;
+    let sym = scope.new_symbol(Some(key))?;
+    scope.push_root(Value::Symbol(sym))?;
+
+    scope.heap_mut().symbol_registry_insert(key, sym)?;
     Ok(sym)
   }
 
@@ -1853,13 +2021,43 @@ impl Heap {
     Some(idx)
   }
 
-  fn ensure_can_allocate(&mut self, new_bytes: usize) -> Result<(), VmError> {
-    let after = self.used_bytes.saturating_add(new_bytes);
+  fn ensure_can_allocate(&mut self, additional_bytes: usize) -> Result<(), VmError> {
+    self.ensure_can_allocate_with(|_| additional_bytes)
+  }
+
+  fn ensure_can_allocate_with<F>(&mut self, additional_bytes: F) -> Result<(), VmError>
+  where
+    F: FnMut(&Heap) -> usize,
+  {
+    self.ensure_can_allocate_with_extra_roots(additional_bytes, &[], &[], &[], &[])
+  }
+
+  fn ensure_can_allocate_with_extra_roots<F>(
+    &mut self,
+    mut additional_bytes: F,
+    extra_value_roots_a: &[Value],
+    extra_value_roots_b: &[Value],
+    extra_env_roots_a: &[GcEnv],
+    extra_env_roots_b: &[GcEnv],
+  ) -> Result<(), VmError>
+  where
+    F: FnMut(&Heap) -> usize,
+  {
+    let after = self
+      .estimated_total_bytes()
+      .saturating_add(additional_bytes(self));
     if after > self.limits.gc_threshold {
-      self.collect_garbage();
+      self.collect_garbage_with_extra_roots(
+        extra_value_roots_a,
+        extra_value_roots_b,
+        extra_env_roots_a,
+        extra_env_roots_b,
+      );
     }
 
-    let after = self.used_bytes.saturating_add(new_bytes);
+    let after = self
+      .estimated_total_bytes()
+      .saturating_add(additional_bytes(self));
     if after > self.limits.max_bytes {
       return Err(VmError::OutOfMemory);
     }
@@ -1879,10 +2077,15 @@ impl Heap {
     slot.bytes = new_bytes;
   }
 
-  fn alloc_unchecked(&mut self, obj: HeapObject, new_bytes: usize) -> HeapId {
+  fn alloc_unchecked(&mut self, obj: HeapObject, new_bytes: usize) -> Result<HeapId, VmError> {
+    // Pre-flight allocation with a dynamic cost model because running GC can populate `free_list`,
+    // which avoids slot-table growth.
+    self.ensure_can_allocate_with(|heap| heap.additional_bytes_for_heap_alloc(new_bytes))?;
+
     let idx = match self.free_list.pop() {
       Some(idx) => idx as usize,
       None => {
+        self.reserve_for_new_slot()?;
         let idx = self.slots.len();
         self.slots.push(Slot::new());
         self.marks.push(0);
@@ -1897,12 +2100,169 @@ impl Heap {
     slot.bytes = new_bytes;
     self.used_bytes = self.used_bytes.saturating_add(new_bytes);
 
-    let id = HeapId::from_parts(idx as u32, slot.generation);
+    let idx_u32: u32 = idx.try_into().map_err(|_| VmError::OutOfMemory)?;
+    let id = HeapId::from_parts(idx_u32, slot.generation);
 
     #[cfg(debug_assertions)]
     self.debug_assert_used_bytes_is_correct();
 
-    id
+    Ok(id)
+  }
+
+  fn symbol_registry_get(&self, key: &JsString) -> Result<Option<GcSymbol>, VmError> {
+    match self.symbol_registry_binary_search(key)? {
+      Ok(idx) => Ok(Some(self.symbol_registry[idx].sym)),
+      Err(_) => Ok(None),
+    }
+  }
+
+  fn symbol_registry_insert(&mut self, key: GcString, sym: GcSymbol) -> Result<(), VmError> {
+    self.reserve_for_symbol_registry_insert(1)?;
+
+    let key_contents = self.get_string(key)?;
+    let insert_at = match self.symbol_registry_binary_search(key_contents)? {
+      Ok(_) => return Ok(()), // Idempotent if called twice.
+      Err(idx) => idx,
+    };
+    self
+      .symbol_registry
+      .insert(insert_at, SymbolRegistryEntry { key, sym });
+    Ok(())
+  }
+
+  fn symbol_registry_binary_search(
+    &self,
+    key: &JsString,
+  ) -> Result<Result<usize, usize>, VmError> {
+    // Manual binary search so we can compare by string contents (not by handle identity).
+    let mut low = 0usize;
+    let mut high = self.symbol_registry.len();
+    while low < high {
+      let mid = low + (high - low) / 2;
+      let mid_key = self.get_string(self.symbol_registry[mid].key)?;
+      match mid_key.cmp(key) {
+        std::cmp::Ordering::Less => {
+          low = mid + 1;
+        }
+        std::cmp::Ordering::Greater => {
+          high = mid;
+        }
+        std::cmp::Ordering::Equal => return Ok(Ok(mid)),
+      }
+    }
+    Ok(Err(low))
+  }
+
+  fn additional_bytes_for_heap_alloc(&self, payload_bytes: usize) -> usize {
+    let mut bytes = payload_bytes;
+    if self.free_list.is_empty() {
+      bytes = bytes.saturating_add(self.additional_bytes_for_new_slot());
+    }
+    bytes
+  }
+
+  fn additional_bytes_for_new_slot(&self) -> usize {
+    let new_len = self.slots.len().saturating_add(1);
+    let mut bytes = 0usize;
+
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<Slot>(
+      self.slots.capacity(),
+      new_len,
+    ));
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<u8>(
+      self.marks.capacity(),
+      new_len,
+    ));
+
+    // Ensure GC sweep and marking can never allocate.
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<u32>(
+      self.free_list.capacity(),
+      new_len,
+    ));
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<HeapId>(
+      self.gc_worklist.capacity(),
+      new_len,
+    ));
+
+    bytes
+  }
+
+  fn reserve_for_new_slot(&mut self) -> Result<(), VmError> {
+    let new_len = self.slots.len().checked_add(1).ok_or(VmError::OutOfMemory)?;
+
+    reserve_vec_to_len::<Slot>(&mut self.slots, new_len)?;
+    reserve_vec_to_len::<u8>(&mut self.marks, new_len)?;
+    reserve_vec_to_len::<u32>(&mut self.free_list, new_len)?;
+    reserve_vec_to_len::<HeapId>(&mut self.gc_worklist, new_len)?;
+    Ok(())
+  }
+
+  fn additional_bytes_for_new_persistent_root_slot(&self) -> usize {
+    let new_len = self.persistent_roots.len().saturating_add(1);
+    let mut bytes = 0usize;
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<Option<Value>>(
+      self.persistent_roots.capacity(),
+      new_len,
+    ));
+    // Ensure `remove_root` never needs to allocate.
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<u32>(
+      self.persistent_roots_free.capacity(),
+      new_len,
+    ));
+    bytes
+  }
+
+  fn reserve_for_new_persistent_root_slot(&mut self) -> Result<(), VmError> {
+    let new_len = self
+      .persistent_roots
+      .len()
+      .checked_add(1)
+      .ok_or(VmError::OutOfMemory)?;
+    reserve_vec_to_len::<Option<Value>>(&mut self.persistent_roots, new_len)?;
+    reserve_vec_to_len::<u32>(&mut self.persistent_roots_free, new_len)?;
+    Ok(())
+  }
+
+  fn additional_bytes_for_new_persistent_env_root_slot(&self) -> usize {
+    let new_len = self.persistent_env_roots.len().saturating_add(1);
+    let mut bytes = 0usize;
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<Option<GcEnv>>(
+      self.persistent_env_roots.capacity(),
+      new_len,
+    ));
+    // Ensure `remove_env_root` never needs to allocate.
+    bytes = bytes.saturating_add(vec_capacity_growth_bytes::<u32>(
+      self.persistent_env_roots_free.capacity(),
+      new_len,
+    ));
+    bytes
+  }
+
+  fn reserve_for_new_persistent_env_root_slot(&mut self) -> Result<(), VmError> {
+    let new_len = self
+      .persistent_env_roots
+      .len()
+      .checked_add(1)
+      .ok_or(VmError::OutOfMemory)?;
+    reserve_vec_to_len::<Option<GcEnv>>(&mut self.persistent_env_roots, new_len)?;
+    reserve_vec_to_len::<u32>(&mut self.persistent_env_roots_free, new_len)?;
+    Ok(())
+  }
+
+  fn additional_bytes_for_symbol_registry_insert(&self, additional: usize) -> usize {
+    let required = self.symbol_registry.len().saturating_add(additional);
+    vec_capacity_growth_bytes::<SymbolRegistryEntry>(self.symbol_registry.capacity(), required)
+  }
+
+  fn reserve_for_symbol_registry_insert(&mut self, additional: usize) -> Result<(), VmError> {
+    let required = self
+      .symbol_registry
+      .len()
+      .checked_add(additional)
+      .ok_or(VmError::OutOfMemory)?;
+    self.ensure_can_allocate_with(|heap| heap.additional_bytes_for_symbol_registry_insert(additional))?;
+    reserve_vec_to_len::<SymbolRegistryEntry>(&mut self.symbol_registry, required)?;
+    Ok(())
   }
 
   fn debug_value_is_valid_or_primitive(&self, value: Value) -> bool {
@@ -1990,17 +2350,77 @@ impl<'a> Scope<'a> {
   /// Pushes a stack root.
   ///
   /// The returned `Value` is the same as the input, allowing call sites to write
-  /// `let v = scope.push_root(v);` if desired.
-  pub fn push_root(&mut self, value: Value) -> Value {
-    debug_assert!(self.heap.debug_value_is_valid_or_primitive(value));
-    self.heap.root_stack.push(value);
-    value
+  /// `let v = scope.push_root(v)?;` if desired.
+  pub fn push_root(&mut self, value: Value) -> Result<Value, VmError> {
+    let values = [value];
+    self.push_roots(&values)?;
+    Ok(value)
   }
 
-  pub(crate) fn push_env_root(&mut self, env: GcEnv) -> GcEnv {
+  /// Pushes multiple stack roots in one operation.
+  pub fn push_roots(&mut self, values: &[Value]) -> Result<(), VmError> {
+    self.push_roots_with_extra_roots(values, &[], &[])
+  }
+
+  pub(crate) fn push_roots_with_extra_roots(
+    &mut self,
+    values: &[Value],
+    extra_roots: &[Value],
+    extra_env_roots: &[GcEnv],
+  ) -> Result<(), VmError> {
+    if values.is_empty() {
+      return Ok(());
+    }
+
+    for value in values {
+      debug_assert!(self.heap.debug_value_is_valid_or_primitive(*value));
+    }
+
+    let new_len = self
+      .heap
+      .root_stack
+      .len()
+      .checked_add(values.len())
+      .ok_or(VmError::OutOfMemory)?;
+    let growth_bytes = vec_capacity_growth_bytes::<Value>(self.heap.root_stack.capacity(), new_len);
+
+    if growth_bytes != 0 {
+      // Ensure `values` (and `extra_roots`) are treated as roots if this triggers a GC.
+      self.heap.ensure_can_allocate_with_extra_roots(
+        |_| growth_bytes,
+        values,
+        extra_roots,
+        extra_env_roots,
+        &[],
+      )?;
+      reserve_vec_to_len::<Value>(&mut self.heap.root_stack, new_len)?;
+    }
+    for value in values {
+      self.heap.root_stack.push(*value);
+    }
+    Ok(())
+  }
+
+  pub(crate) fn push_env_root(&mut self, env: GcEnv) -> Result<GcEnv, VmError> {
     debug_assert!(self.heap.is_valid_env(env));
+
+    let new_len = self
+      .heap
+      .env_root_stack
+      .len()
+      .checked_add(1)
+      .ok_or(VmError::OutOfMemory)?;
+    let growth_bytes = vec_capacity_growth_bytes::<GcEnv>(self.heap.env_root_stack.capacity(), new_len);
+
+    if growth_bytes != 0 {
+      // Ensure `env` is treated as a root if this triggers a GC while we grow `env_root_stack`.
+      let envs = [env];
+      self.heap.ensure_can_allocate_with_extra_roots(|_| growth_bytes, &[], &[], &envs, &[])?;
+      reserve_vec_to_len::<GcEnv>(&mut self.heap.env_root_stack, new_len)?;
+    }
+
     self.heap.env_root_stack.push(env);
-    env
+    Ok(env)
   }
 
   /// Creates a nested child scope that borrows the same heap.
@@ -2040,7 +2460,7 @@ impl<'a> Scope<'a> {
     let js = JsString::from_u16_vec(units);
     debug_assert_eq!(new_bytes, js.heap_size_bytes());
     let obj = HeapObject::String(js);
-    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Allocates a JavaScript string on the heap from UTF-16 code units.
@@ -2058,7 +2478,7 @@ impl<'a> Scope<'a> {
     let js = JsString::from_u16_vec(buf);
     debug_assert_eq!(new_bytes, js.heap_size_bytes());
     let obj = HeapObject::String(js);
-    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Allocates a JavaScript string on the heap from a UTF-16 code unit buffer.
@@ -2069,7 +2489,7 @@ impl<'a> Scope<'a> {
     let js = JsString::from_u16_vec(units);
     debug_assert_eq!(new_bytes, js.heap_size_bytes());
     let obj = HeapObject::String(js);
-    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcString(self.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Convenience alias for [`Scope::alloc_string_from_utf8`].
@@ -2085,17 +2505,17 @@ impl<'a> Scope<'a> {
     // retains a handle and will trace it.
     let mut scope = self.reborrow();
     if let Some(desc) = description {
-      scope.push_root(Value::String(desc));
+      scope.push_root(Value::String(desc))?;
     }
 
-    let new_bytes = mem::size_of::<JsSymbol>();
+    let new_bytes = 0;
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let id = scope.heap.next_symbol_id;
     scope.heap.next_symbol_id = scope.heap.next_symbol_id.wrapping_add(1);
 
     let obj = HeapObject::Symbol(JsSymbol::new(id, description));
-    Ok(GcSymbol(scope.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcSymbol(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Convenience allocation for `Symbol(description)` where `description` is UTF-8.
@@ -2113,7 +2533,7 @@ impl<'a> Scope<'a> {
     self.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Object(JsObject::new(None));
-    Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcObject(self.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Allocates an ordinary object with the provided `[[Prototype]]` and own properties.
@@ -2128,34 +2548,36 @@ impl<'a> Scope<'a> {
     // Note: these roots are temporary; once the object is allocated, it will retain handles and
     // trace them.
     let mut scope = self.reborrow();
+    let max_roots = proto.is_some() as usize + props.len().saturating_mul(3);
+    let mut roots: Vec<Value> = Vec::new();
+    roots
+      .try_reserve_exact(max_roots)
+      .map_err(|_| VmError::OutOfMemory)?;
     if let Some(proto) = proto {
-      scope.push_root(Value::Object(proto));
+      roots.push(Value::Object(proto));
     }
     for (key, desc) in props {
-      match key {
-        PropertyKey::String(s) => {
-          scope.push_root(Value::String(*s));
-        }
-        PropertyKey::Symbol(s) => {
-          scope.push_root(Value::Symbol(*s));
-        }
-      }
+      roots.push(match key {
+        PropertyKey::String(s) => Value::String(*s),
+        PropertyKey::Symbol(s) => Value::Symbol(*s),
+      });
       match desc.kind {
         PropertyKind::Data { value, .. } => {
-          scope.push_root(value);
+          roots.push(value);
         }
         PropertyKind::Accessor { get, set } => {
-          scope.push_root(get);
-          scope.push_root(set);
+          roots.push(get);
+          roots.push(set);
         }
       }
     }
+    scope.push_roots(&roots)?;
 
     let new_bytes = JsObject::heap_size_bytes_for_property_count(props.len());
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Object(JsObject::from_property_slice(proto, props)?);
-    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   /// Allocates an empty JavaScript object on the heap with an explicit internal prototype.
@@ -2178,7 +2600,7 @@ impl<'a> Scope<'a> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     let length_key = scope.alloc_string("length")?;
-    scope.push_root(Value::String(length_key));
+    scope.push_root(Value::String(length_key))?;
 
     // Build the initial property table containing the (non-enumerable) `length` data property.
     //
@@ -2210,10 +2632,11 @@ impl<'a> Scope<'a> {
         kind: ObjectKind::Array(ArrayObject { length: len_u32 }),
       },
     };
-    Ok(GcObject(scope.heap.alloc_unchecked(
-      HeapObject::Object(obj),
-      new_bytes,
-    )))
+    Ok(GcObject(
+      scope
+        .heap
+        .alloc_unchecked(HeapObject::Object(obj), new_bytes)?,
+    ))
   }
 
   /// Allocates a new pending Promise object on the heap.
@@ -2229,14 +2652,14 @@ impl<'a> Scope<'a> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     if let Some(proto) = prototype {
-      scope.push_root(Value::Object(proto));
+      scope.push_root(Value::Object(proto))?;
     }
 
     let new_bytes = JsPromise::heap_size_bytes_for_counts(0, 0, 0);
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Promise(JsPromise::new(prototype));
-    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
   /// Defines (adds or replaces) an own property on `obj`.
   pub fn define_property(
@@ -2247,39 +2670,30 @@ impl<'a> Scope<'a> {
   ) -> Result<(), VmError> {
     // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::Object(obj));
-
-    match key {
-      PropertyKey::String(s) => {
-        scope.push_root(Value::String(s));
-      }
-      PropertyKey::Symbol(s) => {
-        scope.push_root(Value::Symbol(s));
-      }
-    }
-
+    let mut roots = [Value::Undefined; 4];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(obj);
+    root_count += 1;
+    roots[root_count] = match key {
+      PropertyKey::String(s) => Value::String(s),
+      PropertyKey::Symbol(s) => Value::Symbol(s),
+    };
+    root_count += 1;
     match desc.kind {
       PropertyKind::Data { value, .. } => {
-        scope.push_root(value);
+        roots[root_count] = value;
+        root_count += 1;
       }
       PropertyKind::Accessor { get, set } => {
-        scope.push_root(get);
-        scope.push_root(set);
+        roots[root_count] = get;
+        root_count += 1;
+        roots[root_count] = set;
+        root_count += 1;
       }
-    }
+    };
+    scope.push_roots(&roots[..root_count])?;
 
     scope.heap.define_property(obj, key, desc)
-  }
-
-  fn root_promise_reaction(&mut self, reaction: &PromiseReaction) {
-    if let Some(handler) = &reaction.handler {
-      self.push_root(Value::Object(handler.callback()));
-    }
-    if let Some(cap) = &reaction.capability {
-      self.push_root(Value::Object(cap.promise));
-      self.push_root(cap.resolve);
-      self.push_root(cap.reject);
-    }
   }
 
   /// Appends a reaction record to `promise.[[PromiseFulfillReactions]]`.
@@ -2292,8 +2706,23 @@ impl<'a> Scope<'a> {
 
     // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::Object(promise));
-    scope.root_promise_reaction(&reaction);
+    let mut roots = [Value::Undefined; 5];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(promise);
+    root_count += 1;
+    if let Some(handler) = &reaction.handler {
+      roots[root_count] = Value::Object(handler.callback_object());
+      root_count += 1;
+    }
+    if let Some(cap) = &reaction.capability {
+      roots[root_count] = Value::Object(cap.promise);
+      root_count += 1;
+      roots[root_count] = cap.resolve;
+      root_count += 1;
+      roots[root_count] = cap.reject;
+      root_count += 1;
+    }
+    scope.push_roots(&roots[..root_count])?;
 
     scope.heap.promise_append_reaction(promise, true, reaction)
   }
@@ -2308,8 +2737,23 @@ impl<'a> Scope<'a> {
 
     // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::Object(promise));
-    scope.root_promise_reaction(&reaction);
+    let mut roots = [Value::Undefined; 5];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(promise);
+    root_count += 1;
+    if let Some(handler) = &reaction.handler {
+      roots[root_count] = Value::Object(handler.callback_object());
+      root_count += 1;
+    }
+    if let Some(cap) = &reaction.capability {
+      roots[root_count] = Value::Object(cap.promise);
+      root_count += 1;
+      roots[root_count] = cap.resolve;
+      root_count += 1;
+      roots[root_count] = cap.reject;
+      root_count += 1;
+    }
+    scope.push_roots(&roots[..root_count])?;
 
     scope.heap.promise_append_reaction(promise, false, reaction)
   }
@@ -2324,14 +2768,14 @@ impl<'a> Scope<'a> {
   ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::String(name));
+    scope.push_root(Value::String(name))?;
 
     let func = JsFunction::new_native(call, construct, name, length);
     let new_bytes = func.heap_size_bytes();
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Function(func);
-    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes));
+    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?);
 
     // Define standard function properties.
     crate::function_properties::set_function_name(
@@ -2354,14 +2798,14 @@ impl<'a> Scope<'a> {
     // Root `outer` during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     if let Some(outer) = outer {
-      scope.push_env_root(outer);
+      scope.push_env_root(outer)?;
     }
 
     let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(0);
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Env(EnvRecord::new(outer));
-    Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)))
+    Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   pub(crate) fn env_create_mutable_binding(
@@ -2374,10 +2818,10 @@ impl<'a> Scope<'a> {
     }
 
     let mut scope = self.reborrow();
-    scope.push_env_root(env);
+    scope.push_env_root(env)?;
 
     let name = scope.alloc_string(name)?;
-    scope.push_root(Value::String(name));
+    scope.push_root(Value::String(name))?;
 
     scope.heap.env_add_binding(
       env,
@@ -2400,10 +2844,10 @@ impl<'a> Scope<'a> {
     }
 
     let mut scope = self.reborrow();
-    scope.push_env_root(env);
+    scope.push_env_root(env)?;
 
     let name = scope.alloc_string(name)?;
-    scope.push_root(Value::String(name));
+    scope.push_root(Value::String(name))?;
 
     scope.heap.env_add_binding(
       env,
@@ -2429,9 +2873,12 @@ impl<'a> Scope<'a> {
   ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
-    scope.push_root(Value::String(name));
     if let Some(env) = closure_env {
-      scope.push_env_root(env);
+      let roots = [Value::String(name)];
+      scope.push_roots_with_extra_roots(&roots, &[], &[env])?;
+      scope.push_env_root(env)?;
+    } else {
+      scope.push_root(Value::String(name))?;
     }
 
     let func = JsFunction::new_ecma(
@@ -2447,7 +2894,7 @@ impl<'a> Scope<'a> {
     scope.heap.ensure_can_allocate(new_bytes)?;
 
     let obj = HeapObject::Function(func);
-    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes));
+    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?);
 
     // Define standard function properties.
     crate::function_properties::set_function_name(
@@ -2566,6 +3013,10 @@ impl ObjectBase {
   }
 
   pub(crate) fn properties_heap_size_bytes_for_count(count: usize) -> usize {
+    // Payload bytes owned by this object allocation (the property table).
+    //
+    // Note: object headers are stored inline in the heap slot table, so this size intentionally
+    // excludes the header size and only counts heap-owned payload allocations.
     count
       .checked_mul(mem::size_of::<PropertyEntry>())
       .unwrap_or(usize::MAX)
@@ -2630,10 +3081,7 @@ impl JsObject {
   }
 
   fn heap_size_bytes_for_property_count(count: usize) -> usize {
-    let props_bytes = ObjectBase::properties_heap_size_bytes_for_count(count);
-    mem::size_of::<Self>()
-      .checked_add(props_bytes)
-      .unwrap_or(usize::MAX)
+    ObjectBase::properties_heap_size_bytes_for_count(count)
   }
 
   fn array_length(&self) -> Option<u32> {
@@ -2761,16 +3209,12 @@ pub(crate) trait Trace {
 pub(crate) struct Tracer<'a> {
   slots: &'a [Slot],
   marks: &'a mut [u8],
-  worklist: Vec<HeapId>,
+  worklist: &'a mut Vec<HeapId>,
 }
 
 impl<'a> Tracer<'a> {
-  fn new(slots: &'a [Slot], marks: &'a mut [u8]) -> Self {
-    Self {
-      slots,
-      marks,
-      worklist: Vec::new(),
-    }
+  fn new(slots: &'a [Slot], marks: &'a mut [u8], worklist: &'a mut Vec<HeapId>) -> Self {
+    Self { slots, marks, worklist }
   }
 
   fn pop_work(&mut self) -> Option<HeapId> {
@@ -2797,6 +3241,9 @@ impl<'a> Tracer<'a> {
     if self.marks[idx] != 0 {
       return;
     }
+    // Mark as "discovered" before pushing to avoid unbounded worklist growth due to duplicates.
+    // We treat 0 = white, 1 = gray (queued), 2 = black (scanned).
+    self.marks[idx] = 1;
     self.worklist.push(id);
   }
 
@@ -2833,4 +3280,50 @@ fn array_length_from_f64(n: f64) -> Result<u32, VmError> {
     return Err(VmError::Unimplemented("array length exceeds u32"));
   }
   Ok(n as u32)
+}
+
+fn grown_capacity(current_capacity: usize, required_len: usize) -> usize {
+  if required_len <= current_capacity {
+    return current_capacity;
+  }
+  let mut cap = current_capacity.max(MIN_VEC_CAPACITY);
+  while cap < required_len {
+    cap = match cap.checked_mul(2) {
+      Some(next) => next,
+      None => return usize::MAX,
+    };
+  }
+  cap
+}
+
+fn vec_capacity_growth_bytes<T>(current_capacity: usize, required_len: usize) -> usize {
+  let elem_size = mem::size_of::<T>();
+  if elem_size == 0 {
+    return 0;
+  }
+  let new_capacity = grown_capacity(current_capacity, required_len);
+  if new_capacity == usize::MAX {
+    return usize::MAX;
+  }
+  new_capacity
+    .saturating_sub(current_capacity)
+    .saturating_mul(elem_size)
+}
+
+fn reserve_vec_to_len<T>(vec: &mut Vec<T>, required_len: usize) -> Result<(), VmError> {
+  if required_len <= vec.capacity() {
+    return Ok(());
+  }
+  let desired_capacity = grown_capacity(vec.capacity(), required_len);
+  if desired_capacity == usize::MAX {
+    return Err(VmError::OutOfMemory);
+  }
+
+  let additional = desired_capacity
+    .checked_sub(vec.len())
+    .ok_or(VmError::OutOfMemory)?;
+  vec
+    .try_reserve_exact(additional)
+    .map_err(|_| VmError::OutOfMemory)?;
+  Ok(())
 }

@@ -42,7 +42,7 @@ impl VmJobContext for TestContext {
     Err(VmError::Unimplemented("TestContext::construct"))
   }
 
-  fn add_root(&mut self, _value: Value) -> RootId {
+  fn add_root(&mut self, _value: Value) -> Result<RootId, VmError> {
     panic!("TestContext::add_root should not be called in this test")
   }
 
@@ -77,7 +77,7 @@ impl VmJobContext for RootingContext {
     Err(VmError::Unimplemented("RootingContext::construct"))
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.add_root(value)
   }
 
@@ -154,7 +154,7 @@ fn rooted_job_keeps_values_alive_until_run_and_then_allows_collection() -> Resul
     obj = scope.alloc_object()?;
   }
   let mut job = Job::new(JobKind::Promise, move |_ctx, _host| Ok(()));
-  job.add_root(&mut ctx, Value::Object(obj));
+  job.add_root(&mut ctx, Value::Object(obj))?;
   host.host_enqueue_promise_job(job, None);
 
   ctx.heap.collect_garbage();
@@ -183,7 +183,7 @@ fn job_discard_removes_roots_without_running() -> Result<(), VmError> {
     obj = scope.alloc_object()?;
   }
   let mut job = Job::new(JobKind::Promise, move |_ctx, _host| Ok(()));
-  job.add_root(&mut ctx, Value::Object(obj));
+  job.add_root(&mut ctx, Value::Object(obj))?;
   host.host_enqueue_promise_job(job, None);
 
   ctx.heap.collect_garbage();
@@ -213,7 +213,7 @@ fn job_run_removes_roots_even_on_error() -> Result<(), VmError> {
   }
   let mut job =
     Job::new(JobKind::Promise, move |_ctx, _host| Err(VmError::Unimplemented("job failed")));
-  job.add_root(&mut ctx, Value::Object(obj));
+  job.add_root(&mut ctx, Value::Object(obj))?;
   host.host_enqueue_promise_job(job, None);
 
   ctx.heap.collect_garbage();
@@ -327,7 +327,7 @@ fn job_callback_callback_can_be_rooted_by_host() -> Result<(), VmError> {
     weak = WeakGcObject::from(obj);
   }
 
-  let root = heap.add_root(Value::Object(cb.callback()));
+  let root = heap.add_root(Value::Object(cb.callback()))?;
   heap.collect_garbage();
   assert_eq!(weak.upgrade(&heap), Some(obj));
 

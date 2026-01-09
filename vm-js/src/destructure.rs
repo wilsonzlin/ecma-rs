@@ -31,7 +31,7 @@ pub(crate) fn bind_pattern(
   // Keep temporary roots local to this binding operation.
   let mut scope = scope.reborrow();
   // Root the input value so destructuring can allocate without the RHS being collected.
-  let value = scope.push_root(value);
+  let value = scope.push_root(value)?;
 
   match pat {
     Pat::Id(id) => bind_identifier(env, &mut scope, &id.stx.name, value, kind, strict),
@@ -93,7 +93,7 @@ pub(crate) fn bind_assignment_target(
 ) -> Result<(), VmError> {
   // Keep temporary roots local to this binding operation.
   let mut scope = scope.reborrow();
-  let value = scope.push_root(value);
+  let value = scope.push_root(value)?;
 
   match &*target.stx {
     Expr::Id(id) => {
@@ -199,9 +199,12 @@ fn bind_object_pattern(
   let Value::Object(obj) = value else {
     return Err(VmError::Unimplemented("object destructuring requires object"));
   };
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
-  let mut excluded: Vec<PropertyKey> = Vec::with_capacity(pat.properties.len());
+  let mut excluded: Vec<PropertyKey> = Vec::new();
+  excluded
+    .try_reserve_exact(pat.properties.len())
+    .map_err(|_| VmError::OutOfMemory)?;
 
   for prop in &pat.properties {
     let key = resolve_obj_pat_key(
@@ -214,7 +217,7 @@ fn bind_object_pattern(
       this,
       script,
     )?;
-    root_property_key(scope, key);
+    root_property_key(scope, key)?;
     excluded.push(key);
 
     let mut prop_value = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
@@ -243,7 +246,7 @@ fn bind_object_pattern(
   };
 
   let rest_obj = scope.alloc_object()?;
-  scope.push_root(Value::Object(rest_obj));
+  scope.push_root(Value::Object(rest_obj))?;
 
   let keys = scope.ordinary_own_property_keys(obj)?;
   for key in keys {
@@ -295,7 +298,7 @@ fn bind_array_pattern(
   let Value::Object(obj) = value else {
     return Err(VmError::Unimplemented("array destructuring requires object"));
   };
-  scope.push_root(Value::Object(obj));
+  scope.push_root(Value::Object(obj))?;
 
   let len = array_like_length(vm, scope, obj)?;
   let mut idx: u32 = 0;
@@ -337,13 +340,40 @@ fn bind_array_pattern(
     return Ok(());
   };
 
-  let mut rest_values: Vec<Value> = Vec::new();
+  let rest_arr = scope.alloc_object()?;
+  scope.push_root(Value::Object(rest_arr))?;
+
+  let mut rest_idx: u32 = 0;
   while idx < len {
-    rest_values.push(array_like_get(vm, scope, obj, idx)?);
+    let v = array_like_get(vm, scope, obj, idx)?;
+    {
+      // Root the element value while allocating the property key and defining the property:
+      // `array_like_get` can invoke getters which may return newly-allocated objects that are not
+      // reachable from `obj` itself.
+      let mut elem_scope = scope.reborrow();
+      let v = elem_scope.push_root(v)?;
+      let key_str = rest_idx.to_string();
+      let key_s = elem_scope.alloc_string(&key_str)?;
+      let key = PropertyKey::from_string(key_s);
+      let _ = elem_scope.create_data_property(rest_arr, key, v)?;
+    }
     idx += 1;
+    rest_idx += 1;
   }
 
-  let rest_arr = alloc_array_object(scope, &rest_values)?;
+  // Define `length` as non-enumerable to match real arrays closely enough for rest patterns.
+  let length_s = scope.alloc_string("length")?;
+  let length_key = PropertyKey::from_string(length_s);
+  let length_desc = PropertyDescriptor {
+    enumerable: false,
+    configurable: true,
+    kind: PropertyKind::Data {
+      value: Value::Number(rest_idx as f64),
+      writable: true,
+    },
+  };
+  scope.define_property(rest_arr, length_key, length_desc)?;
+
   bind_pattern(
     vm,
     scope,
@@ -376,7 +406,7 @@ fn resolve_obj_pat_key(
     ClassOrObjKey::Computed(expr) => {
       let value = eval_expr(vm, env, ecma_functions, strict, this, script, scope, expr)?;
       // Root the computed value until `to_property_key` completes.
-      let value = scope.push_root(value);
+      let value = scope.push_root(value)?;
       let key = scope.heap_mut().to_property_key(value)?;
       Ok(key)
     }
@@ -406,33 +436,6 @@ fn array_like_get(
   scope.ordinary_get(vm, obj, key, Value::Object(obj))
 }
 
-fn alloc_array_object(scope: &mut Scope<'_>, elems: &[Value]) -> Result<GcObject, VmError> {
-  let arr = scope.alloc_object()?;
-  scope.push_root(Value::Object(arr));
-
-  for (i, &v) in elems.iter().enumerate() {
-    let key_str = i.to_string();
-    let key_s = scope.alloc_string(&key_str)?;
-    let key = PropertyKey::from_string(key_s);
-    let _ = scope.create_data_property(arr, key, v)?;
-  }
-
-  // Define `length` as non-enumerable to match real arrays closely enough for rest patterns.
-  let length_s = scope.alloc_string("length")?;
-  let length_key = PropertyKey::from_string(length_s);
-  let length_desc = PropertyDescriptor {
-    enumerable: false,
-    configurable: true,
-    kind: PropertyKind::Data {
-      value: Value::Number(elems.len() as f64),
-      writable: true,
-    },
-  };
-  scope.define_property(arr, length_key, length_desc)?;
-
-  Ok(arr)
-}
-
 fn assign_to_member(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -450,7 +453,7 @@ fn assign_to_member(
 
   // Root the RHS across evaluation of the LHS object.
   let mut rhs_scope = scope.reborrow();
-  rhs_scope.push_root(value);
+  rhs_scope.push_root(value)?;
   let obj_value = eval_expr(
     vm,
     env,
@@ -497,7 +500,7 @@ fn assign_to_computed_member(
 
   // Root the RHS across evaluation of the LHS object/key.
   let mut rhs_scope = scope.reborrow();
-  rhs_scope.push_root(value);
+  rhs_scope.push_root(value)?;
 
   let obj_value = eval_expr(
     vm,
@@ -523,7 +526,7 @@ fn assign_to_computed_member(
     &mut rhs_scope,
     &member.member,
   )?;
-  let key_value = rhs_scope.push_root(key_value);
+  let key_value = rhs_scope.push_root(key_value)?;
   let key = rhs_scope.heap_mut().to_property_key(key_value)?;
 
   let ok = rhs_scope.ordinary_set(vm, obj, key, value, Value::Object(obj))?;
@@ -538,13 +541,14 @@ fn assign_to_computed_member(
   }
 }
 
-fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) {
+fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
   match key {
     PropertyKey::String(s) => {
-      scope.push_root(Value::String(s));
+      scope.push_root(Value::String(s))?;
     }
     PropertyKey::Symbol(s) => {
-      scope.push_root(Value::Symbol(s));
+      scope.push_root(Value::Symbol(s))?;
     }
   }
+  Ok(())
 }

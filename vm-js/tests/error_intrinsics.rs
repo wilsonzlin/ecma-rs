@@ -84,7 +84,7 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
     let Value::Object(obj) = result else {
       panic!("Error() should return an object");
     };
-    scope.push_root(Value::Object(obj));
+    scope.push_root(Value::Object(obj))?;
 
     assert_eq!(scope.heap().object_prototype(obj)?, Some(error_prototype));
 
@@ -124,7 +124,7 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
     let Value::Object(obj) = result else {
       panic!("new TypeError() should return an object");
     };
-    scope.push_root(Value::Object(obj));
+    scope.push_root(Value::Object(obj))?;
 
     assert_eq!(
       scope.heap().object_prototype(obj)?,

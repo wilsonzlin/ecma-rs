@@ -47,7 +47,7 @@ fn gc_preserves_stack_rooted_objects() -> Result<(), VmError> {
   {
     let mut scope = heap.scope();
     obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(obj));
+    scope.push_root(Value::Object(obj))?;
 
     scope.heap_mut().collect_garbage();
     assert!(scope.heap().is_valid_object(obj));
@@ -69,7 +69,7 @@ fn persistent_roots_keep_objects_live() -> Result<(), VmError> {
   {
     let mut scope = heap.scope();
     obj = scope.alloc_object()?;
-    root = scope.heap_mut().add_root(Value::Object(obj));
+    root = scope.heap_mut().add_root(Value::Object(obj))?;
   }
 
   heap.collect_garbage();
@@ -125,7 +125,7 @@ fn promise_slots_are_traced_by_gc() -> Result<(), VmError> {
       .heap_mut()
       .promise_fulfill(promise, Value::Object(referenced))?;
 
-    scope.push_root(Value::Object(promise));
+    scope.push_root(Value::Object(promise))?;
     scope.heap_mut().collect_garbage();
     assert!(
       scope.heap().is_valid_object(referenced),
@@ -159,7 +159,7 @@ fn promise_reaction_lists_are_cleared_on_settlement() -> Result<(), VmError> {
       },
     )?;
 
-    scope.push_root(Value::Object(promise));
+    scope.push_root(Value::Object(promise))?;
 
     // While the promise is pending, its reaction lists keep handlers alive.
     scope.heap_mut().collect_garbage();

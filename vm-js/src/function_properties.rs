@@ -16,10 +16,10 @@ pub fn set_function_name(
   prefix: Option<&str>,
 ) -> Result<(), VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let computed = compute_function_name(&mut scope, name, prefix)?;
-  scope.push_root(Value::String(computed));
+  scope.push_root(Value::String(computed))?;
 
   let name_key = scope.alloc_string("name")?;
   scope.define_property(
@@ -52,7 +52,7 @@ pub fn set_function_length(
   length: u32,
 ) -> Result<(), VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let length_key = scope.alloc_string("length")?;
   scope.define_property(
@@ -80,10 +80,10 @@ pub fn set_function_length(
 /// - `F.prototype.constructor` as a writable, non-enumerable, configurable data property
 pub fn make_constructor(scope: &mut Scope<'_>, func: GcObject) -> Result<GcObject, VmError> {
   let mut scope = scope.reborrow();
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let prototype = scope.alloc_object()?;
-  scope.push_root(Value::Object(prototype));
+  scope.push_root(Value::Object(prototype))?;
 
   let constructor_key = scope.alloc_string("constructor")?;
   scope.define_property(

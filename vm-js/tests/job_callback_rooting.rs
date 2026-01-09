@@ -32,7 +32,7 @@ impl VmJobContext for HeapBackedContext {
     Err(VmError::Unimplemented("HeapBackedContext::construct"))
   }
 
-  fn add_root(&mut self, value: Value) -> RootId {
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
     self.heap.borrow_mut().add_root(value)
   }
 
@@ -94,7 +94,7 @@ fn job_roots_callback_until_run_then_releases() -> Result<(), VmError> {
 
   // Correct pattern: when queueing work that will later observe/call the callback, root the
   // callback object for the lifetime of the queued job.
-  job.add_root(&mut ctx, Value::Object(callback_obj));
+  job.add_root(&mut ctx, Value::Object(callback_obj))?;
 
   heap.borrow_mut().collect_garbage();
   assert!(

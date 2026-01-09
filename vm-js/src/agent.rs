@@ -100,12 +100,19 @@ impl Agent {
         // Root the completion value across the checkpoint so a host checkpoint implementation can
         // allocate/GC without invalidating the returned value.
         let root = match &result {
-          Ok(v) => Some(self.heap_mut().add_root(*v)),
-          Err(VmError::Throw(v)) => Some(self.heap_mut().add_root(*v)),
+          Ok(v) => self.heap_mut().add_root(*v).ok(),
+          Err(VmError::Throw(v)) => self.heap_mut().add_root(*v).ok(),
           _ => None,
         };
 
-        let checkpoint_result = hooks.microtask_checkpoint(self);
+        // If we fail to allocate a persistent root (OOM), skip the checkpoint: running it without
+        // rooting could allow GC to invalidate the completion value that we are about to return to
+        // the host.
+        let checkpoint_result = if root.is_some() {
+          hooks.microtask_checkpoint(self)
+        } else {
+          Ok(())
+        };
 
         if let Some(root) = root {
           self.heap_mut().remove_root(root);
@@ -163,4 +170,3 @@ pub fn format_termination(term: &Termination) -> String {
     format!("{term}\n{stack}", stack = format_stack_trace(&term.stack))
   }
 }
-

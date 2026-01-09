@@ -10,10 +10,10 @@ fn function_objects_support_prototype_and_properties() -> Result<(), VmError> {
 
   let name = scope.alloc_string("f")?;
   let func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let proto = scope.alloc_object()?;
-  scope.push_root(Value::Object(proto));
+  scope.push_root(Value::Object(proto))?;
 
   scope
     .heap_mut()
@@ -49,10 +49,10 @@ fn function_property_lookups_traverse_prototype_chain() -> Result<(), VmError> {
 
   let name = scope.alloc_string("f")?;
   let func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
-  scope.push_root(Value::Object(func));
+  scope.push_root(Value::Object(func))?;
 
   let proto = scope.alloc_object()?;
-  scope.push_root(Value::Object(proto));
+  scope.push_root(Value::Object(proto))?;
 
   scope
     .heap_mut()
