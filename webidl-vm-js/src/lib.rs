@@ -271,15 +271,17 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
   }
 
   fn alloc_array(&mut self, len: usize) -> Result<Self::Object, Self::Error> {
-    let obj = if let Some(intrinsics) = self.vm.intrinsics() {
-      let len = u32::try_from(len).map_err(|_| VmError::OutOfMemory)?;
-      self
-        .scope
-        .alloc_array_with_prototype_and_len(Some(intrinsics.array_prototype()), len)?
-    } else {
-      self.scope.alloc_array(len)?
-    };
+    let obj = self.scope.alloc_array(len)?;
     self.root(Value::Object(obj));
+
+    // When a realm is initialized, prefer `%Array.prototype%` so the result behaves like a normal
+    // JavaScript array (e.g. is iterable, has standard methods).
+    if let Some(intrinsics) = self.vm.intrinsics() {
+      let proto = intrinsics.array_prototype();
+      self.root(Value::Object(proto));
+      self.scope.object_set_prototype(obj, Some(proto))?;
+    }
+
     Ok(obj)
   }
 
@@ -591,10 +593,10 @@ mod tests {
 
     // Create a method function and a getter function.
     let method;
-    let getter;
+      let getter;
     {
-      let noop_id: NativeFunctionId = vm.register_native_call(noop_call_handler);
-      let getter_id: NativeFunctionId = vm.register_native_call(getter_call_handler);
+      let noop_id: NativeFunctionId = vm.register_native_call(noop_call_handler)?;
+      let getter_id: NativeFunctionId = vm.register_native_call(getter_call_handler)?;
 
       let mut scope = heap.scope();
       let method_name = scope.alloc_string("method")?;
@@ -728,7 +730,7 @@ mod tests {
     // next
     let next_key = VmPropertyKey::from_string(scope.alloc_string("next")?);
     let next_name = scope.alloc_string("next")?;
-    let next_id = vm.register_native_call(iterator_next_call);
+    let next_id = vm.register_native_call(iterator_next_call)?;
     let next_fn = scope.alloc_native_function(next_id, None, next_name, 0)?;
     scope.define_property(
       iter_obj,
@@ -886,7 +888,7 @@ mod tests {
       )?;
 
       let iter_name = cx.scope.alloc_string("iterator")?;
-      let iter_id = cx.vm.register_native_call(iterator_method_call_handler);
+      let iter_id = cx.vm.register_native_call(iterator_method_call_handler)?;
       let iter_fn = cx.scope.alloc_native_function(iter_id, None, iter_name, 0)?;
 
       let sym = cx.well_known_symbol(webidl::WellKnownSymbol::Iterator)?;

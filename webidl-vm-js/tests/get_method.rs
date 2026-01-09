@@ -65,8 +65,8 @@ fn get_method_invokes_getter_once() -> Result<(), VmError> {
   let limits = WebIdlLimits::default();
   let mut cx = VmJsWebIdlCx::new(&mut vm, &mut heap, limits, &hooks);
 
-  let method_id = cx.vm.register_native_call(method);
-  let getter_id = cx.vm.register_native_call(getter);
+  let method_id = cx.vm.register_native_call(method)?;
+  let getter_id = cx.vm.register_native_call(getter)?;
 
   let method_name = cx.scope.alloc_string("m")?;
   let method_fn = cx
