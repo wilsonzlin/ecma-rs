@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Realm, Scope, Value, VmError};
+use crate::{GcObject, Intrinsics, Realm, Scope, Value, VmError};
 
 fn data_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
@@ -48,17 +48,46 @@ pub fn new_error(
   Ok(Value::Object(err))
 }
 
+/// Allocates a new ECMAScript `TypeError` object (instance).
+///
+/// This is an object factory (not a callable constructor) intended for spec-shaped algorithms such
+/// as module loading that need to reject/throw with real Error instances.
+pub fn new_type_error_object(
+  scope: &mut Scope<'_>,
+  intrinsics: &Intrinsics,
+  message: &str,
+) -> Result<Value, VmError> {
+  new_error(
+    scope,
+    intrinsics.type_error_prototype(),
+    "TypeError",
+    message,
+  )
+}
+
+/// Allocates a new ECMAScript `SyntaxError` object (instance).
+///
+/// This is an object factory (not a callable constructor) intended for spec-shaped algorithms such
+/// as module loading that need to reject/throw with real Error instances.
+pub fn new_syntax_error_object(
+  scope: &mut Scope<'_>,
+  intrinsics: &Intrinsics,
+  message: &str,
+) -> Result<Value, VmError> {
+  new_error(
+    scope,
+    intrinsics.syntax_error_prototype(),
+    "SyntaxError",
+    message,
+  )
+}
+
 pub fn new_type_error(
   scope: &mut Scope<'_>,
   realm: &Realm,
   message: &str,
 ) -> Result<VmError, VmError> {
-  let value = new_error(
-    scope,
-    realm.intrinsics().type_error_prototype(),
-    "TypeError",
-    message,
-  )?;
+  let value = new_type_error_object(scope, realm.intrinsics(), message)?;
   Ok(VmError::Throw(value))
 }
 

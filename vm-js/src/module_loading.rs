@@ -427,15 +427,11 @@ fn vm_error_to_rejection_reason(
 
 fn import_call_type_error_message(err: &ImportCallTypeError) -> String {
   match err {
-    ImportCallTypeError::OptionsNotObject => "TypeError: import() options must be an object".to_string(),
-    ImportCallTypeError::AttributesNotObject => {
-      "TypeError: import() options.with must be an object".to_string()
-    }
-    ImportCallTypeError::AttributeValueNotString => {
-      "TypeError: import() attribute values must be strings".to_string()
-    }
+    ImportCallTypeError::OptionsNotObject => "import() options must be an object".to_string(),
+    ImportCallTypeError::AttributesNotObject => "import() options.with must be an object".to_string(),
+    ImportCallTypeError::AttributeValueNotString => "import() attribute values must be strings".to_string(),
     ImportCallTypeError::UnsupportedImportAttribute { key } => {
-      format!("TypeError: unsupported import attribute key: {key}")
+      format!("unsupported import attribute key: {key}")
     }
   }
 }
@@ -492,8 +488,12 @@ pub fn start_dynamic_import(
     Ok(attrs) => attrs,
     Err(ImportCallError::TypeError(type_err)) => {
       let msg = import_call_type_error_message(&type_err);
-      let s = scope.alloc_string(&msg)?;
-      promise_capability.reject(vm, scope, Value::String(s))?;
+      // ECMA-262 requires rejecting with a *newly created* TypeError object in these branches.
+      let reason = match vm.intrinsics() {
+        Some(intr) => crate::new_type_error_object(scope, &intr, &msg)?,
+        None => Value::String(scope.alloc_string(&msg)?),
+      };
+      promise_capability.reject(vm, scope, reason)?;
       return Ok(Value::Object(promise_obj));
     }
     Err(ImportCallError::Vm(err)) => {
