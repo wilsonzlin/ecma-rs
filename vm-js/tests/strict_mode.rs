@@ -6,6 +6,14 @@ fn new_runtime() -> JsRuntime {
   JsRuntime::new(vm, heap).unwrap()
 }
 
+fn assert_value_is_utf8(rt: &JsRuntime, value: Value, expected: &str) {
+  let Value::String(s) = value else {
+    panic!("expected string, got {value:?}");
+  };
+  let actual = rt.heap().get_string(s).unwrap().to_utf8_lossy();
+  assert_eq!(actual, expected);
+}
+
 #[test]
 fn strict_directive_makes_unbound_assignment_throw_reference_error() {
   let mut rt = new_runtime();
@@ -57,4 +65,36 @@ fn strict_function_plain_call_has_undefined_this() {
     .exec_script(r#"function f(){ "use strict"; return this === undefined; } f()"#)
     .unwrap();
   assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn strict_assignment_to_non_writable_property_throws_type_error() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        "use strict";
+        var o = {};
+        Object.defineProperty(o, "x", { value: 1, writable: false });
+        try { o.x = 2; } catch(e) { e.name }
+      "#,
+    )
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "TypeError");
+}
+
+#[test]
+fn non_strict_assignment_to_non_writable_property_is_silent() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(
+      r#"
+        var o = {};
+        Object.defineProperty(o, "x", { value: 1, writable: false });
+        o.x = 2;
+        o.x
+      "#,
+    )
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
 }
