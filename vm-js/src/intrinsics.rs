@@ -188,7 +188,7 @@ fn install_object_static_method(
   length: u32,
   call: crate::vm::NativeCall,
 ) -> Result<(), VmError> {
-  let call_id = vm.register_native_call(call);
+  let call_id = vm.register_native_call(call)?;
   let name_string = scope.alloc_string(name)?;
   let func = alloc_rooted_native_function(scope, roots, call_id, None, name_string, length)?;
   scope
@@ -284,7 +284,8 @@ impl Intrinsics {
     // --- Base prototypes ---
     let object_prototype = alloc_rooted_object(scope, roots)?;
 
-    let function_prototype_call = vm.register_native_call(builtins::function_prototype_call);
+    let function_prototype_call = vm.register_native_call(builtins::function_prototype_call)?;
+    // ECMA-262: %Function.prototype% has a "name" property whose value is the empty String.
     let function_prototype_name = scope.alloc_string("")?;
     let function_prototype = alloc_rooted_native_function(
       scope,
@@ -325,8 +326,9 @@ impl Intrinsics {
 
     // --- Baseline constructors ---
     // `%Object%`
-    let object_call = vm.register_native_call(builtins::object_constructor_call);
-    let object_construct = vm.register_native_construct(builtins::object_constructor_construct);
+    let object_call = vm.register_native_call(builtins::object_constructor_call)?;
+    let object_construct =
+      vm.register_native_construct(builtins::object_constructor_construct)?;
     let object_name = scope.alloc_string("Object")?;
     let object_constructor = alloc_rooted_native_function(
       scope,
@@ -363,8 +365,9 @@ impl Intrinsics {
     install_object_static_methods(vm, scope, roots, function_prototype, object_constructor)?;
 
     // `%Function%`
-    let function_call = vm.register_native_call(builtins::function_constructor_call);
-    let function_construct = vm.register_native_construct(builtins::function_constructor_construct);
+    let function_call = vm.register_native_call(builtins::function_constructor_call)?;
+    let function_construct =
+      vm.register_native_construct(builtins::function_constructor_construct)?;
     let function_name = scope.alloc_string("Function")?;
     let function_constructor = alloc_rooted_native_function(
       scope,
@@ -399,8 +402,8 @@ impl Intrinsics {
     )?;
 
     // `%Array%`
-    let array_call = vm.register_native_call(builtins::array_constructor_call);
-    let array_construct = vm.register_native_construct(builtins::array_constructor_construct);
+    let array_call = vm.register_native_call(builtins::array_constructor_call)?;
+    let array_construct = vm.register_native_construct(builtins::array_constructor_construct)?;
     let array_name = scope.alloc_string("Array")?;
     let array_constructor = alloc_rooted_native_function(
       scope,
@@ -435,8 +438,8 @@ impl Intrinsics {
     )?;
 
     // --- Error + subclasses ---
-    let error_call = vm.register_native_call(builtins::error_constructor_call);
-    let error_construct = vm.register_native_construct(builtins::error_constructor_construct);
+    let error_call = vm.register_native_call(builtins::error_constructor_call)?;
+    let error_construct = vm.register_native_construct(builtins::error_constructor_construct)?;
     let (error, error_prototype) = init_native_error(
       vm,
       scope,

@@ -763,7 +763,7 @@ impl Heap {
     let prop = obj
       .properties
       .get_mut(idx)
-      .expect("idx came from iterating properties");
+      .ok_or(VmError::PropertyNotFound)?;
     match &mut prop.desc.kind {
       PropertyKind::Data { value: slot, .. } => {
         *slot = value;
@@ -1296,7 +1296,9 @@ impl Heap {
     let binding = rec
       .bindings
       .get_mut(idx)
-      .expect("idx came from find_binding_index");
+      .ok_or(VmError::Unimplemented(
+        "environment record binding index out of bounds",
+      ))?;
 
     if binding.initialized {
       return Err(VmError::Unimplemented("binding already initialized"));
@@ -1317,7 +1319,9 @@ impl Heap {
     let Some(idx) = rec.find_binding_index(self, name)? else {
       return Err(VmError::Unimplemented("unbound identifier"));
     };
-    let binding = rec.bindings.get(idx).expect("idx came from find_binding_index");
+    let binding = rec.bindings.get(idx).ok_or(VmError::Unimplemented(
+      "environment record binding index out of bounds",
+    ))?;
     if !binding.initialized {
       // TDZ.
       return Err(VmError::Throw(Value::Undefined));
@@ -1345,7 +1349,9 @@ impl Heap {
     let binding = rec
       .bindings
       .get_mut(idx)
-      .expect("idx came from find_binding_index");
+      .ok_or(VmError::Unimplemented(
+        "environment record binding index out of bounds",
+      ))?;
 
     if !binding.initialized {
       // TDZ.

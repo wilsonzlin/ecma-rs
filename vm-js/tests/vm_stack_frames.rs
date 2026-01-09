@@ -20,7 +20,7 @@ fn vm_call_pushes_and_pops_stack_frame_even_on_error() -> Result<(), VmError> {
   let mut vm = Vm::new(VmOptions::default());
 
   let mut scope = heap.scope();
-  let call_id = vm.register_native_call(native_error);
+  let call_id = vm.register_native_call(native_error)?;
   let name = scope.alloc_string("f")?;
   let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
@@ -54,7 +54,7 @@ fn vm_stack_overflow_on_deep_manual_frames() -> Result<(), VmError> {
   let mut vm = Vm::new(opts);
 
   let mut scope = heap.scope();
-  let call_id = vm.register_native_call(recursive);
+  let call_id = vm.register_native_call(recursive)?;
   let name = scope.alloc_string("recurse")?;
   let callee = scope.alloc_native_function(call_id, None, name, 1)?;
 

@@ -20,7 +20,7 @@ fn native_function_can_be_allocated_and_called() -> Result<(), VmError> {
 
   let func: GcObject = {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(return_42);
+    let call_id = vm.register_native_call(return_42)?;
     let name = scope.alloc_string("return_42")?;
     scope.alloc_native_function(call_id, None, name, 0)?
   };
@@ -39,7 +39,7 @@ fn calling_collected_native_function_returns_invalid_handle() -> Result<(), VmEr
 
   let func: GcObject = {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(return_42);
+    let call_id = vm.register_native_call(return_42)?;
     let name = scope.alloc_string("return_42")?;
     scope.alloc_native_function(call_id, None, name, 0)?
   };
@@ -66,7 +66,7 @@ fn property_descriptor_tracing_keeps_native_functions_alive() -> Result<(), VmEr
   {
     let mut scope = heap.scope();
 
-    let call_id = vm.register_native_call(return_42);
+    let call_id = vm.register_native_call(return_42)?;
 
     // Referenced through a property descriptor.
     let name = scope.alloc_string("return_42")?;

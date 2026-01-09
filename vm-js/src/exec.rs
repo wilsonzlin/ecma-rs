@@ -821,7 +821,7 @@ impl<'a> Evaluator<'a> {
       if let Some(catch) = &stmt.catch {
         let thrown = match result {
           Completion::Throw(v) => v,
-          _ => unreachable!(),
+          _ => return Err(VmError::Unimplemented("try/catch missing thrown value")),
         };
         result = self.eval_catch(scope, &catch.stx, thrown)?;
       }

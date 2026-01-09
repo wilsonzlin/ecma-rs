@@ -58,7 +58,7 @@ fn ordinary_get_invokes_accessor_getter_with_receiver() -> Result<(), VmError> {
 
   let mut scope = heap.scope();
 
-  let call_id = vm.register_native_call(getter_returns_own_value);
+  let call_id = vm.register_native_call(getter_returns_own_value)?;
   let getter = {
     let name = scope.alloc_string("get_value")?;
     scope.alloc_native_function(call_id, None, name, 0)?
@@ -122,7 +122,7 @@ fn ordinary_set_invokes_accessor_setter_with_receiver() -> Result<(), VmError> {
 
   let mut scope = heap.scope();
 
-  let call_id = vm.register_native_call(setter_sets_seen);
+  let call_id = vm.register_native_call(setter_sets_seen)?;
   let setter = {
     let name = scope.alloc_string("set_seen")?;
     scope.alloc_native_function(call_id, None, name, 1)?

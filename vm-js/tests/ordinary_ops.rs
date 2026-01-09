@@ -43,7 +43,7 @@ fn get_invokes_accessor_getter_once_with_receiver() -> Result<(), VmError> {
 
   let mut scope = heap.scope();
 
-  let call_id = vm.register_native_call(getter);
+  let call_id = vm.register_native_call(getter)?;
   let name = scope.alloc_string("get")?;
   let getter_fn = scope.alloc_native_function(call_id, None, name, 0)?;
   // Root the getter function across subsequent allocations; GC is forced before every allocation in

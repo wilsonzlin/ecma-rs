@@ -108,6 +108,10 @@ pub struct Vm {
   // For now `vm-js` assumes a single active realm per `Vm`. When multiple realms are supported,
   // this will likely become realm-indexed state.
   intrinsics: Option<Intrinsics>,
+  #[cfg(test)]
+  native_calls_len_override: Option<usize>,
+  #[cfg(test)]
+  native_constructs_len_override: Option<usize>,
 }
 
 /// RAII guard returned by [`Vm::push_budget`].
@@ -259,6 +263,10 @@ impl Vm {
       native_calls: Vec::new(),
       native_constructs: Vec::new(),
       intrinsics: None,
+      #[cfg(test)]
+      native_calls_len_override: None,
+      #[cfg(test)]
+      native_constructs_len_override: None,
     };
     vm.reset_budget_to_default();
     vm
@@ -324,18 +332,38 @@ impl Vm {
     }
   }
 
-  pub fn register_native_call(&mut self, f: NativeCall) -> NativeFunctionId {
-    let idx = u32::try_from(self.native_calls.len())
-      .expect("too many native call handlers registered");
+  pub fn register_native_call(&mut self, f: NativeCall) -> Result<NativeFunctionId, VmError> {
+    let len = self.native_calls.len();
+    #[cfg(test)]
+    let len = self.native_calls_len_override.unwrap_or(len);
+    let idx = u32::try_from(len)
+      .map_err(|_| VmError::LimitExceeded("too many native call handlers registered"))?;
+
+    // Fallible growth so hostile/buggy embeddings can't abort the process on allocator OOM.
+    self
+      .native_calls
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
     self.native_calls.push(f);
-    NativeFunctionId(idx)
+    Ok(NativeFunctionId(idx))
   }
 
-  pub fn register_native_construct(&mut self, f: NativeConstruct) -> NativeConstructId {
-    let idx = u32::try_from(self.native_constructs.len())
-      .expect("too many native construct handlers registered");
+  pub fn register_native_construct(
+    &mut self,
+    f: NativeConstruct,
+  ) -> Result<NativeConstructId, VmError> {
+    let len = self.native_constructs.len();
+    #[cfg(test)]
+    let len = self.native_constructs_len_override.unwrap_or(len);
+    let idx = u32::try_from(len)
+      .map_err(|_| VmError::LimitExceeded("too many native construct handlers registered"))?;
+
+    self
+      .native_constructs
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
     self.native_constructs.push(f);
-    NativeConstructId(idx)
+    Ok(NativeConstructId(idx))
   }
 
   fn dispatch_native_call(
@@ -657,5 +685,53 @@ impl Vm {
     Err(VmError::Unimplemented(
       "constructing ECMAScript functions (interpreter/bytecode not wired yet)",
     ))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn noop_call(
+    _vm: &mut Vm,
+    _scope: &mut Scope<'_>,
+    _callee: GcObject,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
+    Ok(Value::Undefined)
+  }
+
+  fn noop_construct(
+    _vm: &mut Vm,
+    _scope: &mut Scope<'_>,
+    _callee: GcObject,
+    _args: &[Value],
+    _new_target: Value,
+  ) -> Result<Value, VmError> {
+    Ok(Value::Undefined)
+  }
+
+  #[test]
+  fn registering_too_many_native_handlers_returns_error_instead_of_panicking() {
+    // Only meaningful on platforms where `usize` can exceed `u32::MAX`.
+    if usize::BITS <= 32 {
+      return;
+    }
+
+    let mut vm = Vm::new(VmOptions::default());
+    // Avoid allocating huge vectors; this only affects the `u32::try_from(len)` conversion.
+    vm.native_calls_len_override = Some((u32::MAX as usize) + 1);
+    vm.native_constructs_len_override = Some((u32::MAX as usize) + 1);
+
+    let err = vm.register_native_call(noop_call).unwrap_err();
+    assert!(matches!(err, VmError::LimitExceeded(_)));
+
+    let err = vm.register_native_construct(noop_construct).unwrap_err();
+    assert!(matches!(err, VmError::LimitExceeded(_)));
+
+    // Ensure no handlers were recorded.
+    assert_eq!(vm.native_calls.len(), 0);
+    assert_eq!(vm.native_constructs.len(), 0);
   }
 }

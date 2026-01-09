@@ -99,7 +99,7 @@ fn await_non_promise_value_queues_microtask() {
 
   let (on_fulfilled, on_rejected) = {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(noop);
+    let call_id = vm.register_native_call(noop).unwrap();
     let name = scope.alloc_string("onFulfilled").unwrap();
     let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1).unwrap();
     let name = scope.alloc_string("onRejected").unwrap();
@@ -146,7 +146,7 @@ fn await_rejected_promise_calls_on_rejected() {
     let promise_handle = PromiseHandle::from(scope.alloc_object().unwrap());
     let boom = Value::String(scope.alloc_string("boom").unwrap());
 
-    let call_id = vm.register_native_call(noop);
+    let call_id = vm.register_native_call(noop).unwrap();
     let name = scope.alloc_string("onFulfilled").unwrap();
     let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1).unwrap();
     let name = scope.alloc_string("onRejected").unwrap();

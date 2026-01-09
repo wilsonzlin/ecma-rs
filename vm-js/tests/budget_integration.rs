@@ -81,7 +81,7 @@ fn native_call_consumes_tick() {
   let mut vm = Vm::new(VmOptions::default());
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
-  let native_id = vm.register_native_call(native_noop);
+  let native_id = vm.register_native_call(native_noop).unwrap();
   let mut scope = heap.scope();
   let name = scope.alloc_string("f").unwrap();
   let callee = scope

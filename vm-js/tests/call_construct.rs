@@ -35,8 +35,8 @@ fn call_native_function_returns_value() -> Result<(), VmError> {
 
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
-  let call_id = vm.register_native_call(return_123);
-  let construct_id = vm.register_native_construct(noop_constructor);
+  let call_id = vm.register_native_call(return_123)?;
+  let construct_id = vm.register_native_construct(noop_constructor)?;
 
   let func = {
     let mut scope = heap.scope();
@@ -100,7 +100,7 @@ fn call_ticks_budget_and_reports_stack_on_termination() -> Result<(), VmError> {
 
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
-  let call_id = vm.register_native_call(return_123);
+  let call_id = vm.register_native_call(return_123)?;
 
   let func = {
     let mut scope = heap.scope();

@@ -10,6 +10,10 @@ pub enum VmError {
   #[error("out of memory")]
   OutOfMemory,
 
+  /// A hard VM limit was exceeded (e.g. an embedding attempted to register too many handlers).
+  #[error("limit exceeded: {0}")]
+  LimitExceeded(&'static str),
+
   /// A GC handle was used after the underlying allocation was freed (or the handle is otherwise
   /// malformed).
   #[error("invalid handle")]

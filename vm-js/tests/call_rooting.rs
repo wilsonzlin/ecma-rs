@@ -40,7 +40,7 @@ fn call_return_value_is_not_rooted_by_default() -> Result<(), VmError> {
   let returned_obj;
   {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(alloc_and_return_object);
+    let call_id = vm.register_native_call(alloc_and_return_object)?;
     let name = scope.alloc_string("f")?;
     let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
@@ -66,7 +66,7 @@ fn call_return_value_survives_when_rooted_by_caller() -> Result<(), VmError> {
   let returned_obj;
   {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(alloc_and_return_object);
+    let call_id = vm.register_native_call(alloc_and_return_object)?;
     let name = scope.alloc_string("f")?;
     let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
@@ -94,8 +94,8 @@ fn construct_return_value_is_not_rooted_by_default() -> Result<(), VmError> {
   let returned_obj;
   {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(dummy_call);
-    let construct_id = vm.register_native_construct(alloc_and_return_object_construct);
+    let call_id = vm.register_native_call(dummy_call)?;
+    let construct_id = vm.register_native_construct(alloc_and_return_object_construct)?;
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 
@@ -126,8 +126,8 @@ fn construct_return_value_survives_when_rooted_by_caller() -> Result<(), VmError
   let returned_obj;
   {
     let mut scope = heap.scope();
-    let call_id = vm.register_native_call(dummy_call);
-    let construct_id = vm.register_native_construct(alloc_and_return_object_construct);
+    let call_id = vm.register_native_call(dummy_call)?;
+    let construct_id = vm.register_native_construct(alloc_and_return_object_construct)?;
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 

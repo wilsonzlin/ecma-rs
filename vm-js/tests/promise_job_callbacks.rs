@@ -117,7 +117,7 @@ fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {
   let mut vm = Vm::new(VmOptions::default());
 
   let mut scope = heap.scope();
-  let call_id = vm.register_native_call(noop);
+  let call_id = vm.register_native_call(noop)?;
   let name = scope.alloc_string("onFulfilled")?;
   let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1)?;
   let non_callable = scope.alloc_object()?;
@@ -153,7 +153,7 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   let mut vm = Vm::new(VmOptions::default());
 
   let mut scope = heap.scope();
-  let call_id = vm.register_native_call(noop);
+  let call_id = vm.register_native_call(noop)?;
   let name = scope.alloc_string("then")?;
   let then_action = scope.alloc_native_function(call_id, None, name, 2)?;
 

@@ -395,7 +395,11 @@ fn ordinary_set_with_own_descriptor(
     }
   }
 
-  let own_desc = own_desc.expect("own_desc set above");
+  let Some(own_desc) = own_desc else {
+    return Err(VmError::Unimplemented(
+      "ordinary_set: missing own property descriptor",
+    ));
+  };
 
   match own_desc.kind {
     PropertyKind::Data { writable, .. } => {
@@ -411,12 +415,9 @@ fn ordinary_set_with_own_descriptor(
         if existing_desc.is_accessor_descriptor() {
           return Ok(false);
         }
-        let PropertyKind::Data {
-          writable: receiver_writable,
-          ..
-        } = existing_desc.kind
-        else {
-          unreachable!("checked accessor above");
+        let receiver_writable = match existing_desc.kind {
+          PropertyKind::Data { writable, .. } => writable,
+          PropertyKind::Accessor { .. } => return Ok(false),
         };
         if !receiver_writable {
           return Ok(false);
