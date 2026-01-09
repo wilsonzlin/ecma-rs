@@ -4,6 +4,7 @@ use crate::function::{
   ThisMode,
 };
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
+use crate::promise::{PromiseReaction, PromiseState};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
 use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
@@ -400,8 +401,16 @@ impl Heap {
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
       self.get_heap_object(obj.0),
-      Ok(HeapObject::Object(_) | HeapObject::Function(_))
+      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_))
     )
+  }
+
+  /// Returns `true` if `obj` currently points to a live Promise object allocation.
+  ///
+  /// This is the spec-shaped "brand check" used by `IsPromise`: an object is a Promise if it has
+  /// Promise internal slots (represented here by the `HeapObject::Promise` variant).
+  pub fn is_promise_object(&self, obj: GcObject) -> bool {
+    matches!(self.get_heap_object(obj.0), Ok(HeapObject::Promise(_)))
   }
 
   /// Returns `true` if `s` currently points to a live string allocation.
@@ -506,6 +515,7 @@ impl Heap {
     match self.get_heap_object(obj.0)? {
       HeapObject::Object(o) => Ok(&o.base),
       HeapObject::Function(f) => Ok(&f.base),
+      HeapObject::Promise(p) => Ok(&p.object.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -514,6 +524,7 @@ impl Heap {
     match self.get_heap_object_mut(obj.0)? {
       HeapObject::Object(o) => Ok(&mut o.base),
       HeapObject::Function(f) => Ok(&mut f.base),
+      HeapObject::Promise(p) => Ok(&mut p.object.base),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -946,6 +957,189 @@ impl Heap {
     Some(n as u32)
   }
 
+  fn get_promise(&self, promise: GcObject) -> Result<&JsPromise, VmError> {
+    match self.get_heap_object(promise.0)? {
+      HeapObject::Promise(p) => Ok(p),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  fn get_promise_mut(&mut self, promise: GcObject) -> Result<&mut JsPromise, VmError> {
+    match self.get_heap_object_mut(promise.0)? {
+      HeapObject::Promise(p) => Ok(p),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Returns `promise.[[PromiseState]]`.
+  pub fn promise_state(&self, promise: GcObject) -> Result<PromiseState, VmError> {
+    Ok(self.get_promise(promise)?.state)
+  }
+
+  /// Returns `promise.[[PromiseResult]]`.
+  pub fn promise_result(&self, promise: GcObject) -> Result<Value, VmError> {
+    Ok(self.get_promise(promise)?.result)
+  }
+
+  /// Returns `promise.[[PromiseIsHandled]]`.
+  pub fn promise_is_handled(&self, promise: GcObject) -> Result<bool, VmError> {
+    Ok(self.get_promise(promise)?.is_handled)
+  }
+
+  /// Sets `promise.[[PromiseIsHandled]]`.
+  pub fn promise_set_is_handled(&mut self, promise: GcObject, handled: bool) -> Result<(), VmError> {
+    self.get_promise_mut(promise)?.is_handled = handled;
+    Ok(())
+  }
+
+  /// Returns the length of `promise.[[PromiseFulfillReactions]]`.
+  pub fn promise_fulfill_reactions_len(&self, promise: GcObject) -> Result<usize, VmError> {
+    Ok(self.get_promise(promise)?.fulfill_reactions.len())
+  }
+
+  /// Returns the length of `promise.[[PromiseRejectReactions]]`.
+  pub fn promise_reject_reactions_len(&self, promise: GcObject) -> Result<usize, VmError> {
+    Ok(self.get_promise(promise)?.reject_reactions.len())
+  }
+
+  /// Sets `promise.[[PromiseState]]` and `promise.[[PromiseResult]]`.
+  ///
+  /// If `state` is not [`PromiseState::Pending`], this is a settlement operation and the Promise's
+  /// reaction lists are cleared as required by ECMA-262.
+  pub fn promise_set_state_and_result(
+    &mut self,
+    promise: GcObject,
+    state: PromiseState,
+    result: Value,
+  ) -> Result<(), VmError> {
+    let idx = self.validate(promise.0).ok_or(VmError::InvalidHandle)?;
+
+    let new_bytes = {
+      let promise = match self.slots[idx].value.as_mut() {
+        Some(HeapObject::Promise(p)) => p,
+        _ => return Err(VmError::InvalidHandle),
+      };
+
+      promise.state = state;
+      promise.result = result;
+
+      if state != PromiseState::Pending {
+        promise.fulfill_reactions = Box::default();
+        promise.reject_reactions = Box::default();
+      }
+
+      promise.heap_size_bytes()
+    };
+
+    self.update_slot_bytes(idx, new_bytes);
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+    Ok(())
+  }
+
+  /// Settles a pending Promise as fulfilled.
+  pub fn promise_fulfill(&mut self, promise: GcObject, value: Value) -> Result<(), VmError> {
+    self.promise_set_state_and_result(promise, PromiseState::Fulfilled, value)
+  }
+
+  /// Settles a pending Promise as rejected.
+  pub fn promise_reject(&mut self, promise: GcObject, reason: Value) -> Result<(), VmError> {
+    self.promise_set_state_and_result(promise, PromiseState::Rejected, reason)
+  }
+
+  fn promise_append_reaction(
+    &mut self,
+    promise: GcObject,
+    is_fulfill_list: bool,
+    reaction: PromiseReaction,
+  ) -> Result<(), VmError> {
+    let idx = self.validate(promise.0).ok_or(VmError::InvalidHandle)?;
+
+    let (property_count, fulfill_count, reject_count, old_bytes, state) = {
+      let slot = &self.slots[idx];
+      let Some(obj) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      let HeapObject::Promise(p) = obj else {
+        return Err(VmError::InvalidHandle);
+      };
+      (
+        p.object.base.properties.len(),
+        p.fulfill_reactions.len(),
+        p.reject_reactions.len(),
+        slot.bytes,
+        p.state,
+      )
+    };
+
+    if state != PromiseState::Pending {
+      return Err(VmError::InvalidHandle);
+    }
+
+    let new_fulfill_count = if is_fulfill_list {
+      fulfill_count.checked_add(1).ok_or(VmError::OutOfMemory)?
+    } else {
+      fulfill_count
+    };
+    let new_reject_count = if is_fulfill_list {
+      reject_count
+    } else {
+      reject_count.checked_add(1).ok_or(VmError::OutOfMemory)?
+    };
+
+    let new_bytes =
+      JsPromise::heap_size_bytes_for_counts(property_count, new_fulfill_count, new_reject_count);
+
+    // Before allocating, enforce heap limits based on the net growth of this object.
+    let grow_by = new_bytes.saturating_sub(old_bytes);
+    self.ensure_can_allocate(grow_by)?;
+
+    // Allocate the new reaction list fallibly so hostile inputs cannot abort the host process on
+    // allocator OOM.
+    let new_list_len = if is_fulfill_list {
+      new_fulfill_count
+    } else {
+      new_reject_count
+    };
+
+    let mut buf: Vec<PromiseReaction> = Vec::new();
+    buf
+      .try_reserve_exact(new_list_len)
+      .map_err(|_| VmError::OutOfMemory)?;
+
+    {
+      let slot = &self.slots[idx];
+      let Some(HeapObject::Promise(p)) = slot.value.as_ref() else {
+        return Err(VmError::InvalidHandle);
+      };
+      if is_fulfill_list {
+        buf.extend_from_slice(&p.fulfill_reactions);
+      } else {
+        buf.extend_from_slice(&p.reject_reactions);
+      }
+    }
+
+    buf.push(reaction);
+    let new_list = buf.into_boxed_slice();
+
+    {
+      let promise = match self.slots[idx].value.as_mut() {
+        Some(HeapObject::Promise(p)) => p,
+        _ => return Err(VmError::InvalidHandle),
+      };
+      if is_fulfill_list {
+        promise.fulfill_reactions = new_list;
+      } else {
+        promise.reject_reactions = new_list;
+      }
+    }
+
+    self.update_slot_bytes(idx, new_bytes);
+    #[cfg(debug_assertions)]
+    self.debug_assert_used_bytes_is_correct();
+    Ok(())
+  }
+
   /// Implements `Symbol.for`-like behaviour using a deterministic global registry.
   ///
   /// The registry is scanned by the GC, so registered symbols remain live even if they are not
@@ -1225,7 +1419,17 @@ impl Heap {
   ) -> Result<(), VmError> {
     let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
 
-    let (is_function, bound_args_len, property_count, old_bytes, existing_idx) = {
+    #[derive(Clone, Copy)]
+    enum TargetKind {
+      OrdinaryObject,
+      Function { bound_args_len: usize },
+      Promise {
+        fulfill_reaction_count: usize,
+        reject_reaction_count: usize,
+      },
+    }
+
+    let (target_kind, property_count, old_bytes, existing_idx) = {
       let slot = &self.slots[idx];
       let Some(obj) = slot.value.as_ref() else {
         return Err(VmError::InvalidHandle);
@@ -1238,8 +1442,7 @@ impl Heap {
             .iter()
             .position(|entry| self.property_key_eq(&entry.key, &key));
           (
-            false,
-            0usize,
+            TargetKind::OrdinaryObject,
             obj.base.properties.len(),
             slot.bytes,
             existing_idx,
@@ -1253,9 +1456,25 @@ impl Heap {
             .position(|entry| self.property_key_eq(&entry.key, &key));
           let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
           (
-            true,
-            bound_args_len,
+            TargetKind::Function { bound_args_len },
             func.base.properties.len(),
+            slot.bytes,
+            existing_idx,
+          )
+        }
+        HeapObject::Promise(p) => {
+          let existing_idx = p
+            .object
+            .base
+            .properties
+            .iter()
+            .position(|entry| self.property_key_eq(&entry.key, &key));
+          (
+            TargetKind::Promise {
+              fulfill_reaction_count: p.fulfill_reactions.len(),
+              reject_reaction_count: p.reject_reactions.len(),
+            },
+            p.object.base.properties.len(),
             slot.bytes,
             existing_idx,
           )
@@ -1267,25 +1486,34 @@ impl Heap {
     match existing_idx {
       Some(existing_idx) => {
         // Replace in-place (no change to heap size).
-        let Some(obj) = self.slots[idx].value.as_mut() else {
-          return Err(VmError::InvalidHandle);
-        };
-        match obj {
-          HeapObject::Object(obj) => obj.base.properties[existing_idx].desc = desc,
-          HeapObject::Function(func) => func.base.properties[existing_idx].desc = desc,
+        match self.slots[idx].value.as_mut() {
+          Some(HeapObject::Object(obj)) => obj.base.properties[existing_idx].desc = desc,
+          Some(HeapObject::Function(func)) => func.base.properties[existing_idx].desc = desc,
+          Some(HeapObject::Promise(p)) => p.object.base.properties[existing_idx].desc = desc,
           _ => return Err(VmError::InvalidHandle),
         }
         Ok(())
       }
       None => {
-        let new_property_count = property_count.checked_add(1).ok_or(VmError::OutOfMemory)?;
-        let new_bytes = if is_function {
-          JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
-            bound_args_len,
+        let new_property_count = property_count
+          .checked_add(1)
+          .ok_or(VmError::OutOfMemory)?;
+        let new_bytes = match target_kind {
+          TargetKind::OrdinaryObject => JsObject::heap_size_bytes_for_property_count(new_property_count),
+          TargetKind::Function { bound_args_len } => {
+            JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
+              bound_args_len,
+              new_property_count,
+            )
+          }
+          TargetKind::Promise {
+            fulfill_reaction_count,
+            reject_reaction_count,
+          } => JsPromise::heap_size_bytes_for_counts(
             new_property_count,
-          )
-        } else {
-          JsObject::heap_size_bytes_for_property_count(new_property_count)
+            fulfill_reaction_count,
+            reject_reaction_count,
+          ),
         };
 
         // Before allocating, enforce heap limits based on the net growth of this object.
@@ -1304,6 +1532,7 @@ impl Heap {
           match slot.value.as_ref() {
             Some(HeapObject::Object(obj)) => buf.extend_from_slice(&obj.base.properties),
             Some(HeapObject::Function(func)) => buf.extend_from_slice(&func.base.properties),
+            Some(HeapObject::Promise(p)) => buf.extend_from_slice(&p.object.base.properties),
             _ => return Err(VmError::InvalidHandle),
           }
         }
@@ -1311,12 +1540,10 @@ impl Heap {
         buf.push(PropertyEntry { key, desc });
         let properties = buf.into_boxed_slice();
 
-        let Some(obj) = self.slots[idx].value.as_mut() else {
-          return Err(VmError::InvalidHandle);
-        };
-        match obj {
-          HeapObject::Object(obj) => obj.base.properties = properties,
-          HeapObject::Function(func) => func.base.properties = properties,
+        match self.slots[idx].value.as_mut() {
+          Some(HeapObject::Object(obj)) => obj.base.properties = properties,
+          Some(HeapObject::Function(func)) => func.base.properties = properties,
+          Some(HeapObject::Promise(p)) => p.object.base.properties = properties,
           _ => return Err(VmError::InvalidHandle),
         }
 
@@ -1658,7 +1885,28 @@ impl<'a> Scope<'a> {
     scope.define_property(arr, PropertyKey::from_string(length_key), desc)?;
     Ok(arr)
   }
+  /// Allocates a new pending Promise object on the heap.
+  pub fn alloc_promise(&mut self) -> Result<GcObject, VmError> {
+    self.alloc_promise_with_prototype(None)
+  }
 
+  /// Allocates a new pending Promise object on the heap with an explicit `[[Prototype]]`.
+  pub fn alloc_promise_with_prototype(
+    &mut self,
+    prototype: Option<GcObject>,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    if let Some(proto) = prototype {
+      scope.push_root(Value::Object(proto));
+    }
+
+    let new_bytes = JsPromise::heap_size_bytes_for_counts(0, 0, 0);
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Promise(JsPromise::new(prototype));
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)))
+  }
   /// Defines (adds or replaces) an own property on `obj`.
   pub fn define_property(
     &mut self,
@@ -1690,6 +1938,45 @@ impl<'a> Scope<'a> {
     }
 
     scope.heap.define_property(obj, key, desc)
+  }
+
+  fn root_promise_reaction(&mut self, reaction: &PromiseReaction) {
+    if let Some(handler) = reaction.handler {
+      self.push_root(handler);
+    }
+    if let Some(cap) = &reaction.capability {
+      self.push_root(Value::Object(cap.promise));
+      self.push_root(cap.resolve);
+      self.push_root(cap.reject);
+    }
+  }
+
+  /// Appends a reaction record to `promise.[[PromiseFulfillReactions]]`.
+  pub fn promise_append_fulfill_reaction(
+    &mut self,
+    promise: GcObject,
+    reaction: PromiseReaction,
+  ) -> Result<(), VmError> {
+    // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::Object(promise));
+    scope.root_promise_reaction(&reaction);
+
+    scope.heap.promise_append_reaction(promise, true, reaction)
+  }
+
+  /// Appends a reaction record to `promise.[[PromiseRejectReactions]]`.
+  pub fn promise_append_reject_reaction(
+    &mut self,
+    promise: GcObject,
+    reaction: PromiseReaction,
+  ) -> Result<(), VmError> {
+    // Root inputs for the duration of the operation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::Object(promise));
+    scope.root_promise_reaction(&reaction);
+
+    scope.heap.promise_append_reaction(promise, false, reaction)
   }
 
   /// Allocates a native JavaScript function object on the heap.
@@ -1861,6 +2148,7 @@ enum HeapObject {
   Object(JsObject),
   Function(JsFunction),
   Env(EnvRecord),
+  Promise(JsPromise),
 }
 
 impl Trace for HeapObject {
@@ -1871,6 +2159,7 @@ impl Trace for HeapObject {
       HeapObject::Object(o) => o.trace(tracer),
       HeapObject::Function(f) => f.trace(tracer),
       HeapObject::Env(e) => e.trace(tracer),
+      HeapObject::Promise(p) => p.trace(tracer),
     }
   }
 }
@@ -1980,6 +2269,72 @@ impl JsObject {
 impl Trace for JsObject {
   fn trace(&self, tracer: &mut Tracer<'_>) {
     self.base.trace(tracer);
+  }
+}
+
+#[derive(Debug)]
+struct JsPromise {
+  object: JsObject,
+  state: PromiseState,
+  result: Value,
+  fulfill_reactions: Box<[PromiseReaction]>,
+  reject_reactions: Box<[PromiseReaction]>,
+  is_handled: bool,
+}
+
+impl JsPromise {
+  fn new(prototype: Option<GcObject>) -> Self {
+    Self {
+      object: JsObject::new(prototype),
+      state: PromiseState::Pending,
+      result: Value::Undefined,
+      fulfill_reactions: Box::default(),
+      reject_reactions: Box::default(),
+      is_handled: false,
+    }
+  }
+
+  fn heap_size_bytes(&self) -> usize {
+    Self::heap_size_bytes_for_counts(
+      self.object.base.properties.len(),
+      self.fulfill_reactions.len(),
+      self.reject_reactions.len(),
+    )
+  }
+
+  fn heap_size_bytes_for_counts(
+    property_count: usize,
+    fulfill_reaction_count: usize,
+    reject_reaction_count: usize,
+  ) -> usize {
+    let props_bytes = property_count
+      .checked_mul(mem::size_of::<PropertyEntry>())
+      .unwrap_or(usize::MAX);
+    let fulfill_bytes = fulfill_reaction_count
+      .checked_mul(mem::size_of::<PromiseReaction>())
+      .unwrap_or(usize::MAX);
+    let reject_bytes = reject_reaction_count
+      .checked_mul(mem::size_of::<PromiseReaction>())
+      .unwrap_or(usize::MAX);
+
+    mem::size_of::<Self>()
+      .checked_add(props_bytes)
+      .and_then(|v| v.checked_add(fulfill_bytes))
+      .and_then(|v| v.checked_add(reject_bytes))
+      .unwrap_or(usize::MAX)
+  }
+}
+
+impl Trace for JsPromise {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    self.object.trace(tracer);
+    tracer.trace_value(self.result);
+    for reaction in self.fulfill_reactions.iter() {
+      reaction.trace(tracer);
+    }
+    for reaction in self.reject_reactions.iter() {
+      reaction.trace(tracer);
+    }
   }
 }
 

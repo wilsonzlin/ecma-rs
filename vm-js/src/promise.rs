@@ -1,4 +1,4 @@
-//! Promise algorithm scaffolding.
+//! Promise algorithm scaffolding and Promise-internal-slot types.
 //!
 //! This module intentionally implements only the parts of the ECMA-262 Promise algorithms that are
 //! needed to model *job scheduling* and the HTML integration points:
@@ -6,12 +6,16 @@
 //! - [`VmHostHooks::host_make_job_callback`] (HTML: `HostMakeJobCallback`)
 //! - [`VmHostHooks::host_call_job_callback`] (HTML: `HostCallJobCallback`)
 //!
+//! In addition to job-scheduling scaffolding, it defines **GC-traceable, spec-shaped record types**
+//! for Promise internal slots used by the heap's Promise object representation
+//! (`HeapObject::Promise`).
+//!
 //! The spec requires Promise jobs (reaction jobs and thenable jobs) to call user-provided
 //! callbacks via `HostCallJobCallback` so the embedding can re-establish incumbent/entry settings.
 //!
-//! In addition, this module exposes a minimal engine-internal [`Promise`] record and an
-//! [`await_value`] helper that schedules async/`await` continuations as Promise jobs (microtasks)
-//! without creating a derived promise.
+//! Finally, this module exposes a minimal engine-internal [`Promise`] record and an [`await_value`]
+//! helper that schedules async/`await` continuations as Promise jobs (microtasks) without creating
+//! a derived promise.
 //!
 //! Spec references:
 //! - `Await` abstract operation: <https://tc39.es/ecma262/#await>
@@ -19,20 +23,24 @@
 //! - `PromiseReactionJob`: <https://tc39.es/ecma262/#sec-promisereactionjob>
 //! - `HostPromiseRejectionTracker`: <https://tc39.es/ecma262/#sec-host-promise-rejection-tracker>
 
+use crate::heap::{Trace, Tracer};
 use crate::promise_jobs::new_promise_reaction_job;
 use crate::promise_jobs::new_promise_resolve_thenable_job;
-use crate::GcObject;
-use crate::Heap;
-use crate::Job;
-use crate::JobCallback;
-use crate::PromiseHandle;
-use crate::PromiseRejectionOperation;
-use crate::Value;
-use crate::VmError;
-use crate::VmHostHooks;
+use crate::{
+  GcObject, Heap, Job, JobCallback, PromiseHandle, PromiseRejectionOperation, Value, VmError,
+  VmHostHooks,
+};
 use std::cell::RefCell;
 use std::mem;
 use std::rc::Rc;
+
+/// The value of a Promise object's `[[PromiseState]]` internal slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PromiseState {
+  Pending,
+  Fulfilled,
+  Rejected,
+}
 
 /// The `[[Type]]` of a Promise reaction record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,7 +49,52 @@ pub enum PromiseReactionType {
   Reject,
 }
 
-/// A spec-shaped Promise reaction record.
+/// An ECMAScript PromiseCapability Record.
+///
+/// Spec reference: <https://tc39.es/ecma262/#sec-promisecapability-records>
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PromiseCapability {
+  pub promise: GcObject,
+  pub resolve: Value,
+  pub reject: Value,
+}
+
+impl Trace for PromiseCapability {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    tracer.trace_value(Value::Object(self.promise));
+    tracer.trace_value(self.resolve);
+    tracer.trace_value(self.reject);
+  }
+}
+
+/// An ECMAScript PromiseReaction Record stored in a Promise's reaction lists.
+///
+/// Spec reference: <https://tc39.es/ecma262/#sec-promisereaction-records>
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PromiseReaction {
+  /// `[[Capability]]` is either a PromiseCapability record or empty.
+  pub capability: Option<PromiseCapability>,
+  /// `[[Type]]` is either fulfill or reject.
+  pub reaction_type: PromiseReactionType,
+  /// `[[Handler]]` is either a callable object or empty.
+  ///
+  /// Note: the ECMAScript spec models "empty" separately from `undefined`; at this layer we
+  /// represent it as `None`.
+  pub handler: Option<Value>,
+}
+
+impl Trace for PromiseReaction {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    if let Some(cap) = &self.capability {
+      cap.trace(tracer);
+    }
+    if let Some(handler) = self.handler {
+      tracer.trace_value(handler);
+    }
+  }
+}
+
+/// A spec-shaped Promise reaction record used by job scheduling scaffolding.
 ///
 /// Mirrors ECMA-262's `PromiseReaction` record, but only includes the fields needed for job
 /// creation at this scaffolding layer.
@@ -118,9 +171,9 @@ pub fn create_promise_resolve_thenable_job(
   )))
 }
 
-/// A minimal Promise state used by [`Promise`].
+/// Minimal state for the engine-internal [`Promise`] record.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum PromiseState {
+enum PromiseRecordState {
   Pending,
   Fulfilled(Value),
   Rejected(Value),
@@ -128,7 +181,7 @@ enum PromiseState {
 
 struct PromiseInner {
   handle: Option<PromiseHandle>,
-  state: PromiseState,
+  state: PromiseRecordState,
   is_handled: bool,
   fulfill_reactions: Vec<PromiseReactionRecord>,
   reject_reactions: Vec<PromiseReactionRecord>,
@@ -149,7 +202,7 @@ impl Promise {
     Self {
       inner: Rc::new(RefCell::new(PromiseInner {
         handle,
-        state: PromiseState::Pending,
+        state: PromiseRecordState::Pending,
         is_handled: false,
         fulfill_reactions: Vec::new(),
         reject_reactions: Vec::new(),
@@ -162,7 +215,7 @@ impl Promise {
     Self {
       inner: Rc::new(RefCell::new(PromiseInner {
         handle: None,
-        state: PromiseState::Fulfilled(value),
+        state: PromiseRecordState::Fulfilled(value),
         is_handled: true,
         fulfill_reactions: Vec::new(),
         reject_reactions: Vec::new(),
@@ -179,11 +232,11 @@ impl Promise {
     let (handle, should_track_reject, reactions) = {
       let mut inner = self.inner.borrow_mut();
       match inner.state {
-        PromiseState::Pending => {}
-        PromiseState::Fulfilled(_) | PromiseState::Rejected(_) => return Ok(()),
+        PromiseRecordState::Pending => {}
+        PromiseRecordState::Fulfilled(_) | PromiseRecordState::Rejected(_) => return Ok(()),
       }
 
-      inner.state = PromiseState::Rejected(reason);
+      inner.state = PromiseRecordState::Rejected(reason);
       let handle = inner.handle;
       let should_track_reject = !inner.is_handled;
       let reactions = mem::take(&mut inner.reject_reactions);
@@ -218,7 +271,7 @@ impl Promise {
     let mut inner = self.inner.borrow_mut();
     if has_reject_handler && !inner.is_handled {
       inner.is_handled = true;
-      if matches!(inner.state, PromiseState::Rejected(_)) {
+      if matches!(inner.state, PromiseRecordState::Rejected(_)) {
         if let Some(handle) = inner.handle {
           host.host_promise_rejection_tracker(handle, PromiseRejectionOperation::Handle);
         }
@@ -226,14 +279,14 @@ impl Promise {
     }
 
     match inner.state {
-      PromiseState::Pending => {
+      PromiseRecordState::Pending => {
         inner.fulfill_reactions.push(fulfill_reaction);
         inner.reject_reactions.push(reject_reaction);
       }
-      PromiseState::Fulfilled(v) => {
+      PromiseRecordState::Fulfilled(v) => {
         host.host_enqueue_promise_job(new_promise_reaction_job(fulfill_reaction, v), None);
       }
-      PromiseState::Rejected(r) => {
+      PromiseRecordState::Rejected(r) => {
         host.host_enqueue_promise_job(new_promise_reaction_job(reject_reaction, r), None);
       }
     }
@@ -285,4 +338,3 @@ pub fn await_value(
   let promise = promise_resolve(value);
   promise.then_without_result(host, heap, on_fulfilled, on_rejected)
 }
-

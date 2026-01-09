@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, Value, VmError};
+use vm_js::{Heap, HeapLimits, PromiseReaction, PromiseReactionType, Value, VmError};
 
 #[test]
 fn gc_collects_unreachable_objects() -> Result<(), VmError> {
@@ -106,6 +106,70 @@ fn generations_change_when_slot_reused() -> Result<(), VmError> {
   // Stale handles are invalidated via the generation check.
   assert!(!heap.is_valid_object(first));
   assert!(heap.is_valid_object(second));
+
+  Ok(())
+}
+
+#[test]
+fn promise_slots_are_traced_by_gc() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let promise;
+  let referenced;
+  {
+    let mut scope = heap.scope();
+
+    promise = scope.alloc_promise()?;
+    referenced = scope.alloc_object()?;
+    scope
+      .heap_mut()
+      .promise_fulfill(promise, Value::Object(referenced))?;
+
+    scope.push_root(Value::Object(promise));
+    scope.heap_mut().collect_garbage();
+    assert!(
+      scope.heap().is_valid_object(referenced),
+      "promise.[[PromiseResult]] should be traced"
+    );
+  }
+
+  // Stack roots were removed when the scope was dropped.
+  heap.collect_garbage();
+  assert!(!heap.is_valid_object(referenced));
+  Ok(())
+}
+
+#[test]
+fn promise_reaction_lists_are_cleared_on_settlement() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let handler;
+  {
+    let mut scope = heap.scope();
+
+    let promise = scope.alloc_promise()?;
+    handler = scope.alloc_object()?;
+
+    scope.promise_append_fulfill_reaction(
+      promise,
+      PromiseReaction {
+        capability: None,
+        reaction_type: PromiseReactionType::Fulfill,
+        handler: Some(Value::Object(handler)),
+      },
+    )?;
+
+    scope.push_root(Value::Object(promise));
+
+    // While the promise is pending, its reaction lists keep handlers alive.
+    scope.heap_mut().collect_garbage();
+    assert!(scope.heap().is_valid_object(handler));
+
+    // Settlement clears the reaction lists so they do not keep handlers alive unnecessarily.
+    scope.heap_mut().promise_fulfill(promise, Value::Undefined)?;
+    scope.heap_mut().collect_garbage();
+    assert!(!scope.heap().is_valid_object(handler));
+  }
 
   Ok(())
 }
