@@ -1,3 +1,4 @@
+use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
   EnvRootId, GcEnv, GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, Scope,
   Value, Vm, VmError,
@@ -1066,6 +1067,55 @@ impl<'a> Evaluator<'a> {
         rhs_scope.push_root(left);
         let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
         Ok(Value::Bool(strict_equal(rhs_scope.heap(), left, right)?))
+      }
+      OperatorName::StrictInequality => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        Ok(Value::Bool(!strict_equal(rhs_scope.heap(), left, right)?))
+      }
+      OperatorName::Equality => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        Ok(Value::Bool(abstract_equality(rhs_scope.heap_mut(), left, right)?))
+      }
+      OperatorName::Inequality => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        Ok(Value::Bool(!abstract_equality(
+          rhs_scope.heap_mut(),
+          left,
+          right,
+        )?))
+      }
+      OperatorName::Addition => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        add_operator(rhs_scope.heap_mut(), left, right)
+      }
+      OperatorName::Subtraction => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left);
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        // Root `right` for the duration of numeric conversion: `ToNumber` may allocate when called
+        // on objects (via `ToPrimitive`).
+        rhs_scope.push_root(right);
+        let left_n = to_number(rhs_scope.heap_mut(), left)?;
+        let right_n = to_number(rhs_scope.heap_mut(), right)?;
+        Ok(Value::Number(left_n - right_n))
       }
       OperatorName::Assignment => {
         // `=` assignment expression.

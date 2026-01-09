@@ -38,6 +38,7 @@ mod intrinsics;
 mod interrupt;
 mod jobs;
 mod job_queue;
+mod ops;
 mod promise_rejection_tracker;
 mod property;
 mod realm;
