@@ -64,6 +64,33 @@ fn array_destructuring_supports_rest() {
 }
 
 #[test]
+fn object_destructuring_assignment_binds_properties() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var a; var b; ({a,b} = {a:1,b:2}); a+b === 3"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn object_destructuring_assignment_can_assign_to_member() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var o = {}; ({a:o.x} = {a:1}); o.x === 1"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn array_destructuring_assignment_supports_holes_and_rest() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var x; var y; var r; ([x,,y,...r] = [1,2,3,4,5]); x===1 && y===3 && r.length===2 && r[0]===4"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
 fn catch_param_supports_destructuring() {
   let mut rt = new_runtime();
   let value = rt
