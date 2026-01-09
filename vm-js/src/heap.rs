@@ -1260,6 +1260,48 @@ impl Heap {
     }
   }
 
+  /// ECMAScript `[[Get]]` for ordinary objects (full semantics, including accessors).
+  ///
+  /// This is a convenience wrapper around [`Scope::ordinary_get`]. It:
+  /// - walks the prototype chain (bounded by [`MAX_PROTOTYPE_CHAIN`]),
+  /// - returns data property values,
+  /// - and invokes accessor getters using `vm.call` with `receiver` as `this`.
+  ///
+  /// # Rooting
+  ///
+  /// The returned [`Value`] is **not automatically rooted**. If the caller will perform any
+  /// additional allocations that could trigger GC, it must root the returned value itself (for
+  /// example with [`Scope::push_root`]).
+  pub fn ordinary_get(
+    &mut self,
+    vm: &mut Vm,
+    obj: GcObject,
+    key: PropertyKey,
+    receiver: Value,
+  ) -> Result<Value, VmError> {
+    let mut scope = self.scope();
+    scope.ordinary_get(vm, obj, key, receiver)
+  }
+
+  /// ECMAScript `[[Set]]` for ordinary objects (full semantics, including accessors).
+  ///
+  /// This is a convenience wrapper around [`Scope::ordinary_set`].
+  ///
+  /// # Rooting
+  ///
+  /// This method does not automatically root `value`/`receiver` beyond the scope of the call.
+  pub fn ordinary_set(
+    &mut self,
+    vm: &mut Vm,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+    receiver: Value,
+  ) -> Result<bool, VmError> {
+    let mut scope = self.scope();
+    scope.ordinary_set(vm, obj, key, value, receiver)
+  }
+
   /// Implements the `OwnPropertyKeys` internal method (ECMA-262) for ordinary objects.
   ///
   /// This orders keys as:
