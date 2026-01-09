@@ -166,6 +166,27 @@ impl Heap {
     }
   }
 
+  /// Returns the current length of the value stack root set.
+  ///
+  /// Values pushed via [`Heap::push_stack_root`] are traced during GC.
+  pub fn stack_root_len(&self) -> usize {
+    self.root_stack.len()
+  }
+
+  /// Pushes a value stack root.
+  ///
+  /// Stack roots are traced during GC until removed (typically via
+  /// [`Heap::truncate_stack_roots`]).
+  pub fn push_stack_root(&mut self, value: Value) {
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+    self.root_stack.push(value);
+  }
+
+  /// Truncates the value stack root set.
+  pub fn truncate_stack_roots(&mut self, len: usize) {
+    self.root_stack.truncate(len);
+  }
+
   /// Bytes currently used by live heap allocations.
   pub fn used_bytes(&self) -> usize {
     self.used_bytes
