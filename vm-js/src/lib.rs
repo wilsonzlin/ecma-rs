@@ -29,6 +29,82 @@
 //! - **Persistent roots**: managed by [`Heap::add_root`] / [`Heap::remove_root`], intended for host
 //!   embeddings.
 //!
+//! # Embedding guide: budgets + interrupts
+//!
+//! `vm-js` supports **cooperative** interruption: the host configures a budget/cancellation token,
+//! and evaluators periodically call [`Vm::tick`].
+//!
+//! ## Host cancellation (`interrupt_flag`)
+//!
+//! Create a shared cancellation flag:
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use std::sync::atomic::AtomicBool;
+//! let cancel = Arc::new(AtomicBool::new(false));
+//! # drop(cancel);
+//! ```
+//!
+//! Pass it to [`VmOptions::interrupt_flag`]. The VM will observe the same flag (via its internal
+//! [`InterruptToken`]), so the host can cooperatively cancel execution by setting the flag to
+//! `true`.
+//!
+//! ## Per-task budgets
+//!
+//! - Use [`Vm::set_budget`] to apply a per-task [`Budget`] (fuel and/or deadline).
+//! - Use [`Vm::reset_budget_to_default`] to restore the defaults configured in [`VmOptions`].
+//! - Use [`Vm::push_budget`] to temporarily override the budget with an RAII guard.
+//!
+//! **Important:** budgets/interrupts are only enforced where the evaluator calls [`Vm::tick`]. The
+//! provided [`JsRuntime`] calls `tick()` once per statement and once per loop iteration; custom
+//! evaluators must do the same for budgets to have any effect.
+//!
+//! ## Minimal example: fuel budget + interrupt flag
+//!
+//! ```rust
+//! use std::sync::Arc;
+//! use std::sync::atomic::{AtomicBool, Ordering};
+//! use vm_js::{Budget, Heap, HeapLimits, JsRuntime, TerminationReason, Vm, VmError, VmOptions};
+//!
+//! # fn main() -> Result<(), VmError> {
+//! // Shared host cancellation flag.
+//! let interrupt_flag = Arc::new(AtomicBool::new(false));
+//!
+//! let vm = Vm::new(VmOptions {
+//!   interrupt_flag: Some(interrupt_flag.clone()),
+//!   ..VmOptions::default()
+//! });
+//! let heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+//! let mut rt = JsRuntime::new(vm, heap)?;
+//!
+//! // Give this run a tiny fuel budget so an infinite loop terminates quickly.
+//! rt.vm.set_budget(Budget {
+//!   fuel: Some(5),
+//!   deadline: None,
+//!   check_time_every: 1,
+//! });
+//!
+//! let result = rt.exec_script("while (true) {}");
+//! // Typically you'd reset budgets in a `drop` guard / `defer` after each host task.
+//! rt.vm.reset_budget_to_default();
+//!
+//! let err = result.unwrap_err();
+//! match err {
+//!   VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::OutOfFuel),
+//!   other => panic!("expected termination, got {other:?}"),
+//! }
+//!
+//! // The host can also request cooperative cancellation via the shared interrupt flag:
+//! interrupt_flag.store(true, Ordering::Relaxed);
+//! let err = rt.vm.tick().unwrap_err();
+//! match err {
+//!   VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::Interrupted),
+//!   other => panic!("expected termination, got {other:?}"),
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! # WebIDL / host objects
 //!
 //! If you are embedding `vm-js` in a browser-style host and need to expose Web APIs (constructors,
