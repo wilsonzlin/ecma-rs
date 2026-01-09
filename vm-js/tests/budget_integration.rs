@@ -5,7 +5,7 @@ use vm_js::{Budget, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value
 
 fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
   let heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-  JsRuntime::new(vm, heap)
+  JsRuntime::new(vm, heap).unwrap()
 }
 
 fn assert_termination_reason(err: VmError, expected: TerminationReason) {

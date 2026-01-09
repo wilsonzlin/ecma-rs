@@ -56,6 +56,31 @@ impl Realm {
         Some(intrinsics.object_prototype()),
       )?;
 
+      // `globalThis` is a writable, configurable, non-enumerable data property whose value is the
+      // global object itself.
+      let global_this_key = PropertyKey::from_string(scope.alloc_string("globalThis")?);
+      scope.define_property(
+        global_object,
+        global_this_key,
+        global_data_desc(Value::Object(global_object)),
+      )?;
+
+      // (Optional but useful) Define a global `undefined` binding. In the spec this property is
+      // non-writable, non-enumerable, non-configurable.
+      let undefined_key = PropertyKey::from_string(scope.alloc_string("undefined")?);
+      scope.define_property(
+        global_object,
+        undefined_key,
+        PropertyDescriptor {
+          enumerable: false,
+          configurable: false,
+          kind: PropertyKind::Data {
+            value: Value::Undefined,
+            writable: false,
+          },
+        },
+      )?;
+
       // Install the standard native Error constructors as non-enumerable global properties.
       let error_key = PropertyKey::from_string(scope.alloc_string("Error")?);
       scope.define_property(
