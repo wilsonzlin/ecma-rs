@@ -582,7 +582,7 @@ impl Heap {
   pub fn is_valid_object(&self, obj: GcObject) -> bool {
     matches!(
       self.get_heap_object(obj.0),
-      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_))
+      Ok(HeapObject::Object(_) | HeapObject::Function(_) | HeapObject::Promise(_) | HeapObject::Env(_))
     )
   }
 
@@ -2988,6 +2988,30 @@ impl<'a> Scope<'a> {
     }
 
     Ok(func)
+  }
+
+  pub fn alloc_env_record(&mut self, outer: Option<GcObject>) -> Result<GcObject, VmError> {
+    let outer_env = match outer {
+      Some(obj) => {
+        let env = GcEnv(obj.0);
+        if !self.heap().is_valid_env(env) {
+          return Err(VmError::InvalidHandle);
+        }
+        Some(env)
+      }
+      None => None,
+    };
+
+    let mut scope = self.reborrow();
+    if let Some(outer) = outer {
+      scope.push_root(Value::Object(outer))?;
+    }
+
+    let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(0);
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Env(EnvRecord::new(outer_env));
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   pub fn env_create(&mut self, outer: Option<GcEnv>) -> Result<GcEnv, VmError> {

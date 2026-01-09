@@ -6,6 +6,8 @@ use core::mem;
 pub(crate) struct EnvRecord {
   pub(crate) outer: Option<GcEnv>,
   pub(crate) bindings: Box<[EnvBinding]>,
+  pub(crate) this_value: Option<Value>,
+  pub(crate) new_target: Option<Value>,
 }
 
 impl EnvRecord {
@@ -13,6 +15,8 @@ impl EnvRecord {
     Self {
       outer,
       bindings: Box::default(),
+      this_value: None,
+      new_target: None,
     }
   }
 
@@ -42,6 +46,12 @@ impl Trace for EnvRecord {
     }
     for binding in self.bindings.iter() {
       binding.trace(tracer);
+    }
+    if let Some(this_value) = self.this_value {
+      tracer.trace_value(this_value);
+    }
+    if let Some(new_target) = self.new_target {
+      tracer.trace_value(new_target);
     }
   }
 }
