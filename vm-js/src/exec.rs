@@ -3244,6 +3244,15 @@ impl<'a> Evaluator<'a> {
         let key = rhs_scope.heap_mut().to_property_key(left)?;
         Ok(Value::Bool(rhs_scope.ordinary_has_property(obj, key)?))
       }
+      OperatorName::Instanceof => {
+        let left = self.eval_expr(scope, &expr.left)?;
+        // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
+        let mut rhs_scope = scope.reborrow();
+        rhs_scope.push_root(left)?;
+        let right = self.eval_expr(&mut rhs_scope, &expr.right)?;
+        rhs_scope.push_root(right)?;
+        Ok(Value::Bool(self.instanceof_operator(&mut rhs_scope, left, right)?))
+      }
       OperatorName::Addition => {
         let left = self.eval_expr(scope, &expr.left)?;
         // Root `left` across evaluation of `right` in case the RHS allocates and triggers GC.
@@ -3313,6 +3322,130 @@ impl<'a> Evaluator<'a> {
       }
       _ => Err(VmError::Unimplemented("binary operator")),
     }
+  }
+
+  fn instanceof_operator(
+    &mut self,
+    scope: &mut Scope<'_>,
+    object: Value,
+    constructor: Value,
+  ) -> Result<bool, VmError> {
+    // Root inputs for the duration of the operation: `instanceof` may allocate when performing
+    // `GetMethod`/`Get`/`Call`.
+    let mut scope = scope.reborrow();
+    scope.push_root(object)?;
+    scope.push_root(constructor)?;
+
+    // 1. `C` must be callable.
+    if !scope.heap().is_callable(constructor)? {
+      return Err(throw_type_error(
+        self.vm,
+        &mut scope,
+        "Right-hand side of 'instanceof' is not callable",
+      )?);
+    }
+    let Value::Object(constructor_obj) = constructor else {
+      // `Heap::is_callable` returning true for a non-object would be an internal bug.
+      return Err(VmError::InvariantViolation(
+        "instanceof: is_callable returned true for non-object",
+      ));
+    };
+
+    // 2. GetMethod(C, @@hasInstance).
+    let has_instance_sym = self
+      .vm
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
+      .well_known_symbols()
+      .has_instance;
+    let has_instance_key = PropertyKey::from_symbol(has_instance_sym);
+    let method = match self
+      .vm
+      .get_method(&mut scope, constructor_obj, has_instance_key)
+    {
+      Ok(method) => method,
+      Err(VmError::NotCallable) => {
+        return Err(throw_type_error(
+          self.vm,
+          &mut scope,
+          "@@hasInstance is not callable",
+        )?);
+      }
+      Err(err) => return Err(err),
+    };
+
+    if let Some(method) = method {
+      let result = self.vm.call(
+        &mut scope,
+        method,
+        Value::Object(constructor_obj),
+        &[object],
+      )?;
+      return Ok(to_boolean(scope.heap(), result)?);
+    }
+
+    // 3. If `C` is not constructable, `instanceof` is `false`.
+    if !scope.heap().is_constructor(constructor)? {
+      return Ok(false);
+    }
+
+    self.ordinary_has_instance(&mut scope, object, constructor_obj)
+  }
+
+  fn ordinary_has_instance(
+    &mut self,
+    scope: &mut Scope<'_>,
+    object: Value,
+    constructor: GcObject,
+  ) -> Result<bool, VmError> {
+    // Bound functions delegate `instanceof` checks to their target.
+    if let Ok(func) = scope.heap().get_function(constructor) {
+      if let Some(bound_target) = func.bound_target {
+        return self.instanceof_operator(scope, object, Value::Object(bound_target));
+      }
+    }
+
+    // If the LHS is not an object, `instanceof` is `false` without further observable actions.
+    let Value::Object(object) = object else {
+      return Ok(false);
+    };
+
+    // P = Get(C, "prototype").
+    let prototype_s = scope.alloc_string("prototype")?;
+    scope.push_root(Value::String(prototype_s))?;
+    let prototype = self
+      .vm
+      .get(scope, constructor, PropertyKey::from_string(prototype_s))?;
+
+    let Value::Object(prototype) = prototype else {
+      return Err(throw_type_error(
+        self.vm,
+        scope,
+        "Function has non-object prototype in instanceof check",
+      )?);
+    };
+
+    // Walk `object`'s prototype chain until we find `prototype` or reach the end.
+    let mut current = scope.heap().object_prototype(object)?;
+    let mut steps = 0usize;
+    let mut visited: HashSet<GcObject> = HashSet::new();
+    while let Some(obj) = current {
+      if steps >= crate::MAX_PROTOTYPE_CHAIN {
+        return Err(VmError::PrototypeChainTooDeep);
+      }
+      steps += 1;
+
+      if !visited.insert(obj) {
+        return Err(VmError::PrototypeCycle);
+      }
+
+      if obj == prototype {
+        return Ok(true);
+      }
+      current = scope.heap().object_prototype(obj)?;
+    }
+
+    Ok(false)
   }
 
   fn is_primitive_value(&self, value: Value) -> bool {
