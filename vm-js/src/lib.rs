@@ -39,6 +39,7 @@ mod agent;
 mod builtins;
 mod env;
 mod error;
+mod destructure;
 mod exec;
 mod execution_context;
 mod function;

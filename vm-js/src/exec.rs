@@ -1,3 +1,4 @@
+use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm,
@@ -79,7 +80,7 @@ fn global_var_desc(value: Value) -> PropertyDescriptor {
 }
 
 #[derive(Debug)]
-struct RuntimeEnv {
+pub(crate) struct RuntimeEnv {
   global_object: GcObject,
   lexical_env: GcEnv,
   lexical_root: EnvRootId,
@@ -108,6 +109,10 @@ impl RuntimeEnv {
   fn set_lexical_env(&mut self, heap: &mut Heap, env: GcEnv) {
     self.lexical_env = env;
     heap.set_env_root(self.lexical_root, env);
+  }
+
+  pub(crate) fn lexical_env(&self) -> GcEnv {
+    self.lexical_env
   }
 
   fn resolve_lexical_binding(&self, heap: &Heap, name: &str) -> Result<Option<GcEnv>, VmError> {
@@ -166,7 +171,7 @@ impl RuntimeEnv {
     Ok(Some(key_scope.ordinary_get(vm, global_object, key, receiver)?))
   }
 
-  fn set(
+  pub(crate) fn set(
     &mut self,
     scope: &mut Scope<'_>,
     name: &str,
@@ -231,7 +236,12 @@ impl RuntimeEnv {
     Ok(())
   }
 
-  fn set_var(&mut self, scope: &mut Scope<'_>, name: &str, value: Value) -> Result<(), VmError> {
+  pub(crate) fn set_var(
+    &mut self,
+    scope: &mut Scope<'_>,
+    name: &str,
+    value: Value,
+  ) -> Result<(), VmError> {
     // `var` declarations always assign to the global var environment (the global object), even when
     // a lexical binding shadows the identifier (e.g. a `catch(e)` parameter).
     //
@@ -435,20 +445,58 @@ impl<'a> Evaluator<'a> {
       match var.stx.mode {
         VarDeclMode::Let => {
           for declarator in &var.stx.declarators {
-            let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
-            scope.env_create_mutable_binding(env, name)?;
+            self.hoist_lexical_names_from_pat(scope, env, &declarator.pattern.stx.pat.stx, true)?;
           }
         }
         VarDeclMode::Const => {
           for declarator in &var.stx.declarators {
-            let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
-            scope.env_create_immutable_binding(env, name)?;
+            self.hoist_lexical_names_from_pat(scope, env, &declarator.pattern.stx.pat.stx, false)?;
           }
         }
         _ => {}
       }
     }
     Ok(())
+  }
+
+  fn hoist_lexical_names_from_pat(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcEnv,
+    pat: &Pat,
+    mutable: bool,
+  ) -> Result<(), VmError> {
+    match pat {
+      Pat::Id(id) => {
+        if mutable {
+          scope.env_create_mutable_binding(env, &id.stx.name)?;
+        } else {
+          scope.env_create_immutable_binding(env, &id.stx.name)?;
+        }
+        Ok(())
+      }
+      Pat::Obj(obj) => {
+        for prop in &obj.stx.properties {
+          self.hoist_lexical_names_from_pat(scope, env, &prop.stx.target.stx, mutable)?;
+        }
+        if let Some(rest) = &obj.stx.rest {
+          self.hoist_lexical_names_from_pat(scope, env, &rest.stx, mutable)?;
+        }
+        Ok(())
+      }
+      Pat::Arr(arr) => {
+        for elem in &arr.stx.elements {
+          if let Some(elem) = elem {
+            self.hoist_lexical_names_from_pat(scope, env, &elem.target.stx, mutable)?;
+          }
+        }
+        if let Some(rest) = &arr.stx.rest {
+          self.hoist_lexical_names_from_pat(scope, env, &rest.stx, mutable)?;
+        }
+        Ok(())
+      }
+      Pat::AssignTarget(_) => Err(VmError::Unimplemented("lexical declaration assignment targets")),
+    }
   }
 
   fn collect_var_names(&self, stmt: &Stmt, out: &mut HashSet<String>) -> Result<(), VmError> {
@@ -530,12 +578,36 @@ impl<'a> Evaluator<'a> {
     pat_decl: &PatDecl,
     out: &mut HashSet<String>,
   ) -> Result<(), VmError> {
-    match &*pat_decl.pat.stx {
+    self.collect_var_names_from_pat(&pat_decl.pat.stx, out)
+  }
+
+  fn collect_var_names_from_pat(&self, pat: &Pat, out: &mut HashSet<String>) -> Result<(), VmError> {
+    match pat {
       Pat::Id(id) => {
         out.insert(id.stx.name.clone());
         Ok(())
       }
-      _ => Err(VmError::Unimplemented("var destructuring patterns")),
+      Pat::Obj(obj) => {
+        for prop in &obj.stx.properties {
+          self.collect_var_names_from_pat(&prop.stx.target.stx, out)?;
+        }
+        if let Some(rest) = &obj.stx.rest {
+          self.collect_var_names_from_pat(&rest.stx, out)?;
+        }
+        Ok(())
+      }
+      Pat::Arr(arr) => {
+        for elem in &arr.stx.elements {
+          if let Some(elem) = elem {
+            self.collect_var_names_from_pat(&elem.target.stx, out)?;
+          }
+        }
+        if let Some(rest) = &arr.stx.rest {
+          self.collect_var_names_from_pat(&rest.stx, out)?;
+        }
+        Ok(())
+      }
+      Pat::AssignTarget(_) => Err(VmError::Unimplemented("var declaration assignment targets")),
     }
   }
 
@@ -632,17 +704,45 @@ impl<'a> Evaluator<'a> {
         // `var` bindings are hoisted to `undefined` at function/script entry.
         for declarator in &decl.declarators {
           let Some(init) = &declarator.initializer else {
+            // Destructuring declarations require an initializer (early error in real JS).
+            if !matches!(&*declarator.pattern.stx.pat.stx, Pat::Id(_)) {
+              return Err(VmError::Unimplemented("destructuring var without initializer"));
+            }
             continue;
           };
-          let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
           let value = self.eval_expr(scope, init)?;
-          self.env.set_var(scope, name, value)?;
+          bind_pattern(
+            self.vm,
+            scope,
+            self.env,
+            &declarator.pattern.stx.pat.stx,
+            value,
+            BindingKind::Var,
+            false,
+          )?;
         }
         Ok(Completion::empty())
       }
       VarDeclMode::Let => {
         for declarator in &decl.declarators {
-          let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
+          let Pat::Id(id) = &*declarator.pattern.stx.pat.stx else {
+            let Some(init) = &declarator.initializer else {
+              return Err(VmError::Unimplemented("destructuring let without initializer"));
+            };
+            let value = self.eval_expr(scope, init)?;
+            bind_pattern(
+              self.vm,
+              scope,
+              self.env,
+              &declarator.pattern.stx.pat.stx,
+              value,
+              BindingKind::Let,
+              false,
+            )?;
+            continue;
+          };
+
+          let name = id.stx.name.as_str();
           let value = match &declarator.initializer {
             Some(init) => self.eval_expr(scope, init)?,
             None => Value::Undefined,
@@ -660,12 +760,29 @@ impl<'a> Evaluator<'a> {
       }
       VarDeclMode::Const => {
         for declarator in &decl.declarators {
-          let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
           let Some(init) = &declarator.initializer else {
             // TODO: should be a syntax error (early error).
             return Err(VmError::Unimplemented("const without initializer"));
           };
           let value = self.eval_expr(scope, init)?;
+
+          if !matches!(&*declarator.pattern.stx.pat.stx, Pat::Id(_)) {
+            bind_pattern(
+              self.vm,
+              scope,
+              self.env,
+              &declarator.pattern.stx.pat.stx,
+              value,
+              BindingKind::Const,
+              false,
+            )?;
+            continue;
+          }
+
+          let Pat::Id(id) = &*declarator.pattern.stx.pat.stx else {
+            unreachable!();
+          };
+          let name = id.stx.name.as_str();
 
           if !scope.heap().env_has_binding(self.env.lexical_env, name)? {
             scope.env_create_immutable_binding(self.env.lexical_env, name)?;
@@ -765,17 +882,17 @@ impl<'a> Evaluator<'a> {
     thrown: Value,
     env: GcEnv,
   ) -> Result<(), VmError> {
-    match &*param.pat.stx {
-      Pat::Id(id) => {
-        let name = id.stx.name.as_str();
-        if !scope.heap().env_has_binding(env, name)? {
-          scope.env_create_mutable_binding(env, name)?;
-        }
-        scope.heap_mut().env_initialize_binding(env, name, thrown)?;
-        Ok(())
-      }
-      _ => Err(VmError::Unimplemented("destructuring catch parameter")),
-    }
+    // Bind into the provided catch environment (which should also be the current lexical env).
+    let _ = env;
+    bind_pattern(
+      self.vm,
+      scope,
+      self.env,
+      &param.pat.stx,
+      thrown,
+      BindingKind::Let,
+      false,
+    )
   }
 
   fn eval_return(
@@ -1322,13 +1439,25 @@ impl<'a> Evaluator<'a> {
   fn eval_binary(&mut self, scope: &mut Scope<'_>, expr: &BinaryExpr) -> Result<Value, VmError> {
     match expr.operator {
       OperatorName::Assignment => {
-        let reference = self.eval_reference(scope, &expr.left)?;
-        let mut rhs_scope = scope.reborrow();
-        self.root_reference(&mut rhs_scope, &reference);
-        let value = self.eval_expr(&mut rhs_scope, &expr.right)?;
-        rhs_scope.push_root(value);
-        self.put_value_to_reference(&mut rhs_scope, &reference, value)?;
-        Ok(value)
+        // Destructuring assignment patterns appear in expression position as `Expr::ObjPat` /
+        // `Expr::ArrPat` nodes. These are not valid "references" and must be handled by pattern
+        // binding.
+        match &*expr.left.stx {
+          Expr::ObjPat(_) | Expr::ArrPat(_) => {
+            let value = self.eval_expr(scope, &expr.right)?;
+            bind_assignment_target(self.vm, scope, self.env, &expr.left, value, false)?;
+            Ok(value)
+          }
+          _ => {
+            let reference = self.eval_reference(scope, &expr.left)?;
+            let mut rhs_scope = scope.reborrow();
+            self.root_reference(&mut rhs_scope, &reference);
+            let value = self.eval_expr(&mut rhs_scope, &expr.right)?;
+            rhs_scope.push_root(value);
+            self.put_value_to_reference(&mut rhs_scope, &reference, value)?;
+            Ok(value)
+          }
+        }
       }
       OperatorName::LogicalAnd => {
         let left = self.eval_expr(scope, &expr.left)?;
@@ -1443,11 +1572,14 @@ fn alloc_string_from_lit_str(
   }
 }
 
-fn expect_simple_binding_identifier<'a>(pat_decl: &'a PatDecl) -> Result<&'a str, VmError> {
-  match &*pat_decl.pat.stx {
-    Pat::Id(id) => Ok(&id.stx.name),
-    _ => Err(VmError::Unimplemented("destructuring patterns")),
-  }
+pub(crate) fn eval_expr(
+  vm: &mut Vm,
+  env: &mut RuntimeEnv,
+  scope: &mut Scope<'_>,
+  expr: &Node<Expr>,
+) -> Result<Value, VmError> {
+  let mut evaluator = Evaluator { vm, env };
+  evaluator.eval_expr(scope, expr)
 }
 
 fn is_nullish(value: Value) -> bool {
