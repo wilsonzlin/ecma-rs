@@ -65,3 +65,22 @@ fn env_record_used_bytes_only_counts_binding_table_payload() -> Result<(), VmErr
 
   Ok(())
 }
+
+#[test]
+fn object_env_record_contributes_payload_bytes() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut scope = heap.scope();
+
+  // `alloc_object()` for an empty object has 0 payload bytes, so any `used_bytes` growth is due to
+  // the object environment record itself (which is accounted as a fixed-size payload).
+  let obj = scope.alloc_object()?;
+  let used_before = scope.heap().used_bytes();
+  let _env = scope.alloc_object_env_record(obj, None, false)?;
+  let used_after = scope.heap().used_bytes();
+
+  assert!(
+    used_after > used_before,
+    "expected object env record allocation to contribute payload bytes (used_before={used_before}, used_after={used_after})"
+  );
+  Ok(())
+}
