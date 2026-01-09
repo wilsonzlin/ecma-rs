@@ -3,6 +3,8 @@ use crate::error::TerminationReason;
 use crate::error::VmError;
 use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
+use crate::function::CallHandler;
+use crate::function::ConstructHandler;
 use crate::function::NativeConstructId;
 use crate::function::NativeFunctionId;
 use crate::interrupt::InterruptHandle;
@@ -409,17 +411,24 @@ impl Vm {
       _ => return Err(VmError::NotCallable),
     };
 
-    let call_id = scope.heap().get_function_call_id(callee_obj)?;
-    let function_name = {
-      let name = scope
-        .heap()
-        .get_string(scope.heap().get_function_name(callee_obj)?)?
-        .to_utf8_lossy();
-      Some(Arc::<str>::from(name))
+    let call_handler = scope.heap().get_function_call_handler(callee_obj)?;
+
+    let function_name = scope
+      .heap()
+      .get_function_name(callee_obj)
+      .ok()
+      .and_then(|name| scope.heap().get_string(name).ok())
+      .map(|name| name.to_utf8_lossy())
+      .filter(|name| !name.is_empty())
+      .map(Arc::<str>::from);
+
+    let source = match call_handler {
+      CallHandler::Native(_) => Arc::<str>::from("<native>"),
+      CallHandler::EcmaScript => Arc::<str>::from("<call>"),
     };
     let frame = StackFrame {
       function: function_name,
-      source: Arc::<str>::from("<native>"),
+      source,
       line: 0,
       col: 0,
     };
@@ -429,7 +438,10 @@ impl Vm {
     // Budget/interrupt check for host-initiated calls that may not pass through the evaluator.
     self.tick()?;
 
-    self.dispatch_native_call(call_id, &mut scope, this, args)
+    match call_handler {
+      CallHandler::Native(call_id) => self.dispatch_native_call(call_id, &mut scope, this, args),
+      CallHandler::EcmaScript => self.call_ecma_function(&mut scope, callee_obj, this, args),
+    }
   }
 
   /// Constructs `callee` with the provided arguments and `new_target`.
@@ -461,19 +473,27 @@ impl Vm {
       _ => return Err(VmError::NotConstructable),
     };
 
-    let Some(construct_id) = scope.heap().get_function_construct_id(callee_obj)? else {
-      return Err(VmError::NotConstructable);
-    };
-    let function_name = {
-      let name = scope
-        .heap()
-        .get_string(scope.heap().get_function_name(callee_obj)?)?
-        .to_utf8_lossy();
-      Some(Arc::<str>::from(name))
+    let construct_handler = scope
+      .heap()
+      .get_function_construct_handler(callee_obj)?
+      .ok_or(VmError::NotConstructable)?;
+
+    let function_name = scope
+      .heap()
+      .get_function_name(callee_obj)
+      .ok()
+      .and_then(|name| scope.heap().get_string(name).ok())
+      .map(|name| name.to_utf8_lossy())
+      .filter(|name| !name.is_empty())
+      .map(Arc::<str>::from);
+
+    let source = match construct_handler {
+      ConstructHandler::Native(_) => Arc::<str>::from("<native>"),
+      ConstructHandler::EcmaScript => Arc::<str>::from("<call>"),
     };
     let frame = StackFrame {
       function: function_name,
-      source: Arc::<str>::from("<native>"),
+      source,
       line: 0,
       col: 0,
     };
@@ -484,7 +504,34 @@ impl Vm {
     // evaluator.
     self.tick()?;
 
-    self.dispatch_native_construct(construct_id, &mut scope, args, new_target)
+    match construct_handler {
+      ConstructHandler::Native(construct_id) => {
+        self.dispatch_native_construct(construct_id, &mut scope, args, new_target)
+      }
+      ConstructHandler::EcmaScript => {
+        self.construct_ecma_function(&mut scope, callee_obj, args, new_target)
+      }
+    }
+  }
+
+  fn call_ecma_function(
+    &mut self,
+    _scope: &mut Scope<'_>,
+    _callee: crate::GcObject,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("ecma function call"))
+  }
+
+  fn construct_ecma_function(
+    &mut self,
+    _scope: &mut Scope<'_>,
+    _callee: crate::GcObject,
+    _args: &[Value],
+    _new_target: Value,
+  ) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("ecma function construct"))
   }
 }
 

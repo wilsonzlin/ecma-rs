@@ -813,13 +813,20 @@ impl Heap {
     }
   }
 
-  pub(crate) fn get_function_call_id(&self, func: GcObject) -> Result<NativeFunctionId, VmError> {
+  pub(crate) fn get_function_call_handler(&self, func: GcObject) -> Result<CallHandler, VmError> {
     match self.get_heap_object(func.0)? {
-      HeapObject::Function(f) => match f.call {
-        CallHandler::Native(id) => Ok(id),
-        CallHandler::EcmaScript => Err(VmError::Unimplemented("ECMAScript [[Call]]")),
-      },
+      HeapObject::Function(f) => Ok(f.call),
       _ => Err(VmError::NotCallable),
+    }
+  }
+
+  pub(crate) fn get_function_construct_handler(
+    &self,
+    func: GcObject,
+  ) -> Result<Option<ConstructHandler>, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.construct),
+      _ => Err(VmError::NotConstructable),
     }
   }
 
@@ -827,22 +834,6 @@ impl Heap {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => Ok(f.name),
       _ => Err(VmError::InvalidHandle),
-    }
-  }
-
-  pub(crate) fn get_function_construct_id(
-    &self,
-    func: GcObject,
-  ) -> Result<Option<NativeConstructId>, VmError> {
-    match self.get_heap_object(func.0)? {
-      HeapObject::Function(f) => match f.construct {
-        Some(ConstructHandler::Native(id)) => Ok(Some(id)),
-        Some(ConstructHandler::EcmaScript) => {
-          Err(VmError::Unimplemented("ECMAScript [[Construct]]"))
-        }
-        None => Ok(None),
-      },
-      _ => Err(VmError::NotConstructable),
     }
   }
 }
