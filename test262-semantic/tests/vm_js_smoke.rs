@@ -5,6 +5,7 @@ use std::time::Duration;
 use tempfile::tempdir;
 use test262_semantic::discover::discover_tests;
 use test262_semantic::executor::default_executor;
+use test262_semantic::harness::HarnessMode;
 use test262_semantic::report::TestOutcome;
 use test262_semantic::runner::{expand_cases, Filter};
 
@@ -43,6 +44,7 @@ fn vm_js_executor_smoke_pass_and_timeout() {
 
   let results = test262_semantic::runner::run_cases(
     temp.path(),
+    HarnessMode::Inline,
     &cases,
     &expectations,
     executor.as_ref(),
