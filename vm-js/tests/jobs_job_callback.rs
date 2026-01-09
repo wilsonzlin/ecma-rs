@@ -10,6 +10,7 @@ use vm_js::TerminationReason;
 use vm_js::Value;
 use vm_js::Vm;
 use vm_js::VmError;
+use vm_js::VmHost;
 use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::VmOptions;
@@ -74,7 +75,8 @@ impl VmJobContext for TestContext {
 fn return_123(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -85,7 +87,8 @@ fn return_123(
 fn add_this_and_first_arg(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -102,7 +105,8 @@ fn add_this_and_first_arg(
 fn should_not_be_called(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -115,6 +119,7 @@ fn alloc_native_callback(
   handler: fn(
     &mut Vm,
     &mut Scope<'_>,
+    &mut dyn VmHost,
     &mut dyn VmHostHooks,
     GcObject,
     Value,

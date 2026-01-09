@@ -4,6 +4,7 @@ use crate::string::JsString;
 use crate::{
   GcObject, Job, JobKind, PromiseCapability, PromiseHandle, PromiseReaction, PromiseReactionType,
   PromiseRejectionOperation, PromiseState, RealmId, RootId, Scope, Value, Vm, VmError, VmHostHooks,
+  VmHost,
 };
 
 fn data_desc(
@@ -148,7 +149,8 @@ fn get_own_data_property_value_by_name(
 pub fn function_prototype_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -165,6 +167,7 @@ fn object_constructor_impl(
   let intr = require_intrinsics(vm)?;
 
   let arg0 = args.get(0).copied().unwrap_or(Value::Undefined);
+  let mut host_state = ();
   match arg0 {
     Value::Undefined | Value::Null => {
       let obj = scope.alloc_object()?;
@@ -177,6 +180,7 @@ fn object_constructor_impl(
     Value::String(_) => string_constructor_construct(
       vm,
       scope,
+      &mut host_state,
       host,
       intr.string_constructor(),
       &[arg0],
@@ -185,6 +189,7 @@ fn object_constructor_impl(
     Value::Number(_) => number_constructor_construct(
       vm,
       scope,
+      &mut host_state,
       host,
       intr.number_constructor(),
       &[arg0],
@@ -193,6 +198,7 @@ fn object_constructor_impl(
     Value::Bool(_) => boolean_constructor_construct(
       vm,
       scope,
+      &mut host_state,
       host,
       intr.boolean_constructor(),
       &[arg0],
@@ -245,6 +251,7 @@ fn object_constructor_impl(
 pub fn object_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
@@ -256,6 +263,7 @@ pub fn object_constructor_call(
 pub fn object_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
@@ -267,7 +275,8 @@ pub fn object_constructor_construct(
 pub fn object_define_property(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -317,7 +326,8 @@ pub fn object_define_property(
 pub fn object_create(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -347,7 +357,8 @@ pub fn object_create(
 pub fn object_keys(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -390,7 +401,8 @@ pub fn object_keys(
 pub fn object_assign(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -433,7 +445,8 @@ pub fn object_assign(
 pub fn object_get_prototype_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -448,7 +461,8 @@ pub fn object_get_prototype_of(
 pub fn object_set_prototype_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -516,7 +530,8 @@ fn array_constructor_impl(
 pub fn array_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -527,7 +542,8 @@ pub fn array_constructor_call(
 pub fn array_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   _new_target: Value,
@@ -538,7 +554,8 @@ pub fn array_constructor_construct(
 pub fn function_constructor_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -549,7 +566,8 @@ pub fn function_constructor_call(
 pub fn function_constructor_construct(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _args: &[Value],
   _new_target: Value,
@@ -560,18 +578,20 @@ pub fn function_constructor_construct(
 pub fn error_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
-  error_constructor_construct(vm, scope, host, callee, args, Value::Object(callee))
+  error_constructor_construct(vm, scope, _host, host, callee, args, Value::Object(callee))
 }
 
 pub fn error_constructor_construct(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -666,7 +686,16 @@ fn create_type_error(
   let msg = scope.alloc_string(message)?;
   scope.push_root(Value::String(msg))?;
 
-  error_constructor_construct(vm, scope, host, ctor, &[Value::String(msg)], Value::Object(ctor))
+  let mut host_state = ();
+  error_constructor_construct(
+    vm,
+    scope,
+    &mut host_state,
+    host,
+    ctor,
+    &[Value::String(msg)],
+    Value::Object(ctor),
+  )
 }
 
 fn throw_type_error(
@@ -1149,6 +1178,7 @@ fn resolve_promise(
 pub fn promise_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
@@ -1160,6 +1190,7 @@ pub fn promise_constructor_call(
 pub fn promise_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
@@ -1192,7 +1223,8 @@ pub fn promise_constructor_construct(
 pub fn promise_species_get(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -1203,6 +1235,7 @@ pub fn promise_species_get(
 pub fn promise_resolving_function_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -1244,6 +1277,7 @@ pub fn promise_resolving_function_call(
 pub fn promise_resolve(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1261,6 +1295,7 @@ pub fn promise_resolve(
 pub fn promise_reject(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
@@ -1423,6 +1458,7 @@ fn invoke_then(
 pub fn promise_prototype_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1436,6 +1472,7 @@ pub fn promise_prototype_then(
 pub fn promise_prototype_catch(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1456,6 +1493,7 @@ pub fn promise_prototype_catch(
 pub fn promise_prototype_finally(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1543,6 +1581,7 @@ pub fn promise_prototype_finally(
 pub fn promise_finally_handler_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -1606,7 +1645,8 @@ pub fn promise_finally_handler_call(
 pub fn promise_finally_thunk_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -1627,6 +1667,7 @@ pub fn promise_finally_thunk_call(
 pub fn promise_try(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1661,6 +1702,7 @@ pub fn promise_try(
 pub fn promise_with_resolvers(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -1943,6 +1985,7 @@ fn perform_promise_all(
 pub fn promise_all(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2014,6 +2057,7 @@ fn perform_promise_race(
 pub fn promise_race(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2196,6 +2240,7 @@ fn perform_promise_all_settled(
 pub fn promise_all_settled(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2361,6 +2406,7 @@ fn perform_promise_any(
 pub fn promise_any(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2408,6 +2454,7 @@ pub fn promise_any(
 pub fn promise_all_resolve_element_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -2486,6 +2533,7 @@ pub fn promise_all_resolve_element_call(
 pub fn promise_all_settled_element_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -2593,6 +2641,7 @@ pub fn promise_all_settled_element_call(
 pub fn promise_any_reject_element_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -2724,6 +2773,7 @@ fn vec_try_extend_from_slice<T: Copy>(buf: &mut Vec<T>, slice: &[T]) -> Result<(
 pub fn function_prototype_call_method(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2738,6 +2788,7 @@ pub fn function_prototype_call_method(
 pub fn function_prototype_apply(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2768,7 +2819,8 @@ pub fn function_prototype_apply(
 pub fn function_prototype_bind(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -2854,7 +2906,8 @@ pub fn function_prototype_bind(
 pub fn object_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -2899,6 +2952,7 @@ fn define_array_length(scope: &mut Scope<'_>, obj: GcObject, len: usize) -> Resu
 pub fn array_prototype_map(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHost,
   host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
@@ -2943,7 +2997,8 @@ pub fn array_prototype_map(
 pub fn array_prototype_join(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -3007,7 +3062,8 @@ pub fn array_prototype_join(
 pub fn string_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -3023,7 +3079,8 @@ pub fn string_constructor_call(
 pub fn string_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -3066,7 +3123,8 @@ pub fn string_constructor_construct(
 pub fn string_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3090,7 +3148,8 @@ pub fn string_prototype_to_string(
 pub fn number_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -3106,7 +3165,8 @@ pub fn number_constructor_call(
 pub fn number_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -3148,7 +3208,8 @@ pub fn number_constructor_construct(
 pub fn number_prototype_value_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3172,7 +3233,8 @@ pub fn number_prototype_value_of(
 pub fn boolean_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -3188,7 +3250,8 @@ pub fn boolean_constructor_call(
 pub fn boolean_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -3230,7 +3293,8 @@ pub fn boolean_constructor_construct(
 pub fn boolean_prototype_value_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3254,7 +3318,8 @@ pub fn boolean_prototype_value_of(
 pub fn bigint_prototype_value_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3280,7 +3345,8 @@ pub fn bigint_prototype_value_of(
 pub fn symbol_prototype_value_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3306,7 +3372,8 @@ pub fn symbol_prototype_value_of(
 pub fn global_is_nan(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -3320,7 +3387,8 @@ pub fn global_is_nan(
 pub fn date_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -3334,7 +3402,8 @@ pub fn date_constructor_call(
 pub fn date_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -3376,7 +3445,8 @@ pub fn date_constructor_construct(
 pub fn date_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -3389,7 +3459,8 @@ pub fn date_prototype_to_string(
 pub fn date_prototype_value_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3410,7 +3481,8 @@ pub fn date_prototype_value_of(
 pub fn date_prototype_to_primitive(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -3421,9 +3493,9 @@ pub fn date_prototype_to_primitive(
     _ => "default".to_string(),
   };
   if hint == "number" {
-    date_prototype_value_of(_vm, scope, _host, _callee, this, &[])
+    date_prototype_value_of(_vm, scope, _host, _hooks, _callee, this, &[])
   } else {
-    date_prototype_to_string(_vm, scope, _host, _callee, this, &[])
+    date_prototype_to_string(_vm, scope, _host, _hooks, _callee, this, &[])
   }
 }
 
@@ -3431,7 +3503,8 @@ pub fn date_prototype_to_primitive(
 pub fn symbol_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -3460,7 +3533,8 @@ fn concat_with_colon_space(name: &[u16], message: &[u16]) -> Result<Vec<u16>, Vm
 pub fn error_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -3508,7 +3582,8 @@ pub fn error_prototype_to_string(
 pub fn json_stringify(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],

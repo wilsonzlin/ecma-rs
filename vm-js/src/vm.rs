@@ -10,6 +10,7 @@ use crate::Heap;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::jobs::VmJobContext;
+use crate::jobs::VmHost;
 use crate::jobs::VmHostHooks;
 use crate::microtasks::MicrotaskQueue;
 use crate::RootId;
@@ -42,7 +43,8 @@ pub type NativeCall =
   for<'a> fn(
     &mut Vm,
     &mut Scope<'a>,
-    host: &mut dyn VmHostHooks,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
     callee: GcObject,
     this: Value,
     args: &[Value],
@@ -52,7 +54,8 @@ pub type NativeCall =
 pub type NativeConstruct = for<'a> fn(
   &mut Vm,
   &mut Scope<'a>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -860,7 +863,7 @@ impl Vm {
     &mut self,
     call_id: NativeFunctionId,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    hooks: &mut dyn VmHostHooks,
     callee: GcObject,
     this: Value,
     args: &[Value],
@@ -870,14 +873,17 @@ impl Vm {
       .get(call_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native function id"))?;
-    f(self, scope, host, callee, this, args)
+    // `Vm` does not currently thread embedder state through calls. Provide an empty host object so
+    // native call handlers have a stable `VmHost` parameter for future use.
+    let mut host = ();
+    f(self, scope, &mut host, hooks, callee, this, args)
   }
 
   fn dispatch_native_construct(
     &mut self,
     construct_id: NativeConstructId,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    hooks: &mut dyn VmHostHooks,
     callee: GcObject,
     args: &[Value],
     new_target: Value,
@@ -887,7 +893,8 @@ impl Vm {
       .get(construct_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
-    construct(self, scope, host, callee, args, new_target)
+    let mut host = ();
+    construct(self, scope, &mut host, hooks, callee, args, new_target)
   }
 
   /// Pushes a stack frame and returns an RAII guard that will pop it on drop.
@@ -1408,7 +1415,8 @@ mod tests {
   fn noop_call(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     _callee: GcObject,
     _this: Value,
     _args: &[Value],
@@ -1419,7 +1427,8 @@ mod tests {
   fn noop_construct(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
-    _host: &mut dyn VmHostHooks,
+    _host: &mut dyn VmHost,
+    _hooks: &mut dyn VmHostHooks,
     _callee: GcObject,
     _args: &[Value],
     _new_target: Value,

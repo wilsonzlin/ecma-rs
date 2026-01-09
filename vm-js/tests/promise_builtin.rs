@@ -2,7 +2,7 @@ use std::cell::Cell;
 
 use vm_js::{
   GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, RootId, Scope, Value, Vm, VmError,
-  VmHostHooks, VmOptions,
+  VmHost, VmHostHooks, VmOptions,
 };
 
 thread_local! {
@@ -20,21 +20,23 @@ fn reset_thread_locals() {
 fn executor_calls_and_resolves(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   EXECUTOR_CALLS.with(|c| c.set(c.get() + 1));
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, host, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
   Ok(Value::Undefined)
 }
 
 fn then1_handler(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -47,7 +49,8 @@ fn then1_handler(
 fn then2_handler(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],

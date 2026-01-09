@@ -207,6 +207,7 @@ pub use crate::jobs::JobResult;
 pub use crate::jobs::PromiseHandle;
 pub use crate::jobs::PromiseRejectionOperation;
 pub use crate::jobs::RealmId;
+pub use crate::jobs::VmHost;
 pub use crate::jobs::VmHostHooks;
 pub use crate::jobs::VmJobContext;
 #[deprecated(note = "Use VmHostHooks instead (JobQueue was renamed for spec alignment).")]

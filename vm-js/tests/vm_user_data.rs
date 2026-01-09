@@ -1,4 +1,4 @@
-use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHostHooks, VmOptions};
+use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmHost, VmHostHooks, VmOptions};
 
 #[test]
 fn user_data_set_get_smoke() {
@@ -33,7 +33,8 @@ struct Counter(u32);
 fn inc_counter(
   vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -66,4 +67,3 @@ fn native_call_can_mutate_user_data() -> Result<(), VmError> {
 
   Ok(())
 }
-

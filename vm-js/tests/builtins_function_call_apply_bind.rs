@@ -1,6 +1,6 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Realm, Scope, Value,
-  Vm, VmError, VmHostHooks, VmOptions,
+  Vm, VmError, VmHost, VmHostHooks, VmOptions,
 };
 
 fn data_desc(value: Value) -> PropertyDescriptor {
@@ -33,7 +33,8 @@ fn get_builtin(scope: &mut Scope<'_>, realm: &Realm, name: &str) -> Result<Value
 fn native_add(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -52,7 +53,8 @@ fn native_add(
 fn native_get_x(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],

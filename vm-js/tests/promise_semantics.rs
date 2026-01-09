@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use vm_js::{
   GcObject, Heap, HeapLimits, Job, JobCallback, PromiseHandle, PromiseRejectionOperation,
   PromiseState, PropertyDescriptor, PropertyKey, PropertyKind, Realm, RealmId, RootId, Scope,
-  Value, Vm, VmError, VmHostHooks, VmJobContext, VmOptions,
+  Value, Vm, VmError, VmHost, VmHostHooks, VmJobContext, VmOptions,
 };
 
 thread_local! {
@@ -137,33 +137,36 @@ fn get_own_data_function(heap: &mut Heap, obj: GcObject, name: &str) -> Result<G
 fn executor_resolve_one(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
   Ok(Value::Undefined)
 }
 
 fn executor_reject_one(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let reject = args.get(1).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, host, reject, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(scope, hooks, reject, Value::Undefined, &[Value::Number(1.0)])?;
   Ok(Value::Undefined)
 }
 
 fn executor_store_resolve(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -177,7 +180,8 @@ fn executor_store_resolve(
 fn add_one(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -191,7 +195,8 @@ fn add_one(
 fn return_99(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -202,7 +207,8 @@ fn return_99(
 fn record_then2_arg(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -217,7 +223,8 @@ fn record_then2_arg(
 fn log_1(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -229,7 +236,8 @@ fn log_1(
 fn log_2(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -241,20 +249,22 @@ fn log_2(
 fn thenable_then_resolve_42(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
-  let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[Value::Number(42.0)])?;
+  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(42.0)])?;
   Ok(Value::Undefined)
 }
 
 fn thenable_then_getter_returns_then_fn(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -278,7 +288,8 @@ fn thenable_then_getter_returns_then_fn(
 fn executor_resolve_thenable_then_resolve_again(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -303,12 +314,12 @@ fn executor_resolve_thenable_then_resolve_again(
   // alreadyResolved record.
   let _ = vm.call_with_host(
     scope,
-    host,
+    hooks,
     resolve,
     Value::Undefined,
     &[Value::Object(thenable)],
   )?;
-  let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[Value::Number(1.0)])?;
+  let _ = vm.call_with_host(scope, hooks, resolve, Value::Undefined, &[Value::Number(1.0)])?;
 
   Ok(Value::Undefined)
 }
@@ -316,7 +327,8 @@ fn executor_resolve_thenable_then_resolve_again(
 fn executor_resolve_thenable_accessor_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -361,7 +373,7 @@ fn executor_resolve_thenable_accessor_then(
 
   let _ = vm.call_with_host(
     scope,
-    host,
+    hooks,
     resolve,
     Value::Undefined,
     &[Value::Object(thenable)],

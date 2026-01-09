@@ -1,12 +1,13 @@
 use vm_js::{
   Budget, GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions,
-  VmHostHooks,
+  VmHost, VmHostHooks,
 };
 
 fn return_123(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -17,7 +18,8 @@ fn return_123(
 fn noop_constructor(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _args: &[Value],
   _new_target: Value,

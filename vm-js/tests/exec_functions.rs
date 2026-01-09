@@ -1,6 +1,6 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError, VmHostHooks,
-  VmOptions,
+  VmHost, VmOptions,
 };
 
 fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
@@ -11,7 +11,8 @@ fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
 fn host_add(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -30,14 +31,15 @@ fn host_add(
 fn host_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let callee = args.get(0).copied().unwrap_or(Value::Undefined);
   let x = args.get(1).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, host, callee, Value::Undefined, &[x])
+  vm.call_with_host(scope, hooks, callee, Value::Undefined, &[x])
 }
 
 #[test]

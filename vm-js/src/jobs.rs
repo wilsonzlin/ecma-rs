@@ -33,6 +33,28 @@ use std::fmt;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+/// Host-provided state passed to native call/construct handlers.
+///
+/// This is intentionally minimal and primarily exists so embeddings can thread arbitrary state
+/// through VM-to-host call boundaries without using globals.
+pub trait VmHost {
+  /// Returns this host value as a mutable [`Any`] reference for downcasting.
+  ///
+  /// By default this returns `None`. Embeddings that want downcasting support should rely on the
+  /// blanket impl for `T: Any` (most host types) or provide their own implementation.
+  #[inline]
+  fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+    None
+  }
+}
+
+impl<T: Any> VmHost for T {
+  #[inline]
+  fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
+    Some(self)
+  }
+}
+
 /// Opaque identifier for a Realm Record that a job should run in.
 ///
 /// In ECMA-262, realms are described here:

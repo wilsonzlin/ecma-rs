@@ -1,11 +1,13 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, NativeFunctionId, Scope, Value, Vm, VmError, VmHostHooks, VmOptions,
+  VmHost,
 };
 
 fn return_first_native_slot(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   _args: &[Value],

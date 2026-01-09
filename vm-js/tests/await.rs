@@ -14,6 +14,7 @@ use vm_js::Scope;
 use vm_js::Value;
 use vm_js::Vm;
 use vm_js::VmError;
+use vm_js::VmHost;
 use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::VmOptions;
@@ -21,7 +22,8 @@ use vm_js::VmOptions;
 fn noop(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: vm_js::GcObject,
   _this: Value,
   _args: &[Value],

@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 
 use vm_js::{
   GcObject, Heap, HeapLimits, Job, PromiseHandle, PromiseRejectionOperation, PromiseState, PropertyKey,
-  PropertyDescriptor, PropertyKind, Realm, RealmId, RootId, Scope, Value, Vm, VmError, VmHostHooks,
-  VmJobContext, VmOptions,
+  PropertyDescriptor, PropertyKind, Realm, RealmId, RootId, Scope, Value, Vm, VmError, VmHost,
+  VmHostHooks, VmJobContext, VmOptions,
 };
 
 thread_local! {
@@ -124,7 +124,8 @@ fn get_own_data_function(heap: &mut Heap, obj: GcObject, name: &str) -> Result<G
 fn on_rejected_returns_42(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -137,7 +138,8 @@ fn on_rejected_returns_42(
 fn borrowed_then_returns_123(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -152,7 +154,8 @@ fn borrowed_then_returns_123(
 fn borrowed_then_should_not_be_called(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -164,7 +167,8 @@ fn borrowed_then_should_not_be_called(
 fn on_finally_increments(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -176,7 +180,8 @@ fn on_finally_increments(
 fn on_finally_returns_promise(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -189,7 +194,8 @@ fn on_finally_returns_promise(
 fn then_records_value(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],

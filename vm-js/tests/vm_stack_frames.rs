@@ -1,11 +1,13 @@
 use vm_js::{
-  GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmHostHooks, VmOptions,
+  GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmHost, VmHostHooks,
+  VmOptions,
 };
 
 fn native_error(
   vm: &mut Vm,
   _scope: &mut Scope<'_>,
-  _host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  _hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -39,13 +41,14 @@ fn vm_call_pushes_and_pops_stack_frame_even_on_error() -> Result<(), VmError> {
 fn recursive(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let callee = args.get(0).copied().unwrap_or(Value::Undefined);
-  vm.call_with_host(scope, host, callee, Value::Undefined, args)
+  vm.call_with_host(scope, hooks, callee, Value::Undefined, args)
 }
 
 #[test]
