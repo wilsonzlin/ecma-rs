@@ -1,4 +1,4 @@
-use crate::heap::{PropertyEntry, Trace, Tracer};
+use crate::heap::{ObjectBase, Trace, Tracer};
 use crate::{GcEnv, GcObject, GcString, Value};
 use core::mem;
 
@@ -39,10 +39,6 @@ pub(crate) enum ConstructHandler {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub(crate) struct JsFunction {
-  /// `[[Prototype]]` internal slot (functions are ordinary objects).
-  pub(crate) prototype: Option<GcObject>,
-  /// `[[Extensible]]` internal slot.
-  pub(crate) extensible: bool,
   /// The function's `[[Call]]` internal method.
   pub(crate) call: CallHandler,
   /// The function's `[[Construct]]` internal method (if present).
@@ -52,8 +48,7 @@ pub(crate) struct JsFunction {
   /// Function `length` metadata (used by `Function.prototype.length`).
   pub(crate) length: u32,
 
-  /// Own properties (functions are ordinary objects).
-  pub(crate) properties: Box<[PropertyEntry]>,
+  pub(crate) base: ObjectBase,
 
   // Forward-compat internal slots (currently unused but spec-aligned).
   pub(crate) bound_target: Option<GcObject>,
@@ -71,13 +66,11 @@ impl JsFunction {
     length: u32,
   ) -> Self {
     Self {
-      prototype: None,
-      extensible: true,
       call: CallHandler::Native(call),
       construct: construct.map(ConstructHandler::Native),
       name,
       length,
-      properties: Box::default(),
+      base: ObjectBase::new(None),
       bound_target: None,
       bound_this: None,
       bound_args: None,
@@ -89,7 +82,8 @@ impl JsFunction {
   #[allow(dead_code)]
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
-    Self::heap_size_bytes_for_bound_args_len_and_property_count(bound_args_len, self.properties.len())
+    let property_count = self.base.property_count();
+    Self::heap_size_bytes_for_bound_args_len_and_property_count(bound_args_len, property_count)
   }
 
   pub(crate) fn heap_size_bytes_for_bound_args_len_and_property_count(
@@ -99,9 +93,7 @@ impl JsFunction {
     let bound_args_bytes = bound_args_len
       .checked_mul(mem::size_of::<Value>())
       .unwrap_or(usize::MAX);
-    let props_bytes = property_count
-      .checked_mul(mem::size_of::<PropertyEntry>())
-      .unwrap_or(usize::MAX);
+    let props_bytes = ObjectBase::properties_heap_size_bytes_for_count(property_count);
     mem::size_of::<Self>()
       .checked_add(bound_args_bytes)
       .and_then(|size| size.checked_add(props_bytes))
@@ -111,13 +103,8 @@ impl JsFunction {
 
 impl Trace for JsFunction {
   fn trace(&self, tracer: &mut Tracer<'_>) {
-    if let Some(proto) = self.prototype {
-      tracer.trace_value(Value::Object(proto));
-    }
+    self.base.trace(tracer);
     tracer.trace_value(Value::String(self.name));
-    for prop in self.properties.iter() {
-      prop.trace(tracer);
-    }
 
     if let Some(target) = self.bound_target {
       tracer.trace_value(Value::Object(target));
