@@ -210,8 +210,7 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
   }
 
   fn type_error(&mut self, message: &'static str) -> Self::Error {
-    // `vm-js` does not yet model Error objects.
-    VmError::Unimplemented(message)
+    VmError::TypeError(message)
   }
 
   fn get(
@@ -377,8 +376,9 @@ mod tests {
     PropertyKind, Realm, Scope, Value, Vm, VmError, VmHostHooks, VmOptions,
   };
   use webidl::{
-    conversions, sequence_to_js_array, DomString, IdlRecord, InterfaceId, JsRuntime,
-    PropertyKey as WebIdlPropertyKey, ToJsValue, WebIdlHooks, WebIdlLimits,
+    conversions, index_to_property_key, record_to_js_object, sequence_to_js_array, DomString,
+    IdlRecord, InterfaceId, JsRuntime, PropertyKey as WebIdlPropertyKey, ToJsValue, WebIdlHooks,
+    WebIdlLimits,
   };
 
   struct NoHooks;
@@ -391,6 +391,15 @@ mod tests {
     fn implements_interface(&self, _value: Value, _interface: InterfaceId) -> bool {
       false
     }
+  }
+
+  fn prop_key_str(
+    cx: &mut VmJsWebIdlCx<'_>,
+    s: &str,
+  ) -> Result<WebIdlPropertyKey<vm_js::GcString, vm_js::GcSymbol>, VmError> {
+    let units: Vec<u16> = s.encode_utf16().collect();
+    let handle = cx.alloc_string_from_code_units(&units)?;
+    Ok(WebIdlPropertyKey::String(handle))
   }
 
   #[test]
@@ -533,6 +542,76 @@ mod tests {
     assert!(writable);
     assert_eq!(value, Value::Number(2.0));
 
+    Ok(())
+  }
+
+  #[test]
+  fn sequence_to_js_array_sets_length_indices_and_own_property_keys() -> Result<(), VmError> {
+    let mut vm = Vm::new(VmOptions::default());
+    // Stress rooting: force a GC before each allocation.
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
+    let hooks = NoHooks;
+    let limits = WebIdlLimits::default();
+    let mut cx = VmJsWebIdlCx::new(&mut vm, &mut heap, limits, &hooks);
+
+    let array =
+      sequence_to_js_array(&mut cx, &limits, &[1u32, 2u32]).expect("sequence_to_js_array");
+
+    // length === 2
+    let length_key = prop_key_str(&mut cx, "length")?;
+    let length = cx.get(array, length_key)?;
+    assert_eq!(length, Value::Number(2.0));
+
+    // array[0] === 1, array[1] === 2
+    for (i, expected) in [1.0, 2.0].into_iter().enumerate() {
+      let key = index_to_property_key(&mut cx, i).expect("index key");
+      let v = cx.get(array, key)?;
+      assert_eq!(v, Value::Number(expected));
+    }
+
+    let keys = cx.own_property_keys(array)?;
+    let keys = keys
+      .into_iter()
+      .map(|k| match k {
+        WebIdlPropertyKey::String(s) => cx.scope.heap().get_string(s).unwrap().to_utf8_lossy(),
+        WebIdlPropertyKey::Symbol(sym) => {
+          format!("sym:{}", cx.scope.heap().get_symbol_id(sym).unwrap())
+        }
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(keys, vec!["0".to_string(), "1".to_string(), "length".to_string()]);
+    Ok(())
+  }
+
+  #[test]
+  fn record_to_js_object_sets_properties_and_own_property_keys() -> Result<(), VmError> {
+    let mut vm = Vm::new(VmOptions::default());
+    // Stress rooting: force a GC before each allocation.
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
+    let hooks = NoHooks;
+    let limits = WebIdlLimits::default();
+    let mut cx = VmJsWebIdlCx::new(&mut vm, &mut heap, limits, &hooks);
+
+    let entries = [("b", 2u32), ("a", 1u32)];
+    let obj = record_to_js_object(&mut cx, &limits, &entries).expect("record_to_js_object");
+
+    for (k, v_expected) in entries.iter() {
+      let key = prop_key_str(&mut cx, k)?;
+      let v = cx.get(obj, key)?;
+      assert_eq!(v, Value::Number(*v_expected as f64));
+    }
+
+    let keys = cx.own_property_keys(obj)?;
+    let keys = keys
+      .into_iter()
+      .map(|k| match k {
+        WebIdlPropertyKey::String(s) => cx.scope.heap().get_string(s).unwrap().to_utf8_lossy(),
+        WebIdlPropertyKey::Symbol(sym) => {
+          format!("sym:{}", cx.scope.heap().get_symbol_id(sym).unwrap())
+        }
+      })
+      .collect::<Vec<_>>();
+    assert_eq!(keys, vec!["b".to_string(), "a".to_string()]);
     Ok(())
   }
 

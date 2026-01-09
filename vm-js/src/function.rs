@@ -197,6 +197,7 @@ impl JsFunction {
       bound_target: None,
       bound_this: None,
       bound_args: None,
+      native_slots: None,
       realm: None,
       closure_env: None,
     }
