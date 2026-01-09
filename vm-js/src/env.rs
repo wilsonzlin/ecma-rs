@@ -21,11 +21,13 @@ impl EnvRecord {
   }
 
   pub(crate) fn heap_size_bytes_for_binding_count(count: usize) -> usize {
-    let bindings_bytes = count
+    // Payload bytes owned by this environment record allocation.
+    //
+    // Note: `EnvRecord` headers are stored inline in the heap slot table, so this size
+    // intentionally excludes `mem::size_of::<EnvRecord>()` and only counts the backing binding
+    // table allocation.
+    count
       .checked_mul(mem::size_of::<EnvBinding>())
-      .unwrap_or(usize::MAX);
-    mem::size_of::<Self>()
-      .checked_add(bindings_bytes)
       .unwrap_or(usize::MAX)
   }
 
