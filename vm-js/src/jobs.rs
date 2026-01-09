@@ -27,6 +27,7 @@
 
 use crate::heap::{Trace, Tracer};
 use crate::{GcObject, RootId, Value, VmError};
+use crate::{HostDefined, ModuleLoadPayload, ModuleReferrer, ModuleRequest, VmModuleLoadingContext};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -474,5 +475,56 @@ pub trait VmHostHooks {
     _promise: PromiseHandle,
     _operation: PromiseRejectionOperation,
   ) {
+  }
+
+  /// Returns the list of import attribute keys supported by this host.
+  ///
+  /// This corresponds to ECMA-262's `HostGetSupportedImportAttributes()`:
+  /// <https://tc39.es/ecma262/#sec-hostgetsupportedimportattributes>.
+  ///
+  /// The default implementation returns an empty list (no attributes supported).
+  fn host_get_supported_import_attributes(&self) -> &'static [&'static str] {
+    &[]
+  }
+
+  /// Load an imported module (host hook).
+  ///
+  /// This corresponds to ECMA-262's
+  /// [`HostLoadImportedModule(referrer, moduleRequest, hostDefined, payload)`](https://tc39.es/ecma262/#sec-HostLoadImportedModule).
+  ///
+  /// The host environment must perform
+  /// `FinishLoadingImportedModule(referrer, moduleRequest, payload, result)` by calling
+  /// [`VmModuleLoadingContext::finish_loading_imported_module`], either synchronously or
+  /// asynchronously.
+  ///
+  /// ## Re-entrancy
+  ///
+  /// The host may call `FinishLoadingImportedModule` synchronously from inside this hook. That
+  /// re-enters module graph loading (spec `ContinueModuleLoading`) and may cause nested
+  /// `host_load_imported_module` calls.
+  ///
+  /// ## Caching requirement (ECMA-262)
+  ///
+  /// If this operation is called multiple times with the same `(referrer, moduleRequest)` pair (as
+  /// determined by `ModuleRequestsEqual` / [`crate::module_requests_equal`]) and it completes
+  /// normally (i.e. `FinishLoadingImportedModule` is called with `Ok(module)`), then it must
+  /// complete with the **same Module Record** each time.
+  ///
+  /// The `payload` argument is an opaque token owned by the engine; the host must not inspect it.
+  fn host_load_imported_module(
+    &mut self,
+    ctx: &mut dyn VmModuleLoadingContext,
+    referrer: ModuleReferrer,
+    module_request: ModuleRequest,
+    host_defined: HostDefined,
+    payload: ModuleLoadPayload,
+  ) {
+    let _ = host_defined;
+    ctx.finish_loading_imported_module(
+      referrer,
+      module_request,
+      payload,
+      Err(VmError::Unimplemented("HostLoadImportedModule")),
+    );
   }
 }
