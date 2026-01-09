@@ -3,7 +3,7 @@
 //! These jobs are enqueued via `HostEnqueuePromiseJob` and run during microtask checkpoints in
 //! HTML.
 
-use crate::promise::PromiseReactionRecord;
+use crate::promise::{PromiseReactionRecord, PromiseReactionType};
 use crate::Heap;
 use crate::Job;
 use crate::JobCallback;
@@ -23,13 +23,33 @@ pub fn new_promise_reaction_job(
   reaction: PromiseReactionRecord,
   argument: Value,
 ) -> Result<Job, VmError> {
-  let handler = reaction.handler;
+  let PromiseReactionRecord {
+    reaction_type,
+    handler,
+  } = reaction;
   let callback_obj = handler.as_ref().map(|cb| cb.callback());
   let job = Job::new(JobKind::Promise, move |ctx, host| {
-    if let Some(job_callback) = &handler {
-      host.host_call_job_callback(ctx, job_callback, Value::Undefined, &[argument])?;
+    let Some(job_callback) = &handler else {
+      // Spec invariant: `NewPromiseReactionJob` is only constructed with an undefined capability
+      // for `Await`, where the handlers are always callable. A missing reject handler would imply
+      // a `ThrowCompletion` handler result, which the spec rules out via an assertion.
+      //
+      // See: https://tc39.es/ecma262/#sec-newpromisereactionjob
+      if matches!(reaction_type, PromiseReactionType::Reject) {
+        return Err(VmError::InvariantViolation(
+          "PromiseReactionJob reject handler is missing while capability is undefined",
+        ));
+      }
+      return Ok(());
+    };
+
+    match host.host_call_job_callback(ctx, job_callback, Value::Undefined, &[argument]) {
+      Ok(_) => Ok(()),
+      Err(VmError::Throw(_)) => Err(VmError::InvariantViolation(
+        "PromiseReactionJob handler threw while capability is undefined",
+      )),
+      Err(e) => Err(e),
     }
-    Ok(())
   });
 
   // Jobs are opaque closures and are not traced by the GC; explicitly root captured handles until
@@ -82,8 +102,15 @@ pub fn new_promise_resolve_thenable_job(
 ) -> Result<Job, VmError> {
   let callback_obj = then_job_callback.callback();
   let job = Job::new(JobKind::Promise, move |ctx, host| {
-    host.host_call_job_callback(ctx, &then_job_callback, thenable, &[resolve, reject])?;
-    Ok(())
+    match host.host_call_job_callback(ctx, &then_job_callback, thenable, &[resolve, reject]) {
+      Ok(_) => Ok(()),
+      Err(VmError::Throw(thrown)) => {
+        // Spec: if `then` throws, call `reject` with the thrown value.
+        ctx.call(host, reject, Value::Undefined, &[thrown])?;
+        Ok(())
+      }
+      Err(e) => Err(e),
+    }
   });
 
   // Root all captured handles until the job runs.

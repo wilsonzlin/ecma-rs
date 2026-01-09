@@ -15,6 +15,10 @@ use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::VmOptions;
 
+thread_local! {
+  static REJECT_ARG: std::cell::Cell<Option<f64>> = std::cell::Cell::new(None);
+}
+
 fn noop(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
@@ -23,6 +27,21 @@ fn noop(
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
+  Ok(Value::Undefined)
+}
+
+fn record_reject_arg(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let Value::Number(n) = args.get(0).copied().unwrap_or(Value::Undefined) else {
+    return Err(VmError::Unimplemented("expected number"));
+  };
+  REJECT_ARG.with(|c| c.set(Some(n)));
   Ok(Value::Undefined)
 }
 
@@ -117,6 +136,63 @@ impl VmJobContext for RootingContext<'_> {
 
   fn remove_root(&mut self, id: RootId) {
     self.heap.remove_root(id)
+  }
+}
+
+struct CallingContext<'a> {
+  vm: &'a mut Vm,
+  heap: &'a mut Heap,
+}
+
+impl VmJobContext for CallingContext<'_> {
+  fn call(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let mut scope = self.heap.scope();
+    self.vm.call_with_host(&mut scope, host, callee, this, args)
+  }
+
+  fn construct(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _args: &[Value],
+    _new_target: Value,
+  ) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("CallingContext::construct"))
+  }
+
+  fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
+    self.heap.add_root(value)
+  }
+
+  fn remove_root(&mut self, id: RootId) {
+    self.heap.remove_root(id)
+  }
+}
+
+#[derive(Default)]
+struct ThrowingHost;
+
+impl VmHostHooks for ThrowingHost {
+  fn host_enqueue_promise_job(&mut self, _job: Job, _realm: Option<vm_js::RealmId>) {}
+
+  fn host_make_job_callback(&mut self, callback: GcObject) -> JobCallback {
+    JobCallback::new(callback)
+  }
+
+  fn host_call_job_callback(
+    &mut self,
+    _ctx: &mut dyn VmJobContext,
+    _callback: &JobCallback,
+    _this_argument: Value,
+    _arguments: &[Value],
+  ) -> Result<Value, VmError> {
+    Err(VmError::Throw(Value::Number(7.0)))
   }
 }
 
@@ -221,5 +297,92 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   assert!(!ctx.heap.is_valid_object(thenable));
   assert!(!ctx.heap.is_valid_object(resolve));
   assert!(!ctx.heap.is_valid_object(reject));
+  Ok(())
+}
+
+#[test]
+fn promise_reaction_job_throw_is_invariant_violation_when_capability_is_undefined(
+) -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+
+  let mut scope = heap.scope();
+  let call_id = vm.register_native_call(noop)?;
+  let name = scope.alloc_string("onFulfilled")?;
+  let on_fulfilled = scope.alloc_native_function(call_id, None, name, 1)?;
+
+  let argument_obj = scope.alloc_object()?;
+  let argument = Value::Object(argument_obj);
+
+  // Create a fulfill reaction with a callable handler.
+  let mut host = ThrowingHost::default();
+  let (fulfill_reaction, _reject_reaction) =
+    perform_promise_then(&mut host, scope.heap(), Value::Object(on_fulfilled), Value::Undefined)?;
+  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument)?;
+
+  drop(scope);
+
+  // The job must keep both the callback and argument alive until it runs.
+  heap.collect_garbage();
+  assert!(heap.is_valid_object(on_fulfilled));
+  assert!(heap.is_valid_object(argument_obj));
+
+  let mut ctx = RootingContext { heap: &mut heap };
+
+  // Critical: per spec, PromiseReactionJob with undefined capability has an assertion that the
+  // handler result is not abrupt; a thrown completion indicates an invariant violation.
+  match job.run(&mut ctx, &mut host) {
+    Err(VmError::InvariantViolation(_)) => {}
+    other => panic!("expected invariant violation, got {other:?}"),
+  }
+
+  // After job execution, the persistent roots should be removed.
+  ctx.heap.collect_garbage();
+  assert!(!ctx.heap.is_valid_object(on_fulfilled));
+  assert!(!ctx.heap.is_valid_object(argument_obj));
+  Ok(())
+}
+
+#[test]
+fn promise_resolve_thenable_job_throw_calls_reject() -> Result<(), VmError> {
+  REJECT_ARG.with(|c| c.set(None));
+
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+
+  let mut scope = heap.scope();
+  let then_call_id = vm.register_native_call(noop)?;
+  let then_name = scope.alloc_string("then")?;
+  let then_action = scope.alloc_native_function(then_call_id, None, then_name, 2)?;
+
+  let reject_call_id = vm.register_native_call(record_reject_arg)?;
+  let reject_name = scope.alloc_string("reject")?;
+  let reject = scope.alloc_native_function(reject_call_id, None, reject_name, 1)?;
+
+  let thenable = scope.alloc_object()?;
+  let resolve = scope.alloc_object()?;
+
+  let mut host = ThrowingHost::default();
+  let job = create_promise_resolve_thenable_job(
+    &mut host,
+    scope.heap_mut(),
+    Value::Object(thenable),
+    Value::Object(then_action),
+    Value::Object(resolve),
+    Value::Object(reject),
+  )?
+  .expect("then_action is callable");
+
+  drop(scope);
+
+  let mut ctx = CallingContext {
+    vm: &mut vm,
+    heap: &mut heap,
+  };
+
+  // Critical: the job must catch the thrown value and feed it into `reject`, not surface it as an
+  // abrupt completion.
+  job.run(&mut ctx, &mut host)?;
+  assert_eq!(REJECT_ARG.with(|c| c.get()), Some(7.0));
   Ok(())
 }
