@@ -6,6 +6,14 @@ fn new_runtime() -> JsRuntime {
   JsRuntime::new(vm, heap).unwrap()
 }
 
+fn assert_value_is_utf8(rt: &JsRuntime, value: Value, expected: &str) {
+  let Value::String(s) = value else {
+    panic!("expected string, got {value:?}");
+  };
+  let actual = rt.heap().get_string(s).unwrap().to_utf8_lossy();
+  assert_eq!(actual, expected);
+}
+
 #[test]
 fn switch_empty_case_block_returns_undefined() {
   let mut rt = new_runtime();
@@ -95,4 +103,47 @@ fn switch_after_default_case_selector_is_not_evaluated_when_match_before_default
     .exec_script("var x = 0; switch (0) { case 0: 0; default: 0; case (++x): 0; } x")
     .unwrap();
   assert_eq!(value, Value::Number(0.0));
+}
+
+#[test]
+fn switch_var_is_hoisted_out_of_case_clauses() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("switch (0) { case 0: break; case 1: var x = 1; } x")
+    .unwrap();
+  assert_eq!(value, Value::Undefined);
+}
+
+#[test]
+fn switch_let_is_not_visible_outside_case_block() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { switch (0) { case 0: let x = 1; } x } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "ReferenceError");
+}
+
+#[test]
+fn switch_let_tdz_applies_across_case_clauses() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"try { switch (0) { case 0: x; break; case 1: let x = 1; } } catch(e) { e.name }"#)
+    .unwrap();
+  assert_value_is_utf8(&rt, value, "ReferenceError");
+}
+
+#[test]
+fn switch_let_initialized_is_visible_in_same_clause() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script("switch (0) { case 0: let x = 1; x }").unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn switch_let_initialized_fallthrough_is_visible_in_later_clause() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script("switch (0) { case 0: let x = 1; case 1: x }")
+    .unwrap();
+  assert_eq!(value, Value::Number(1.0));
 }
