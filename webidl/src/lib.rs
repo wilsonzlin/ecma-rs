@@ -93,6 +93,22 @@ pub enum WellKnownSymbol {
   AsyncIterator,
 }
 
+/// A concrete own-property descriptor returned by [`WebIdlJsRuntime::get_own_property`].
+///
+/// Web IDL currently only requires the `[[Enumerable]]` flag, but we expose the "shape" of a
+/// descriptor so future binding code can reuse it without expanding the runtime surface again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JsOwnPropertyDescriptor<V> {
+  pub enumerable: bool,
+  pub kind: JsPropertyKind<V>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum JsPropertyKind<V> {
+  Data { value: V },
+  Accessor { get: V, set: V },
+}
+
 /// Abstraction over a JS runtime sufficient for WebIDL conversions.
 ///
 /// This is intentionally a narrow interface: it models only the operations used by WebIDL
@@ -213,6 +229,34 @@ pub trait JsRuntime {
     let step = self.iterator_next(iterator)?;
     Ok(if step.done { None } else { Some(step.value) })
   }
+}
+
+/// Additional JS runtime operations used by WebIDL JS→IDL conversions and overload resolution.
+///
+/// This extends the base [`JsRuntime`] used by IDL→JS helpers with operations needed to implement
+/// WebIDL algorithms like `ToNumeric`, `ToBigInt`, own property descriptor checks, and BufferSource
+/// internal-slot predicates.
+pub trait WebIdlJsRuntime: JsRuntime {
+  fn is_callable(&self, value: Self::Value) -> bool;
+  fn is_bigint(&self, value: Self::Value) -> bool;
+
+  fn to_bigint(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error>;
+  fn to_numeric(&mut self, value: Self::Value) -> Result<Self::Value, Self::Error>;
+
+  fn get_own_property(
+    &mut self,
+    object: Self::Object,
+    key: PropertyKey<Self::String, Self::Symbol>,
+  ) -> Result<Option<JsOwnPropertyDescriptor<Self::Value>>, Self::Error>;
+
+  fn throw_type_error(&mut self, message: &str) -> Self::Error;
+  fn throw_range_error(&mut self, message: &str) -> Self::Error;
+
+  // ---- internal slot checks (overload resolution prerequisites) ----
+  fn is_array_buffer(&self, value: Self::Value) -> bool;
+  fn is_shared_array_buffer(&self, value: Self::Value) -> bool;
+  fn is_data_view(&self, value: Self::Value) -> bool;
+  fn typed_array_name(&self, value: Self::Value) -> Option<&'static str>;
 }
 
 pub mod conversions {

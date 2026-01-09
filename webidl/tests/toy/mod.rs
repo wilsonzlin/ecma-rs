@@ -3,13 +3,15 @@
 use std::fmt;
 
 use webidl::{
-  InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits, WellKnownSymbol,
+  InterfaceId, IteratorResult, JsOwnPropertyDescriptor, JsPropertyKind, JsRuntime, PropertyKey,
+  WebIdlHooks, WebIdlJsRuntime, WebIdlLimits, WellKnownSymbol,
 };
 
 #[derive(Debug)]
 pub enum ToyError {
   Unimplemented(&'static str),
-  TypeError(&'static str),
+  TypeError(String),
+  RangeError(String),
 }
 
 impl fmt::Display for ToyError {
@@ -17,6 +19,7 @@ impl fmt::Display for ToyError {
     match self {
       ToyError::Unimplemented(msg) => write!(f, "unimplemented: {msg}"),
       ToyError::TypeError(msg) => write!(f, "TypeError: {msg}"),
+      ToyError::RangeError(msg) => write!(f, "RangeError: {msg}"),
     }
   }
 }
@@ -372,7 +375,7 @@ impl JsRuntime for ToyRuntime {
   }
 
   fn type_error(&mut self, message: &'static str) -> Self::Error {
-    ToyError::TypeError(message)
+    ToyError::TypeError(message.to_string())
   }
 
   fn get(
@@ -400,9 +403,9 @@ impl JsRuntime for ToyRuntime {
         ToyObjectKind::IteratorMethod { .. } | ToyObjectKind::AsyncIteratorMethod { .. } => {
           Ok(Some(v))
         }
-        _ => Err(ToyError::TypeError("property is not callable")),
+        _ => Err(ToyError::TypeError("property is not callable".to_string())),
       },
-      _ => Err(ToyError::TypeError("property is not callable")),
+      _ => Err(ToyError::TypeError("property is not callable".to_string())),
     }
   }
 
@@ -472,12 +475,12 @@ impl JsRuntime for ToyRuntime {
 
   fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error> {
     let ToyValue::Object(obj) = value else {
-      return Err(ToyError::TypeError("GetIterator expected object"));
+      return Err(ToyError::TypeError("GetIterator expected object".to_string()));
     };
     let iter_sym = self.well_known_symbol(WellKnownSymbol::Iterator)?;
     let method = self
       .get_method(obj, PropertyKey::Symbol(iter_sym))?
-      .ok_or(ToyError::TypeError("GetIterator: value is not iterable"))?;
+      .ok_or(ToyError::TypeError("GetIterator: value is not iterable".to_string()))?;
     self.get_iterator_from_method(obj, method)
   }
 
@@ -487,20 +490,28 @@ impl JsRuntime for ToyRuntime {
     method: Self::Value,
   ) -> Result<Self::Object, Self::Error> {
     let ToyValue::Object(method_obj) = method else {
-      return Err(ToyError::TypeError("GetIteratorFromMethod expected object method"));
+      return Err(ToyError::TypeError(
+        "GetIteratorFromMethod expected object method".to_string(),
+      ));
     };
     let values = match &self.objects[method_obj.0].kind {
       ToyObjectKind::IteratorMethod { values } | ToyObjectKind::AsyncIteratorMethod { values } => {
         values.clone()
       }
-      _ => return Err(ToyError::TypeError("GetIteratorFromMethod: method is not iterable")),
+      _ => {
+        return Err(ToyError::TypeError(
+          "GetIteratorFromMethod: method is not iterable".to_string(),
+        ));
+      }
     };
     Ok(self.alloc_object_with_kind(ToyObjectKind::Iterator { values, index: 0 }))
   }
 
   fn iterator_next(&mut self, iterator: Self::Object) -> Result<IteratorResult<Self::Value>, Self::Error> {
     let ToyObjectKind::Iterator { values, index } = &mut self.objects[iterator.0].kind else {
-      return Err(ToyError::TypeError("IteratorNext expected iterator object"));
+      return Err(ToyError::TypeError(
+        "IteratorNext expected iterator object".to_string(),
+      ));
     };
     if *index >= values.len() {
       return Ok(IteratorResult {
@@ -511,5 +522,63 @@ impl JsRuntime for ToyRuntime {
     let v = values[*index];
     *index += 1;
     Ok(IteratorResult { value: v, done: false })
+  }
+}
+
+impl WebIdlJsRuntime for ToyRuntime {
+  fn is_callable(&self, _value: Self::Value) -> bool {
+    false
+  }
+
+  fn is_bigint(&self, _value: Self::Value) -> bool {
+    false
+  }
+
+  fn to_bigint(&mut self, _value: Self::Value) -> Result<Self::Value, Self::Error> {
+    Err(ToyError::Unimplemented("ToBigInt"))
+  }
+
+  fn to_numeric(&mut self, _value: Self::Value) -> Result<Self::Value, Self::Error> {
+    Err(ToyError::Unimplemented("ToNumeric"))
+  }
+
+  fn get_own_property(
+    &mut self,
+    object: Self::Object,
+    key: PropertyKey<Self::String, Self::Symbol>,
+  ) -> Result<Option<JsOwnPropertyDescriptor<Self::Value>>, Self::Error> {
+    let data = &self.objects[object.0];
+    let Some((_k, v)) = data.props.iter().find(|(k, _)| *k == key) else {
+      return Ok(None);
+    };
+
+    Ok(Some(JsOwnPropertyDescriptor {
+      enumerable: true,
+      kind: JsPropertyKind::Data { value: *v },
+    }))
+  }
+
+  fn throw_type_error(&mut self, message: &str) -> Self::Error {
+    ToyError::TypeError(message.to_string())
+  }
+
+  fn throw_range_error(&mut self, message: &str) -> Self::Error {
+    ToyError::RangeError(message.to_string())
+  }
+
+  fn is_array_buffer(&self, _value: Self::Value) -> bool {
+    false
+  }
+
+  fn is_shared_array_buffer(&self, _value: Self::Value) -> bool {
+    false
+  }
+
+  fn is_data_view(&self, _value: Self::Value) -> bool {
+    false
+  }
+
+  fn typed_array_name(&self, _value: Self::Value) -> Option<&'static str> {
+    None
   }
 }
