@@ -217,7 +217,7 @@ impl Heap {
   /// Minimal ECMAScript `ToString`.
   ///
   /// This is intentionally small (sufficient for early interpreter scaffolding):
-  /// - Objects stringify to `"[object Object]"` (no `ToPrimitive` / user `toString` invocation yet).
+  /// - Objects are not supported yet (requires `ToPrimitive`).
   pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
     // Fast path: no allocation.
     if let Value::String(s) = value {
@@ -254,13 +254,8 @@ impl Heap {
         }
       }
       Value::String(_) => unreachable!(),
-      Value::Symbol(_) => {
-        // Per ECMA-262, `ToString(Symbol)` throws a TypeError. We don't have real Error objects
-        // yet, so throw a string placeholder.
-        let msg = scope.alloc_string("TypeError: Cannot convert a Symbol value to a string")?;
-        Err(VmError::Throw(Value::String(msg)))
-      }
-      Value::Object(_) => scope.alloc_string("[object Object]"),
+      Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
+      Value::Object(_) => Err(VmError::Unimplemented("ToString for Object (ToPrimitive)")),
     }
   }
 
