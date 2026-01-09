@@ -27,12 +27,20 @@ use std::{mem, ops};
 
 /// A native (host-implemented) function call handler.
 pub type NativeCall =
-  for<'a> fn(&mut Vm, &mut Scope<'a>, callee: GcObject, this: Value, args: &[Value]) -> Result<Value, VmError>;
+  for<'a> fn(
+    &mut Vm,
+    &mut Scope<'a>,
+    host: &mut dyn VmHostHooks,
+    callee: GcObject,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError>;
 
 /// A native (host-implemented) function constructor handler.
 pub type NativeConstruct = for<'a> fn(
   &mut Vm,
   &mut Scope<'a>,
+  host: &mut dyn VmHostHooks,
   callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -302,19 +310,28 @@ impl Vm {
     }
 
     impl VmJobContext for Ctx<'_> {
-      fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError> {
+      fn call(
+        &mut self,
+        host: &mut dyn VmHostHooks,
+        callee: Value,
+        this: Value,
+        args: &[Value],
+      ) -> Result<Value, VmError> {
         let mut scope = self.heap.scope();
-        self.vm.call(&mut scope, callee, this, args)
+        self.vm.call_with_host(&mut scope, host, callee, this, args)
       }
 
       fn construct(
         &mut self,
+        host: &mut dyn VmHostHooks,
         callee: Value,
         args: &[Value],
         new_target: Value,
       ) -> Result<Value, VmError> {
         let mut scope = self.heap.scope();
-        self.vm.construct(&mut scope, callee, args, new_target)
+        self
+          .vm
+          .construct_with_host(&mut scope, host, callee, args, new_target)
       }
 
       fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {
@@ -356,7 +373,12 @@ impl Vm {
         this_argument: Value,
         arguments: &[Value],
       ) -> Result<Value, VmError> {
-        ctx.call(Value::Object(callback.callback_object()), this_argument, arguments)
+        ctx.call(
+          self,
+          Value::Object(callback.callback_object()),
+          this_argument,
+          arguments,
+        )
       }
 
       fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {
@@ -509,6 +531,7 @@ impl Vm {
     &mut self,
     call_id: NativeFunctionId,
     scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
     callee: GcObject,
     this: Value,
     args: &[Value],
@@ -518,13 +541,14 @@ impl Vm {
       .get(call_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native function id"))?;
-    f(self, scope, callee, this, args)
+    f(self, scope, host, callee, this, args)
   }
 
   fn dispatch_native_construct(
     &mut self,
     construct_id: NativeConstructId,
     scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
     callee: GcObject,
     args: &[Value],
     new_target: Value,
@@ -534,7 +558,7 @@ impl Vm {
       .get(construct_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
-    construct(self, scope, callee, args, new_target)
+    construct(self, scope, host, callee, args, new_target)
   }
 
   /// Pushes a stack frame and returns an RAII guard that will pop it on drop.
@@ -656,6 +680,25 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
+    // `call_with_host` requires `&mut self` plus an independent `&mut host`, but `Vm` stores a
+    // default microtask queue inside itself. Temporarily move it out so it can serve as the host
+    // hook implementation for this call.
+    let mut host = mem::take(&mut self.microtasks);
+    let result = self.call_with_host(scope, &mut host, callee, this, args);
+    self.microtasks = host;
+    result
+  }
+
+  /// Calls `callee` with the provided `this` value and arguments, using a custom host hook
+  /// implementation.
+  pub fn call_with_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
     let mut scope = scope.reborrow();
     // Root all inputs in a way that is robust against GC triggering while we grow the root stack.
     //
@@ -719,7 +762,7 @@ impl Vm {
 
     match call_handler {
       CallHandler::Native(call_id) => {
-        vm.dispatch_native_call(call_id, &mut scope, callee_obj, this, args)
+        vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
       }
       CallHandler::Ecma(_) => vm.call_ecma_function(&mut scope, callee_obj, this, args),
     }
@@ -771,6 +814,22 @@ impl Vm {
   pub fn construct(
     &mut self,
     scope: &mut Scope<'_>,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let mut host = mem::take(&mut self.microtasks);
+    let result = self.construct_with_host(scope, &mut host, callee, args, new_target);
+    self.microtasks = host;
+    result
+  }
+
+  /// Constructs `callee` with the provided arguments and `new_target`, using a custom host hook
+  /// implementation.
+  pub fn construct_with_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    host: &mut dyn VmHostHooks,
     callee: Value,
     args: &[Value],
     new_target: Value,
@@ -838,7 +897,7 @@ impl Vm {
 
     match construct_handler {
       ConstructHandler::Native(construct_id) => {
-        vm.dispatch_native_construct(construct_id, &mut scope, callee_obj, args, new_target)
+        vm.dispatch_native_construct(construct_id, &mut scope, host, callee_obj, args, new_target)
       }
       ConstructHandler::Ecma(_) => {
         vm.construct_ecma_function(&mut scope, callee_obj, args, new_target)
@@ -878,6 +937,7 @@ mod tests {
   fn noop_call(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     _callee: GcObject,
     _this: Value,
     _args: &[Value],
@@ -888,6 +948,7 @@ mod tests {
   fn noop_construct(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     _callee: GcObject,
     _args: &[Value],
     _new_target: Value,

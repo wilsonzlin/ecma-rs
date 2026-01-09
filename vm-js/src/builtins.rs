@@ -2,8 +2,8 @@ use crate::function::{CallHandler, ConstructHandler, FunctionData};
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::{
-  GcObject, Job, JobCallback, JobKind, PromiseCapability, PromiseReaction, PromiseReactionType,
-  PromiseState, RootId, Scope, Value, Vm, VmError,
+  GcObject, Job, JobKind, PromiseCapability, PromiseHandle, PromiseReaction, PromiseReactionType,
+  PromiseRejectionOperation, PromiseState, RootId, Scope, Value, Vm, VmError, VmHostHooks,
 };
 
 fn data_desc(
@@ -137,6 +137,7 @@ fn get_own_data_property_value_by_name(
 pub fn function_prototype_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -168,6 +169,7 @@ fn object_constructor_impl(
 pub fn object_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -178,6 +180,7 @@ pub fn object_constructor_call(
 pub fn object_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   _new_target: Value,
@@ -188,6 +191,7 @@ pub fn object_constructor_construct(
 pub fn object_define_property(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -237,6 +241,7 @@ pub fn object_define_property(
 pub fn object_create(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -266,6 +271,7 @@ pub fn object_create(
 pub fn object_keys(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -308,6 +314,7 @@ pub fn object_keys(
 pub fn object_assign(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -350,6 +357,7 @@ pub fn object_assign(
 pub fn object_get_prototype_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -364,6 +372,7 @@ pub fn object_get_prototype_of(
 pub fn object_set_prototype_of(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -431,6 +440,7 @@ fn array_constructor_impl(
 pub fn array_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -441,6 +451,7 @@ pub fn array_constructor_call(
 pub fn array_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   _new_target: Value,
@@ -451,6 +462,7 @@ pub fn array_constructor_construct(
 pub fn function_constructor_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -461,6 +473,7 @@ pub fn function_constructor_call(
 pub fn function_constructor_construct(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _args: &[Value],
   _new_target: Value,
@@ -471,16 +484,18 @@ pub fn function_constructor_construct(
 pub fn error_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
-  error_constructor_construct(vm, scope, callee, args, Value::Object(callee))
+  error_constructor_construct(vm, scope, host, callee, args, Value::Object(callee))
 }
 
 pub fn error_constructor_construct(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -548,33 +563,29 @@ pub fn error_constructor_construct(
   Ok(Value::Object(obj))
 }
 
-fn throw_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result<Value, VmError> {
+fn create_type_error(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  message: &str,
+) -> Result<Value, VmError> {
   let intr = require_intrinsics(vm)?;
   let ctor = intr.type_error();
 
   let msg = scope.alloc_string(message)?;
   scope.push_root(Value::String(msg))?;
 
-  let err =
-    error_constructor_construct(vm, scope, ctor, &[Value::String(msg)], Value::Object(ctor))?;
-  Err(VmError::Throw(err))
+  error_constructor_construct(vm, scope, host, ctor, &[Value::String(msg)], Value::Object(ctor))
 }
 
-fn create_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result<Value, VmError> {
-  let intr = require_intrinsics(vm)?;
-  let ctor = intr.type_error();
-
-  let msg = scope.alloc_string(message)?;
-  scope.push_root(Value::String(msg))?;
-
-  let err = error_constructor_construct(
-    vm,
-    scope,
-    ctor,
-    &[Value::String(msg)],
-    Value::Object(ctor),
-  )?;
-  Ok(err)
+fn throw_type_error(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  message: &str,
+) -> Result<Value, VmError> {
+  let err = create_type_error(vm, scope, host, message)?;
+  Err(VmError::Throw(err))
 }
 
 fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> {
@@ -585,6 +596,7 @@ fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> 
 fn new_promise_capability(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   constructor: Value,
 ) -> Result<PromiseCapability, VmError> {
   let intr = require_intrinsics(vm)?;
@@ -592,7 +604,7 @@ fn new_promise_capability(
   let Value::Object(c) = constructor else {
     // `throw_type_error` always returns `Err(VmError::Throw(_))`, but avoid relying on that
     // implementation detail to keep this path panic-free if it ever changes.
-    match throw_type_error(vm, scope, "Promise capability constructor must be an object") {
+    match throw_type_error(vm, scope, host, "Promise capability constructor must be an object") {
       Ok(_) => {
         return Err(VmError::InvariantViolation(
           "throw_type_error unexpectedly returned Ok",
@@ -628,8 +640,21 @@ fn create_promise_resolving_functions(
   let intr = require_intrinsics(vm)?;
   let call_id = intr.promise_resolving_function_call();
 
-  // Root the promise while allocating the resolving functions.
+  // Root the promise and shared [[AlreadyResolved]] state while allocating the resolving
+  // functions.
   scope.push_root(Value::Object(promise))?;
+
+  // Model `alreadyResolved` as a mutable binding in a shared closure environment.
+  //
+  // This is important for spec-correct behavior when:
+  // - an executor calls both `resolve` and `reject`,
+  // - or calls `resolve(thenable)` and then calls `resolve` again before the thenable job runs.
+  let already_resolved_env = scope.env_create(None)?;
+  scope.push_env_root(already_resolved_env)?;
+  scope.env_create_mutable_binding(already_resolved_env, "alreadyResolved")?;
+  scope
+    .heap_mut()
+    .env_initialize_binding(already_resolved_env, "alreadyResolved", Value::Bool(false))?;
 
   let resolve_name = scope.alloc_string("resolve")?;
   let resolve = scope.alloc_native_function(call_id, None, resolve_name, 1)?;
@@ -643,6 +668,9 @@ fn create_promise_resolving_functions(
       is_reject: false,
     },
   )?;
+  scope
+    .heap_mut()
+    .set_function_closure_env(resolve, Some(already_resolved_env))?;
 
   let reject_name = scope.alloc_string("reject")?;
   let reject = scope.alloc_native_function(call_id, None, reject_name, 1)?;
@@ -656,12 +684,15 @@ fn create_promise_resolving_functions(
       is_reject: true,
     },
   )?;
+  scope
+    .heap_mut()
+    .set_function_closure_env(reject, Some(already_resolved_env))?;
 
   Ok((Value::Object(resolve), Value::Object(reject)))
 }
 
 fn enqueue_promise_reaction_job(
-  vm: &mut Vm,
+  host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   reaction: PromiseReaction,
   argument: Value,
@@ -680,7 +711,7 @@ fn enqueue_promise_reaction_job(
           match host.host_call_job_callback(ctx, handler, Value::Undefined, &[argument]) {
             Ok(v) => v,
             Err(VmError::Throw(e)) => {
-              let _ = ctx.call(cap.reject, Value::Undefined, &[e])?;
+              let _ = ctx.call(host, cap.reject, Value::Undefined, &[e])?;
               return Ok(());
             }
             Err(e) => return Err(e),
@@ -689,24 +720,24 @@ fn enqueue_promise_reaction_job(
           argument
         };
 
-        let _ = ctx.call(cap.resolve, Value::Undefined, &[handler_result])?;
+        let _ = ctx.call(host, cap.resolve, Value::Undefined, &[handler_result])?;
         Ok(())
       }
       PromiseReactionType::Reject => {
         if let Some(handler) = &reaction.handler {
           match host.host_call_job_callback(ctx, handler, Value::Undefined, &[argument]) {
             Ok(v) => {
-              let _ = ctx.call(cap.resolve, Value::Undefined, &[v])?;
+              let _ = ctx.call(host, cap.resolve, Value::Undefined, &[v])?;
               Ok(())
             }
             Err(VmError::Throw(e)) => {
-              let _ = ctx.call(cap.reject, Value::Undefined, &[e])?;
+              let _ = ctx.call(host, cap.reject, Value::Undefined, &[e])?;
               Ok(())
             }
             Err(e) => Err(e),
           }
         } else {
-          let _ = ctx.call(cap.reject, Value::Undefined, &[argument])?;
+          let _ = ctx.call(host, cap.reject, Value::Undefined, &[argument])?;
           Ok(())
         }
       }
@@ -752,24 +783,24 @@ fn enqueue_promise_reaction_job(
   }
 
   let job = job.with_roots(roots);
-  vm.microtask_queue_mut().enqueue_promise_job(job, None);
+  host.host_enqueue_promise_job(job, None);
   Ok(())
 }
 
 fn trigger_promise_reactions(
-  vm: &mut Vm,
+  host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   reactions: Box<[PromiseReaction]>,
   argument: Value,
 ) -> Result<(), VmError> {
   for reaction in reactions.into_vec() {
-    enqueue_promise_reaction_job(vm, scope, reaction, argument)?;
+    enqueue_promise_reaction_job(host, scope, reaction, argument)?;
   }
   Ok(())
 }
 
 fn fulfill_promise(
-  vm: &mut Vm,
+  host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   promise: GcObject,
   value: Value,
@@ -778,42 +809,157 @@ fn fulfill_promise(
     scope
       .heap_mut()
       .promise_settle_and_take_reactions(promise, PromiseState::Fulfilled, value)?;
-  trigger_promise_reactions(vm, scope, fulfill_reactions, value)
+  trigger_promise_reactions(host, scope, fulfill_reactions, value)
 }
 
 fn reject_promise(
-  vm: &mut Vm,
+  host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   promise: GcObject,
   reason: Value,
 ) -> Result<(), VmError> {
+  if scope.heap().promise_state(promise)? != PromiseState::Pending {
+    // Per spec, subsequent rejects of an already-settled promise are no-ops.
+    return Ok(());
+  }
+
+  let is_handled = scope.heap().promise_is_handled(promise)?;
+
   let (_fulfill_reactions, reject_reactions) =
     scope
       .heap_mut()
       .promise_settle_and_take_reactions(promise, PromiseState::Rejected, reason)?;
-  trigger_promise_reactions(vm, scope, reject_reactions, reason)
+
+  if !is_handled {
+    host.host_promise_rejection_tracker(PromiseHandle(promise), PromiseRejectionOperation::Reject);
+  }
+
+  trigger_promise_reactions(host, scope, reject_reactions, reason)
+}
+
+fn resolve_promise(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  promise: GcObject,
+  resolution: Value,
+) -> Result<(), VmError> {
+  // 27.2.1.3.2 `Promise Resolve Functions`: self-resolution is a TypeError rejection.
+  if let Value::Object(obj) = resolution {
+    if obj == promise {
+      let err = create_type_error(vm, scope, host, "Promise cannot resolve itself")?;
+      return reject_promise(host, scope, promise, err);
+    }
+  }
+
+  // Non-objects cannot be thenables.
+  let Value::Object(thenable_obj) = resolution else {
+    return fulfill_promise(host, scope, promise, resolution);
+  };
+
+  // Get `thenable.then`.
+  //
+  // We currently use `Heap::get`, which supports ordinary data properties and a minimal subset of
+  // accessors. This matches the current VM capabilities and is sufficient for thenables with a
+  // data-property `then`.
+  let then_result = {
+    // Root `thenable_obj` while allocating the property key.
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(thenable_obj))?;
+    let then_key_s = key_scope.alloc_string("then")?;
+    key_scope.push_root(Value::String(then_key_s))?;
+    let then_key = PropertyKey::from_string(then_key_s);
+
+    key_scope.heap().get(thenable_obj, &then_key)
+  };
+
+  let then = match then_result {
+    Ok(v) => v,
+    Err(VmError::Throw(e)) => {
+      reject_promise(host, scope, promise, e)?;
+      return Ok(());
+    }
+    Err(e) => return Err(e),
+  };
+
+  if !scope.heap().is_callable(then)? {
+    return fulfill_promise(host, scope, promise, resolution);
+  }
+
+  let Value::Object(then_obj) = then else {
+    return Err(VmError::Unimplemented("callable then is not an object"));
+  };
+
+  // Enqueue PromiseResolveThenableJob(promise, thenable, then).
+  let then_job_callback = host.host_make_job_callback(then_obj);
+
+  // Per spec, the thenable job must use *fresh* resolving functions for `promise` (with their own
+  // alreadyResolved record).
+  scope.push_root(Value::Object(thenable_obj))?;
+  let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
+
+  let callback_obj = then_job_callback.callback_object();
+  let job = Job::new(JobKind::Promise, move |ctx, host| {
+    match host.host_call_job_callback(ctx, &then_job_callback, resolution, &[resolve, reject]) {
+      Ok(_) => Ok(()),
+      Err(VmError::Throw(e)) => {
+        let _ = ctx.call(host, reject, Value::Undefined, &[e])?;
+        Ok(())
+      }
+      Err(e) => Err(e),
+    }
+  });
+
+  // Root captured GC values while creating persistent roots: `Heap::add_root` can trigger a GC.
+  // The resulting `RootId`s are transferred to the job so it can clean them up on run/discard.
+  let mut root_scope = scope.reborrow();
+  let values = [resolution, Value::Object(callback_obj), resolve, reject];
+  root_scope.push_roots(&values)?;
+
+  let mut roots: Vec<RootId> = Vec::new();
+  roots
+    .try_reserve_exact(values.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+  for value in values {
+    let id = match root_scope.heap_mut().add_root(value) {
+      Ok(id) => id,
+      Err(e) => {
+        for root in roots.drain(..) {
+          root_scope.heap_mut().remove_root(root);
+        }
+        return Err(e);
+      }
+    };
+    roots.push(id);
+  }
+
+  let job = job.with_roots(roots);
+  host.host_enqueue_promise_job(job, None);
+  Ok(())
 }
 
 pub fn promise_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
-  throw_type_error(vm, scope, "Promise constructor must be called with new")
+  throw_type_error(vm, scope, host, "Promise constructor must be called with new")
 }
 
 pub fn promise_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {
   let executor = args.get(0).copied().unwrap_or(Value::Undefined);
   if !scope.heap().is_callable(executor)? {
-    return throw_type_error(vm, scope, "Promise executor is not callable");
+    return throw_type_error(vm, scope, host, "Promise executor is not callable");
   }
 
   let promise = new_promise(vm, scope)?;
@@ -822,11 +968,12 @@ pub fn promise_constructor_construct(
   let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
 
   // Invoke executor(resolve, reject).
-  match vm.call(scope, executor, Value::Undefined, &[resolve, reject]) {
+  match vm.call_with_host(scope, host, executor, Value::Undefined, &[resolve, reject]) {
     Ok(_) => {}
     Err(VmError::Throw(reason)) => {
-      // If executor throws, reject the promise with the thrown value.
-      reject_promise(vm, scope, promise, reason)?;
+      // If executor throws, reject the promise with the thrown value by calling the resolving
+      // function (so it respects `alreadyResolved`).
+      let _ = vm.call_with_host(scope, host, reject, Value::Undefined, &[reason])?;
     }
     Err(e) => return Err(e),
   }
@@ -837,6 +984,7 @@ pub fn promise_constructor_construct(
 pub fn promise_resolving_function_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -849,66 +997,27 @@ pub fn promise_resolving_function_call(
     ));
   };
 
+  let Some(env) = scope.heap().get_function_closure_env(callee)? else {
+    return Err(VmError::Unimplemented(
+      "promise resolving functions must have a closure env for alreadyResolved",
+    ));
+  };
+
+  // `alreadyResolved` record check.
+  let already = scope
+    .heap()
+    .env_get_binding_value(env, "alreadyResolved", false)?;
+  if already == Value::Bool(true) {
+    return Ok(Value::Undefined);
+  }
+  scope
+    .heap_mut()
+    .env_set_mutable_binding(env, "alreadyResolved", Value::Bool(true), false)?;
+
   if is_reject {
-    reject_promise(vm, scope, promise, resolution)?;
+    reject_promise(host, scope, promise, resolution)?;
   } else {
-    // Minimal Promise resolution procedure:
-    // - adopt Promise resolution (Promise-to-Promise), needed for `then`/`finally` chaining;
-    // - otherwise, fulfill with the provided value.
-    if let Value::Object(resolution_obj) = resolution {
-      if scope.heap().is_promise_object(resolution_obj) {
-        if resolution_obj == promise {
-          let err = create_type_error(vm, scope, "Cannot resolve a promise with itself")?;
-          scope.push_root(err)?;
-          reject_promise(vm, scope, promise, err)?;
-          return Ok(Value::Undefined);
-        }
-
-        match scope.heap().promise_state(resolution_obj)? {
-          PromiseState::Pending => {
-            // Attach reactions that settle `promise` once `resolution_obj` settles.
-            scope.push_root(Value::Object(promise))?;
-            let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
-            let capability = PromiseCapability {
-              promise,
-              resolve,
-              reject,
-            };
-            let fulfill_reaction = PromiseReaction {
-              capability: Some(capability),
-              type_: PromiseReactionType::Fulfill,
-              handler: None,
-            };
-            let reject_reaction = PromiseReaction {
-              capability: Some(capability),
-              type_: PromiseReactionType::Reject,
-              handler: None,
-            };
-
-            scope.promise_append_fulfill_reaction(resolution_obj, fulfill_reaction)?;
-            scope.promise_append_reject_reaction(resolution_obj, reject_reaction)?;
-          }
-          PromiseState::Fulfilled => {
-            let value = scope
-              .heap()
-              .promise_result(resolution_obj)?
-              .unwrap_or(Value::Undefined);
-            fulfill_promise(vm, scope, promise, value)?;
-          }
-          PromiseState::Rejected => {
-            let reason = scope
-              .heap()
-              .promise_result(resolution_obj)?
-              .unwrap_or(Value::Undefined);
-            reject_promise(vm, scope, promise, reason)?;
-          }
-        }
-
-        return Ok(Value::Undefined);
-      }
-    }
-
-    fulfill_promise(vm, scope, promise, resolution)?;
+    resolve_promise(vm, scope, host, promise, resolution)?;
   }
   Ok(Value::Undefined)
 }
@@ -916,6 +1025,7 @@ pub fn promise_resolving_function_call(
 pub fn promise_resolve(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -932,26 +1042,30 @@ pub fn promise_resolve(
   }
 
   let p = new_promise(vm, scope)?;
-  scope.heap_mut().promise_fulfill(p, x)?;
+  scope.push_root(Value::Object(p))?;
+  let (resolve, _reject) = create_promise_resolving_functions(vm, scope, p)?;
+  let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[x])?;
   Ok(Value::Object(p))
 }
 
 pub fn promise_reject(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let reason = args.get(0).copied().unwrap_or(Value::Undefined);
   let p = new_promise(vm, scope)?;
-  reject_promise(vm, scope, p, reason)?;
+  reject_promise(host, scope, p, reason)?;
   Ok(Value::Object(p))
 }
 
 fn promise_then_impl(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   this: Value,
   on_fulfilled: Value,
   on_rejected: Value,
@@ -959,10 +1073,26 @@ fn promise_then_impl(
   let intr = require_intrinsics(vm)?;
 
   let Value::Object(promise) = this else {
-    return throw_type_error(vm, scope, "Promise.prototype.then called on non-object");
+    return throw_type_error(
+      vm,
+      scope,
+      host,
+      "Promise.prototype.then called on non-object",
+    );
   };
   if !scope.heap().is_promise_object(promise) {
-    return throw_type_error(vm, scope, "Promise.prototype.then called on non-promise");
+    return throw_type_error(
+      vm,
+      scope,
+      host,
+      "Promise.prototype.then called on non-promise",
+    );
+  }
+
+  // `PerformPromiseThen`: unhandled rejection tracking.
+  let was_handled = scope.heap().promise_is_handled(promise)?;
+  if scope.heap().promise_state(promise)? == PromiseState::Rejected && !was_handled {
+    host.host_promise_rejection_tracker(PromiseHandle(promise), PromiseRejectionOperation::Handle);
   }
 
   // `PerformPromiseThen` sets `[[PromiseIsHandled]] = true`.
@@ -971,13 +1101,13 @@ fn promise_then_impl(
   // Normalize handlers: use "empty" when not callable.
   let on_fulfilled = match on_fulfilled {
     Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => {
-      Some(JobCallback::new(obj))
+      Some(host.host_make_job_callback(obj))
     }
     _ => None,
   };
   let on_rejected = match on_rejected {
     Value::Object(obj) if scope.heap().is_callable(Value::Object(obj))? => {
-      Some(JobCallback::new(obj))
+      Some(host.host_make_job_callback(obj))
     }
     _ => None,
   };
@@ -1014,14 +1144,14 @@ fn promise_then_impl(
         .heap()
         .promise_result(promise)?
         .unwrap_or(Value::Undefined);
-      enqueue_promise_reaction_job(vm, scope, fulfill_reaction, arg)?;
+      enqueue_promise_reaction_job(host, scope, fulfill_reaction, arg)?;
     }
     PromiseState::Rejected => {
       let arg = scope
         .heap()
         .promise_result(promise)?
         .unwrap_or(Value::Undefined);
-      enqueue_promise_reaction_job(vm, scope, reject_reaction, arg)?;
+      enqueue_promise_reaction_job(host, scope, reject_reaction, arg)?;
     }
   }
 
@@ -1031,29 +1161,32 @@ fn promise_then_impl(
 pub fn promise_prototype_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let on_fulfilled = args.get(0).copied().unwrap_or(Value::Undefined);
   let on_rejected = args.get(1).copied().unwrap_or(Value::Undefined);
-  promise_then_impl(vm, scope, this, on_fulfilled, on_rejected)
+  promise_then_impl(vm, scope, host, this, on_fulfilled, on_rejected)
 }
 
 pub fn promise_prototype_catch(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let on_rejected = args.get(0).copied().unwrap_or(Value::Undefined);
-  promise_then_impl(vm, scope, this, Value::Undefined, on_rejected)
+  promise_then_impl(vm, scope, host, this, Value::Undefined, on_rejected)
 }
 
 pub fn promise_prototype_finally(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -1062,14 +1195,24 @@ pub fn promise_prototype_finally(
   let on_finally = args.get(0).copied().unwrap_or(Value::Undefined);
 
   let Value::Object(promise) = this else {
-    return throw_type_error(vm, scope, "Promise.prototype.finally called on non-object");
+    return throw_type_error(
+      vm,
+      scope,
+      host,
+      "Promise.prototype.finally called on non-object",
+    );
   };
   if !scope.heap().is_promise_object(promise) {
-    return throw_type_error(vm, scope, "Promise.prototype.finally called on non-promise");
+    return throw_type_error(
+      vm,
+      scope,
+      host,
+      "Promise.prototype.finally called on non-promise",
+    );
   }
 
   if !scope.heap().is_callable(on_finally)? {
-    return promise_then_impl(vm, scope, this, on_finally, on_finally);
+    return promise_then_impl(vm, scope, host, this, on_finally, on_finally);
   }
 
   scope.push_root(Value::Object(promise))?;
@@ -1110,6 +1253,7 @@ pub fn promise_prototype_finally(
   promise_then_impl(
     vm,
     scope,
+    host,
     this,
     Value::Object(then_finally),
     Value::Object(catch_finally),
@@ -1119,6 +1263,7 @@ pub fn promise_prototype_finally(
 pub fn promise_finally_handler_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -1135,12 +1280,19 @@ pub fn promise_finally_handler_call(
   let captured = args.get(0).copied().unwrap_or(Value::Undefined);
 
   // Call onFinally() with no arguments.
-  let result = vm.call(scope, on_finally, Value::Undefined, &[])?;
+  let result = vm.call_with_host(scope, host, on_finally, Value::Undefined, &[])?;
   let result = scope.push_root(result)?;
 
   // `PromiseResolve(%Promise%, result)`
   let promise_ctor = intr.promise();
-  let p = promise_resolve(vm, scope, promise_ctor, Value::Object(promise_ctor), &[result])?;
+  let p = promise_resolve(
+    vm,
+    scope,
+    host,
+    promise_ctor,
+    Value::Object(promise_ctor),
+    &[result],
+  )?;
   let Value::Object(promise_obj) = p else {
     return Err(VmError::Unimplemented("Promise.resolve did not return an object"));
   };
@@ -1165,12 +1317,20 @@ pub fn promise_finally_handler_call(
 
   // Return `p.then(valueThunk)` / `p.then(thrower)`.
   scope.push_root(Value::Object(thunk))?;
-  promise_then_impl(vm, scope, Value::Object(promise_obj), Value::Object(thunk), Value::Undefined)
+  promise_then_impl(
+    vm,
+    scope,
+    host,
+    Value::Object(promise_obj),
+    Value::Object(thunk),
+    Value::Undefined,
+  )
 }
 
 pub fn promise_finally_thunk_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -1191,16 +1351,17 @@ pub fn promise_finally_thunk_call(
 pub fn promise_try(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let callback = args.get(0).copied().unwrap_or(Value::Undefined);
   if !scope.heap().is_callable(callback)? {
-    return throw_type_error(vm, scope, "Promise.try callback is not callable");
+    return throw_type_error(vm, scope, host, "Promise.try callback is not callable");
   }
 
-  let capability = new_promise_capability(vm, scope, this)?;
+  let capability = new_promise_capability(vm, scope, host, this)?;
 
   // Root the promise + resolving functions for the duration of the callback call.
   scope.push_root(Value::Object(capability.promise))?;
@@ -1208,12 +1369,12 @@ pub fn promise_try(
   scope.push_root(capability.reject)?;
 
   let callback_args = args.get(1..).unwrap_or(&[]);
-  match vm.call(scope, callback, Value::Undefined, callback_args) {
+  match vm.call_with_host(scope, host, callback, Value::Undefined, callback_args) {
     Ok(v) => {
-      let _ = vm.call(scope, capability.resolve, Value::Undefined, &[v])?;
+      let _ = vm.call_with_host(scope, host, capability.resolve, Value::Undefined, &[v])?;
     }
     Err(VmError::Throw(e)) => {
-      let _ = vm.call(scope, capability.reject, Value::Undefined, &[e])?;
+      let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[e])?;
     }
     Err(e) => return Err(e),
   }
@@ -1224,13 +1385,14 @@ pub fn promise_try(
 pub fn promise_with_resolvers(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
   let intr = require_intrinsics(vm)?;
 
-  let capability = new_promise_capability(vm, scope, this)?;
+  let capability = new_promise_capability(vm, scope, host, this)?;
   // Root the new promise and resolving functions before allocating the result object.
   scope.push_root(Value::Object(capability.promise))?;
   scope.push_root(capability.resolve)?;
@@ -1320,19 +1482,21 @@ fn vec_try_extend_from_slice<T: Copy>(buf: &mut Vec<T>, slice: &[T]) -> Result<(
 pub fn function_prototype_call_method(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let this_arg = args.first().copied().unwrap_or(Value::Undefined);
   let rest = args.get(1..).unwrap_or(&[]);
-  vm.call(scope, this, this_arg, rest)
+  vm.call_with_host(scope, host, this, this_arg, rest)
 }
 
 /// `Function.prototype.apply` (minimal, supports array-like objects).
 pub fn function_prototype_apply(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -1342,13 +1506,15 @@ pub fn function_prototype_apply(
   let arg_array = args.get(1).copied().unwrap_or(Value::Undefined);
 
   match arg_array {
-    Value::Undefined | Value::Null => vm.call(scope, Value::Object(target), this_arg, &[]),
+    Value::Undefined | Value::Null => {
+      vm.call_with_host(scope, host, Value::Object(target), this_arg, &[])
+    }
     Value::Object(obj) => {
       // Root `obj` while building the argument list, since we may allocate strings for property
       // keys and trigger a GC.
       scope.push_root(Value::Object(obj))?;
       let list = get_array_like_args(scope, obj)?;
-      vm.call(scope, Value::Object(target), this_arg, &list)
+      vm.call_with_host(scope, host, Value::Object(target), this_arg, &list)
     }
     _ => Err(VmError::Unimplemented(
       "Function.prototype.apply: argArray must be an object or null/undefined",
@@ -1360,6 +1526,7 @@ pub fn function_prototype_apply(
 pub fn function_prototype_bind(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -1436,6 +1603,7 @@ pub fn function_prototype_bind(
 pub fn object_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -1479,6 +1647,7 @@ fn define_array_length(scope: &mut Scope<'_>, obj: GcObject, len: usize) -> Resu
 pub fn array_prototype_map(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -1510,7 +1679,7 @@ pub fn array_prototype_map(
 
     // callback(value, index, array)
     let call_args = [value, Value::Number(i as f64), Value::Object(this_obj)];
-    let mapped = vm.call(scope, callback, this_arg, &call_args)?;
+    let mapped = vm.call_with_host(scope, host, callback, this_arg, &call_args)?;
 
     scope.define_property(out, key, data_desc(mapped, true, true, true))?;
   }
@@ -1522,6 +1691,7 @@ pub fn array_prototype_map(
 pub fn array_prototype_join(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
@@ -1585,6 +1755,7 @@ pub fn array_prototype_join(
 pub fn string_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -1600,6 +1771,7 @@ pub fn string_constructor_call(
 pub fn string_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   args: &[Value],
   new_target: Value,
@@ -1642,6 +1814,7 @@ pub fn string_constructor_construct(
 pub fn string_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -1665,6 +1838,7 @@ pub fn string_prototype_to_string(
 pub fn symbol_constructor_call(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -1693,6 +1867,7 @@ fn concat_with_colon_space(name: &[u16], message: &[u16]) -> Result<Vec<u16>, Vm
 pub fn error_prototype_to_string(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -1740,6 +1915,7 @@ pub fn error_prototype_to_string(
 pub fn json_stringify(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],

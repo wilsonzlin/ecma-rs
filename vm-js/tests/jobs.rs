@@ -29,12 +29,19 @@ impl VmHostHooks for TestHost {
 struct TestContext;
 
 impl VmJobContext for TestContext {
-  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("TestContext::call"))
   }
 
   fn construct(
     &mut self,
+    _host: &mut dyn VmHostHooks,
     _callee: Value,
     _args: &[Value],
     _new_target: Value,
@@ -64,12 +71,19 @@ impl Default for RootingContext {
 }
 
 impl VmJobContext for RootingContext {
-  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("RootingContext::call"))
   }
 
   fn construct(
     &mut self,
+    _host: &mut dyn VmHostHooks,
     _callee: Value,
     _args: &[Value],
     _new_target: Value,

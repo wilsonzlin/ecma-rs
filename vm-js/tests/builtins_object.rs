@@ -1,6 +1,6 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Realm, Scope, Value,
-  Vm, VmError, VmOptions,
+  Vm, VmError, VmHostHooks, VmOptions,
 };
 
 struct TestRealm {
@@ -59,6 +59,7 @@ fn define_enumerable_data_property(
 fn return_two_native(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],

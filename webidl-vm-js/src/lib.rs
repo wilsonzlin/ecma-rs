@@ -374,7 +374,7 @@ mod tests {
   use super::VmJsWebIdlCx;
   use vm_js::{
     GcObject, Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyKey as VmPropertyKey,
-    PropertyKind, Realm, Scope, Value, Vm, VmError, VmOptions,
+    PropertyKind, Realm, Scope, Value, Vm, VmError, VmHostHooks, VmOptions,
   };
   use webidl::{
     conversions, sequence_to_js_array, DomString, IdlRecord, InterfaceId, JsRuntime,
@@ -570,6 +570,7 @@ mod tests {
   fn getter_call_handler(
     _vm: &mut Vm,
     scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     _callee: GcObject,
     this: Value,
     _args: &[Value],
@@ -580,6 +581,7 @@ mod tests {
   fn noop_call_handler(
     _vm: &mut Vm,
     _scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     _callee: GcObject,
     _this: Value,
     _args: &[Value],
@@ -752,6 +754,7 @@ mod tests {
   fn iterator_method_call_handler(
     vm: &mut Vm,
     scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     callee: GcObject,
     this: Value,
     args: &[Value],
@@ -762,6 +765,7 @@ mod tests {
   fn iterator_next_call(
     _vm: &mut Vm,
     scope: &mut Scope<'_>,
+    _host: &mut dyn VmHostHooks,
     _callee: GcObject,
     this: Value,
     _args: &[Value],

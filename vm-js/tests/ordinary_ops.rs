@@ -1,6 +1,7 @@
 use std::cell::Cell;
 use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm, VmError, VmOptions,
+  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm, VmError,
+  VmHostHooks, VmOptions,
 };
 
 thread_local! {
@@ -11,6 +12,7 @@ thread_local! {
 fn getter(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: vm_js::GcObject,
   this: Value,
   _args: &[Value],

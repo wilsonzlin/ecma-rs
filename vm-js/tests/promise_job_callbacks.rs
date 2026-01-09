@@ -18,6 +18,7 @@ use vm_js::VmOptions;
 fn noop(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -90,12 +91,19 @@ struct RootingContext<'a> {
 }
 
 impl VmJobContext for RootingContext<'_> {
-  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("RootingContext::call"))
   }
 
   fn construct(
     &mut self,
+    _host: &mut dyn VmHostHooks,
     _callee: Value,
     _args: &[Value],
     _new_target: Value,

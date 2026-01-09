@@ -9,6 +9,7 @@ use vm_js::MicrotaskQueue;
 use vm_js::RootId;
 use vm_js::Value;
 use vm_js::VmError;
+use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::WeakGcObject;
 
@@ -25,12 +26,19 @@ impl TestContext {
 }
 
 impl VmJobContext for TestContext {
-  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("TestContext::call"))
   }
 
   fn construct(
     &mut self,
+    _host: &mut dyn VmHostHooks,
     _callee: Value,
     _args: &[Value],
     _new_target: Value,

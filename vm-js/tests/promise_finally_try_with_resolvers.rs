@@ -1,6 +1,9 @@
 use std::cell::Cell;
 
-use vm_js::{GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, Scope, Value, Vm, VmError, VmOptions};
+use vm_js::{
+  GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, Scope, Value, Vm, VmError,
+  VmHostHooks, VmOptions,
+};
 
 thread_local! {
   static FINALLY_CALLS: Cell<u32> = Cell::new(0);
@@ -26,6 +29,7 @@ fn get_own_data_function(heap: &mut Heap, obj: GcObject, name: &str) -> Result<G
 fn on_finally_increments(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -37,6 +41,7 @@ fn on_finally_increments(
 fn try_returns_value(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],
@@ -49,6 +54,7 @@ fn try_returns_value(
 fn try_throws(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
@@ -287,4 +293,3 @@ fn promise_with_resolvers_returns_object_with_callable_resolve_reject() -> Resul
   realm.teardown(&mut heap);
   Ok(())
 }
-

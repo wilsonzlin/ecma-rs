@@ -19,12 +19,19 @@ struct HeapBackedContext {
 }
 
 impl VmJobContext for HeapBackedContext {
-  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    _host: &mut dyn VmHostHooks,
+    _callee: Value,
+    _this: Value,
+    _args: &[Value],
+  ) -> Result<Value, VmError> {
     Err(VmError::Unimplemented("HeapBackedContext::call"))
   }
 
   fn construct(
     &mut self,
+    _host: &mut dyn VmHostHooks,
     _callee: Value,
     _args: &[Value],
     _new_target: Value,

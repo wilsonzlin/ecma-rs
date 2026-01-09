@@ -5,8 +5,7 @@ use crate::function::{CallHandler, ConstructHandler, EcmaFunctionId, ThisMode};
 use crate::{
   new_reference_error, new_type_error, EnvRootId, GcEnv, GcObject, GcString, Heap,
   PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Realm, RootId, Scope,
-  SourceText, StackFrame, Value, Vm, VmError,
-  VmJobContext,
+  SourceText, StackFrame, Value, Vm, VmError, VmHostHooks, VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
@@ -457,16 +456,23 @@ impl Drop for JsRuntime {
 }
 
 impl VmJobContext for JsRuntime {
-  fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError> {
+  fn call(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
     // Borrow-split `vm` and `heap` so we can hold a `Scope` while calling into the VM.
     let vm = &mut self.vm;
     let heap = &mut self.heap;
     let mut scope = heap.scope();
-    vm.call(&mut scope, callee, this, args)
+    vm.call_with_host(&mut scope, host, callee, this, args)
   }
 
   fn construct(
     &mut self,
+    host: &mut dyn VmHostHooks,
     callee: Value,
     args: &[Value],
     new_target: Value,
@@ -474,7 +480,7 @@ impl VmJobContext for JsRuntime {
     let vm = &mut self.vm;
     let heap = &mut self.heap;
     let mut scope = heap.scope();
-    vm.construct(&mut scope, callee, args, new_target)
+    vm.construct_with_host(&mut scope, host, callee, args, new_target)
   }
 
   fn add_root(&mut self, value: Value) -> Result<RootId, VmError> {

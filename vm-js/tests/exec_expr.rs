@@ -1,4 +1,7 @@
-use vm_js::{GcObject, Heap, HeapLimits, JsRuntime, Scope, Value, Vm, VmError, VmOptions, PropertyKey};
+use vm_js::{
+  GcObject, Heap, HeapLimits, JsRuntime, PropertyKey, Scope, Value, Vm, VmError, VmHostHooks,
+  VmOptions,
+};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -9,6 +12,7 @@ fn new_runtime() -> JsRuntime {
 fn return_this(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   _args: &[Value],
@@ -19,6 +23,7 @@ fn return_this(
 fn return_arg_count(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   args: &[Value],

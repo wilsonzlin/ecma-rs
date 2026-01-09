@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use vm_js::{
   Budget, GcObject, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError,
-  VmOptions,
+  VmHostHooks, VmOptions,
 };
 
 fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
@@ -69,6 +69,7 @@ fn expression_evaluation_consumes_fuel() {
 fn native_noop(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],

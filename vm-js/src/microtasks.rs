@@ -107,7 +107,12 @@ impl VmHostHooks for MicrotaskQueue {
     this_argument: Value,
     arguments: &[Value],
   ) -> Result<Value, VmError> {
-    ctx.call(Value::Object(callback.callback_object()), this_argument, arguments)
+    ctx.call(
+      self,
+      Value::Object(callback.callback_object()),
+      this_argument,
+      arguments,
+    )
   }
 
   fn as_any_mut(&mut self) -> Option<&mut dyn std::any::Any> {

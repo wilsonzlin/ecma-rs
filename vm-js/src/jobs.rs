@@ -99,11 +99,18 @@ pub type JobResult = Result<(), VmError>;
 /// This trait is intentionally object-safe so hosts can store job runners behind trait objects.
 pub trait VmJobContext {
   /// Calls `callee` with the provided `this` value and arguments.
-  fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError>;
+  fn call(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError>;
 
   /// Constructs `callee` with the provided arguments and `new_target`.
   fn construct(
     &mut self,
+    host: &mut dyn VmHostHooks,
     callee: Value,
     args: &[Value],
     new_target: Value,
@@ -282,8 +289,8 @@ impl Drop for Job {
 /// # }
 /// # struct Ctx;
 /// # impl VmJobContext for Ctx {
-/// #   fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> { unimplemented!() }
-/// #   fn construct(&mut self, _callee: Value, _args: &[Value], _new_target: Value) -> Result<Value, VmError> { unimplemented!() }
+/// #   fn call(&mut self, _host: &mut dyn VmHostHooks, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> { unimplemented!() }
+/// #   fn construct(&mut self, _host: &mut dyn VmHostHooks, _callee: Value, _args: &[Value], _new_target: Value) -> Result<Value, VmError> { unimplemented!() }
 /// #   fn add_root(&mut self, _value: Value) -> Result<RootId, VmError> { unimplemented!() }
 /// #   fn remove_root(&mut self, _id: RootId) { unimplemented!() }
 /// # }

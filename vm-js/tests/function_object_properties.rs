@@ -1,11 +1,12 @@
 use vm_js::{
   GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
-  VmError, VmOptions,
+  VmError, VmHostHooks, VmOptions,
 };
 
 fn return_undefined(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],

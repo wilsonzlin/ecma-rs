@@ -2462,6 +2462,27 @@ impl Heap {
       _ => Err(VmError::InvalidHandle),
     }
   }
+
+  pub(crate) fn get_function_closure_env(&self, func: GcObject) -> Result<Option<GcEnv>, VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.closure_env),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  pub(crate) fn set_function_closure_env(
+    &mut self,
+    func: GcObject,
+    env: Option<GcEnv>,
+  ) -> Result<(), VmError> {
+    match self.get_heap_object_mut(func.0)? {
+      HeapObject::Function(f) => {
+        f.closure_env = env;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
 }
 
 /// A stack-rooting scope.
