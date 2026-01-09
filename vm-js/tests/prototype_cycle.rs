@@ -1,8 +1,18 @@
 use vm_js::{
-  Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyKey, PropertyKind, Value,
-  VmError,
+  GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
+  VmError, VmOptions,
   MAX_PROTOTYPE_CHAIN,
 };
+
+fn return_undefined(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Undefined)
+}
 
 #[test]
 fn set_prototype_rejects_direct_self() -> Result<(), VmError> {
@@ -41,12 +51,14 @@ fn set_prototype_rejects_indirect_cycle() -> Result<(), VmError> {
 #[test]
 fn set_prototype_rejects_indirect_cycle_including_functions() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+  let call_id = vm.register_native_call(return_undefined)?;
   let mut scope = heap.scope();
 
   let name1 = scope.alloc_string("f1")?;
   let name2 = scope.alloc_string("f2")?;
-  let f1 = scope.alloc_native_function(NativeFunctionId(1), None, name1, 0)?;
-  let f2 = scope.alloc_native_function(NativeFunctionId(2), None, name2, 0)?;
+  let f1 = scope.alloc_native_function(call_id, None, name1, 0)?;
+  let f2 = scope.alloc_native_function(call_id, None, name2, 0)?;
 
   scope.heap_mut().object_set_prototype(f1, Some(f2))?;
   assert!(matches!(

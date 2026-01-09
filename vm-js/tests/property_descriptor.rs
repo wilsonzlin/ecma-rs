@@ -1,7 +1,17 @@
 use vm_js::{
-  Heap, HeapLimits, NativeFunctionId, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey,
-  PropertyKind, Value, VmError,
+  GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey,
+  PropertyKind, Scope, Value, Vm, VmError, VmOptions,
 };
+
+fn return_undefined(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(Value::Undefined)
+}
 
 #[test]
 fn property_descriptor_patch_validation_rejects_mixing_data_and_accessor_fields() {
@@ -124,10 +134,12 @@ fn property_key_equality_uses_string_code_units_or_symbol_identity() -> Result<(
 #[test]
 fn define_property_works_on_native_function_objects() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
+  let call_id = vm.register_native_call(return_undefined)?;
   let mut scope = heap.scope();
 
   let name = scope.alloc_string("f")?;
-  let func = scope.alloc_native_function(NativeFunctionId(1), None, name, 0)?;
+  let func = scope.alloc_native_function(call_id, None, name, 0)?;
   scope.push_root(Value::Object(func));
 
   let key_str = scope.alloc_string("x")?;
