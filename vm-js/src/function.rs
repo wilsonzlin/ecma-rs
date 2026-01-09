@@ -100,7 +100,13 @@ pub(crate) struct JsFunction {
   pub(crate) base: ObjectBase,
   pub(crate) data: FunctionData,
 
-  // Forward-compat internal slots (currently unused but spec-aligned).
+  // Spec-shaped internal slots for function objects.
+  //
+  // - Bound functions use `bound_target`, `bound_this`, and `bound_args`.
+  // - Arrow functions capture their lexical `this`/`new.target` into `bound_this` and
+  //   `bound_new_target`.
+  //
+  // For ordinary functions these remain `None`.
   pub(crate) bound_target: Option<GcObject>,
   pub(crate) bound_this: Option<Value>,
   pub(crate) bound_new_target: Option<Value>,
