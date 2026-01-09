@@ -54,3 +54,18 @@ fn var_decl_and_if_statement_execute() {
   assert_eq!(value, Value::Number(2.0));
 }
 
+#[test]
+fn try_finally_updates_empty_completion_value() {
+  let mut rt = new_runtime();
+  let value = rt.exec_script(r#"try { } finally { 1 }"#).unwrap();
+  assert_eq!(value, Value::Number(1.0));
+}
+
+#[test]
+fn var_initializer_assigns_to_var_env_even_when_catch_param_shadows() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"var e = 1; try { throw 2; } catch(e){ var e = 3; } e"#)
+    .unwrap();
+  assert_eq!(value, Value::Number(3.0));
+}

@@ -166,6 +166,13 @@ impl Env {
     heap.set_root(binding.root, value);
     Ok(())
   }
+
+  fn set_var(&mut self, heap: &mut Heap, name: &str, value: Value) -> Result<(), VmError> {
+    self.declare_var(heap, name);
+    let binding = self.var.get(name).copied().unwrap();
+    heap.set_root(binding.root, value);
+    Ok(())
+  }
 }
 
 /// An (early, incomplete) AST-interpreting execution engine for `parse-js` syntax trees.
@@ -407,7 +414,7 @@ impl<'a> Evaluator<'a> {
           };
           let name = expect_simple_binding_identifier(&declarator.pattern.stx)?;
           let value = self.eval_expr(scope, init)?;
-          self.env.set(scope.heap_mut(), name, value)?;
+          self.env.set_var(scope.heap_mut(), name, value)?;
         }
         Ok(Completion::empty())
       }
@@ -484,6 +491,8 @@ impl<'a> Evaluator<'a> {
       if finally_result.is_abrupt() {
         return Ok(finally_result);
       }
+
+      result = result.update_empty(finally_result.value());
     }
 
     Ok(result)
