@@ -75,6 +75,15 @@ fn arrow_function_captures_lexical_new_target_in_plain_call() {
 }
 
 #[test]
+fn arrow_function_uses_lexical_arguments_object() {
+  let mut rt = new_runtime();
+  let value = rt
+    .exec_script(r#"function f(){ return (()=>arguments.length)(); } f(1,2) === 2"#)
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
 fn arrow_function_is_not_constructable() {
   let mut rt = new_runtime();
   let value = rt
