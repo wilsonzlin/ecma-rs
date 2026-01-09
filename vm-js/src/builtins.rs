@@ -1,4 +1,4 @@
-use crate::function::FunctionData;
+use crate::function::{CallHandler, ConstructHandler, FunctionData};
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::{
@@ -30,6 +30,77 @@ fn require_object(value: Value) -> Result<GcObject, VmError> {
     Value::Object(o) => Ok(o),
     _ => Err(VmError::TypeError("expected object")),
   }
+}
+
+fn require_callable(this: Value) -> Result<GcObject, VmError> {
+  match this {
+    Value::Object(obj) => Ok(obj),
+    _ => Err(VmError::NotCallable),
+  }
+}
+
+fn make_value_vec(values: &[Value]) -> Result<Box<[Value]>, VmError> {
+  if values.is_empty() {
+    return Ok(Box::default());
+  }
+
+  let mut vec: Vec<Value> = Vec::new();
+  vec
+    .try_reserve_exact(values.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+  vec.extend_from_slice(values);
+  Ok(vec.into_boxed_slice())
+}
+
+fn get_array_like_args(scope: &mut Scope<'_>, obj: GcObject) -> Result<Vec<Value>, VmError> {
+  // Treat `obj` as array-like:
+  // - read `length` as a Number
+  // - read indices 0..length-1 as data properties
+  let length_key_s = scope.alloc_string("length")?;
+  let length_key = PropertyKey::from_string(length_key_s);
+  let length_desc = scope.heap().get_property(obj, &length_key)?;
+  let length_val = match length_desc.map(|d| d.kind) {
+    Some(PropertyKind::Data { value, .. }) => value,
+    Some(PropertyKind::Accessor { .. }) => {
+      return Err(VmError::Unimplemented(
+        "Function.prototype.apply: accessor length",
+      ));
+    }
+    None => Value::Number(0.0),
+  };
+
+  let length = match length_val {
+    Value::Number(n) if n.is_finite() && n >= 0.0 => n as usize,
+    Value::Number(_) => 0usize,
+    _ => {
+      return Err(VmError::Unimplemented(
+        "Function.prototype.apply: non-numeric length",
+      ))
+    }
+  };
+
+  let mut out: Vec<Value> = Vec::new();
+  out
+    .try_reserve_exact(length)
+    .map_err(|_| VmError::OutOfMemory)?;
+
+  for idx in 0..length {
+    let idx_s = scope.alloc_string(&idx.to_string())?;
+    let key = PropertyKey::from_string(idx_s);
+    let desc = scope.heap().get_property(obj, &key)?;
+    let value = match desc.map(|d| d.kind) {
+      Some(PropertyKind::Data { value, .. }) => value,
+      Some(PropertyKind::Accessor { .. }) => {
+        return Err(VmError::Unimplemented(
+          "Function.prototype.apply: accessor indexed element",
+        ));
+      }
+      None => Value::Undefined,
+    };
+    out.push(value);
+  }
+
+  Ok(out)
 }
 
 fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) -> Result<(), VmError> {
@@ -1256,6 +1327,109 @@ pub fn function_prototype_call_method(
   let this_arg = args.first().copied().unwrap_or(Value::Undefined);
   let rest = args.get(1..).unwrap_or(&[]);
   vm.call(scope, this, this_arg, rest)
+}
+
+/// `Function.prototype.apply` (minimal, supports array-like objects).
+pub fn function_prototype_apply(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let target = require_callable(this)?;
+  let this_arg = args.first().copied().unwrap_or(Value::Undefined);
+  let arg_array = args.get(1).copied().unwrap_or(Value::Undefined);
+
+  match arg_array {
+    Value::Undefined | Value::Null => vm.call(scope, Value::Object(target), this_arg, &[]),
+    Value::Object(obj) => {
+      // Root `obj` while building the argument list, since we may allocate strings for property
+      // keys and trigger a GC.
+      scope.push_root(Value::Object(obj))?;
+      let list = get_array_like_args(scope, obj)?;
+      vm.call(scope, Value::Object(target), this_arg, &list)
+    }
+    _ => Err(VmError::Unimplemented(
+      "Function.prototype.apply: argArray must be an object or null/undefined",
+    )),
+  }
+}
+
+/// `Function.prototype.bind` (minimal, using `JsFunction` bound internal slots).
+pub fn function_prototype_bind(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+
+  let target = require_callable(this)?;
+
+  // Extract function metadata without holding a heap borrow across allocations.
+  let (target_call, target_construct, target_len, target_name) = {
+    let f = scope.heap().get_function(target)?;
+    let target_call = match f.call {
+      CallHandler::Native(id) => id,
+      CallHandler::Ecma(_) => {
+        return Err(VmError::Unimplemented(
+          "Function.prototype.bind: ECMAScript target functions",
+        ))
+      }
+    };
+    let target_construct = match f.construct {
+      Some(ConstructHandler::Native(id)) => Some(id),
+      Some(ConstructHandler::Ecma(_)) => {
+        return Err(VmError::Unimplemented(
+          "Function.prototype.bind: ECMAScript target constructors",
+        ))
+      }
+      None => None,
+    };
+    (target_call, target_construct, f.length, f.name)
+  };
+
+  let bound_this = args.first().copied().unwrap_or(Value::Undefined);
+  let bound_args = args.get(1..).unwrap_or(&[]);
+
+  let bound_args_len_u32 = u32::try_from(bound_args.len()).unwrap_or(u32::MAX);
+  let bound_len = target_len.saturating_sub(bound_args_len_u32);
+
+  let name = scope.alloc_string("bound")?;
+  let bound_args = make_value_vec(bound_args)?;
+  let bound_args = if bound_args.is_empty() {
+    None
+  } else {
+    Some(bound_args)
+  };
+
+  let func = scope.alloc_bound_function(
+    target_call,
+    target_construct,
+    name,
+    bound_len,
+    target,
+    bound_this,
+    bound_args,
+  )?;
+
+  // Bound functions are ordinary function objects: their `[[Prototype]]` is `%Function.prototype%`.
+  scope
+    .heap_mut()
+    .object_set_prototype(func, Some(intr.function_prototype()))?;
+
+  // Define standard function metadata properties (`name`, `length`).
+  crate::function_properties::set_function_name(
+    scope,
+    func,
+    PropertyKey::String(target_name),
+    Some("bound"),
+  )?;
+  crate::function_properties::set_function_length(scope, func, bound_len)?;
+
+  Ok(Value::Object(func))
 }
 
 /// `Object.prototype.toString` (partial).

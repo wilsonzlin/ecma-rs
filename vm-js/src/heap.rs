@@ -3013,6 +3013,51 @@ impl<'a> Scope<'a> {
 
     Ok(func)
   }
+
+  /// Allocates a native JavaScript bound function object on the heap.
+  ///
+  /// This creates an ordinary function object with the `[[BoundTargetFunction]]`,
+  /// `[[BoundThis]]`, and `[[BoundArguments]]` internal slots populated.
+  ///
+  /// Note: we intentionally do not define standard function properties (`name`, `length`,
+  /// `prototype`) here; callers are expected to define `name`/`length` per ECMA-262 as needed.
+  pub(crate) fn alloc_bound_function(
+    &mut self,
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    bound_target: GcObject,
+    bound_this: Value,
+    bound_args: Option<Box<[Value]>>,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    let bound_args_len = bound_args.as_deref().map(|args| args.len()).unwrap_or(0);
+    let max_roots = 3usize.saturating_add(bound_args_len);
+    let mut roots: Vec<Value> = Vec::new();
+    roots
+      .try_reserve_exact(max_roots)
+      .map_err(|_| VmError::OutOfMemory)?;
+    roots.push(Value::String(name));
+    roots.push(Value::Object(bound_target));
+    roots.push(bound_this);
+    if let Some(bound_args) = bound_args.as_deref() {
+      roots.extend_from_slice(bound_args);
+    }
+    scope.push_roots(&roots)?;
+
+    let mut func = JsFunction::new_native(call, construct, name, length);
+    func.bound_target = Some(bound_target);
+    func.bound_this = Some(bound_this);
+    func.bound_args = bound_args;
+
+    let new_bytes = func.heap_size_bytes();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Function(func);
+    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
+  }
 }
 
 #[derive(Debug)]

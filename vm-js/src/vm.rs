@@ -669,6 +669,28 @@ impl Vm {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotCallable),
     };
+
+    // Bound function dispatch: if the callee has `[[BoundTargetFunction]]`, forward the call to
+    // the target with the bound `this` and arguments.
+    if let Ok(func) = scope.heap().get_function(callee_obj) {
+      if let Some(bound_target) = func.bound_target {
+        let bound_this = func.bound_this.unwrap_or(Value::Undefined);
+        let bound_args = func.bound_args.as_deref().unwrap_or(&[]);
+
+        let total_len = bound_args
+          .len()
+          .checked_add(args.len())
+          .ok_or(VmError::OutOfMemory)?;
+        let mut combined: Vec<Value> = Vec::new();
+        combined
+          .try_reserve_exact(total_len)
+          .map_err(|_| VmError::OutOfMemory)?;
+        combined.extend_from_slice(bound_args);
+        combined.extend_from_slice(args);
+
+        return self.call(&mut scope, Value::Object(bound_target), bound_this, &combined);
+      }
+    }
     let call_handler = scope.heap().get_function_call_handler(callee_obj)?;
 
     let function_name = scope
@@ -763,6 +785,27 @@ impl Vm {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotConstructable),
     };
+
+    // Bound function dispatch: if the callee has `[[BoundTargetFunction]]`, forward construction to
+    // the target with concatenated arguments.
+    if let Ok(func) = scope.heap().get_function(callee_obj) {
+      if let Some(bound_target) = func.bound_target {
+        let bound_args = func.bound_args.as_deref().unwrap_or(&[]);
+
+        let total_len = bound_args
+          .len()
+          .checked_add(args.len())
+          .ok_or(VmError::OutOfMemory)?;
+        let mut combined: Vec<Value> = Vec::new();
+        combined
+          .try_reserve_exact(total_len)
+          .map_err(|_| VmError::OutOfMemory)?;
+        combined.extend_from_slice(bound_args);
+        combined.extend_from_slice(args);
+
+        return self.construct(&mut scope, Value::Object(bound_target), &combined, new_target);
+      }
+    }
     let construct_handler = scope
       .heap()
       .get_function_construct_handler(callee_obj)?

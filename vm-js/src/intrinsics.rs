@@ -349,6 +349,10 @@ impl Intrinsics {
     let object_prototype_to_string = vm.register_native_call(builtins::object_prototype_to_string)?;
     let function_prototype_call_method =
       vm.register_native_call(builtins::function_prototype_call_method)?;
+    let function_prototype_apply_method =
+      vm.register_native_call(builtins::function_prototype_apply)?;
+    let function_prototype_bind_method =
+      vm.register_native_call(builtins::function_prototype_bind)?;
     let array_prototype_map = vm.register_native_call(builtins::array_prototype_map)?;
     let array_prototype_join = vm.register_native_call(builtins::array_prototype_join)?;
     let string_prototype_to_string = vm.register_native_call(builtins::string_prototype_to_string)?;
@@ -460,6 +464,42 @@ impl Intrinsics {
         scope
           .heap_mut()
           .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        function_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // Function.prototype.apply
+    {
+      let apply_s = scope.alloc_string("apply")?;
+      scope.push_root(Value::String(apply_s))?;
+      let key = PropertyKey::from_string(apply_s);
+      let func =
+        scope.alloc_native_function(function_prototype_apply_method, None, apply_s, 2)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
+      scope.define_property(
+        function_prototype,
+        key,
+        data_desc(Value::Object(func), true, false, true),
+      )?;
+    }
+
+    // Function.prototype.bind
+    {
+      let bind_s = scope.alloc_string("bind")?;
+      scope.push_root(Value::String(bind_s))?;
+      let key = PropertyKey::from_string(bind_s);
+      let func =
+        scope.alloc_native_function(function_prototype_bind_method, None, bind_s, 1)?;
+      scope.push_root(Value::Object(func))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(func, Some(function_prototype))?;
       scope.define_property(
         function_prototype,
         key,
