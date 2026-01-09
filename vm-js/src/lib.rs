@@ -64,7 +64,6 @@ mod value;
 mod vm;
 
 pub(crate) use crate::handle::EnvRootId;
-pub(crate) use crate::handle::GcEnv;
 
 pub use crate::error::Termination;
 pub use crate::error::TerminationReason;
@@ -75,12 +74,15 @@ pub use crate::execution_context::ExecutionContext;
 pub use crate::execution_context::ModuleId;
 pub use crate::execution_context::ScriptId;
 pub use crate::execution_context::ScriptOrModule;
+pub use crate::function::EcmaFunctionId;
 pub use crate::function::NativeConstructId;
 pub use crate::function::NativeFunctionId;
+pub use crate::function::ThisMode;
 pub use crate::function_properties::make_constructor;
 pub use crate::function_properties::set_function_length;
 pub use crate::function_properties::set_function_name;
 pub use crate::handle::GcObject;
+pub use crate::handle::GcEnv;
 pub use crate::handle::GcString;
 pub use crate::handle::GcSymbol;
 pub use crate::handle::HeapId;

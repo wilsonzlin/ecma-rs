@@ -16,18 +16,37 @@ pub struct NativeFunctionId(pub u32);
 #[repr(transparent)]
 pub struct NativeConstructId(pub u32);
 
+/// Identifier for an ECMAScript (user-defined) function's executable body.
+///
+/// This is intentionally just an id so that function objects can outlive a single `exec_script`
+/// invocation without holding any references into ephemeral parser/AST data structures.
+///
+/// In the future this id can index into a per-realm code table (bytecode, HIR, etc.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct EcmaFunctionId(pub u32);
+
+/// ECMAScript `[[ThisMode]]` (ECMA-262).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThisMode {
+  /// Arrow functions.
+  Lexical,
+  /// Strict-mode functions.
+  Strict,
+  /// Sloppy-mode functions.
+  Global,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CallHandler {
   Native(NativeFunctionId),
-  #[allow(dead_code)]
-  EcmaScript,
+  Ecma(EcmaFunctionId),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ConstructHandler {
   Native(NativeConstructId),
-  #[allow(dead_code)]
-  EcmaScript,
+  Ecma(EcmaFunctionId),
 }
 
 /// A JavaScript function object.
@@ -47,6 +66,13 @@ pub(crate) struct JsFunction {
   pub(crate) name: GcString,
   /// Function `length` metadata (used by `Function.prototype.length`).
   pub(crate) length: u32,
+  /// ECMAScript `[[ThisMode]]`.
+  pub(crate) this_mode: ThisMode,
+  /// Whether the function is strict mode.
+  ///
+  /// Note: `[[ThisMode]]` depends on strictness for ordinary functions, but strictness also affects
+  /// other semantics (early errors, `arguments`, etc), so we store it separately.
+  pub(crate) is_strict: bool,
 
   pub(crate) base: ObjectBase,
 
@@ -70,6 +96,8 @@ impl JsFunction {
       construct: construct.map(ConstructHandler::Native),
       name,
       length,
+      this_mode: ThisMode::Global,
+      is_strict: false,
       base: ObjectBase::new(None),
       bound_target: None,
       bound_this: None,
@@ -79,7 +107,34 @@ impl JsFunction {
     }
   }
 
-  #[allow(dead_code)]
+  pub(crate) fn new_ecma(
+    code: EcmaFunctionId,
+    is_constructable: bool,
+    name: GcString,
+    length: u32,
+    this_mode: ThisMode,
+    is_strict: bool,
+    closure_env: Option<GcEnv>,
+  ) -> Self {
+    Self {
+      call: CallHandler::Ecma(code),
+      construct: if is_constructable {
+        Some(ConstructHandler::Ecma(code))
+      } else {
+        None
+      },
+      name,
+      length,
+      this_mode,
+      is_strict,
+      base: ObjectBase::new(None),
+      bound_target: None,
+      bound_this: None,
+      bound_args: None,
+      realm: None,
+      closure_env,
+    }
+  }
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
     let property_count = self.base.property_count();

@@ -1,5 +1,8 @@
 use crate::env::{EnvBinding, EnvRecord};
-use crate::function::{CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId};
+use crate::function::{
+  CallHandler, ConstructHandler, EcmaFunctionId, JsFunction, NativeConstructId, NativeFunctionId,
+  ThisMode,
+};
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
@@ -349,7 +352,7 @@ impl Heap {
     matches!(self.get_heap_object(sym.0), Ok(HeapObject::Symbol(_)))
   }
 
-  pub(crate) fn is_valid_env(&self, env: GcEnv) -> bool {
+  pub fn is_valid_env(&self, env: GcEnv) -> bool {
     matches!(self.get_heap_object(env.0), Ok(HeapObject::Env(_)))
   }
 
@@ -1663,7 +1666,7 @@ impl<'a> Scope<'a> {
     Ok(func)
   }
 
-  pub(crate) fn env_create(&mut self, outer: Option<GcEnv>) -> Result<GcEnv, VmError> {
+  pub fn env_create(&mut self, outer: Option<GcEnv>) -> Result<GcEnv, VmError> {
     // Root `outer` during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     if let Some(outer) = outer {
@@ -1719,6 +1722,56 @@ impl<'a> Scope<'a> {
         initialized: false,
       },
     )
+  }
+
+  /// Allocates an ECMAScript (user-defined) function object on the heap.
+  pub fn alloc_ecma_function(
+    &mut self,
+    code: EcmaFunctionId,
+    is_constructable: bool,
+    name: GcString,
+    length: u32,
+    this_mode: ThisMode,
+    is_strict: bool,
+    closure_env: Option<GcEnv>,
+  ) -> Result<GcObject, VmError> {
+    // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
+    let mut scope = self.reborrow();
+    scope.push_root(Value::String(name));
+    if let Some(env) = closure_env {
+      scope.push_env_root(env);
+    }
+
+    let func = JsFunction::new_ecma(
+      code,
+      is_constructable,
+      name,
+      length,
+      this_mode,
+      is_strict,
+      closure_env,
+    );
+    let new_bytes = func.heap_size_bytes();
+    scope.heap.ensure_can_allocate(new_bytes)?;
+
+    let obj = HeapObject::Function(func);
+    let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes));
+
+    // Define standard function properties.
+    crate::function_properties::set_function_name(
+      &mut scope,
+      func,
+      PropertyKey::String(name),
+      None,
+    )?;
+    crate::function_properties::set_function_length(&mut scope, func, length)?;
+
+    // Constructors get a `.prototype` object.
+    if is_constructable {
+      crate::function_properties::make_constructor(&mut scope, func)?;
+    }
+
+    Ok(func)
   }
 }
 

@@ -3,10 +3,7 @@ use crate::error::TerminationReason;
 use crate::error::VmError;
 use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
-use crate::function::CallHandler;
-use crate::function::ConstructHandler;
-use crate::function::NativeConstructId;
-use crate::function::NativeFunctionId;
+use crate::function::{CallHandler, ConstructHandler, NativeConstructId, NativeFunctionId};
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
@@ -486,7 +483,6 @@ impl Vm {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotCallable),
     };
-
     let call_handler = scope.heap().get_function_call_handler(callee_obj)?;
 
     let function_name = scope
@@ -500,7 +496,7 @@ impl Vm {
 
     let source = match call_handler {
       CallHandler::Native(_) => Arc::<str>::from("<native>"),
-      CallHandler::EcmaScript => Arc::<str>::from("<call>"),
+      CallHandler::Ecma(_) => Arc::<str>::from("<call>"),
     };
     let frame = StackFrame {
       function: function_name,
@@ -515,7 +511,7 @@ impl Vm {
 
     match call_handler {
       CallHandler::Native(call_id) => vm.dispatch_native_call(call_id, &mut scope, this, args),
-      CallHandler::EcmaScript => vm.call_ecma_function(&mut scope, callee_obj, this, args),
+      CallHandler::Ecma(_) => vm.call_ecma_function(&mut scope, callee_obj, this, args),
     }
   }
 
@@ -580,7 +576,6 @@ impl Vm {
       Value::Object(obj) => obj,
       _ => return Err(VmError::NotConstructable),
     };
-
     let construct_handler = scope
       .heap()
       .get_function_construct_handler(callee_obj)?
@@ -597,7 +592,7 @@ impl Vm {
 
     let source = match construct_handler {
       ConstructHandler::Native(_) => Arc::<str>::from("<native>"),
-      ConstructHandler::EcmaScript => Arc::<str>::from("<call>"),
+      ConstructHandler::Ecma(_) => Arc::<str>::from("<call>"),
     };
     let frame = StackFrame {
       function: function_name,
@@ -615,7 +610,7 @@ impl Vm {
       ConstructHandler::Native(construct_id) => {
         vm.dispatch_native_construct(construct_id, &mut scope, args, new_target)
       }
-      ConstructHandler::EcmaScript => {
+      ConstructHandler::Ecma(_) => {
         vm.construct_ecma_function(&mut scope, callee_obj, args, new_target)
       }
     }
@@ -628,7 +623,9 @@ impl Vm {
     _this: Value,
     _args: &[Value],
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("ecma function call"))
+    Err(VmError::Unimplemented(
+      "calling ECMAScript functions (interpreter/bytecode not wired yet)",
+    ))
   }
 
   fn construct_ecma_function(
@@ -638,6 +635,8 @@ impl Vm {
     _args: &[Value],
     _new_target: Value,
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("ecma function construct"))
+    Err(VmError::Unimplemented(
+      "constructing ECMAScript functions (interpreter/bytecode not wired yet)",
+    ))
   }
 }

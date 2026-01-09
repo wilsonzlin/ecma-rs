@@ -174,7 +174,7 @@ impl GcSymbol {
 /// A GC-managed internal environment record.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
-pub(crate) struct GcEnv(pub(crate) HeapId);
+pub struct GcEnv(pub(crate) HeapId);
 
 #[allow(dead_code)]
 impl GcEnv {

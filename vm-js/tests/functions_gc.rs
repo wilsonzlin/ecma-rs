@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, NativeFunctionId, Value, VmError};
+use vm_js::{EcmaFunctionId, Heap, HeapLimits, NativeFunctionId, ThisMode, Value, VmError};
 
 #[test]
 fn gc_collects_unreachable_functions() -> Result<(), VmError> {
@@ -63,3 +63,40 @@ fn function_traces_its_name_string() -> Result<(), VmError> {
   Ok(())
 }
 
+#[test]
+fn gc_traces_closure_env_from_ecma_function() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let env;
+  let func;
+  {
+    let mut scope = heap.scope();
+    let name = scope.alloc_string("closure")?;
+    // Root the name across environment allocation in case it triggers a GC.
+    scope.push_root(Value::String(name));
+
+    env = scope.env_create(None)?;
+    func = scope.alloc_ecma_function(
+      EcmaFunctionId(1),
+      true,
+      name,
+      0,
+      ThisMode::Global,
+      false,
+      Some(env),
+    )?;
+
+    // Only root the function; if it doesn't trace `closure_env`, `env` would be collected.
+    scope.push_root(Value::Object(func));
+
+    scope.heap_mut().collect_garbage();
+    assert!(scope.heap().is_valid_object(func));
+    assert!(scope.heap().is_valid_env(env));
+  }
+
+  // Stack roots were removed when the scope was dropped.
+  heap.collect_garbage();
+  assert!(!heap.is_valid_object(func));
+  assert!(!heap.is_valid_env(env));
+  Ok(())
+}
