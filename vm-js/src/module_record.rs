@@ -243,7 +243,9 @@ impl SourceTextModuleRecord {
     // 6. For each ExportEntry Record e of module.[[StarExportEntries]], do
     for entry in &self.star_export_entries {
       // a. Let requestedModule be GetImportedModule(module, e.[[ModuleRequest]]).
-      let requested_module = graph.get_imported_module(module, &entry.module_request);
+      let Some(requested_module) = graph.get_imported_module(module, &entry.module_request) else {
+        continue;
+      };
       // b. Let starNames be requestedModule.GetExportedNames(exportStarSet).
       let star_names =
         graph
@@ -316,7 +318,9 @@ impl SourceTextModuleRecord {
       // a. If SameValue(exportName, e.[[ExportName]]) is true, then
       if entry.export_name == export_name {
         // i. Let importedModule be GetImportedModule(module, e.[[ModuleRequest]]).
-        let imported_module = graph.get_imported_module(module, &entry.module_request);
+        let Some(imported_module) = graph.get_imported_module(module, &entry.module_request) else {
+          return ResolveExportResult::NotFound;
+        };
         // ii. If e.[[ImportName]] is all, then
         if entry.import_name == ImportName::All {
           // 1. Return ResolvedBinding Record { [[Module]]: importedModule, [[BindingName]]: namespace }.
@@ -329,8 +333,12 @@ impl SourceTextModuleRecord {
         // iii. Else,
         // 1. Assert: e.[[ImportName]] is a String.
         // 2. Return importedModule.ResolveExport(e.[[ImportName]], resolveSet).
-        let ImportName::Name(import_name) = &entry.import_name else {
-          unreachable!("ImportName::All handled above");
+        let import_name = match &entry.import_name {
+          ImportName::Name(name) => name,
+          ImportName::All => {
+            debug_assert!(false, "ImportName::All handled above");
+            return ResolveExportResult::NotFound;
+          }
         };
         return graph
           .module(imported_module)
@@ -350,7 +358,9 @@ impl SourceTextModuleRecord {
     // 7. For each ExportEntry Record e of module.[[StarExportEntries]], do
     for entry in &self.star_export_entries {
       // a. Let importedModule be GetImportedModule(module, e.[[ModuleRequest]]).
-      let imported_module = graph.get_imported_module(module, &entry.module_request);
+      let Some(imported_module) = graph.get_imported_module(module, &entry.module_request) else {
+        continue;
+      };
       // b. Let resolution be importedModule.ResolveExport(exportName, resolveSet).
       let resolution = graph
         .module(imported_module)

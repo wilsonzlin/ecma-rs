@@ -10,6 +10,10 @@ pub enum VmError {
   #[error("out of memory")]
   OutOfMemory,
 
+  /// An internal invariant was violated (bug in the VM or the embedding).
+  #[error("invariant violation: {0}")]
+  InvariantViolation(&'static str),
+
   /// A hard VM limit was exceeded (e.g. an embedding attempted to register too many handlers).
   #[error("limit exceeded: {0}")]
   LimitExceeded(&'static str),

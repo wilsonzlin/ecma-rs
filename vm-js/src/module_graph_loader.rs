@@ -107,16 +107,27 @@ impl CyclicModuleRecord {
 
   /// Inserts or replaces an entry in `loaded_modules` using ECMA-262's `ModuleRequestsEqual`
   /// semantics.
-  pub fn set_loaded_module(&mut self, request: ModuleRequest, module: ModuleId) {
+  pub fn set_loaded_module(&mut self, request: ModuleRequest, module: ModuleId) -> Result<(), VmError> {
     if let Some(existing) = self
       .loaded_modules
       .iter_mut()
       .find(|loaded| module_requests_equal(&loaded.request, &request))
     {
-      existing.module = module;
-      return;
+      if existing.module != module {
+        // `FinishLoadingImportedModule` requires that duplicate requests resolve to the same Module
+        // Record. If this is violated it indicates a bug (or a malicious embedding).
+        return Err(VmError::InvariantViolation(
+          "FinishLoadingImportedModule invariant violation: module request resolved to different modules",
+        ));
+      }
+      return Ok(());
     }
+    self
+      .loaded_modules
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
     self.loaded_modules.push(LoadedModuleRequest { request, module });
+    Ok(())
   }
 }
 
@@ -136,40 +147,38 @@ pub struct ModuleStore {
 }
 
 impl ModuleStore {
-  pub fn insert(&mut self, module: ModuleRecord) -> ModuleId {
+  pub fn insert(&mut self, module: ModuleRecord) -> Result<ModuleId, VmError> {
+    self
+      .modules
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
     let id = ModuleId::from_raw(self.next_id);
     self.next_id = self.next_id.wrapping_add(1);
     self.modules.insert(id, module);
-    id
+    Ok(id)
   }
 
-  pub fn insert_cyclic(&mut self, module: CyclicModuleRecord) -> ModuleId {
+  pub fn insert_cyclic(&mut self, module: CyclicModuleRecord) -> Result<ModuleId, VmError> {
     self.insert(ModuleRecord::Cyclic(module))
   }
 
-  pub fn get(&self, id: ModuleId) -> &ModuleRecord {
-    self
-      .modules
-      .get(&id)
-      .unwrap_or_else(|| panic!("invalid ModuleId {id:?}"))
+  pub fn get(&self, id: ModuleId) -> Option<&ModuleRecord> {
+    self.modules.get(&id)
   }
 
-  pub fn get_mut(&mut self, id: ModuleId) -> &mut ModuleRecord {
-    self
-      .modules
-      .get_mut(&id)
-      .unwrap_or_else(|| panic!("invalid ModuleId {id:?}"))
+  pub fn get_mut(&mut self, id: ModuleId) -> Option<&mut ModuleRecord> {
+    self.modules.get_mut(&id)
   }
 
   pub fn get_cyclic(&self, id: ModuleId) -> Option<&CyclicModuleRecord> {
-    match self.get(id) {
+    match self.get(id)? {
       ModuleRecord::Cyclic(m) => Some(m),
       _ => None,
     }
   }
 
   pub fn get_cyclic_mut(&mut self, id: ModuleId) -> Option<&mut CyclicModuleRecord> {
-    match self.get_mut(id) {
+    match self.get_mut(id)? {
       ModuleRecord::Cyclic(m) => Some(m),
       _ => None,
     }
@@ -323,16 +332,25 @@ impl GraphLoadingState {
     self.0.borrow().visited.contains(&module)
   }
 
-  fn push_visited(&self, module: ModuleId) {
-    self.0.borrow_mut().visited.push(module);
+  fn push_visited(&self, module: ModuleId) -> Result<(), VmError> {
+    let mut state = self.0.borrow_mut();
+    state
+      .visited
+      .try_reserve(1)
+      .map_err(|_| VmError::OutOfMemory)?;
+    state.visited.push(module);
+    Ok(())
   }
 
-  fn visited_snapshot(&self) -> Vec<ModuleId> {
-    self.0.borrow().visited.clone()
-  }
-
-  fn inc_pending(&self, delta: usize) {
-    self.0.borrow_mut().pending_modules_count += delta;
+  fn inc_pending(&self, delta: usize) -> Result<(), VmError> {
+    let mut state = self.0.borrow_mut();
+    state.pending_modules_count = state
+      .pending_modules_count
+      .checked_add(delta)
+      .ok_or(VmError::LimitExceeded(
+        "module graph loader pending module count overflow",
+      ))?;
+    Ok(())
   }
 
   fn dec_pending(&self) -> usize {
@@ -389,7 +407,13 @@ pub fn inner_module_loading(
   state: &GraphLoadingState,
   module: ModuleId,
 ) {
-  let (should_traverse, requested_modules) = match modules.get(module) {
+  let Some(record) = modules.get(module) else {
+    state.set_is_loading(false);
+    state.reject_promise(VmError::InvalidHandle);
+    return;
+  };
+
+  let (should_traverse, requested_modules) = match record {
     ModuleRecord::Cyclic(m) => {
       let should_traverse =
         m.status == ModuleStatus::New && !state.visited_contains(module);
@@ -404,8 +428,16 @@ pub fn inner_module_loading(
   };
 
   if should_traverse {
-    state.push_visited(module);
-    state.inc_pending(requested_modules.len());
+    if let Err(err) = state.push_visited(module) {
+      state.set_is_loading(false);
+      state.reject_promise(err);
+      return;
+    }
+    if let Err(err) = state.inc_pending(requested_modules.len()) {
+      state.set_is_loading(false);
+      state.reject_promise(err);
+      return;
+    }
 
     for request in requested_modules {
       if !all_import_attributes_supported(&request) {
@@ -445,11 +477,14 @@ pub fn inner_module_loading(
   }
 
   state.set_is_loading(false);
-  for visited in state.visited_snapshot() {
-    if let Some(module) = modules.get_cyclic_mut(visited) {
+  {
+    let visited = state.0.borrow();
+    for &visited_id in &visited.visited {
+      if let Some(module) = modules.get_cyclic_mut(visited_id) {
       if module.status == ModuleStatus::New {
         module.status = ModuleStatus::Unlinked;
       }
+    }
     }
   }
   state.resolve_promise();
@@ -490,7 +525,10 @@ pub fn finish_loading_imported_module(
 ) {
   if let Ok(loaded) = result {
     if let Some(module) = modules.get_cyclic_mut(referrer) {
-      module.set_loaded_module(request, loaded);
+      if let Err(err) = module.set_loaded_module(request, loaded) {
+        continue_module_loading(modules, host, payload, Err(err));
+        return;
+      }
     }
     continue_module_loading(modules, host, payload, Ok(loaded));
   } else {

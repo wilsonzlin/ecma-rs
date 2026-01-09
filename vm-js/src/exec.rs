@@ -882,7 +882,10 @@ impl<'a> Evaluator<'a> {
           }
 
           let Pat::Id(id) = &*declarator.pattern.stx.pat.stx else {
-            unreachable!();
+            debug_assert!(false, "expected Pat::Id after matches! guard");
+            return Err(VmError::InvariantViolation(
+              "internal error: const declaration pattern mismatch",
+            ));
           };
           let name = id.stx.name.as_str();
 
@@ -2142,7 +2145,12 @@ impl<'a> Evaluator<'a> {
           OperatorName::LessThanOrEqual => Ok(Value::Bool(left_n <= right_n)),
           OperatorName::GreaterThan => Ok(Value::Bool(left_n > right_n)),
           OperatorName::GreaterThanOrEqual => Ok(Value::Bool(left_n >= right_n)),
-          _ => unreachable!(),
+          _ => {
+            debug_assert!(false, "unexpected operator in numeric binary op fast path");
+            Err(VmError::InvariantViolation(
+              "internal error: unexpected operator in numeric binary op",
+            ))
+          }
         }
       }
       _ => Err(VmError::Unimplemented("binary operator")),

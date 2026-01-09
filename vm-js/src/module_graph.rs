@@ -60,34 +60,30 @@ impl ModuleGraph {
     for referrer_idx in 0..self.modules.len() {
       let requests = self.modules[referrer_idx].requested_modules.clone();
       for request in requests {
-        let imported = self.resolve_host_module(&request).unwrap_or_else(|| {
-          panic!(
+        if let Some(imported) = self.resolve_host_module(&request) {
+          self.modules[referrer_idx]
+            .loaded_modules
+            .push((request, imported));
+        } else {
+          // `ModuleGraph` is a small in-memory helper used primarily by unit tests. Avoid panicking
+          // in library code; missing host resolution simply leaves the request unlinked.
+          debug_assert!(
+            false,
             "ModuleGraph::link_all_by_specifier: no module registered for specifier {:?}",
             request.specifier
-          )
-        });
-        self.modules[referrer_idx]
-          .loaded_modules
-          .push((request, imported));
+          );
+        }
       }
     }
   }
 
   /// Implements ECMA-262 `GetImportedModule(referrer, request)`.
-  ///
-  /// This minimal implementation panics if the module has not been linked/loaded.
-  pub fn get_imported_module(&self, referrer: ModuleId, request: &ModuleRequest) -> ModuleId {
+  pub fn get_imported_module(&self, referrer: ModuleId, request: &ModuleRequest) -> Option<ModuleId> {
     self
       .modules[module_index(referrer)]
       .loaded_modules
       .iter()
       .find_map(|(req, id)| (req == request).then_some(*id))
-      .unwrap_or_else(|| {
-        panic!(
-          "GetImportedModule: module {referrer:?} has no loaded module for request {:?}",
-          request.specifier
-        )
-      })
   }
 
   fn resolve_host_module(&self, request: &ModuleRequest) -> Option<ModuleId> {
