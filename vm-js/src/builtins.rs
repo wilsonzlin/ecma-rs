@@ -859,9 +859,9 @@ fn resolve_promise(
 
   // Get `thenable.then`.
   //
-  // We currently use `Heap::get`, which supports ordinary data properties and a minimal subset of
-  // accessors. This matches the current VM capabilities and is sufficient for thenables with a
-  // data-property `then`.
+  // Spec: this must perform `Get(thenable, "then")`, which means it must:
+  // - traverse the prototype chain,
+  // - and invoke accessor getters.
   let then_result = {
     // Root `thenable_obj` while allocating the property key.
     let mut key_scope = scope.reborrow();
@@ -870,7 +870,22 @@ fn resolve_promise(
     key_scope.push_root(Value::String(then_key_s))?;
     let then_key = PropertyKey::from_string(then_key_s);
 
-    key_scope.heap().get(thenable_obj, &then_key)
+    match key_scope.heap().get_property(thenable_obj, &then_key)? {
+      None => Ok(Value::Undefined),
+      Some(desc) => match desc.kind {
+        PropertyKind::Data { value, .. } => Ok(value),
+        PropertyKind::Accessor { get, .. } => {
+          if matches!(get, Value::Undefined) {
+            Ok(Value::Undefined)
+          } else {
+            if !key_scope.heap().is_callable(get)? {
+              return Err(VmError::TypeError("accessor getter is not callable"));
+            }
+            vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
+          }
+        }
+      },
+    }
   };
 
   let then = match then_result {

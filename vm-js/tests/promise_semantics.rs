@@ -11,6 +11,9 @@ thread_local! {
   static STORED_RESOLVE_ROOT: Cell<Option<RootId>> = Cell::new(None);
   static THEN2_ARG: Cell<Option<f64>> = Cell::new(None);
   static CALL_LOG: RefCell<Vec<u8>> = RefCell::new(Vec::new());
+  static THEN_GETTER_CALLS: Cell<u32> = Cell::new(0);
+  static THEN_GETTER_EXPECTED_THIS: Cell<Option<GcObject>> = Cell::new(None);
+  static THEN_GETTER_RETURN: Cell<Option<GcObject>> = Cell::new(None);
 }
 
 #[derive(Default)]
@@ -248,6 +251,30 @@ fn thenable_then_resolve_42(
   Ok(Value::Undefined)
 }
 
+fn thenable_then_getter_returns_then_fn(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  THEN_GETTER_CALLS.with(|c| c.set(c.get() + 1));
+
+  let expected = THEN_GETTER_EXPECTED_THIS
+    .with(|c| c.get())
+    .expect("THEN_GETTER_EXPECTED_THIS should be set");
+  assert_eq!(this, Value::Object(expected));
+
+  // Stress rooting: `resolve_promise` must keep the receiver + getter return value live across GC.
+  scope.heap_mut().collect_garbage();
+
+  let then_fn = THEN_GETTER_RETURN
+    .with(|c| c.get())
+    .expect("THEN_GETTER_RETURN should be set");
+  Ok(Value::Object(then_fn))
+}
+
 fn executor_resolve_thenable_then_resolve_again(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -283,6 +310,62 @@ fn executor_resolve_thenable_then_resolve_again(
   )?;
   let _ = vm.call_with_host(scope, host, resolve, Value::Undefined, &[Value::Number(1.0)])?;
 
+  Ok(Value::Undefined)
+}
+
+fn executor_resolve_thenable_accessor_then(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  THEN_GETTER_CALLS.with(|c| c.set(0));
+  THEN_GETTER_EXPECTED_THIS.with(|c| c.set(None));
+  THEN_GETTER_RETURN.with(|c| c.set(None));
+
+  let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
+
+  let thenable = scope.alloc_object()?;
+  scope.push_root(Value::Object(thenable))?;
+
+  let then_call_id = vm.register_native_call(thenable_then_resolve_42)?;
+  let then_name = scope.alloc_string("then")?;
+  let then_fn = scope.alloc_native_function(then_call_id, None, then_name, 2)?;
+  scope.push_root(Value::Object(then_fn))?;
+
+  let getter_call_id = vm.register_native_call(thenable_then_getter_returns_then_fn)?;
+  let getter_name = scope.alloc_string("get_then")?;
+  let getter_fn = scope.alloc_native_function(getter_call_id, None, getter_name, 0)?;
+  scope.push_root(Value::Object(getter_fn))?;
+
+  THEN_GETTER_EXPECTED_THIS.with(|c| c.set(Some(thenable)));
+  THEN_GETTER_RETURN.with(|c| c.set(Some(then_fn)));
+
+  let then_key_s = scope.alloc_string("then")?;
+  scope.push_root(Value::String(then_key_s))?;
+  let then_key = PropertyKey::from_string(then_key_s);
+  scope.define_property(
+    thenable,
+    then_key,
+    PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Accessor {
+        get: Value::Object(getter_fn),
+        set: Value::Undefined,
+      },
+    },
+  )?;
+
+  let _ = vm.call_with_host(
+    scope,
+    host,
+    resolve,
+    Value::Undefined,
+    &[Value::Object(thenable)],
+  )?;
   Ok(Value::Undefined)
 }
 
@@ -622,6 +705,51 @@ fn thenable_assimilation_and_already_resolved_record() -> Result<(), VmError> {
   };
 
   // The thenable should enqueue a resolve-thenable job and keep the promise pending until it runs.
+  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Pending);
+  assert_eq!(host.queue.len(), 1);
+
+  ctx.run_jobs(&mut host)?;
+
+  assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Fulfilled);
+  assert_eq!(ctx.heap.promise_result(promise_obj)?, Some(Value::Number(42.0)));
+
+  realm.teardown(&mut ctx.heap);
+  Ok(())
+}
+
+#[test]
+fn thenable_assimilation_supports_accessor_then_property() -> Result<(), VmError> {
+  THEN_GETTER_CALLS.with(|c| c.set(0));
+
+  let mut ctx = TestContext::new();
+  let mut host = TestHost::default();
+  let mut realm = Realm::new(&mut ctx.vm, &mut ctx.heap)?;
+
+  let promise_ctor = realm.intrinsics().promise();
+
+  let promise_obj = {
+    let mut scope = ctx.heap.scope();
+
+    let exec_id = ctx
+      .vm
+      .register_native_call(executor_resolve_thenable_accessor_then)?;
+    let exec_name = scope.alloc_string("executor")?;
+    let executor = scope.alloc_native_function(exec_id, None, exec_name, 2)?;
+
+    let Value::Object(promise_obj) = ctx.vm.construct_with_host(
+      &mut scope,
+      &mut host,
+      Value::Object(promise_ctor),
+      &[Value::Object(executor)],
+      Value::Object(promise_ctor),
+    )?
+    else {
+      return Err(VmError::Unimplemented("Promise constructor returned non-object"));
+    };
+    promise_obj
+  };
+
+  assert_eq!(THEN_GETTER_CALLS.with(|c| c.get()), 1);
   assert_eq!(ctx.heap.promise_state(promise_obj)?, PromiseState::Pending);
   assert_eq!(host.queue.len(), 1);
 
