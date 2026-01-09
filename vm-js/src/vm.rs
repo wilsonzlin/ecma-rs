@@ -62,7 +62,7 @@ impl Default for VmOptions {
 }
 
 /// Per-run execution budget.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Budget {
   pub fuel: Option<u64>,
   pub deadline: Option<Instant>,
@@ -80,7 +80,7 @@ impl Budget {
 }
 
 #[derive(Debug, Clone)]
-struct BudgetState {
+pub(crate) struct BudgetState {
   budget: Budget,
   ticks: u64,
 }
@@ -275,8 +275,22 @@ impl Vm {
     self.interrupt_handle.clone()
   }
 
+  /// Returns the current execution budget (including remaining fuel/deadline).
+  #[inline]
+  pub fn budget(&self) -> Budget {
+    self.budget.budget.clone()
+  }
+
   pub fn set_budget(&mut self, budget: Budget) {
     self.budget = BudgetState::new(budget);
+  }
+
+  pub(crate) fn swap_budget_state(&mut self, budget: Budget) -> BudgetState {
+    mem::replace(&mut self.budget, BudgetState::new(budget))
+  }
+
+  pub(crate) fn restore_budget_state(&mut self, state: BudgetState) {
+    self.budget = state;
   }
 
   /// Reset this VM's execution budget to its construction defaults.

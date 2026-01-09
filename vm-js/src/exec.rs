@@ -143,7 +143,9 @@ impl RuntimeEnv {
 
   fn get(&self, vm: &mut Vm, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
     if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
-      return Ok(Some(scope.heap().env_get_binding_value(env, name, false)?));
+      return Ok(Some(
+        scope.heap().env_get_binding_value(env, name, false)?,
+      ));
     }
 
     // Fall back to global object property lookup.

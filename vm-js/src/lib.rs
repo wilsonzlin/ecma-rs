@@ -35,6 +35,7 @@
 //! `prototype` objects, native methods/attributes, wrapper identity caches), see
 //! [`docs::webidl_host_objects`](crate::docs::webidl_host_objects).
 
+mod agent;
 mod builtins;
 mod env;
 mod error;
@@ -65,6 +66,9 @@ mod vm;
 
 pub(crate) use crate::handle::EnvRootId;
 
+pub use crate::agent::format_termination;
+pub use crate::agent::Agent;
+pub use crate::agent::HostHooks;
 pub use crate::error::Termination;
 pub use crate::error::TerminationReason;
 pub use crate::error::VmError;
@@ -91,6 +95,7 @@ pub use crate::handle::WeakGcObject;
 pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
 pub use crate::heap::MAX_PROTOTYPE_CHAIN;
+pub use crate::heap::PersistentRoot;
 pub use crate::heap::Scope;
 pub use crate::intrinsics::Intrinsics;
 pub use crate::intrinsics::WellKnownSymbols;

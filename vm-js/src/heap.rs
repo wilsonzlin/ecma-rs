@@ -70,6 +70,62 @@ pub struct Heap {
   symbol_registry: BTreeMap<JsString, GcSymbol>,
 }
 
+/// RAII wrapper for a persistent GC root created by [`Heap::add_root`].
+///
+/// This is intended for host embeddings that need to keep VM values alive across calls but want to
+/// avoid leaking roots on early returns.
+///
+/// While this guard is alive it holds a mutable borrow of the [`Heap`]. For long-lived roots stored
+/// in host state, prefer storing the returned [`RootId`] from [`Heap::add_root`] directly.
+pub struct PersistentRoot<'a> {
+  heap: &'a mut Heap,
+  id: RootId,
+}
+
+impl<'a> PersistentRoot<'a> {
+  /// Adds `value` to the heap's persistent root set and returns a guard that removes it on drop.
+  pub fn new(heap: &'a mut Heap, value: Value) -> Self {
+    let id = heap.add_root(value);
+    Self { heap, id }
+  }
+
+  /// The underlying [`RootId`].
+  #[inline]
+  pub fn id(&self) -> RootId {
+    self.id
+  }
+
+  /// Returns the current rooted value.
+  #[inline]
+  pub fn get(&self) -> Option<Value> {
+    self.heap.get_root(self.id)
+  }
+
+  /// Updates the rooted value.
+  #[inline]
+  pub fn set(&mut self, value: Value) {
+    self.heap.set_root(self.id, value);
+  }
+
+  /// Borrows the underlying heap immutably.
+  #[inline]
+  pub fn heap(&self) -> &Heap {
+    &*self.heap
+  }
+
+  /// Borrows the underlying heap mutably.
+  #[inline]
+  pub fn heap_mut(&mut self) -> &mut Heap {
+    &mut *self.heap
+  }
+}
+
+impl Drop for PersistentRoot<'_> {
+  fn drop(&mut self) {
+    self.heap.remove_root(self.id);
+  }
+}
+
 impl Heap {
   /// Creates a new heap with the provided memory limits.
   pub fn new(limits: HeapLimits) -> Self {
@@ -208,6 +264,12 @@ impl Heap {
 
     #[cfg(debug_assertions)]
     self.debug_assert_used_bytes_is_correct();
+  }
+
+  /// Adds a persistent root and returns an RAII guard that removes it on drop.
+  #[inline]
+  pub fn persistent_root(&mut self, value: Value) -> PersistentRoot<'_> {
+    PersistentRoot::new(self, value)
   }
 
   /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
