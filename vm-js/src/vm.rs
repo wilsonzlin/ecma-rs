@@ -222,7 +222,7 @@ impl Vm {
   ///
   /// The returned [`Value`] is **not automatically rooted**. If the caller will perform any
   /// additional allocations that could trigger GC, it must root the returned value itself (for
-  /// example with [`Scope::push_root`]).
+  /// example with `scope.push_root(result)`.
   ///
   /// This method roots `callee`, `this`, and `args` for the duration of the call using a temporary
   /// child [`Scope`].
@@ -273,7 +273,7 @@ impl Vm {
   ///
   /// The returned [`Value`] is **not automatically rooted**. If the caller will perform any
   /// additional allocations that could trigger GC, it must root the returned value itself (for
-  /// example with [`Scope::push_root`]).
+  /// example with `scope.push_root(result)`.
   ///
   /// This method roots `callee`, `new_target`, and `args` for the duration of construction using a
   /// temporary child [`Scope`].
