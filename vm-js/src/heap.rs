@@ -606,7 +606,6 @@ impl Heap {
     )
   }
 
-<<<<<<< HEAD
   /// Returns `true` if `obj` currently points to a live Promise object allocation.
   ///
   /// This is the spec-shaped "brand check" used by `IsPromise`: an object is a Promise if it has
@@ -618,7 +617,8 @@ impl Heap {
   /// Alias for [`Heap::is_promise_object`].
   pub fn is_promise(&self, obj: GcObject) -> bool {
     self.is_promise_object(obj)
-=======
+  }
+
   /// Sets a host-only internal slot payload on an object.
   ///
   /// This is intended for platform bindings (e.g. DOM wrappers) to attach small metadata
@@ -656,7 +656,6 @@ impl Heap {
       }
       _ => Err(VmError::InvalidHandle),
     }
->>>>>>> 8e34efc (feat(vm-js): add per-object host slots for bindings)
   }
 
   /// Returns `true` if `s` currently points to a live string allocation.
