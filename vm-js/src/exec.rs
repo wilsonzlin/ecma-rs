@@ -961,6 +961,13 @@ impl<'a> Evaluator<'a> {
           out.insert(name.stx.name.clone());
         }
       }
+      // Function declarations are hoisted like `var` declarations, but we must not traverse into
+      // the function body.
+      Stmt::FunctionDecl(decl) => {
+        if let Some(name) = &decl.stx.name {
+          out.insert(name.stx.name.clone());
+        }
+      }
 
       // TODO: other statement types.
       _ => {}
@@ -1091,7 +1098,10 @@ impl<'a> Evaluator<'a> {
       Stmt::ForTriple(stmt) => self.eval_for_triple(scope, &stmt.stx, label_set),
       Stmt::ForIn(stmt) => self.eval_for_in(scope, &stmt.stx, label_set),
       Stmt::ForOf(stmt) => self.eval_for_of(scope, &stmt.stx, label_set),
-      Stmt::Switch(stmt) => self.eval_switch(scope, &stmt.stx),
+      Stmt::Switch(stmt) => {
+        let result = self.eval_switch(scope, &stmt.stx)?;
+        Ok(Self::normalise_iteration_break(result))
+      }
       Stmt::Label(stmt) => self.eval_label(scope, &stmt.stx, label_set),
       // Function declarations are instantiated during hoisting.
       Stmt::FunctionDecl(_) => Ok(Completion::empty()),
@@ -1350,7 +1360,7 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  /// Converts an unlabelled `break` completion from an iteration statement into a normal
+  /// Converts an unlabelled `break` completion from a breakable statement into a normal
   /// completion (ECMA-262 `BreakableStatement` / `LabelledEvaluation` semantics).
   fn normalise_iteration_break(completion: Completion) -> Completion {
     match completion {
@@ -1844,15 +1854,18 @@ impl<'a> Evaluator<'a> {
     scope: &mut Scope<'_>,
     stmt: &SwitchStmt,
   ) -> Result<Completion, VmError> {
+    // 13.12.3 Runtime Semantics: Evaluation, SwitchStatement
     let discriminant = self.eval_expr(scope, &stmt.test)?;
+
+    // Root the discriminant across selector evaluation and case-body execution, which may allocate
+    // and trigger GC.
     let mut switch_scope = scope.reborrow();
     switch_scope.push_root(discriminant)?;
 
+    // `switch` creates a new lexical environment for the entire case block.
     let outer = self.env.lexical_env;
     let switch_env = switch_scope.env_create(Some(outer))?;
-    self
-      .env
-      .set_lexical_env(switch_scope.heap_mut(), switch_env);
+    self.env.set_lexical_env(switch_scope.heap_mut(), switch_env);
 
     let result = (|| -> Result<Completion, VmError> {
       // `switch` shares one lexical scope across all case clauses.
@@ -1860,62 +1873,126 @@ impl<'a> Evaluator<'a> {
         self.hoist_lexical_decls_in_stmt_list(&mut switch_scope, switch_env, &branch.stx.body)?;
       }
 
-      // Select the first matching case clause, or `default` if no clause matches.
-      let mut default_idx: Option<usize> = None;
-      let mut start_idx: Option<usize> = None;
-      for (i, branch) in stmt.branches.iter().enumerate() {
-        match &branch.stx.case {
-          None => {
-            if default_idx.is_none() {
-              default_idx = Some(i);
-            }
-          }
-          Some(case_expr) => {
-            let case_value = self.eval_expr(&mut switch_scope, case_expr)?;
-            if strict_equal(switch_scope.heap(), discriminant, case_value)? {
-              start_idx = Some(i);
-              break;
-            }
-          }
-        }
-      }
-      let Some(start_idx) = start_idx.or(default_idx) else {
-        return Ok(Completion::empty());
-      };
+      // ECMA-262 `CaseBlockEvaluation`: `V` starts as `undefined` and is never ~empty~ for normal
+      // completion.
+      let v_root_idx = switch_scope.heap().root_stack.len();
+      switch_scope.push_root(Value::Undefined)?;
+      let mut v = Value::Undefined;
 
-      // Evaluate statement lists from the selected clause until a break or abrupt completion.
-      let last_root = switch_scope.heap_mut().add_root(Value::Undefined)?;
-      let mut last_value: Option<Value> = None;
+      let default_idx = stmt.branches.iter().position(|b| b.stx.case.is_none());
 
-      for branch in stmt.branches.iter().skip(start_idx) {
-        for stmt in &branch.stx.body {
-          let completion = self.eval_stmt(&mut switch_scope, stmt)?;
-          let completion = completion.update_empty(last_value);
-          match completion {
-            Completion::Normal(v) => {
-              if let Some(v) = v {
-                last_value = Some(v);
-                switch_scope.heap_mut().set_root(last_root, v);
+      match default_idx {
+        None => {
+          let mut found = false;
+          for branch in &stmt.branches {
+            let Some(case_expr) = &branch.stx.case else {
+              continue;
+            };
+
+            if !found {
+              let case_value = self.eval_expr(&mut switch_scope, case_expr)?;
+              found = strict_equal(switch_scope.heap(), discriminant, case_value)?;
+            }
+
+            if found {
+              let r = self.eval_stmt_list(&mut switch_scope, &branch.stx.body)?;
+              if let Some(value) = r.value() {
+                v = value;
+                switch_scope.heap_mut().root_stack[v_root_idx] = value;
+              }
+              if r.is_abrupt() {
+                return Ok(r.update_empty(Some(v)));
               }
             }
-            abrupt => {
-              switch_scope.heap_mut().remove_root(last_root);
-              return Ok(abrupt);
+          }
+          Ok(Completion::normal(v))
+        }
+        Some(default_idx) => {
+          let (a, rest) = stmt.branches.split_at(default_idx);
+          let default_branch = &rest[0];
+          let b = &rest[1..];
+
+          let mut found = false;
+          for branch in a {
+            let Some(case_expr) = &branch.stx.case else {
+              continue;
+            };
+
+            if !found {
+              let case_value = self.eval_expr(&mut switch_scope, case_expr)?;
+              found = strict_equal(switch_scope.heap(), discriminant, case_value)?;
+            }
+
+            if found {
+              let r = self.eval_stmt_list(&mut switch_scope, &branch.stx.body)?;
+              if let Some(value) = r.value() {
+                v = value;
+                switch_scope.heap_mut().root_stack[v_root_idx] = value;
+              }
+              if r.is_abrupt() {
+                return Ok(r.update_empty(Some(v)));
+              }
             }
           }
+
+          let mut found_in_b = false;
+          if !found {
+            for branch in b {
+              let Some(case_expr) = &branch.stx.case else {
+                continue;
+              };
+
+              if !found_in_b {
+                let case_value = self.eval_expr(&mut switch_scope, case_expr)?;
+                found_in_b = strict_equal(switch_scope.heap(), discriminant, case_value)?;
+              }
+
+              if found_in_b {
+                let r = self.eval_stmt_list(&mut switch_scope, &branch.stx.body)?;
+                if let Some(value) = r.value() {
+                  v = value;
+                  switch_scope.heap_mut().root_stack[v_root_idx] = value;
+                }
+                if r.is_abrupt() {
+                  return Ok(r.update_empty(Some(v)));
+                }
+              }
+            }
+          }
+
+          if found_in_b {
+            return Ok(Completion::normal(v));
+          }
+
+          let default_r = self.eval_stmt_list(&mut switch_scope, &default_branch.stx.body)?;
+          if let Some(value) = default_r.value() {
+            v = value;
+            switch_scope.heap_mut().root_stack[v_root_idx] = value;
+          }
+          if default_r.is_abrupt() {
+            return Ok(default_r.update_empty(Some(v)));
+          }
+
+          // NOTE: The following is another complete iteration of the after-default clauses.
+          for branch in b {
+            let r = self.eval_stmt_list(&mut switch_scope, &branch.stx.body)?;
+            if let Some(value) = r.value() {
+              v = value;
+              switch_scope.heap_mut().root_stack[v_root_idx] = value;
+            }
+            if r.is_abrupt() {
+              return Ok(r.update_empty(Some(v)));
+            }
+          }
+
+          Ok(Completion::normal(v))
         }
       }
-
-      switch_scope.heap_mut().remove_root(last_root);
-      Ok(Completion::Normal(last_value))
     })();
 
+    // Restore the outer lexical environment no matter how control leaves the switch.
     self.env.set_lexical_env(switch_scope.heap_mut(), outer);
-    let completion = result?;
-    Ok(match completion {
-      Completion::Break(None, v) => Completion::Normal(v),
-      other => other,
-    })
+    result
   }
 
   fn eval_expr(&mut self, scope: &mut Scope<'_>, expr: &Node<Expr>) -> Result<Value, VmError> {
