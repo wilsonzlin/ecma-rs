@@ -394,9 +394,9 @@ pub fn finish_loading_imported_module(
         ));
       }
     } else {
-      referrer
-        .loaded_modules_mut()
-        .push(LoadedModuleRequest::new(module_request, *module));
+      let list = referrer.loaded_modules_mut();
+      list.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+      list.push(LoadedModuleRequest::new(module_request, *module));
     }
   }
 
