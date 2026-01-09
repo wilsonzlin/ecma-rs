@@ -1,7 +1,7 @@
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::{
-  EnvRootId, GcEnv, GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, Scope,
-  Value, Vm, VmError,
+  EnvRootId, GcEnv, GcObject, Heap, PropertyDescriptor, PropertyKey, PropertyKind, Realm, RootId,
+  Scope, Value, Vm, VmError, VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
@@ -338,6 +338,36 @@ impl Drop for JsRuntime {
     // reuse in tests/embeddings from accumulating roots and satisfies `Realm`'s debug assertion.
     self.env.teardown(&mut self.heap);
     self.realm.teardown(&mut self.heap);
+  }
+}
+
+impl VmJobContext for JsRuntime {
+  fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError> {
+    // Borrow-split `vm` and `heap` so we can hold a `Scope` while calling into the VM.
+    let vm = &mut self.vm;
+    let heap = &mut self.heap;
+    let mut scope = heap.scope();
+    vm.call(&mut scope, callee, this, args)
+  }
+
+  fn construct(
+    &mut self,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let vm = &mut self.vm;
+    let heap = &mut self.heap;
+    let mut scope = heap.scope();
+    vm.construct(&mut scope, callee, args, new_target)
+  }
+
+  fn add_root(&mut self, value: Value) -> RootId {
+    self.heap.add_root(value)
+  }
+
+  fn remove_root(&mut self, id: RootId) {
+    self.heap.remove_root(id)
   }
 }
 

@@ -28,6 +28,12 @@
 //!   dropped, all stack roots created within it are popped.
 //! - **Persistent roots**: managed by [`Heap::add_root`] / [`Heap::remove_root`], intended for host
 //!   embeddings.
+//!
+//! # WebIDL / host objects
+//!
+//! If you are embedding `vm-js` in a browser-style host and need to expose Web APIs (constructors,
+//! `prototype` objects, native methods/attributes, wrapper identity caches), see
+//! [`docs::webidl_host_objects`](crate::docs::webidl_host_objects).
 
 mod error;
 mod env;
@@ -93,6 +99,10 @@ pub use crate::jobs::VmHostHooks;
 pub use crate::jobs::VmJobContext;
 pub use crate::jobs::PromiseHandle;
 pub use crate::jobs::PromiseRejectionOperation;
+#[deprecated(note = "Use VmHostHooks instead (JobQueue was renamed for spec alignment).")]
+pub use crate::jobs::VmHostHooks as JobQueue;
+#[deprecated(note = "Use Job instead (MicrotaskJob was renamed for spec alignment).")]
+pub use crate::jobs::Job as MicrotaskJob;
 pub use crate::native::alloc_native_function_name;
 pub use crate::native::dispatch_native_call;
 pub use crate::native::dispatch_native_construct;
@@ -128,3 +138,10 @@ pub use crate::vm::BudgetGuard;
 pub use crate::vm::ExecutionContextGuard;
 pub use crate::vm::Vm;
 pub use crate::vm::VmOptions;
+
+/// Long-form guides and embedding documentation.
+pub mod docs {
+  /// WebIDL binding initialization patterns (constructors, prototypes, host objects).
+  #[doc = include_str!("../docs/webidl_host_objects.md")]
+  pub mod webidl_host_objects {}
+}

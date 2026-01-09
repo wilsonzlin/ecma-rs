@@ -25,9 +25,8 @@
 //! FastRender) can implement it by routing Promise jobs into the HTML microtask queue. The actual
 //! queue is **host-owned**; this crate only provides the job representation.
 
-use crate::GcObject;
-use crate::Value;
-use crate::VmError;
+use crate::heap::{Trace, Tracer};
+use crate::{GcObject, RootId, Value, VmError};
 use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
@@ -92,9 +91,29 @@ pub type JobResult = Result<(), VmError>;
 
 /// Dynamic context passed to jobs at execution time.
 ///
-/// This is deliberately minimal: jobs are created and stored before the evaluator exists, so the
-/// trait doesn't expose evaluator-specific functionality yet.
-pub trait VmJobContext {}
+/// Promise jobs need to:
+/// - call/construct JS values,
+/// - keep captured GC handles alive while queued (persistent roots).
+///
+/// This trait is intentionally object-safe so hosts can store job runners behind trait objects.
+pub trait VmJobContext {
+  /// Calls `callee` with the provided `this` value and arguments.
+  fn call(&mut self, callee: Value, this: Value, args: &[Value]) -> Result<Value, VmError>;
+
+  /// Constructs `callee` with the provided arguments and `new_target`.
+  fn construct(
+    &mut self,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError>;
+
+  /// Adds a persistent root, keeping `value` live until the returned [`RootId`] is removed.
+  fn add_root(&mut self, value: Value) -> RootId;
+
+  /// Removes a persistent root previously created by [`VmJobContext::add_root`].
+  fn remove_root(&mut self, id: RootId);
+}
 
 /// A spec-shaped representation of an ECMAScript *Job Abstract Closure*.
 ///
@@ -104,9 +123,20 @@ pub trait VmJobContext {}
 /// This representation is Rust-idiomatic: a job is a boxed `FnOnce` that receives a dynamic
 /// [`VmJobContext`] and [`VmHostHooks`] so it can call back into the evaluator/embedding at run
 /// time.
+///
+/// # GC safety
+///
+/// Promise jobs can be queued across allocations/GC. Any GC-managed [`Value`] captured by a job
+/// MUST be kept alive until the job runs.
+///
+/// The engine-supported pattern is:
+/// - create persistent roots at enqueue time (via [`VmJobContext::add_root`]),
+/// - record the returned [`RootId`]s on the job,
+/// - and let [`Job::run`] / [`Job::discard`] automatically remove them.
 pub struct Job {
   kind: JobKind,
-  run: Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>,
+  roots: Vec<RootId>,
+  run: Option<Box<dyn FnOnce(&mut dyn VmJobContext, &mut dyn VmHostHooks) -> JobResult + Send + 'static>>,
 }
 
 impl Job {
@@ -117,8 +147,33 @@ impl Job {
   ) -> Self {
     Self {
       kind,
-      run: Box::new(run),
+      roots: Vec::new(),
+      run: Some(Box::new(run)),
     }
+  }
+
+  /// Adds a persistent root that will be automatically removed when the job is run or discarded.
+  pub fn add_root(&mut self, ctx: &mut dyn VmJobContext, value: Value) -> RootId {
+    let id = ctx.add_root(value);
+    self.roots.push(id);
+    id
+  }
+
+  /// Records an existing persistent root so it will be automatically removed when the job is run
+  /// or discarded.
+  pub fn push_root(&mut self, id: RootId) {
+    self.roots.push(id);
+  }
+
+  /// Adds multiple existing persistent roots.
+  pub fn extend_roots(&mut self, ids: impl IntoIterator<Item = RootId>) {
+    self.roots.extend(ids);
+  }
+
+  /// Replaces the job's root list (useful when capturing roots at enqueue time).
+  pub fn with_roots(mut self, roots: Vec<RootId>) -> Self {
+    self.roots = roots;
+    self
   }
 
   /// Returns this job's kind.
@@ -127,17 +182,56 @@ impl Job {
     self.kind
   }
 
+  fn cleanup_roots(&mut self, ctx: &mut dyn VmJobContext) {
+    for root in self.roots.drain(..) {
+      ctx.remove_root(root);
+    }
+  }
+
   /// Run the job, consuming it.
   #[inline]
-  pub fn run(self, ctx: &mut dyn VmJobContext, host: &mut dyn VmHostHooks) -> JobResult {
-    let Job { run, .. } = self;
-    run(ctx, host)
+  pub fn run(mut self, ctx: &mut dyn VmJobContext, host: &mut dyn VmHostHooks) -> JobResult {
+    let Some(run) = self.run.take() else {
+      return Err(VmError::Unimplemented("job already consumed"));
+    };
+
+    // Ensure roots are cleaned up even if the job panics.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(ctx, host)));
+    self.cleanup_roots(ctx);
+
+    match result {
+      Ok(result) => result,
+      Err(panic) => std::panic::resume_unwind(panic),
+    }
+  }
+
+  /// Discards the job without running it, cleaning up any persistent roots it owns.
+  pub fn discard(mut self, ctx: &mut dyn VmJobContext) {
+    self.run = None;
+    self.cleanup_roots(ctx);
   }
 }
 
 impl fmt::Debug for Job {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("Job").field("kind", &self.kind).finish()
+    f.debug_struct("Job")
+      .field("kind", &self.kind)
+      .field("roots", &self.roots.len())
+      .finish()
+  }
+}
+
+impl Drop for Job {
+  fn drop(&mut self) {
+    // Avoid panicking from a destructor while unwinding (that would abort).
+    if std::thread::panicking() {
+      return;
+    }
+    debug_assert!(
+      self.roots.is_empty(),
+      "Job dropped with {} leaked persistent roots; call Job::run(..) or Job::discard(..)",
+      self.roots.len()
+    );
   }
 }
 
@@ -152,18 +246,17 @@ impl fmt::Debug for Job {
 ///
 /// # GC safety / rooting
 ///
-/// `JobCallback` is **not** automatically traced by the GC.
+/// `JobCallback` implements [`Trace`] by tracing the callback object, but it is **not** a root by
+/// itself. If a `JobCallback` is stored somewhere that can outlive a stack rooting scope (e.g. in
+/// Promise reaction records, as queued microtasks, etc), the embedding/engine must ensure that the
+/// containing data structure calls `trace`.
 ///
-/// If a `JobCallback` is stored somewhere that can outlive a stack rooting scope (e.g. in Promise
-/// reaction records, as queued microtasks, etc), the embedding/engine must ensure that
-/// [`JobCallback::callback`] is traced/rooted by the relevant data structure.
-///
-/// Similarly, any GC handles stored inside the host-defined `data` payload are **opaque** to the GC
-/// and must be traced/rooted by the host.
+/// The host-defined payload is **opaque** to the GC. Hosts MUST NOT store GC handles inside the
+/// payload unless they keep them alive independently.
 #[derive(Clone)]
 pub struct JobCallback {
   callback: GcObject,
-  data: Arc<dyn Any + Send + Sync>,
+  host_defined: Option<Arc<dyn Any + Send + Sync>>,
 }
 
 impl JobCallback {
@@ -171,7 +264,7 @@ impl JobCallback {
   pub fn new(callback: GcObject) -> Self {
     Self {
       callback,
-      data: Arc::new(()),
+      host_defined: None,
     }
   }
 
@@ -179,7 +272,7 @@ impl JobCallback {
   pub fn new_with_data<T: Any + Send + Sync>(callback: GcObject, data: T) -> Self {
     Self {
       callback,
-      data: Arc::new(data),
+      host_defined: Some(Arc::new(data)),
     }
   }
 
@@ -189,9 +282,15 @@ impl JobCallback {
     self.callback
   }
 
+  /// Alias for [`JobCallback::callback`].
+  #[inline]
+  pub fn callback_object(&self) -> GcObject {
+    self.callback
+  }
+
   /// Attempts to downcast the host-defined metadata payload by reference.
   pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-    self.data.downcast_ref::<T>()
+    self.host_defined.as_ref()?.downcast_ref::<T>()
   }
 }
 
@@ -199,8 +298,17 @@ impl fmt::Debug for JobCallback {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("JobCallback")
       .field("callback", &self.callback)
-      .field("data_type_id", &self.data.type_id())
+      .field(
+        "host_defined_type_id",
+        &self.host_defined.as_ref().map(|v| v.type_id()),
+      )
       .finish()
+  }
+}
+
+impl Trace for JobCallback {
+  fn trace(&self, tracer: &mut Tracer<'_>) {
+    tracer.trace_value(Value::Object(self.callback));
   }
 }
 
