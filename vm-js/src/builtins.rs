@@ -1,4 +1,4 @@
-use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
+use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::{GcObject, Scope, Value, Vm, VmError};
 
 fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool) -> PropertyDescriptor {
@@ -12,6 +12,43 @@ fn data_desc(value: Value, writable: bool, enumerable: bool, configurable: bool)
 fn require_intrinsics(vm: &Vm) -> Result<crate::Intrinsics, VmError> {
   vm.intrinsics()
     .ok_or(VmError::Unimplemented("native builtins require Vm::intrinsics to be set"))
+}
+
+fn require_object(value: Value) -> Result<GcObject, VmError> {
+  match value {
+    Value::Object(o) => Ok(o),
+    _ => Err(VmError::TypeError("expected object")),
+  }
+}
+
+fn root_property_key(scope: &mut Scope<'_>, key: PropertyKey) {
+  match key {
+    PropertyKey::String(s) => {
+      scope.push_root(Value::String(s));
+    }
+    PropertyKey::Symbol(s) => {
+      scope.push_root(Value::Symbol(s));
+    }
+  }
+}
+
+fn get_own_data_property_value_by_name(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  name: &str,
+) -> Result<Option<Value>, VmError> {
+  let mut scope = scope.reborrow();
+  scope.push_root(Value::Object(obj));
+  let key = PropertyKey::from_string(scope.alloc_string(name)?);
+  let Some(desc) = scope.heap().object_get_own_property(obj, &key)? else {
+    return Ok(None);
+  };
+  match desc.kind {
+    PropertyKind::Data { value, .. } => Ok(Some(value)),
+    PropertyKind::Accessor { .. } => Err(VmError::Unimplemented(
+      "accessor properties are not yet supported",
+    )),
+  }
 }
 
 pub fn function_prototype_call(
@@ -59,6 +96,196 @@ pub fn object_constructor_construct(
   _new_target: Value,
 ) -> Result<Value, VmError> {
   object_constructor_impl(vm, scope, args)
+}
+
+pub fn object_define_property(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let mut scope = scope.reborrow();
+
+  let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+  scope.push_root(Value::Object(target));
+
+  let prop = args.get(1).copied().unwrap_or(Value::Undefined);
+  let key = scope.heap_mut().to_property_key(prop)?;
+  root_property_key(&mut scope, key);
+
+  let desc_obj = require_object(args.get(2).copied().unwrap_or(Value::Undefined))?;
+  scope.push_root(Value::Object(desc_obj));
+
+  let value = get_own_data_property_value_by_name(&mut scope, desc_obj, "value")?;
+  let writable = get_own_data_property_value_by_name(&mut scope, desc_obj, "writable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let enumerable = get_own_data_property_value_by_name(&mut scope, desc_obj, "enumerable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let configurable = get_own_data_property_value_by_name(&mut scope, desc_obj, "configurable")?
+    .map(|v| scope.heap().to_boolean(v))
+    .transpose()?;
+  let get = get_own_data_property_value_by_name(&mut scope, desc_obj, "get")?;
+  let set = get_own_data_property_value_by_name(&mut scope, desc_obj, "set")?;
+
+  let patch = PropertyDescriptorPatch {
+    enumerable,
+    configurable,
+    value,
+    writable,
+    get,
+    set,
+  };
+  patch.validate()?;
+
+  let ok = scope.ordinary_define_own_property(target, key, patch)?;
+  if !ok {
+    return Err(VmError::TypeError("DefineOwnProperty rejected"));
+  }
+  Ok(Value::Object(target))
+}
+
+pub fn object_create(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let proto_val = args.get(0).copied().unwrap_or(Value::Undefined);
+  let proto = match proto_val {
+    Value::Object(o) => Some(o),
+    Value::Null => None,
+    _ => return Err(VmError::TypeError("Object.create prototype must be an object or null")),
+  };
+
+  if let Some(properties_object) = args.get(1).copied() {
+    if !matches!(properties_object, Value::Undefined) {
+      return Err(VmError::Unimplemented("Object.create propertiesObject"));
+    }
+  }
+
+  let obj = scope.alloc_object()?;
+  scope.heap_mut().object_set_prototype(obj, proto)?;
+  Ok(Value::Object(obj))
+}
+
+pub fn object_keys(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let obj = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+
+  let own_keys = scope.heap().ordinary_own_property_keys(obj)?;
+  let mut names: Vec<crate::GcString> = Vec::new();
+  names
+    .try_reserve_exact(own_keys.len())
+    .map_err(|_| VmError::OutOfMemory)?;
+
+  for key in own_keys {
+    let PropertyKey::String(key_str) = key else {
+      continue;
+    };
+    let Some(desc) = scope.heap().object_get_own_property(obj, &key)? else {
+      continue;
+    };
+    if desc.enumerable {
+      names.push(key_str);
+    }
+  }
+
+  let len = u32::try_from(names.len()).map_err(|_| VmError::OutOfMemory)?;
+  let array = create_array_object(vm, scope, len)?;
+
+  for (i, name) in names.iter().copied().enumerate() {
+    let mut idx_scope = scope.reborrow();
+    idx_scope.push_root(Value::Object(array));
+    idx_scope.push_root(Value::String(name));
+
+    let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
+    idx_scope.define_property(array, key, data_desc(Value::String(name), true, true, true))?;
+  }
+
+  Ok(Value::Object(array))
+}
+
+pub fn object_assign(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let target = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+
+  for source_val in args.iter().copied().skip(1) {
+    let source = match source_val {
+      Value::Undefined | Value::Null => continue,
+      Value::Object(o) => o,
+      _ => return Err(VmError::TypeError("Object.assign source must be an object")),
+    };
+
+    let keys = scope.heap().ordinary_own_property_keys(source)?;
+    for key in keys {
+      let Some(desc) = scope.heap().object_get_own_property(source, &key)? else {
+        continue;
+      };
+      if !desc.enumerable {
+        continue;
+      }
+
+      let value = match desc.kind {
+        PropertyKind::Data { value, .. } => value,
+        PropertyKind::Accessor { .. } => {
+          return Err(VmError::Unimplemented(
+            "Object.assign does not yet support accessor properties",
+          ));
+        }
+      };
+
+      scope.define_property(target, key, data_desc(value, true, true, true))?;
+    }
+  }
+
+  Ok(Value::Object(target))
+}
+
+pub fn object_get_prototype_of(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let obj = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+  match scope.heap().object_prototype(obj)? {
+    Some(proto) => Ok(Value::Object(proto)),
+    None => Ok(Value::Null),
+  }
+}
+
+pub fn object_set_prototype_of(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let obj = require_object(args.get(0).copied().unwrap_or(Value::Undefined))?;
+  let proto_val = args.get(1).copied().unwrap_or(Value::Undefined);
+  let proto = match proto_val {
+    Value::Object(o) => Some(o),
+    Value::Null => None,
+    _ => return Err(VmError::TypeError("Object.setPrototypeOf prototype must be an object or null")),
+  };
+
+  scope.heap_mut().object_set_prototype(obj, proto)?;
+  Ok(Value::Object(obj))
 }
 
 fn create_array_object(vm: &mut Vm, scope: &mut Scope<'_>, len: u32) -> Result<GcObject, VmError> {

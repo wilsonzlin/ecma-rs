@@ -8,8 +8,8 @@ struct TestRealm {
 
 impl TestRealm {
   fn new(limits: HeapLimits) -> Result<Self, VmError> {
-    let mut heap = Heap::new(limits);
     let mut vm = Vm::new(VmOptions::default());
+    let mut heap = Heap::new(limits);
     let realm = Realm::new(&mut vm, &mut heap)?;
     Ok(Self { heap, vm, realm })
   }

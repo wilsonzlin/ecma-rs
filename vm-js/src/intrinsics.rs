@@ -178,6 +178,101 @@ fn init_native_error(
   Ok((constructor, prototype))
 }
 
+fn install_object_static_method(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  roots: &mut Vec<RootId>,
+  function_prototype: GcObject,
+  object_constructor: GcObject,
+  name: &str,
+  length: u32,
+  call: crate::vm::NativeCall,
+) -> Result<(), VmError> {
+  let call_id = vm.register_native_call(call);
+  let name_string = scope.alloc_string(name)?;
+  let func = alloc_rooted_native_function(scope, roots, call_id, None, name_string, length)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(func, Some(function_prototype))?;
+
+  scope.define_property(
+    object_constructor,
+    PropertyKey::from_string(name_string),
+    data_desc(Value::Object(func), true, false, true),
+  )?;
+  Ok(())
+}
+
+fn install_object_static_methods(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  roots: &mut Vec<RootId>,
+  function_prototype: GcObject,
+  object_constructor: GcObject,
+) -> Result<(), VmError> {
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "defineProperty",
+    3,
+    builtins::object_define_property,
+  )?;
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "create",
+    2,
+    builtins::object_create,
+  )?;
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "keys",
+    1,
+    builtins::object_keys,
+  )?;
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "assign",
+    2,
+    builtins::object_assign,
+  )?;
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "getPrototypeOf",
+    1,
+    builtins::object_get_prototype_of,
+  )?;
+  install_object_static_method(
+    vm,
+    scope,
+    roots,
+    function_prototype,
+    object_constructor,
+    "setPrototypeOf",
+    2,
+    builtins::object_set_prototype_of,
+  )?;
+  Ok(())
+}
+
 impl Intrinsics {
   pub(crate) fn init(
     vm: &mut Vm,
@@ -264,6 +359,8 @@ impl Intrinsics {
       common.constructor,
       data_desc(Value::Object(object_constructor), true, false, true),
     )?;
+
+    install_object_static_methods(vm, scope, roots, function_prototype, object_constructor)?;
 
     // `%Function%`
     let function_call = vm.register_native_call(builtins::function_constructor_call);

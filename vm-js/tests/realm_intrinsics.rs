@@ -2,8 +2,8 @@ use vm_js::{Heap, HeapLimits, Realm, Value, Vm, VmError, VmOptions};
 
 #[test]
 fn realm_allocates_and_roots_global_object_and_well_known_symbols() -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut realm = Realm::new(&mut vm, &mut heap)?;
 
   // Drop any temporary initialization scopes and ensure the realm's allocations survive GC.
@@ -43,8 +43,8 @@ fn realm_allocates_and_roots_global_object_and_well_known_symbols() -> Result<()
 
 #[test]
 fn realm_remove_roots_allows_collection() -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut realm = Realm::new(&mut vm, &mut heap)?;
 
   heap.collect_garbage();

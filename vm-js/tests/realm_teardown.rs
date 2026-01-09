@@ -2,8 +2,8 @@ use vm_js::{Heap, HeapLimits, Realm, Vm, VmError, VmOptions};
 
 #[test]
 fn realm_teardown_unregisters_persistent_roots() -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut vm = Vm::new(VmOptions::default());
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
   let mut realm = Realm::new(&mut vm, &mut heap)?;
 
   let global = realm.global_object();
