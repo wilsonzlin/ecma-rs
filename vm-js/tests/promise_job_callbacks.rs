@@ -85,12 +85,13 @@ impl VmHostHooks for TestHost {
   }
 }
 
-#[derive(Default)]
-struct TestContext;
+struct RootingContext<'a> {
+  heap: &'a mut Heap,
+}
 
-impl VmJobContext for TestContext {
+impl VmJobContext for RootingContext<'_> {
   fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("TestContext::call"))
+    Err(VmError::Unimplemented("RootingContext::call"))
   }
 
   fn construct(
@@ -99,15 +100,15 @@ impl VmJobContext for TestContext {
     _args: &[Value],
     _new_target: Value,
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("TestContext::construct"))
+    Err(VmError::Unimplemented("RootingContext::construct"))
   }
 
-  fn add_root(&mut self, _value: Value) -> RootId {
-    panic!("TestContext::add_root should not be called by these tests");
+  fn add_root(&mut self, value: Value) -> RootId {
+    self.heap.add_root(value)
   }
 
-  fn remove_root(&mut self, _id: RootId) {
-    panic!("TestContext::remove_root should not be called by these tests");
+  fn remove_root(&mut self, id: RootId) {
+    self.heap.remove_root(id)
   }
 }
 
@@ -133,17 +134,31 @@ fn promise_reaction_job_uses_host_call_job_callback() -> Result<(), VmError> {
   assert!(reject_reaction.handler.is_none());
   assert_eq!(host.made, vec![on_fulfilled]);
 
-  let argument = Value::Number(123.0);
-  let job = new_promise_reaction_job(fulfill_reaction, argument);
+  // Use heap objects so we can validate GC safety for job captures.
+  let argument_obj = scope.alloc_object()?;
+  let argument = Value::Object(argument_obj);
+  let job = new_promise_reaction_job(scope.heap_mut(), fulfill_reaction, argument);
   host.expected = Some(ExpectedCall {
     callback: on_fulfilled,
     this_argument: Value::Undefined,
     arguments: vec![argument],
   });
 
-  let mut ctx = TestContext::default();
+  drop(scope);
+
+  // The job should keep both the callback and argument alive until it runs.
+  heap.collect_garbage();
+  assert!(heap.is_valid_object(on_fulfilled));
+  assert!(heap.is_valid_object(argument_obj));
+
+  let mut ctx = RootingContext { heap: &mut heap };
   job.run(&mut ctx, &mut host)?;
   assert_eq!(host.calls, 1);
+
+  // After job execution, the persistent roots should be removed.
+  ctx.heap.collect_garbage();
+  assert!(!ctx.heap.is_valid_object(on_fulfilled));
+  assert!(!ctx.heap.is_valid_object(argument_obj));
   Ok(())
 }
 
@@ -164,7 +179,7 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
   let mut host = TestHost::default();
   let job = create_promise_resolve_thenable_job(
     &mut host,
-    scope.heap(),
+    scope.heap_mut(),
     Value::Object(thenable),
     Value::Object(then_action),
     Value::Object(resolve),
@@ -179,8 +194,24 @@ fn promise_resolve_thenable_job_uses_host_call_job_callback() -> Result<(), VmEr
     arguments: vec![Value::Object(resolve), Value::Object(reject)],
   });
 
-  let mut ctx = TestContext::default();
+  drop(scope);
+
+  // The job should keep all captured values alive until it runs.
+  heap.collect_garbage();
+  assert!(heap.is_valid_object(then_action));
+  assert!(heap.is_valid_object(thenable));
+  assert!(heap.is_valid_object(resolve));
+  assert!(heap.is_valid_object(reject));
+
+  let mut ctx = RootingContext { heap: &mut heap };
   job.run(&mut ctx, &mut host)?;
   assert_eq!(host.calls, 1);
+
+  // After execution, the job roots should be removed.
+  ctx.heap.collect_garbage();
+  assert!(!ctx.heap.is_valid_object(then_action));
+  assert!(!ctx.heap.is_valid_object(thenable));
+  assert!(!ctx.heap.is_valid_object(resolve));
+  assert!(!ctx.heap.is_valid_object(reject));
   Ok(())
 }

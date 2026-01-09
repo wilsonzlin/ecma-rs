@@ -149,7 +149,7 @@ pub fn perform_promise_then(
 /// is callable, creates a `PromiseResolveThenableJob` and enqueues it.
 pub fn create_promise_resolve_thenable_job(
   host: &mut dyn VmHostHooks,
-  heap: &Heap,
+  heap: &mut Heap,
   thenable: Value,
   then_action: Value,
   resolve: Value,
@@ -161,6 +161,7 @@ pub fn create_promise_resolve_thenable_job(
 
   let then_job_callback = host.host_make_job_callback(then_action);
   Ok(Some(new_promise_resolve_thenable_job(
+    heap,
     thenable,
     then_job_callback,
     resolve,
@@ -225,7 +226,7 @@ impl Promise {
   /// If this promise has no rejection handlers, this will call
   /// [`VmHostHooks::host_promise_rejection_tracker`] with
   /// [`PromiseRejectionOperation::Reject`].
-  pub fn reject(&self, host: &mut dyn VmHostHooks, reason: Value) -> Result<(), VmError> {
+  pub fn reject(&self, host: &mut dyn VmHostHooks, heap: &mut Heap, reason: Value) -> Result<(), VmError> {
     let (handle, should_track_reject, reactions) = {
       let mut inner = self.inner.borrow_mut();
       match inner.state {
@@ -247,7 +248,7 @@ impl Promise {
     }
 
     for reaction in reactions {
-      host.host_enqueue_promise_job(new_promise_reaction_job(reaction, reason), None);
+      host.host_enqueue_promise_job(new_promise_reaction_job(heap, reaction, reason), None);
     }
 
     Ok(())
@@ -256,7 +257,7 @@ impl Promise {
   fn then_without_result(
     &self,
     host: &mut dyn VmHostHooks,
-    heap: &Heap,
+    heap: &mut Heap,
     on_fulfilled: Value,
     on_rejected: Value,
   ) -> Result<(), VmError> {
@@ -281,10 +282,10 @@ impl Promise {
         inner.reject_reactions.push(reject_reaction);
       }
       PromiseRecordState::Fulfilled(v) => {
-        host.host_enqueue_promise_job(new_promise_reaction_job(fulfill_reaction, v), None);
+        host.host_enqueue_promise_job(new_promise_reaction_job(heap, fulfill_reaction, v), None);
       }
       PromiseRecordState::Rejected(r) => {
-        host.host_enqueue_promise_job(new_promise_reaction_job(reject_reaction, r), None);
+        host.host_enqueue_promise_job(new_promise_reaction_job(heap, reject_reaction, r), None);
       }
     }
 
@@ -327,7 +328,7 @@ fn promise_resolve(value: Awaitable) -> Promise {
 /// 2. `PerformPromiseThen(promise, on_fulfilled, on_rejected)` (no derived promise)
 pub fn await_value(
   host: &mut dyn VmHostHooks,
-  heap: &Heap,
+  heap: &mut Heap,
   value: Awaitable,
   on_fulfilled: Value,
   on_rejected: Value,

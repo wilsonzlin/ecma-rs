@@ -66,12 +66,13 @@ impl VmHostHooks for RecordingHost {
   }
 }
 
-#[derive(Default)]
-struct TestContext;
+struct RootingContext<'a> {
+  heap: &'a mut Heap,
+}
 
-impl VmJobContext for TestContext {
+impl VmJobContext for RootingContext<'_> {
   fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("TestContext::call"))
+    Err(VmError::Unimplemented("RootingContext::call"))
   }
 
   fn construct(
@@ -80,15 +81,15 @@ impl VmJobContext for TestContext {
     _args: &[Value],
     _new_target: Value,
   ) -> Result<Value, VmError> {
-    Err(VmError::Unimplemented("TestContext::construct"))
+    Err(VmError::Unimplemented("RootingContext::construct"))
   }
 
-  fn add_root(&mut self, _value: Value) -> RootId {
-    panic!("TestContext::add_root should not be called in this test")
+  fn add_root(&mut self, value: Value) -> RootId {
+    self.heap.add_root(value)
   }
 
-  fn remove_root(&mut self, _id: RootId) {
-    panic!("TestContext::remove_root should not be called in this test")
+  fn remove_root(&mut self, id: RootId) {
+    self.heap.remove_root(id)
   }
 }
 
@@ -110,7 +111,7 @@ fn await_non_promise_value_queues_microtask() {
   let mut host = RecordingHost::default();
   await_value(
     &mut host,
-    &heap,
+    &mut heap,
     Awaitable::from(Value::Number(123.0)),
     Value::Object(on_fulfilled),
     Value::Object(on_rejected),
@@ -121,7 +122,7 @@ fn await_non_promise_value_queues_microtask() {
   assert!(host.calls.is_empty());
   assert_eq!(host.queue.len(), 1);
 
-  let mut ctx = TestContext::default();
+  let mut ctx = RootingContext { heap: &mut heap };
   while let Some(job) = host.queue.pop_front() {
     job.run(&mut ctx, &mut host).unwrap();
   }
@@ -160,7 +161,7 @@ fn await_rejected_promise_calls_on_rejected() {
   let mut host = RecordingHost::default();
 
   // Reject with no handlers attached: should be tracked as unhandled.
-  promise.reject(&mut host, boom).unwrap();
+  promise.reject(&mut host, &mut heap, boom).unwrap();
   assert_eq!(
     host.tracker_calls,
     vec![(promise_handle, PromiseRejectionOperation::Reject)]
@@ -169,7 +170,7 @@ fn await_rejected_promise_calls_on_rejected() {
 
   await_value(
     &mut host,
-    &heap,
+    &mut heap,
     Awaitable::from(promise.clone()),
     Value::Object(on_fulfilled),
     Value::Object(on_rejected),
@@ -189,7 +190,7 @@ fn await_rejected_promise_calls_on_rejected() {
   assert!(host.calls.is_empty());
   assert_eq!(host.queue.len(), 1);
 
-  let mut ctx = TestContext::default();
+  let mut ctx = RootingContext { heap: &mut heap };
   while let Some(job) = host.queue.pop_front() {
     job.run(&mut ctx, &mut host).unwrap();
   }
