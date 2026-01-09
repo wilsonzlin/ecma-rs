@@ -123,9 +123,7 @@ impl<'a> Scope<'a> {
             Ok(Value::Undefined)
           } else {
             if !self.heap().is_callable(get)? {
-              return Err(VmError::Unimplemented(
-                "TypeError: accessor getter is not callable",
-              ));
+              return Err(VmError::TypeError("accessor getter is not callable"));
             }
             vm.call(self, get, receiver, &[])
           }
@@ -617,9 +615,7 @@ fn ordinary_set_with_own_descriptor(
         return Ok(false);
       }
       if !scope.heap().is_callable(set)? {
-        return Err(VmError::Unimplemented(
-          "TypeError: accessor setter is not callable",
-        ));
+        return Err(VmError::TypeError("accessor setter is not callable"));
       }
       let _ = vm.call(scope, set, receiver, &[value])?;
       Ok(true)

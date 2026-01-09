@@ -1801,7 +1801,11 @@ impl Heap {
     ))?;
     if !binding.initialized {
       // TDZ.
-      return Err(VmError::Throw(Value::Undefined));
+      //
+      // Note: environment records do not currently have access to a `Realm` to construct proper
+      // `ReferenceError` objects. We return a sentinel throw value that higher-level execution code
+      // can translate into a realm-aware error object.
+      return Err(VmError::Throw(Value::Null));
     }
     Ok(binding.value)
   }
@@ -1832,11 +1836,15 @@ impl Heap {
 
     if !binding.initialized {
       // TDZ.
-      return Err(VmError::Throw(Value::Undefined));
+      // See `env_get_binding_value` for why this is a sentinel.
+      return Err(VmError::Throw(Value::Null));
     }
 
     if !binding.mutable {
       // Assignment to const.
+      //
+      // Like TDZ, this is currently a sentinel throw value that is later mapped to a TypeError
+      // object by higher-level evaluation code.
       return Err(VmError::Throw(Value::Undefined));
     }
 

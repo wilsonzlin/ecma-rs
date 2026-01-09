@@ -3,8 +3,9 @@ use crate::iterator;
 use crate::ops::{add_operator, abstract_equality, to_number};
 use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
 use crate::{
-  EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor, PropertyDescriptorPatch,
-  PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm, VmError, VmJobContext,
+  new_reference_error, new_type_error, EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor,
+  PropertyDescriptorPatch, PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm, VmError,
+  VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
@@ -129,14 +130,12 @@ pub(crate) struct RuntimeEnv {
   global_object: GcObject,
   lexical_env: GcEnv,
   lexical_root: EnvRootId,
-  reference_error_prototype: GcObject,
 }
 
 impl RuntimeEnv {
   fn new(
     heap: &mut Heap,
     global_object: GcObject,
-    reference_error_prototype: GcObject,
   ) -> Result<Self, VmError> {
     // Root the global object across env allocation in case it triggers GC.
     let mut scope = heap.scope();
@@ -149,18 +148,11 @@ impl RuntimeEnv {
       global_object,
       lexical_env,
       lexical_root,
-      reference_error_prototype,
     })
   }
 
   fn teardown(&mut self, heap: &mut Heap) {
     heap.remove_env_root(self.lexical_root);
-  }
-
-  fn new_reference_error(&self, scope: &mut Scope<'_>) -> Result<Value, VmError> {
-    // Minimal "ReferenceError-like" object: only the prototype chain is meaningful today.
-    let obj = scope.alloc_object_with_prototype(Some(self.reference_error_prototype))?;
-    Ok(Value::Object(obj))
   }
 
   fn set_lexical_env(&mut self, heap: &mut Heap, env: GcEnv) {
@@ -203,11 +195,23 @@ impl RuntimeEnv {
     Ok(())
   }
 
-  fn get(&self, vm: &mut Vm, scope: &mut Scope<'_>, name: &str) -> Result<Option<Value>, VmError> {
+  fn get(
+    &self,
+    vm: &mut Vm,
+    scope: &mut Scope<'_>,
+    realm: &Realm,
+    name: &str,
+  ) -> Result<Option<Value>, VmError> {
     if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
-      return Ok(Some(
-        scope.heap().env_get_binding_value(env, name, false)?,
-      ));
+      match scope.heap().env_get_binding_value(env, name, false) {
+        Ok(v) => return Ok(Some(v)),
+        // TDZ sentinel from `Heap::{env_get_binding_value, env_set_mutable_binding}`.
+        Err(VmError::Throw(Value::Null)) => {
+          let msg = format!("Cannot access '{}' before initialization", name);
+          return Err(new_reference_error(scope, realm, &msg)?);
+        }
+        Err(err) => return Err(err),
+      }
     }
 
     // Fall back to global object property lookup.
@@ -230,15 +234,30 @@ impl RuntimeEnv {
 
   pub(crate) fn set(
     &mut self,
+    _vm: &mut Vm,
     scope: &mut Scope<'_>,
+    realm: &Realm,
     name: &str,
     value: Value,
     strict: bool,
   ) -> Result<(), VmError> {
     if let Some(env) = self.resolve_lexical_binding(scope.heap(), name)? {
-      return scope
+      match scope
         .heap_mut()
-        .env_set_mutable_binding(env, name, value, strict);
+        .env_set_mutable_binding(env, name, value, strict)
+      {
+        Ok(()) => return Ok(()),
+        // TDZ sentinel from `Heap::{env_get_binding_value, env_set_mutable_binding}`.
+        Err(VmError::Throw(Value::Null)) => {
+          let msg = format!("Cannot access '{}' before initialization", name);
+          return Err(new_reference_error(scope, realm, &msg)?);
+        }
+        // `const` assignment sentinel from `Heap::env_set_mutable_binding`.
+        Err(VmError::Throw(Value::Undefined)) => {
+          return Err(new_type_error(scope, realm, "Assignment to constant variable.")?);
+        }
+        Err(err) => return Err(err),
+      }
     }
 
     // Assignment to global (var) bindings is backed by the global object.
@@ -252,7 +271,8 @@ impl RuntimeEnv {
     let has_binding = key_scope.ordinary_has_property(global_object, key)?;
     if !has_binding {
       if strict {
-        return Err(VmError::Throw(self.new_reference_error(&mut key_scope)?));
+        let msg = format!("{name} is not defined");
+        return Err(new_reference_error(&mut key_scope, realm, &msg)?);
       }
 
       // Sloppy-mode: create a new global `var` property.
@@ -271,13 +291,12 @@ impl RuntimeEnv {
             .object_set_existing_data_property_value(global_object, &key, value)?;
           return Ok(());
         }
-        PropertyKind::Data {
-          writable: false, ..
-        } => {
-          // TODO: Should throw a TypeError in strict mode; sloppy-mode is a no-op.
-          return Err(VmError::Unimplemented(
-            "assignment to non-writable global property",
-          ));
+        PropertyKind::Data { writable: false, .. } => {
+          if strict {
+            let msg = format!("Cannot assign to read only property '{name}'");
+            return Err(new_type_error(&mut key_scope, realm, &msg)?);
+          }
+          return Ok(());
         }
         PropertyKind::Accessor { .. } => {
           return Err(VmError::Unimplemented("accessor properties"));
@@ -354,11 +373,7 @@ impl JsRuntime {
     let mut vm = vm;
     let mut heap = heap;
     let realm = Realm::new(&mut vm, &mut heap)?;
-    let env = RuntimeEnv::new(
-      &mut heap,
-      realm.global_object(),
-      realm.intrinsics().reference_error_prototype(),
-    )?;
+    let env = RuntimeEnv::new(&mut heap, realm.global_object())?;
     Ok(Self {
       vm,
       heap,
@@ -396,6 +411,7 @@ impl JsRuntime {
     let mut evaluator = Evaluator {
       vm: &mut self.vm,
       env: &mut self.env,
+      realm: &self.realm,
       ecma_functions: &mut self.ecma_functions,
       strict,
       this: global_this,
@@ -459,6 +475,7 @@ impl VmJobContext for JsRuntime {
 struct Evaluator<'a> {
   vm: &'a mut Vm,
   env: &'a mut RuntimeEnv,
+  realm: &'a Realm,
   ecma_functions: &'a mut Vec<InterpretedEcmaFunction>,
   strict: bool,
   this: Value,
@@ -808,6 +825,7 @@ impl<'a> Evaluator<'a> {
             self.vm,
             scope,
             self.env,
+            self.realm,
             self.ecma_functions,
             &declarator.pattern.stx.pat.stx,
             value,
@@ -830,6 +848,7 @@ impl<'a> Evaluator<'a> {
               self.vm,
               scope,
               self.env,
+              self.realm,
               self.ecma_functions,
               &declarator.pattern.stx.pat.stx,
               value,
@@ -870,6 +889,7 @@ impl<'a> Evaluator<'a> {
               self.vm,
               scope,
               self.env,
+              self.realm,
               self.ecma_functions,
               &declarator.pattern.stx.pat.stx,
               value,
@@ -1061,6 +1081,7 @@ impl<'a> Evaluator<'a> {
       self.vm,
       scope,
       self.env,
+      self.realm,
       self.ecma_functions,
       &param.pat.stx,
       thrown,
@@ -1240,6 +1261,7 @@ impl<'a> Evaluator<'a> {
             self.vm,
             &mut iter_scope,
             self.env,
+            self.realm,
             self.ecma_functions,
             &pat_decl.stx.pat.stx,
             value,
@@ -1253,6 +1275,7 @@ impl<'a> Evaluator<'a> {
           self.vm,
           &mut iter_scope,
           self.env,
+          self.realm,
           self.ecma_functions,
           &pat.stx,
           value,
@@ -1529,9 +1552,12 @@ impl<'a> Evaluator<'a> {
     reference: &Reference<'_>,
   ) -> Result<Value, VmError> {
     match *reference {
-      Reference::Binding(name) => match self.env.get(self.vm, scope, name)? {
+      Reference::Binding(name) => match self.env.get(self.vm, scope, self.realm, name)? {
         Some(v) => Ok(v),
-        None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+        None => {
+          let msg = format!("{name} is not defined");
+          Err(new_reference_error(scope, self.realm, &msg)?)
+        }
       },
       Reference::Property { object, key } => {
         let mut get_scope = scope.reborrow();
@@ -1548,7 +1574,7 @@ impl<'a> Evaluator<'a> {
     value: Value,
   ) -> Result<(), VmError> {
     match *reference {
-      Reference::Binding(name) => self.env.set(scope, name, value, self.strict),
+      Reference::Binding(name) => self.env.set(self.vm, scope, self.realm, name, value, self.strict),
       Reference::Property { object, key } => {
         let ok = self.ordinary_set(scope, object, key, value, Value::Object(object))?;
         if ok {
@@ -2161,16 +2187,22 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
-    match self.env.get(self.vm, scope, &expr.name)? {
+    match self.env.get(self.vm, scope, self.realm, &expr.name)? {
       Some(v) => Ok(v),
-      None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+      None => {
+        let msg = format!("{name} is not defined", name = expr.name);
+        Err(new_reference_error(scope, self.realm, &msg)?)
+      }
     }
   }
 
   fn eval_id_pat(&mut self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
-    match self.env.get(self.vm, scope, &expr.name)? {
+    match self.env.get(self.vm, scope, self.realm, &expr.name)? {
       Some(v) => Ok(v),
-      None => Err(VmError::Throw(self.env.new_reference_error(scope)?)),
+      None => {
+        let msg = format!("{name} is not defined", name = expr.name);
+        Err(new_reference_error(scope, self.realm, &msg)?)
+      }
     }
   }
 
@@ -2412,6 +2444,7 @@ impl<'a> Evaluator<'a> {
           self.vm,
           scope,
           self.env,
+          self.realm,
           self.ecma_functions,
           &param.stx.pattern.stx.pat.stx,
           value,
@@ -2483,6 +2516,7 @@ impl<'a> Evaluator<'a> {
               self.vm,
               scope,
               self.env,
+              self.realm,
               self.ecma_functions,
               &expr.left,
               value,
@@ -2624,6 +2658,7 @@ fn alloc_string_from_lit_str(
 pub(crate) fn eval_expr(
   vm: &mut Vm,
   env: &mut RuntimeEnv,
+  realm: &Realm,
   ecma_functions: &mut Vec<InterpretedEcmaFunction>,
   strict: bool,
   this: Value,
@@ -2634,6 +2669,7 @@ pub(crate) fn eval_expr(
   let mut evaluator = Evaluator {
     vm,
     env,
+    realm,
     ecma_functions,
     strict,
     this,
