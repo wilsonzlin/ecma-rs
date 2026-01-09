@@ -215,12 +215,12 @@ impl RootId {
 
 /// An ID for a persistent environment root stored in the heap.
 ///
-/// This is used to keep internal environment records alive across GC cycles.
+/// Returned by [`Heap::add_env_root`](crate::Heap::add_env_root) and later passed to
+/// [`Heap::remove_env_root`](crate::Heap::remove_env_root).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 #[repr(transparent)]
-pub(crate) struct EnvRootId(pub(crate) u32);
+pub struct EnvRootId(pub(crate) u32);
 
-#[allow(dead_code)]
 impl EnvRootId {
   /// The underlying index into the heap's persistent env root table.
   #[inline]

@@ -1,4 +1,5 @@
-use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmOptions};
+use semantic_js::js::SymbolId;
+use vm_js::{EnvBinding, Heap, HeapLimits, JsRuntime, Value, Vm, VmError, VmOptions};
 
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
@@ -53,4 +54,79 @@ fn const_assignment_throws() {
     .exec_script(r#"try { const x = 1; x = 2; } catch(e) { "ok" }"#)
     .unwrap();
   assert_value_is_utf8(&rt, value, "ok");
+}
+
+#[test]
+fn tdz_binding_errors_until_initialized() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let sym = SymbolId::from_raw(1);
+  let env;
+  {
+    let mut scope = heap.scope();
+    env = scope.alloc_env_record(
+      None,
+      &[EnvBinding {
+        symbol: sym,
+        name: None,
+        value: Value::Undefined,
+        initialized: false,
+        mutable: true,
+        strict: true,
+      }],
+    )?;
+    scope.push_env_root(env)?;
+
+    assert!(matches!(
+      scope.heap().env_get_symbol_binding_value(env, sym),
+      Err(VmError::Unimplemented("tdz"))
+    ));
+
+    scope
+      .heap_mut()
+      .env_initialize_symbol_binding(env, sym, Value::Number(123.0))?;
+
+    assert_eq!(
+      scope.heap().env_get_symbol_binding_value(env, sym)?,
+      Value::Number(123.0)
+    );
+  }
+
+  Ok(())
+}
+
+#[test]
+fn immutable_binding_rejects_assignment() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  let sym = SymbolId::from_raw(1);
+  let env;
+  {
+    let mut scope = heap.scope();
+    env = scope.alloc_env_record(
+      None,
+      &[EnvBinding {
+        symbol: sym,
+        name: None,
+        value: Value::Undefined,
+        initialized: false,
+        mutable: false,
+        strict: true,
+      }],
+    )?;
+    scope.push_env_root(env)?;
+
+    scope
+      .heap_mut()
+      .env_initialize_symbol_binding(env, sym, Value::Number(1.0))?;
+
+    assert!(matches!(
+      scope
+        .heap_mut()
+        .env_set_mutable_symbol_binding(env, sym, Value::Number(2.0)),
+      Err(VmError::Unimplemented("assignment to const"))
+    ));
+  }
+
+  Ok(())
 }

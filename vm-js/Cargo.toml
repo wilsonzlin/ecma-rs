@@ -11,3 +11,4 @@ thiserror = { workspace = true }
 parse-js = { workspace = true, features = ["diagnostics"] }
 hir-js = { workspace = true }
 ryu = { workspace = true }
+semantic-js = { workspace = true }

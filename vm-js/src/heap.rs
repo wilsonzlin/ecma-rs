@@ -10,6 +10,7 @@ use crate::symbol::JsSymbol;
 use crate::CompiledFunctionRef;
 use crate::{EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
+use semantic_js::js::SymbolId;
 use std::collections::HashSet;
 
 /// Hard upper bound for `[[Prototype]]` chain traversals.
@@ -507,7 +508,9 @@ impl Heap {
     }
   }
 
-  pub(crate) fn add_env_root(&mut self, env: GcEnv) -> Result<EnvRootId, VmError> {
+  /// Adds a persistent environment root, keeping `env` live until the returned [`EnvRootId`] is
+  /// removed.
+  pub fn add_env_root(&mut self, env: GcEnv) -> Result<EnvRootId, VmError> {
     debug_assert!(self.is_valid_env(env));
 
     // Root `env` during allocation in case growing the env-root table triggers GC.
@@ -532,15 +535,18 @@ impl Heap {
     Ok(EnvRootId(idx as u32))
   }
 
-  #[allow(dead_code)]
-  pub(crate) fn get_env_root(&self, id: EnvRootId) -> Option<GcEnv> {
+  /// Returns the current value of a persistent env root.
+  pub fn get_env_root(&self, id: EnvRootId) -> Option<GcEnv> {
     self
       .persistent_env_roots
       .get(id.0 as usize)
       .and_then(|slot| *slot)
   }
 
-  pub(crate) fn set_env_root(&mut self, id: EnvRootId, env: GcEnv) {
+  /// Updates a persistent env root's value.
+  ///
+  /// Panics only in debug builds if `id` is invalid.
+  pub fn set_env_root(&mut self, id: EnvRootId, env: GcEnv) {
     debug_assert!(self.is_valid_env(env));
 
     let idx = id.0 as usize;
@@ -560,8 +566,8 @@ impl Heap {
     }
   }
 
-  #[allow(dead_code)]
-  pub(crate) fn remove_env_root(&mut self, id: EnvRootId) {
+  /// Removes a persistent env root previously created by [`Heap::add_env_root`].
+  pub fn remove_env_root(&mut self, id: EnvRootId) {
     let idx = id.0 as usize;
     debug_assert!(
       idx < self.persistent_env_roots.len(),
@@ -1933,6 +1939,38 @@ impl Heap {
     Ok(())
   }
 
+  pub fn env_has_symbol_binding(&self, env: GcEnv, symbol: SymbolId) -> Result<bool, VmError> {
+    Ok(self.get_env(env)?.has_symbol_binding(symbol))
+  }
+
+  pub fn env_get_symbol_binding_value(
+    &self,
+    env: GcEnv,
+    symbol: SymbolId,
+  ) -> Result<Value, VmError> {
+    self.get_env(env)?.get_symbol_binding_value(symbol)
+  }
+
+  pub fn env_initialize_symbol_binding(
+    &mut self,
+    env: GcEnv,
+    symbol: SymbolId,
+    value: Value,
+  ) -> Result<(), VmError> {
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+    self.get_env_mut(env)?.initialize_symbol_binding(symbol, value)
+  }
+
+  pub fn env_set_mutable_symbol_binding(
+    &mut self,
+    env: GcEnv,
+    symbol: SymbolId,
+    value: Value,
+  ) -> Result<(), VmError> {
+    debug_assert!(self.debug_value_is_valid_or_primitive(value));
+    self.get_env_mut(env)?.set_mutable_symbol_binding(symbol, value)
+  }
+
   fn env_add_binding(&mut self, env: GcEnv, binding: EnvBinding) -> Result<(), VmError> {
     let idx = self.validate(env.0).ok_or(VmError::InvalidHandle)?;
 
@@ -1966,7 +2004,11 @@ impl Heap {
       buf.extend_from_slice(&env.bindings);
     }
 
-    buf.push(binding);
+    let insert_at = match buf.binary_search_by_key(&binding.symbol, |b| b.symbol) {
+      Ok(_) => return Err(VmError::Unimplemented("duplicate env binding")),
+      Err(idx) => idx,
+    };
+    buf.insert(insert_at, binding);
     let bindings = buf.into_boxed_slice();
 
     let Some(HeapObject::Env(env)) = self.slots[idx].value.as_mut() else {
@@ -2671,7 +2713,7 @@ impl<'a> Scope<'a> {
     Ok(())
   }
 
-  pub(crate) fn push_env_root(&mut self, env: GcEnv) -> Result<GcEnv, VmError> {
+  pub fn push_env_root(&mut self, env: GcEnv) -> Result<GcEnv, VmError> {
     debug_assert!(self.heap.is_valid_env(env));
 
     let new_len = self
@@ -3096,28 +3138,56 @@ impl<'a> Scope<'a> {
     Ok(func)
   }
 
-  pub fn alloc_env_record(&mut self, outer: Option<GcObject>) -> Result<GcObject, VmError> {
-    let outer_env = match outer {
-      Some(obj) => {
-        let env = GcEnv(obj.0);
-        if !self.heap().is_valid_env(env) {
-          return Err(VmError::InvalidHandle);
-        }
-        Some(env)
-      }
-      None => None,
-    };
-
+  pub fn alloc_env_record(
+    &mut self,
+    outer: Option<GcEnv>,
+    bindings: &[EnvBinding],
+  ) -> Result<GcEnv, VmError> {
+    // Root inputs for the duration of allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     if let Some(outer) = outer {
-      scope.push_root(Value::Object(outer))?;
+      if !scope.heap().is_valid_env(outer) {
+        return Err(VmError::InvalidHandle);
+      }
+      scope.push_env_root(outer)?;
     }
 
-    let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(0);
+    for binding in bindings {
+      if let Some(name) = binding.name {
+        scope.push_root(Value::String(name))?;
+      }
+      scope.push_root(binding.value)?;
+    }
+
+    let new_bytes = EnvRecord::heap_size_bytes_for_binding_count(bindings.len());
     scope.heap.ensure_can_allocate(new_bytes)?;
 
-    let obj = HeapObject::Env(EnvRecord::new(outer_env));
-    Ok(GcObject(scope.heap.alloc_unchecked(obj, new_bytes)?))
+    // Allocate the backing buffer fallibly so hostile inputs cannot abort the host process
+    // on allocator OOM.
+    let mut buf: Vec<EnvBinding> = Vec::new();
+    buf
+      .try_reserve_exact(bindings.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    buf.extend_from_slice(bindings);
+
+    // Keep the table deterministic by sorting by `SymbolId`.
+    buf.sort_by_key(|binding| binding.symbol);
+    if buf
+      .windows(2)
+      .any(|pair| pair[0].symbol == pair[1].symbol)
+    {
+      return Err(VmError::Unimplemented("duplicate env binding"));
+    }
+
+    let bindings = buf.into_boxed_slice();
+    let env = EnvRecord::new_with_bindings(outer, bindings);
+    debug_assert_eq!(
+      new_bytes,
+      EnvRecord::heap_size_bytes_for_binding_count(env.bindings.len())
+    );
+
+    let obj = HeapObject::Env(env);
+    Ok(GcEnv(scope.heap.alloc_unchecked(obj, new_bytes)?))
   }
 
   pub fn env_create(&mut self, outer: Option<GcEnv>) -> Result<GcEnv, VmError> {
@@ -3152,10 +3222,12 @@ impl<'a> Scope<'a> {
     scope.heap.env_add_binding(
       env,
       EnvBinding {
-        name,
+        symbol: SymbolId::from_raw(name.id().0),
+        name: Some(name),
         value: Value::Undefined,
         mutable: true,
         initialized: false,
+        strict: false,
       },
     )
   }
@@ -3178,10 +3250,12 @@ impl<'a> Scope<'a> {
     scope.heap.env_add_binding(
       env,
       EnvBinding {
-        name,
+        symbol: SymbolId::from_raw(name.id().0),
+        name: Some(name),
         value: Value::Undefined,
         mutable: false,
         initialized: false,
+        strict: false,
       },
     )
   }
