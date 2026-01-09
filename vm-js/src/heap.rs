@@ -1,8 +1,10 @@
-use crate::function::{CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId};
+use crate::function::{
+  CallHandler, ConstructHandler, JsFunction, NativeConstructId, NativeFunctionId,
+};
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::symbol::JsSymbol;
-use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, VmError};
+use crate::{GcObject, GcString, GcSymbol, HeapId, RootId, Value, Vm, VmError};
 use core::mem;
 use std::collections::BTreeMap;
 
@@ -223,7 +225,10 @@ impl Heap {
     if idx >= self.persistent_roots.len() {
       return;
     }
-    debug_assert!(self.persistent_roots[idx].is_some(), "RootId already removed");
+    debug_assert!(
+      self.persistent_roots[idx].is_some(),
+      "RootId already removed"
+    );
     if self.persistent_roots[idx].is_some() {
       self.persistent_roots[idx] = Some(value);
     }
@@ -236,7 +241,10 @@ impl Heap {
     if idx >= self.persistent_roots.len() {
       return;
     }
-    debug_assert!(self.persistent_roots[idx].is_some(), "RootId already removed");
+    debug_assert!(
+      self.persistent_roots[idx].is_some(),
+      "RootId already removed"
+    );
     if self.persistent_roots[idx].take().is_some() {
       self.persistent_roots_free.push(id.0);
     }
@@ -281,6 +289,37 @@ impl Heap {
       },
       _ => Ok(false),
     }
+  }
+
+  /// Calls `callee` with the provided `this` value and arguments.
+  ///
+  /// This is a convenience wrapper around [`Vm::call`] for host embeddings: it creates a temporary
+  /// stack-rooting [`Scope`] to keep `callee`, `this`, and `args` alive for the duration of the
+  /// call.
+  ///
+  /// Invalid handles are rejected up-front with [`VmError::InvalidHandle`] (rather than tripping
+  /// debug assertions when rooting).
+  pub fn call(
+    &mut self,
+    vm: &mut Vm,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    if !self.debug_value_is_valid_or_primitive(callee) {
+      return Err(VmError::InvalidHandle);
+    }
+    if !self.debug_value_is_valid_or_primitive(this) {
+      return Err(VmError::InvalidHandle);
+    }
+    for &arg in args {
+      if !self.debug_value_is_valid_or_primitive(arg) {
+        return Err(VmError::InvalidHandle);
+      }
+    }
+
+    let mut scope = self.scope();
+    vm.call(&mut scope, callee, this, args)
   }
 
   /// Gets the string contents for `s`.
@@ -601,7 +640,13 @@ impl Heap {
             .properties
             .iter()
             .position(|entry| self.property_key_eq(&entry.key, &key));
-          (false, 0usize, obj.properties.len(), slot.bytes, existing_idx)
+          (
+            false,
+            0usize,
+            obj.properties.len(),
+            slot.bytes,
+            existing_idx,
+          )
         }
         HeapObject::Function(func) => {
           let existing_idx = func
@@ -609,7 +654,13 @@ impl Heap {
             .iter()
             .position(|entry| self.property_key_eq(&entry.key, &key));
           let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
-          (true, bound_args_len, func.properties.len(), slot.bytes, existing_idx)
+          (
+            true,
+            bound_args_len,
+            func.properties.len(),
+            slot.bytes,
+            existing_idx,
+          )
         }
         _ => return Err(VmError::InvalidHandle),
       }
@@ -629,9 +680,7 @@ impl Heap {
         Ok(())
       }
       None => {
-        let new_property_count = property_count
-          .checked_add(1)
-          .ok_or(VmError::OutOfMemory)?;
+        let new_property_count = property_count.checked_add(1).ok_or(VmError::OutOfMemory)?;
         let new_bytes = if is_function {
           JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
             bound_args_len,
@@ -684,18 +733,12 @@ impl Heap {
 
   fn get_heap_object(&self, id: HeapId) -> Result<&HeapObject, VmError> {
     let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
-    self.slots[idx]
-      .value
-      .as_ref()
-      .ok_or(VmError::InvalidHandle)
+    self.slots[idx].value.as_ref().ok_or(VmError::InvalidHandle)
   }
 
   fn get_heap_object_mut(&mut self, id: HeapId) -> Result<&mut HeapObject, VmError> {
     let idx = self.validate(id).ok_or(VmError::InvalidHandle)?;
-    self.slots[idx]
-      .value
-      .as_mut()
-      .ok_or(VmError::InvalidHandle)
+    self.slots[idx].value.as_mut().ok_or(VmError::InvalidHandle)
   }
 
   fn validate(&self, id: HeapId) -> Option<usize> {
@@ -795,7 +838,9 @@ impl Heap {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => match f.construct {
         Some(ConstructHandler::Native(id)) => Ok(Some(id)),
-        Some(ConstructHandler::EcmaScript) => Err(VmError::Unimplemented("ECMAScript [[Construct]]")),
+        Some(ConstructHandler::EcmaScript) => {
+          Err(VmError::Unimplemented("ECMAScript [[Construct]]"))
+        }
         None => Ok(None),
       },
       _ => Err(VmError::NotConstructable),
@@ -1034,7 +1079,12 @@ impl<'a> Scope<'a> {
     let func = GcObject(scope.heap.alloc_unchecked(obj, new_bytes));
 
     // Define standard function properties.
-    crate::function_properties::set_function_name(&mut scope, func, PropertyKey::String(name), None)?;
+    crate::function_properties::set_function_name(
+      &mut scope,
+      func,
+      PropertyKey::String(name),
+      None,
+    )?;
     crate::function_properties::set_function_length(&mut scope, func, length)?;
 
     // Constructors get a `.prototype` object.
