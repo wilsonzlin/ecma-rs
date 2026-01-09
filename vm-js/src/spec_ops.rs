@@ -3,7 +3,7 @@
 //! This module contains small helpers that mirror ECMA-262 abstract operations closely. These are
 //! intended to be used by built-ins so their algorithms remain spec-shaped.
 
-use crate::{GcObject, PropertyKey, Scope, Value, Vm, VmError};
+use crate::{GcObject, PropertyDescriptorPatch, PropertyKey, Scope, Value, Vm, VmError};
 
 /// `GetPrototypeFromConstructor(constructor, intrinsicDefaultProto)` (ECMA-262).
 ///
@@ -61,3 +61,66 @@ where
   Ok(obj)
 }
 
+/// `CreateDataProperty(O, P, V)` (ECMA-262).
+///
+/// Spec: <https://tc39.es/ecma262/#sec-createdataproperty>
+#[inline]
+pub fn create_data_property(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  key: PropertyKey,
+  value: Value,
+) -> Result<bool, VmError> {
+  scope.create_data_property(obj, key, value)
+}
+
+/// `CreateDataPropertyOrThrow(O, P, V)` (ECMA-262).
+///
+/// Spec: <https://tc39.es/ecma262/#sec-createdatapropertyorthrow>
+#[inline]
+pub fn create_data_property_or_throw(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  key: PropertyKey,
+  value: Value,
+) -> Result<(), VmError> {
+  scope.create_data_property_or_throw(obj, key, value)
+}
+
+/// `DefinePropertyOrThrow(O, P, desc)` (ECMA-262).
+///
+/// Spec: <https://tc39.es/ecma262/#sec-definepropertyorthrow>
+#[inline]
+pub fn define_property_or_throw(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  key: PropertyKey,
+  desc: PropertyDescriptorPatch,
+) -> Result<(), VmError> {
+  scope.define_property_or_throw(obj, key, desc)
+}
+
+/// `DeletePropertyOrThrow(O, P)` (ECMA-262).
+///
+/// Spec: <https://tc39.es/ecma262/#sec-deletepropertyorthrow>
+#[inline]
+pub fn delete_property_or_throw(
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  key: PropertyKey,
+) -> Result<(), VmError> {
+  scope.delete_property_or_throw(obj, key)
+}
+
+/// `GetMethod(V, P)` (ECMA-262) (partial).
+///
+/// Spec: <https://tc39.es/ecma262/#sec-getmethod>
+#[inline]
+pub fn get_method(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  value: Value,
+  key: PropertyKey,
+) -> Result<Option<Value>, VmError> {
+  vm.get_method(scope, value, key)
+}
