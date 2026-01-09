@@ -98,16 +98,40 @@ pub(crate) struct JsFunction {
   pub(crate) bound_target: Option<GcObject>,
   pub(crate) bound_this: Option<Value>,
   pub(crate) bound_args: Option<Box<[Value]>>,
+  /// Per-function captured state for native/builtin functions.
+  ///
+  /// This is the VM's representation of spec "abstract closures" that capture internal slots.
+  ///
+  /// For example, ECMA-262's `CreateResolvingFunctions(promise)` creates two fresh function objects
+  /// (`resolve`/`reject`) that both capture:
+  /// - the target promise, and
+  /// - a shared `alreadyResolved` record.
+  ///
+  /// With `native_slots`, an embedding can represent these by allocating two builtin/native
+  /// functions that share one captured value (e.g. a small heap object acting as the
+  /// `alreadyResolved` record) and each capture the target promise.
+  pub(crate) native_slots: Option<Box<[Value]>>,
   pub(crate) realm: Option<GcObject>,
   pub(crate) closure_env: Option<GcEnv>,
 }
 
 impl JsFunction {
+  #[allow(dead_code)]
   pub(crate) fn new_native(
     call: NativeFunctionId,
     construct: Option<NativeConstructId>,
     name: GcString,
     length: u32,
+  ) -> Self {
+    Self::new_native_with_slots(call, construct, name, length, None)
+  }
+
+  pub(crate) fn new_native_with_slots(
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    native_slots: Option<Box<[Value]>>,
   ) -> Self {
     Self {
       call: CallHandler::Native(call),
@@ -121,6 +145,7 @@ impl JsFunction {
       bound_target: None,
       bound_this: None,
       bound_args: None,
+      native_slots,
       realm: None,
       closure_env: None,
     }
@@ -151,21 +176,27 @@ impl JsFunction {
       bound_target: None,
       bound_this: None,
       bound_args: None,
+      native_slots: None,
       realm: None,
       closure_env,
     }
   }
   pub(crate) fn heap_size_bytes(&self) -> usize {
     let bound_args_len = self.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
+    let native_slots_len = self.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0);
     let property_count = self.base.property_count();
-    Self::heap_size_bytes_for_bound_args_len_and_property_count(bound_args_len, property_count)
+    Self::heap_size_bytes_for_counts(bound_args_len, native_slots_len, property_count)
   }
 
-  pub(crate) fn heap_size_bytes_for_bound_args_len_and_property_count(
+  pub(crate) fn heap_size_bytes_for_counts(
     bound_args_len: usize,
+    native_slots_len: usize,
     property_count: usize,
   ) -> usize {
     let bound_args_bytes = bound_args_len
+      .checked_mul(mem::size_of::<Value>())
+      .unwrap_or(usize::MAX);
+    let native_slots_bytes = native_slots_len
       .checked_mul(mem::size_of::<Value>())
       .unwrap_or(usize::MAX);
     let props_bytes = ObjectBase::properties_heap_size_bytes_for_count(property_count);
@@ -174,7 +205,10 @@ impl JsFunction {
     // Note: `JsFunction` headers are stored inline in the heap slot table, so this size
     // intentionally excludes `mem::size_of::<JsFunction>()` and only counts heap-owned payload
     // allocations.
-    bound_args_bytes.checked_add(props_bytes).unwrap_or(usize::MAX)
+    bound_args_bytes
+      .checked_add(native_slots_bytes)
+      .and_then(|b| b.checked_add(props_bytes))
+      .unwrap_or(usize::MAX)
   }
 }
 
@@ -204,6 +238,11 @@ impl Trace for JsFunction {
     }
     if let Some(bound_args) = &self.bound_args {
       for value in bound_args.iter().copied() {
+        tracer.trace_value(value);
+      }
+    }
+    if let Some(native_slots) = &self.native_slots {
+      for value in native_slots.iter().copied() {
         tracer.trace_value(value);
       }
     }

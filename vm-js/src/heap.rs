@@ -827,7 +827,10 @@ impl Heap {
     #[derive(Clone, Copy)]
     enum TargetKind {
       OrdinaryObject,
-      Function { bound_args_len: usize },
+      Function {
+        bound_args_len: usize,
+        native_slots_len: usize,
+      },
       Promise {
         fulfill_reaction_count: usize,
         reject_reaction_count: usize,
@@ -857,6 +860,7 @@ impl Heap {
             .position(|prop| self.property_key_eq(&prop.key, key)),
           TargetKind::Function {
             bound_args_len: func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0),
+            native_slots_len: func.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0),
           },
           func.base.properties.len(),
         ),
@@ -883,12 +887,10 @@ impl Heap {
     let new_property_count = property_count.saturating_sub(1);
     let new_bytes = match target_kind {
       TargetKind::OrdinaryObject => JsObject::heap_size_bytes_for_property_count(new_property_count),
-      TargetKind::Function { bound_args_len } => {
-        JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
-          bound_args_len,
-          new_property_count,
-        )
-      }
+      TargetKind::Function {
+        bound_args_len,
+        native_slots_len,
+      } => JsFunction::heap_size_bytes_for_counts(bound_args_len, native_slots_len, new_property_count),
       TargetKind::Promise {
         fulfill_reaction_count,
         reject_reaction_count,
@@ -1953,7 +1955,10 @@ impl Heap {
     #[derive(Clone, Copy)]
     enum TargetKind {
       OrdinaryObject,
-      Function { bound_args_len: usize },
+      Function {
+        bound_args_len: usize,
+        native_slots_len: usize,
+      },
       Promise {
         fulfill_reaction_count: usize,
         reject_reaction_count: usize,
@@ -1987,8 +1992,12 @@ impl Heap {
             .iter()
             .position(|entry| self.property_key_eq(&entry.key, &key));
           let bound_args_len = func.bound_args.as_ref().map(|args| args.len()).unwrap_or(0);
+          let native_slots_len = func.native_slots.as_ref().map(|slots| slots.len()).unwrap_or(0);
           (
-            TargetKind::Function { bound_args_len },
+            TargetKind::Function {
+              bound_args_len,
+              native_slots_len,
+            },
             func.base.properties.len(),
             slot.bytes,
             existing_idx,
@@ -2058,12 +2067,10 @@ impl Heap {
           .ok_or(VmError::OutOfMemory)?;
         let new_bytes = match target_kind {
           TargetKind::OrdinaryObject => JsObject::heap_size_bytes_for_property_count(new_property_count),
-          TargetKind::Function { bound_args_len } => {
-            JsFunction::heap_size_bytes_for_bound_args_len_and_property_count(
-              bound_args_len,
-              new_property_count,
-            )
-          }
+          TargetKind::Function {
+            bound_args_len,
+            native_slots_len,
+          } => JsFunction::heap_size_bytes_for_counts(bound_args_len, native_slots_len, new_property_count),
           TargetKind::Promise {
             fulfill_reaction_count,
             reject_reaction_count,
@@ -2414,6 +2421,16 @@ impl Heap {
   pub(crate) fn get_function_call_handler(&self, func: GcObject) -> Result<CallHandler, VmError> {
     match self.get_heap_object(func.0)? {
       HeapObject::Function(f) => Ok(f.call),
+      _ => Err(VmError::NotCallable),
+    }
+  }
+
+  /// Returns the captured native slots for a function object.
+  ///
+  /// If the function has no native slots, this returns an empty slice.
+  pub fn get_function_native_slots(&self, func: GcObject) -> Result<&[Value], VmError> {
+    match self.get_heap_object(func.0)? {
+      HeapObject::Function(f) => Ok(f.native_slots.as_deref().unwrap_or(&[])),
       _ => Err(VmError::NotCallable),
     }
   }
@@ -2962,11 +2979,39 @@ impl<'a> Scope<'a> {
     name: GcString,
     length: u32,
   ) -> Result<GcObject, VmError> {
+    self.alloc_native_function_with_slots(call, construct, name, length, &[])
+  }
+
+  /// Allocates a native JavaScript function object with captured native slots.
+  pub fn alloc_native_function_with_slots(
+    &mut self,
+    call: NativeFunctionId,
+    construct: Option<NativeConstructId>,
+    name: GcString,
+    length: u32,
+    slots: &[Value],
+  ) -> Result<GcObject, VmError> {
     // Root inputs during allocation in case `ensure_can_allocate` triggers a GC.
     let mut scope = self.reborrow();
     scope.push_root(Value::String(name))?;
+    for v in slots {
+      scope.push_root(*v)?;
+    }
 
-    let func = JsFunction::new_native(call, construct, name, length);
+    let native_slots: Option<Box<[Value]>> = if slots.is_empty() {
+      None
+    } else {
+      // Allocate the slot buffer fallibly so hostile inputs cannot abort the host process on
+      // allocator OOM.
+      let mut buf: Vec<Value> = Vec::new();
+      buf
+        .try_reserve_exact(slots.len())
+        .map_err(|_| VmError::OutOfMemory)?;
+      buf.extend_from_slice(slots);
+      Some(buf.into_boxed_slice())
+    };
+
+    let func = JsFunction::new_native_with_slots(call, construct, name, length, native_slots);
     let new_bytes = func.heap_size_bytes();
     scope.heap.ensure_can_allocate(new_bytes)?;
 
