@@ -117,13 +117,30 @@ fn string_to_number(heap: &Heap, s: GcString) -> Result<f64, VmError> {
   }
 
   // Guard against Rust accepting "inf"/"infinity" case-insensitively.
-  let rest = trimmed
-    .strip_prefix('+')
-    .or_else(|| trimmed.strip_prefix('-'))
-    .unwrap_or(trimmed);
+  let (has_sign, rest) = match trimmed.strip_prefix('+') {
+    Some(rest) => (true, rest),
+    None => match trimmed.strip_prefix('-') {
+      Some(rest) => (true, rest),
+      None => (false, trimmed),
+    },
+  };
   if rest.eq_ignore_ascii_case("inf") || rest.eq_ignore_ascii_case("infinity") {
     // Only the exact "Infinity" spelling is accepted above.
     return Ok(f64::NAN);
+  }
+
+  // Per ECMA-262, signed hex/binary/octal literals are not valid `StringToNumber` inputs.
+  // E.g. `Number("-0x10")` is `NaN` (use `parseInt` for signed radix parsing).
+  if has_sign {
+    if rest.starts_with("0x")
+      || rest.starts_with("0X")
+      || rest.starts_with("0b")
+      || rest.starts_with("0B")
+      || rest.starts_with("0o")
+      || rest.starts_with("0O")
+    {
+      return Ok(f64::NAN);
+    }
   }
 
   if let Some(hex) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {

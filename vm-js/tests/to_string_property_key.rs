@@ -42,13 +42,14 @@ fn to_string_primitives() {
   let err = heap.to_string(Value::Symbol(sym)).unwrap_err();
   assert!(matches!(err, VmError::TypeError(_)));
 
-  // Object uses the current `ToPrimitive` placeholder.
+  // Object coercion is not implemented yet.
   let obj = {
     let mut scope = heap.scope();
     scope.alloc_object().expect("alloc object")
   };
   let _obj_root = heap.add_root(Value::Object(obj));
-  assert_to_string(&mut heap, Value::Object(obj), "[object Object]");
+  let err = heap.to_string(Value::Object(obj)).unwrap_err();
+  assert!(matches!(err, VmError::Unimplemented(_)));
 }
 
 #[test]
@@ -102,16 +103,12 @@ fn to_property_key_primitives() {
     _ => panic!("expected string key"),
   }
 
-  // Object uses the current `ToPrimitive` placeholder.
+  // Object coercion is not implemented yet.
   let obj = {
     let mut scope = heap.scope();
     scope.alloc_object().expect("alloc object")
   };
   let _obj_root = heap.add_root(Value::Object(obj));
-  match heap.to_property_key(Value::Object(obj)).unwrap() {
-    PropertyKey::String(s) => {
-      assert_eq!(heap.get_string(s).unwrap().to_utf8_lossy(), "[object Object]")
-    }
-    _ => panic!("expected string key"),
-  }
+  let err = heap.to_property_key(Value::Object(obj)).unwrap_err();
+  assert!(matches!(err, VmError::Unimplemented(_)));
 }

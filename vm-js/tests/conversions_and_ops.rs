@@ -40,3 +40,28 @@ fn abstract_equality_matches_ecmascript_primitives() {
   let value = rt.exec_script(r#""0" == 0"#).unwrap();
   assert_eq!(value, Value::Bool(true));
 }
+
+#[test]
+fn tonumber_rejects_signed_radix_prefixes() {
+  let mut rt = new_runtime();
+
+  // ECMA-262 `StringToNumber` does not accept signed 0x/0b/0o prefixes.
+  // Assert NaN via self-inequality to avoid depending on NaN bit patterns.
+  let value = rt.exec_script(r#"+'+0x10' !== +'+0x10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+
+  let value = rt.exec_script(r#"+'-0x10' !== +'-0x10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+
+  let value = rt.exec_script(r#"+'+0b10' !== +'+0b10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+
+  let value = rt.exec_script(r#"+'-0b10' !== +'-0b10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+
+  let value = rt.exec_script(r#"+'+0o10' !== +'+0o10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+
+  let value = rt.exec_script(r#"+'-0o10' !== +'-0o10'"#).unwrap();
+  assert_eq!(value, Value::Bool(true));
+}

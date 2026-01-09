@@ -205,18 +205,15 @@ impl Heap {
   ///
   /// This is a minimal implementation of the `ToPropertyKey` shape from ECMA-262:
   /// - `String`/`Symbol` values are returned directly.
-  /// - `Object` values are first converted using [`crate::ops::to_primitive`].
+  /// - `Object` values are not supported yet (requires a real `ToPrimitive` implementation).
   /// - All other values go through `ToString`.
   pub fn to_property_key(&mut self, value: Value) -> Result<PropertyKey, VmError> {
     match value {
       Value::String(s) => Ok(PropertyKey::String(s)),
       Value::Symbol(s) => Ok(PropertyKey::Symbol(s)),
-      Value::Object(_) => {
-        // Per spec: ToPrimitive (hint String), then ToString unless it's a Symbol.
-        // We currently use the placeholder `to_primitive` until built-ins exist.
-        let prim = crate::ops::to_primitive(self, value)?;
-        self.to_property_key(prim)
-      }
+      Value::Object(_) => Err(VmError::Unimplemented(
+        "ToPropertyKey on objects requires ToPrimitive/built-ins",
+      )),
       other => Ok(PropertyKey::String(self.to_string(other)?)),
     }
   }
@@ -226,8 +223,7 @@ impl Heap {
   /// This covers the primitive cases needed by WebIDL conversions:
   /// - `undefined`, `null`, booleans, numbers, strings.
   ///
-  /// For `Object`, this uses [`crate::ops::to_primitive`] (currently a placeholder) and then
-  /// converts the resulting primitive.
+  /// For `Object`, this is currently unimplemented (requires `ToPrimitive` and built-ins).
   ///
   /// For `Symbol`, this throws a TypeError.
   pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
@@ -249,13 +245,9 @@ impl Heap {
       Value::BigInt(n) => scope.alloc_string(&n.to_decimal_string()),
       Value::String(s) => Ok(s),
       Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
-      Value::Object(_) => {
-        // Per spec: ToPrimitive, then ToString.
-        // `to_primitive` currently returns a placeholder string for objects.
-        let prim = crate::ops::to_primitive(scope.heap_mut(), value)?;
-        scope.push_root(prim)?;
-        scope.heap_mut().to_string(prim)
-      }
+      Value::Object(_) => Err(VmError::Unimplemented(
+        "ToString on objects requires ToPrimitive/built-ins",
+      )),
     }
   }
 
