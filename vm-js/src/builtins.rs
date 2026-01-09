@@ -1061,6 +1061,17 @@ pub fn promise_constructor_construct(
   Ok(Value::Object(promise))
 }
 
+pub fn promise_species_get(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _host: &mut dyn VmHostHooks,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  Ok(this)
+}
+
 pub fn promise_resolving_function_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,

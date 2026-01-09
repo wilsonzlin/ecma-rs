@@ -1167,6 +1167,37 @@ impl Intrinsics {
       data_desc(Value::Number(1.0), false, false, true),
     )?;
 
+    // Promise[@@species]
+    //
+    // Spec: `get Promise [ @@species ]` (ECMA-262).
+    //
+    // The getter returns the receiver and is used by `SpeciesConstructor`.
+    let promise_species_call = vm.register_native_call(builtins::promise_species_get)?;
+    let promise_species_name = scope.alloc_string("get [Symbol.species]")?;
+    let promise_species_getter = alloc_rooted_native_function(
+      scope,
+      roots,
+      promise_species_call,
+      None,
+      promise_species_name,
+      0,
+    )?;
+    scope
+      .heap_mut()
+      .object_set_prototype(promise_species_getter, Some(function_prototype))?;
+    scope.define_property(
+      promise,
+      PropertyKey::Symbol(well_known_symbols.species),
+      PropertyDescriptor {
+        enumerable: false,
+        configurable: true,
+        kind: PropertyKind::Accessor {
+          get: Value::Object(promise_species_getter),
+          set: Value::Undefined,
+        },
+      },
+    )?;
+
     // Promise.resolve / Promise.reject
     {
       let resolve_call = vm.register_native_call(builtins::promise_resolve)?;
