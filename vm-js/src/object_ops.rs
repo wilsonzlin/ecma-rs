@@ -77,7 +77,36 @@ impl<'a> Scope<'a> {
     key: PropertyKey,
     desc: PropertyDescriptorPatch,
   ) -> Result<(), VmError> {
-    let ok = self.define_own_property(obj, key, desc)?;
+    // Root `obj`, `key`, and any `desc` values for the duration of the operation.
+    //
+    // This is important even for *rejected* definitions: when `gc_threshold` is low, pushing the
+    // first stack root can trigger a GC, and any not-yet-rooted key/descriptor values would be
+    // collected if the operation ultimately returns `false`.
+    let mut scope = self.reborrow();
+    let mut roots = [Value::Undefined; 5];
+    let mut root_count = 0usize;
+    roots[root_count] = Value::Object(obj);
+    root_count += 1;
+    roots[root_count] = match key {
+      PropertyKey::String(s) => Value::String(s),
+      PropertyKey::Symbol(s) => Value::Symbol(s),
+    };
+    root_count += 1;
+    if let Some(v) = desc.value {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.get {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    if let Some(v) = desc.set {
+      roots[root_count] = v;
+      root_count += 1;
+    }
+    scope.push_roots(&roots[..root_count])?;
+
+    let ok = scope.define_own_property(obj, key, desc)?;
     if ok {
       Ok(())
     } else {
@@ -245,7 +274,21 @@ impl<'a> Scope<'a> {
     key: PropertyKey,
     value: Value,
   ) -> Result<bool, VmError> {
-    self.define_own_property(
+    // Root inputs for the duration of the operation. This is particularly important for failure
+    // cases (e.g. non-extensible objects) where `key`/`value` are not reachable from any existing
+    // heap object.
+    let mut scope = self.reborrow();
+    let roots = [
+      Value::Object(obj),
+      match key {
+        PropertyKey::String(s) => Value::String(s),
+        PropertyKey::Symbol(s) => Value::Symbol(s),
+      },
+      value,
+    ];
+    scope.push_roots(&roots)?;
+
+    scope.define_own_property(
       obj,
       key,
       PropertyDescriptorPatch {
@@ -277,7 +320,19 @@ impl<'a> Scope<'a> {
   /// This is a convenience wrapper around [`Scope::ordinary_delete`]. If the deletion is rejected
   /// (`false`), this returns a `TypeError`.
   pub fn delete_property_or_throw(&mut self, obj: GcObject, key: PropertyKey) -> Result<(), VmError> {
-    let ok = self.ordinary_delete(obj, key)?;
+    // Root `obj`/`key` for the duration of the operation. Deleting a *missing* property should not
+    // require the caller to pre-root `key` even when GC is triggered while growing the root stack.
+    let mut scope = self.reborrow();
+    let roots = [
+      Value::Object(obj),
+      match key {
+        PropertyKey::String(s) => Value::String(s),
+        PropertyKey::Symbol(s) => Value::Symbol(s),
+      },
+    ];
+    scope.push_roots(&roots)?;
+
+    let ok = scope.ordinary_delete(obj, key)?;
     if ok {
       Ok(())
     } else {

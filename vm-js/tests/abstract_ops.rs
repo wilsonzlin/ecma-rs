@@ -1,11 +1,13 @@
 use vm_js::{
-  create_data_property_or_throw, delete_property_or_throw, get_method, Heap, HeapLimits,
-  PropertyDescriptor, PropertyKey, PropertyKind, Value, Vm, VmError, VmOptions,
+  create_data_property_or_throw, define_property_or_throw, delete_property_or_throw, get_method,
+  Heap, HeapLimits, PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Value,
+  Vm, VmError, VmOptions,
 };
 
 #[test]
 fn create_data_property_or_throw_throws_on_non_extensible_object() -> Result<(), VmError> {
-  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  // Stress rooting: force a GC before each allocation.
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
   let mut scope = heap.scope();
 
   let obj = scope.alloc_object()?;
@@ -42,6 +44,36 @@ fn delete_property_or_throw_throws_on_non_configurable_property() -> Result<(), 
 
   let err = delete_property_or_throw(&mut scope, obj, key).unwrap_err();
   assert!(matches!(err, VmError::TypeError(_)));
+  Ok(())
+}
+
+#[test]
+fn define_property_or_throw_throws_on_non_extensible_object_under_gc() -> Result<(), VmError> {
+  // Stress rooting: force a GC before each allocation.
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
+  let mut scope = heap.scope();
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj))?;
+  scope.object_prevent_extensions(obj)?;
+
+  let key = PropertyKey::from_string(scope.alloc_string("x")?);
+  let err = define_property_or_throw(&mut scope, obj, key, PropertyDescriptorPatch::default()).unwrap_err();
+  assert!(matches!(err, VmError::TypeError(_)));
+  Ok(())
+}
+
+#[test]
+fn delete_property_or_throw_succeeds_for_missing_property_under_gc() -> Result<(), VmError> {
+  // Stress rooting: force a GC before each allocation.
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 0));
+  let mut scope = heap.scope();
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj))?;
+
+  let key = PropertyKey::from_string(scope.alloc_string("missing")?);
+  delete_property_or_throw(&mut scope, obj, key)?;
   Ok(())
 }
 
