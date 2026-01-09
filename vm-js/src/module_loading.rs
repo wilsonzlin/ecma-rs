@@ -20,12 +20,12 @@
 
 use crate::property::PropertyKey;
 use crate::{
-  GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId, Scope, ScriptId,
-  Value, Vm, VmError,
+  GcObject, GcString, ImportAttribute, LoadedModuleRequest, ModuleId, ModuleRequest, RealmId,
+  RootId, Scope, ScriptId, ScriptOrModule, Value, Vm, VmError,
 };
 use std::any::Any;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// The *identity* of the `referrer` passed to `HostLoadImportedModule`/`FinishLoadingImportedModule`.
 ///
@@ -129,28 +129,87 @@ impl fmt::Debug for GraphLoadingState {
 /// This is used as the `_payload_` when starting a dynamic import (`import()`), and is later passed
 /// back to `ContinueDynamicImport` via `FinishLoadingImportedModule`.
 ///
-/// Note: `vm-js` does not yet implement user-facing JavaScript Promises. This record exists as an
-/// engine-owned continuation token so the dynamic import path can be wired in a spec-shaped way.
+/// Note: `vm-js` models Promise objects and Promise jobs, but module evaluation is not yet
+/// integrated. This record keeps the Promise object alive across asynchronous boundaries so host
+/// module loading can later resolve/reject it.
 #[derive(Clone)]
-pub struct PromiseCapability(Arc<dyn Any + Send + Sync>);
+pub struct PromiseCapability(Arc<Mutex<PromiseCapabilityInner>>);
+
+#[derive(Debug)]
+struct PromiseCapabilityInner {
+  promise: GcObject,
+  /// Persistent root keeping `promise` alive until the capability is settled.
+  root: Option<RootId>,
+}
 
 impl PromiseCapability {
-  /// Wrap engine-defined state.
-  pub fn new<T: Any + Send + Sync>(data: T) -> Self {
-    Self(Arc::new(data))
+  /// Create a new pending PromiseCapability.
+  ///
+  /// This allocates a Promise object and roots it in the heap's persistent root set so the returned
+  /// capability can be held by the host across asynchronous module loading.
+  pub fn new(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<Self, VmError> {
+    // When intrinsics are present, use the realm's `%Promise.prototype%` so the returned object is
+    // `instanceof Promise` from JS. Tests sometimes call this helper without initializing a realm;
+    // fall back to an unprototyped Promise object in that case.
+    let promise = match vm.intrinsics() {
+      Some(intr) => scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))?,
+      None => scope.alloc_promise()?,
+    };
+
+    // Root the promise while inserting it into the persistent root set (which can allocate and
+    // trigger GC). Use a child scope so the temporary stack root does not escape.
+    let mut root_scope = scope.reborrow();
+    root_scope.push_root(Value::Object(promise))?;
+    let root = root_scope.heap_mut().add_root(Value::Object(promise))?;
+    Ok(Self(Arc::new(Mutex::new(PromiseCapabilityInner {
+      promise,
+      root: Some(root),
+    }))))
   }
 
-  /// Attempts to downcast the payload by reference.
-  pub fn downcast_ref<T: Any>(&self) -> Option<&T> {
-    self.0.downcast_ref::<T>()
+  /// Returns the underlying Promise object.
+  pub fn promise(&self) -> GcObject {
+    self.0.lock().expect("poisoned PromiseCapability").promise
+  }
+
+  /// Fulfill this capability's promise with `value` (idempotent).
+  pub fn fulfill(&self, vm: &mut Vm, scope: &mut Scope<'_>, value: Value) -> Result<(), VmError> {
+    let mut inner = self.0.lock().expect("poisoned PromiseCapability");
+    if inner.root.is_none() {
+      return Ok(());
+    }
+    let promise = inner.promise;
+    crate::builtins::fulfill_promise(vm.microtask_queue_mut(), scope, promise, value)?;
+    let root = inner
+      .root
+      .take()
+      .expect("PromiseCapability root should be present when unsettled");
+    scope.heap_mut().remove_root(root);
+    Ok(())
+  }
+
+  /// Reject this capability's promise with `reason` (idempotent).
+  pub fn reject(&self, vm: &mut Vm, scope: &mut Scope<'_>, reason: Value) -> Result<(), VmError> {
+    let mut inner = self.0.lock().expect("poisoned PromiseCapability");
+    if inner.root.is_none() {
+      return Ok(());
+    }
+    let promise = inner.promise;
+    crate::builtins::reject_promise(vm.microtask_queue_mut(), scope, promise, reason)?;
+    let root = inner
+      .root
+      .take()
+      .expect("PromiseCapability root should be present when unsettled");
+    scope.heap_mut().remove_root(root);
+    Ok(())
   }
 }
 
 impl fmt::Debug for PromiseCapability {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("PromiseCapability")
-      .field("type_id", &self.0.type_id())
-      .finish()
+    // Treat the promise capability as opaque to the host.
+    let _ = &self.0;
+    f.write_str("PromiseCapability(..)")
   }
 }
 
@@ -350,11 +409,47 @@ pub fn all_import_attributes_supported(
     .all(|attr| supported_keys.iter().any(|k| *k == attr.key.as_str()))
 }
 
+fn vm_error_to_rejection_reason(
+  scope: &mut Scope<'_>,
+  err: VmError,
+) -> Result<(Value, Option<VmError>), VmError> {
+  match err {
+    VmError::Throw(v) => Ok((v, None)),
+    // Represent non-throw VM errors as a string reason so dynamic import remains evaluator-
+    // independent while Error object construction is still evolving.
+    other => {
+      let msg = other.to_string();
+      let s = scope.alloc_string(&msg)?;
+      Ok((Value::String(s), Some(other)))
+    }
+  }
+}
+
+fn import_call_type_error_message(err: &ImportCallTypeError) -> String {
+  match err {
+    ImportCallTypeError::OptionsNotObject => "TypeError: import() options must be an object".to_string(),
+    ImportCallTypeError::AttributesNotObject => {
+      "TypeError: import() options.with must be an object".to_string()
+    }
+    ImportCallTypeError::AttributeValueNotString => {
+      "TypeError: import() attribute values must be strings".to_string()
+    }
+    ImportCallTypeError::UnsupportedImportAttribute { key } => {
+      format!("TypeError: unsupported import attribute key: {key}")
+    }
+  }
+}
+
 /// Spec-shaped dynamic import entry point (EvaluateImportCall).
 ///
-/// This function currently returns [`VmError::Unimplemented`] because `vm-js` does not yet provide
-/// a user-facing JavaScript Promise implementation or a full module evaluator.
-#[allow(unused_variables)]
+/// This implements the *host integration* and option validation parts of ECMA-262's
+/// `EvaluateImportCall`:
+/// <https://tc39.es/ecma262/#sec-evaluate-import-call>.
+///
+/// `vm-js` does not yet implement full module evaluation, but this function still:
+/// - returns a Promise object,
+/// - validates import attributes, and
+/// - calls the host's `HostLoadImportedModule` hook with `payload = PromiseCapability`.
 pub fn start_dynamic_import(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -363,7 +458,62 @@ pub fn start_dynamic_import(
   specifier: Value,
   options: Value,
 ) -> Result<Value, VmError> {
-  Err(VmError::Unimplemented("dynamic import"))
+  let promise_capability = PromiseCapability::new(vm, scope)?;
+  let promise_obj = promise_capability.promise();
+
+  // 1. `specifierString = ToString(specifier)`
+  let specifier_string = match scope.heap_mut().to_string(specifier) {
+    Ok(s) => s,
+    Err(err) => {
+      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
+      promise_capability.reject(vm, scope, reason)?;
+      return Ok(Value::Object(promise_obj));
+    }
+  };
+  let specifier = clone_heap_string_to_string(scope.heap(), specifier_string)?;
+
+  // 2. Determine `referrer = GetActiveScriptOrModule(); if null, use current Realm Record`.
+  let referrer = match vm.get_active_script_or_module() {
+    Some(ScriptOrModule::Script(id)) => ModuleReferrer::Script(id),
+    Some(ScriptOrModule::Module(id)) => ModuleReferrer::Module(id),
+    None => match vm.current_realm() {
+      Some(realm) => ModuleReferrer::Realm(realm),
+      None => {
+        let s = scope.alloc_string("unimplemented: dynamic import requires a current realm")?;
+        promise_capability.reject(vm, scope, Value::String(s))?;
+        return Ok(Value::Object(promise_obj));
+      }
+    },
+  };
+
+  // 3. Parse/validate import attributes.
+  let supported_keys = host.host_get_supported_import_attributes();
+  let attributes = match import_attributes_from_options(vm, scope, options, supported_keys) {
+    Ok(attrs) => attrs,
+    Err(ImportCallError::TypeError(type_err)) => {
+      let msg = import_call_type_error_message(&type_err);
+      let s = scope.alloc_string(&msg)?;
+      promise_capability.reject(vm, scope, Value::String(s))?;
+      return Ok(Value::Object(promise_obj));
+    }
+    Err(ImportCallError::Vm(err)) => {
+      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
+      promise_capability.reject(vm, scope, reason)?;
+      return Ok(Value::Object(promise_obj));
+    }
+  };
+
+  // 4. HostLoadImportedModule(referrer, moduleRequest, empty, payload = promiseCapability).
+  let module_request = ModuleRequest::new(specifier, attributes);
+  host.host_load_imported_module(
+    ctx,
+    referrer,
+    module_request,
+    HostDefined::new(()),
+    ModuleLoadPayload::promise_capability(promise_capability),
+  );
+
+  Ok(Value::Object(promise_obj))
 }
 
 /// Spec helper: `FinishLoadingImportedModule(referrer, moduleRequest, payload, result)`.
@@ -374,6 +524,8 @@ pub fn start_dynamic_import(
 ///   - Otherwise append a new `LoadedModuleRequest`.
 /// - Dispatch to `ContinueModuleLoading` or `ContinueDynamicImport` based on payload kind.
 pub fn finish_loading_imported_module(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
   referrer: &mut impl LoadedModulesOwner,
   module_request: ModuleRequest,
   payload: ModuleLoadPayload,
@@ -401,27 +553,45 @@ pub fn finish_loading_imported_module(
   }
 
   match payload.0 {
-    ModuleLoadPayloadInner::GraphLoadingState(state) => continue_module_loading(state, result),
+    ModuleLoadPayloadInner::GraphLoadingState(state) => continue_module_loading(vm, scope, state, result),
     ModuleLoadPayloadInner::PromiseCapability(promise_capability) => {
-      continue_dynamic_import(promise_capability, result)
+      continue_dynamic_import(vm, scope, promise_capability, result)
     }
   }
 }
 
 /// Placeholder for the static-module loading continuation (`ContinueModuleLoading`).
 pub fn continue_module_loading(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
   _state: GraphLoadingState,
   _result: ModuleCompletion,
 ) -> Result<(), VmError> {
   Err(VmError::Unimplemented("ContinueModuleLoading"))
 }
 
-/// Placeholder for the dynamic import continuation (`ContinueDynamicImport`).
+/// Dynamic import continuation (`ContinueDynamicImport`).
+///
+/// This currently implements only the rejection path because module evaluation is not yet
+/// integrated into `vm-js`.
 pub fn continue_dynamic_import(
-  _promise_capability: PromiseCapability,
-  _module_completion: ModuleCompletion,
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  promise_capability: PromiseCapability,
+  module_completion: ModuleCompletion,
 ) -> Result<(), VmError> {
-  Err(VmError::Unimplemented("ContinueDynamicImport"))
+  match module_completion {
+    Err(err) => {
+      let (reason, _) = vm_error_to_rejection_reason(scope, err)?;
+      promise_capability.reject(vm, scope, reason)?;
+      Ok(())
+    }
+    Ok(_module) => {
+      let s = scope.alloc_string("unimplemented: ContinueDynamicImport (module evaluation)")?;
+      promise_capability.reject(vm, scope, Value::String(s))?;
+      Ok(())
+    }
+  }
 }
 
 /// Minimal engine callback surface needed to implement `FinishLoadingImportedModule`.
@@ -584,11 +754,16 @@ mod tests {
 
   #[test]
   fn finish_loading_imported_module_dispatches_by_payload_kind() {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
     let request = ModuleRequest::new("./x.mjs", vec![]);
     let ok = Ok(ModuleId::from_raw(1));
 
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let err = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
@@ -597,24 +772,37 @@ mod tests {
     .unwrap_err();
     assert!(matches!(err, VmError::Unimplemented("ContinueModuleLoading")));
 
-    let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
-    let err = finish_loading_imported_module(
+    let promise_capability = PromiseCapability::new(&mut vm, &mut scope).unwrap();
+    let promise = promise_capability.promise();
+
+    finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request,
-      ModuleLoadPayload::promise_capability(PromiseCapability::new(())),
+      ModuleLoadPayload::promise_capability(promise_capability),
       Ok(ModuleId::from_raw(1)),
     )
-    .unwrap_err();
-    assert!(matches!(err, VmError::Unimplemented("ContinueDynamicImport")));
+    .unwrap();
+
+    assert_eq!(
+      scope.heap().promise_state(promise).unwrap(),
+      crate::PromiseState::Rejected
+    );
   }
 
   #[test]
   fn finish_loading_imported_module_appends_loaded_modules_on_success() {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let request = ModuleRequest::new("./x.mjs", vec![ImportAttribute::new("type", "json")]);
     let module = ModuleId::from_raw(123);
 
     let err = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
@@ -631,10 +819,15 @@ mod tests {
 
   #[test]
   fn finish_loading_imported_module_does_not_append_on_failure() {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let request = ModuleRequest::new("./x.mjs", vec![]);
 
     let err = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request,
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
@@ -647,17 +840,24 @@ mod tests {
 
   #[test]
   fn finish_loading_imported_module_does_not_duplicate_on_same_module() {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let request = ModuleRequest::new("./x.mjs", vec![]);
     let module = ModuleId::from_raw(1);
 
     let _ = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
       Ok(module),
     );
     let _ = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
@@ -669,12 +869,17 @@ mod tests {
 
   #[test]
   fn finish_loading_imported_module_errors_on_duplicate_mismatch() {
+    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+    let mut scope = heap.scope();
+    let mut vm = Vm::new(VmOptions::default());
     let mut loaded_modules = Vec::<LoadedModuleRequest<ModuleId>>::new();
     let request = ModuleRequest::new("./x.mjs", vec![]);
     let module_a = ModuleId::from_raw(1);
     let module_b = ModuleId::from_raw(2);
 
     let _ = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request.clone(),
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),
@@ -682,6 +887,8 @@ mod tests {
     );
 
     let err = finish_loading_imported_module(
+      &mut vm,
+      &mut scope,
       &mut loaded_modules,
       request,
       ModuleLoadPayload::graph_loading_state(GraphLoadingState::new(())),

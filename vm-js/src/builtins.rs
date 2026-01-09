@@ -799,7 +799,7 @@ fn trigger_promise_reactions(
   Ok(())
 }
 
-fn fulfill_promise(
+pub(crate) fn fulfill_promise(
   host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   promise: GcObject,
@@ -812,7 +812,7 @@ fn fulfill_promise(
   trigger_promise_reactions(host, scope, fulfill_reactions, value)
 }
 
-fn reject_promise(
+pub(crate) fn reject_promise(
   host: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   promise: GcObject,
