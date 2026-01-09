@@ -385,12 +385,30 @@ impl Heap {
     Ok(None)
   }
 
+  /// Returns an object's own property keys in insertion order (property table order).
+  pub fn object_keys_in_insertion_order(&self, obj: GcObject) -> Result<Vec<PropertyKey>, VmError> {
+    let obj = self.get_object(obj)?;
+    Ok(obj.properties.iter().map(|prop| prop.key).collect())
+  }
+
   /// Gets a property descriptor from `obj` or its prototype chain.
   pub fn get_property(
     &self,
     obj: GcObject,
     key: &PropertyKey,
   ) -> Result<Option<PropertyDescriptor>, VmError> {
+    Ok(self.get_property_with_holder(obj, key)?.map(|(_holder, desc)| desc))
+  }
+
+  /// Gets a property descriptor from `obj` or its prototype chain, returning the "holder" object.
+  ///
+  /// The returned `holder` is the object on which the property was found (i.e. the `[[GetOwnProperty]]`
+  /// receiver during prototype chain traversal).
+  pub fn get_property_with_holder(
+    &self,
+    obj: GcObject,
+    key: &PropertyKey,
+  ) -> Result<Option<(GcObject, PropertyDescriptor)>, VmError> {
     let mut current = Some(obj);
     let mut steps = 0usize;
     let mut visited: HashSet<GcObject> = HashSet::new();
@@ -406,7 +424,7 @@ impl Heap {
       }
 
       if let Some(desc) = self.object_get_own_property(obj, key)? {
-        return Ok(Some(desc));
+        return Ok(Some((obj, desc)));
       }
 
       current = self.object_prototype(obj)?;
@@ -653,6 +671,18 @@ impl Heap {
       Value::String(s) => self.is_valid_string(s),
       Value::Symbol(s) => self.is_valid_symbol(s),
       Value::Object(o) => self.is_valid_object(o),
+    }
+  }
+
+  /// Returns whether `value` is callable (has a `[[Call]]` internal method).
+  pub fn is_callable(&self, value: Value) -> Result<bool, VmError> {
+    let Value::Object(obj) = value else {
+      return Ok(false);
+    };
+    match self.get_heap_object(obj.0)? {
+      HeapObject::Function(_) => Ok(true),
+      HeapObject::Object(_) => Ok(false),
+      _ => Err(VmError::InvalidHandle),
     }
   }
 

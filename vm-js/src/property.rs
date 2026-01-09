@@ -122,6 +122,54 @@ impl Heap {
     }
   }
 
+  /// Attempts to parse `s` as an ECMAScript array index.
+  ///
+  /// This matches the `ToString(ToUint32(P)) === P` and `ToUint32(P) != 2^32-1` conditions used by
+  /// `OrdinaryOwnPropertyKeys`.
+  pub fn string_to_array_index(&self, s: GcString) -> Result<Option<u32>, VmError> {
+    let s = self.get_string(s)?;
+    let units = s.as_code_units();
+    if units.is_empty() {
+      return Ok(None);
+    }
+
+    const U0: u16 = b'0' as u16;
+    const U9: u16 = b'9' as u16;
+
+    // No leading zeros (except the single "0").
+    if units.len() > 1 && units[0] == U0 {
+      return Ok(None);
+    }
+
+    let mut value: u64 = 0;
+    for &u in units {
+      if !(U0..=U9).contains(&u) {
+        return Ok(None);
+      }
+      value = match value.checked_mul(10).and_then(|v| v.checked_add((u - U0) as u64)) {
+        Some(v) => v,
+        None => return Ok(None),
+      };
+      if value > u32::MAX as u64 {
+        return Ok(None);
+      }
+    }
+
+    // Exclude 2^32-1.
+    if value == u32::MAX as u64 {
+      return Ok(None);
+    }
+    Ok(Some(value as u32))
+  }
+
+  /// Attempts to parse `key` as an ECMAScript array index.
+  pub fn property_key_to_array_index(&self, key: &PropertyKey) -> Result<Option<u32>, VmError> {
+    match key {
+      PropertyKey::String(s) => self.string_to_array_index(*s),
+      PropertyKey::Symbol(_) => Ok(None),
+    }
+  }
+
   /// Convert a value to a property key.
   ///
   /// This is a minimal stub (sufficient for early scaffolding):
