@@ -74,6 +74,15 @@ struct RunArgs {
   #[arg(long, value_name = "PATH", default_value = DEFAULT_TEST262_DIR)]
   test262_dir: PathBuf,
 
+  /// Configure which test262 harness scripts are prepended before each test body.
+  ///
+  /// - `test262`: prepend `assert.js` + `sta.js` + frontmatter `includes` (default).
+  /// - `includes`: prepend only frontmatter `includes`.
+  /// - `none`: prepend nothing (useful for early engine bring-up when the VM can't execute the
+  ///   upstream harness yet).
+  #[arg(long, value_enum, default_value_t = HarnessMode::Test262)]
+  harness: HarnessMode,
+
   /// Discover tests in the test262 corpus and print how many were found.
   ///
   /// This is a cheap corpus-availability check (it does not parse frontmatter

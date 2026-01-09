@@ -1,7 +1,7 @@
 use crate::discover::{read_utf8_file, DiscoveredTest};
 use crate::executor::{ExecError, Executor, JsError};
 use crate::frontmatter::{parse_test_source, Frontmatter};
-use crate::harness::{assemble_source_with_mode, HarnessMode};
+use crate::harness::{assemble_source, HarnessMode};
 use crate::report::{
   ExpectationOutcome, ExpectedOutcome, MismatchSummary, Summary, TestOutcome, TestResult, Variant,
 };
@@ -191,7 +191,7 @@ fn run_single_case(
     };
   }
 
-  let source = match assemble_source_with_mode(
+  let source = match assemble_source(
     test262_dir,
     &case.metadata,
     case.variant,
@@ -550,7 +550,7 @@ status = "skip"
     let timeout_manager = TimeoutManager::new();
     run_single_case(
       temp.path(),
-      HarnessMode::Inline,
+      HarnessMode::Test262,
       &case,
       expectation,
       &executor,

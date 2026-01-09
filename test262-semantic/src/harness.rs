@@ -1,18 +1,20 @@
 use crate::frontmatter::Frontmatter;
 use crate::report::Variant;
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use std::collections::HashSet;
 use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "lowercase")]
 pub enum HarnessMode {
-  /// Inline the upstream `test262` harness sources (`assert.js` and `sta.js`).
-  Inline,
-  /// Do not automatically inline the default harness sources.
-  ///
-  /// The executor/host is expected to provide `assert`, `Test262Error`, and any
-  /// other globals normally provided by `assert.js`/`sta.js`.
-  Host,
+  /// Prepend the standard test262 harness (`assert.js`, `sta.js`) plus any additional frontmatter
+  /// includes.
+  Test262,
+  /// Prepend only the harness files explicitly listed in test frontmatter (`includes`).
+  Includes,
+  /// Prepend no harness files at all.
+  None,
 }
 
 pub fn assemble_source(
@@ -20,61 +22,63 @@ pub fn assemble_source(
   frontmatter: &Frontmatter,
   variant: Variant,
   body: &str,
+  harness_mode: HarnessMode,
 ) -> Result<String> {
-  assemble_source_with_mode(test262_dir, frontmatter, variant, body, HarnessMode::Inline)
-}
-
-pub fn assemble_source_with_mode(
-  test262_dir: &Path,
-  frontmatter: &Frontmatter,
-  variant: Variant,
-  body: &str,
-  mode: HarnessMode,
-) -> Result<String> {
-  let default_includes: &[&str] = match mode {
-    HarnessMode::Inline => &["assert.js", "sta.js"],
-    HarnessMode::Host => &[],
-  };
-
-  let mut includes: Vec<String> = Vec::new();
-  let mut seen: HashSet<String> = HashSet::new();
-  for name in default_includes
-    .iter()
-    .copied()
-    .map(|s| s.to_string())
-    .chain(frontmatter.includes.iter().cloned())
-  {
-    if seen.insert(name.clone()) {
-      includes.push(name);
-    }
-  }
-
   let mut out = String::new();
-  // Ensure strict-mode variants actually run in strict mode: the directive must
-  // appear before any other statements (including harness includes), otherwise
-  // the directive prologue is already terminated.
+  // Ensure strict-mode variants actually run in strict mode: the directive must appear before any
+  // other statements (including harness includes), otherwise the directive prologue is already
+  // terminated.
   if variant == Variant::Strict {
     out.push_str("'use strict';\n\n");
   }
-  if !includes.is_empty() {
-    let harness_dir = test262_dir.join("harness");
-    if !harness_dir.is_dir() {
-      bail!(
-        "test262 harness directory not found at {} (expected a tc39/test262 checkout)",
-        harness_dir.display()
-      );
-    }
 
-    for include in includes {
-      let path = harness_dir.join(&include);
-      let content =
-        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-      out.push_str(&content);
-      if !content.ends_with('\n') {
-        out.push('\n');
+  // In `none` mode, do not touch the filesystem at all.
+  if harness_mode == HarnessMode::None {
+    out.push_str(body);
+    return Ok(out);
+  }
+
+  let harness_dir = test262_dir.join("harness");
+  if !harness_dir.is_dir() {
+    bail!(
+      "test262 harness directory not found at {} (expected a tc39/test262 checkout)",
+      harness_dir.display()
+    );
+  }
+
+  let mut includes: Vec<String> = Vec::new();
+  let mut seen: HashSet<String> = HashSet::new();
+  let mut maybe_push = |name: &str| {
+    let name = name.to_string();
+    if seen.insert(name.clone()) {
+      includes.push(name);
+    }
+  };
+
+  match harness_mode {
+    HarnessMode::Test262 => {
+      maybe_push("assert.js");
+      maybe_push("sta.js");
+      for include in &frontmatter.includes {
+        maybe_push(include);
       }
+    }
+    HarnessMode::Includes => {
+      for include in &frontmatter.includes {
+        maybe_push(include);
+      }
+    }
+    HarnessMode::None => {}
+  }
+
+  for include in includes {
+    let path = harness_dir.join(&include);
+    let content = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    out.push_str(&content);
+    if !content.ends_with('\n') {
       out.push('\n');
     }
+    out.push('\n');
   }
 
   out.push_str(body);
@@ -98,22 +102,22 @@ mod tests {
   }
 
   #[test]
-  fn inline_includes_default_harness_and_dedupes_frontmatter() {
+  fn test262_mode_includes_default_harness_and_dedupes_frontmatter() {
     let temp = setup_test262_dir();
     let frontmatter = Frontmatter {
-      // `assert.js` appears both as an implicit default include and explicitly in
-      // frontmatter; it should appear only once.
+      // `assert.js` appears both as an implicit default include and explicitly in frontmatter; it
+      // should appear only once.
       includes: vec!["assert.js".to_string(), "helper.js".to_string()],
       ..Frontmatter::default()
     };
 
     let body = "/*body*/\n";
-    let source = assemble_source_with_mode(
+    let source = assemble_source(
       temp.path(),
       &frontmatter,
       Variant::NonStrict,
       body,
-      HarnessMode::Inline,
+      HarnessMode::Test262,
     )
     .unwrap();
 
@@ -131,17 +135,17 @@ mod tests {
   }
 
   #[test]
-  fn host_omits_default_harness_when_not_explicitly_included() {
+  fn includes_mode_omits_default_harness_when_not_explicitly_included() {
     let temp = setup_test262_dir();
     let frontmatter = Frontmatter::default();
     let body = "/*body*/\n";
 
-    let source = assemble_source_with_mode(
+    let source = assemble_source(
       temp.path(),
       &frontmatter,
       Variant::NonStrict,
       body,
-      HarnessMode::Host,
+      HarnessMode::Includes,
     )
     .unwrap();
 
@@ -149,7 +153,7 @@ mod tests {
   }
 
   #[test]
-  fn host_includes_frontmatter_includes_and_dedupes() {
+  fn includes_mode_includes_frontmatter_includes_and_dedupes() {
     let temp = setup_test262_dir();
     let frontmatter = Frontmatter {
       includes: vec![
@@ -161,12 +165,12 @@ mod tests {
     };
     let body = "/*body*/\n";
 
-    let source = assemble_source_with_mode(
+    let source = assemble_source(
       temp.path(),
       &frontmatter,
       Variant::NonStrict,
       body,
-      HarnessMode::Host,
+      HarnessMode::Includes,
     )
     .unwrap();
 
@@ -187,13 +191,19 @@ mod tests {
     let harness_dir = dir.path().join("harness");
     fs::create_dir_all(&harness_dir).unwrap();
 
-    // Intentionally include non-directive statements so the directive prologue
-    // would be terminated if we appended 'use strict' after includes.
+    // Intentionally include non-directive statements so the directive prologue would be terminated
+    // if we appended 'use strict' after includes.
     fs::write(harness_dir.join("assert.js"), "var ASSERT_LOADED = true;").unwrap();
     fs::write(harness_dir.join("sta.js"), "var STA_LOADED = true;").unwrap();
 
-    let src =
-      assemble_source(dir.path(), &Frontmatter::default(), Variant::Strict, "body();").unwrap();
+    let src = assemble_source(
+      dir.path(),
+      &Frontmatter::default(),
+      Variant::Strict,
+      "body();",
+      HarnessMode::Test262,
+    )
+    .unwrap();
     assert!(
       src.starts_with("'use strict';\n\n"),
       "strict source should begin with directive, got: {src:?}"
@@ -213,6 +223,7 @@ mod tests {
       &Frontmatter::default(),
       Variant::NonStrict,
       "body();",
+      HarnessMode::Test262,
     )
     .unwrap();
     assert!(
@@ -222,19 +233,45 @@ mod tests {
   }
 
   #[test]
-  fn strict_host_mode_begins_with_use_strict_without_prepended_harness_sources() {
+  fn none_mode_does_not_require_harness_dir_and_still_inserts_use_strict() {
     let dir = tempdir().unwrap();
-    let body = "/*body*/\n";
+    let frontmatter = Frontmatter {
+      // If `none` mode attempted to read includes, this would error because the harness directory
+      // does not exist.
+      includes: vec!["assert.js".to_string(), "missing.js".to_string()],
+      ..Frontmatter::default()
+    };
 
-    let src = assemble_source_with_mode(
+    let src = assemble_source(
       dir.path(),
-      &Frontmatter::default(),
+      &frontmatter,
       Variant::Strict,
-      body,
-      HarnessMode::Host,
+      "body();",
+      HarnessMode::None,
     )
     .unwrap();
+    assert_eq!(src, "'use strict';\n\nbody();");
+  }
 
-    assert_eq!(src, format!("'use strict';\n\n{body}"));
+  #[test]
+  fn includes_mode_requires_harness_dir() {
+    let dir = tempdir().unwrap();
+    let frontmatter = Frontmatter {
+      includes: vec!["helper.js".to_string()],
+      ..Frontmatter::default()
+    };
+
+    let err = assemble_source(
+      dir.path(),
+      &frontmatter,
+      Variant::NonStrict,
+      "body();",
+      HarnessMode::Includes,
+    )
+    .unwrap_err();
+    assert!(
+      err.to_string().contains("test262 harness directory not found"),
+      "expected missing harness directory error, got: {err:#}"
+    );
   }
 }

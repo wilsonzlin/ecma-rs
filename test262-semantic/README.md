@@ -17,7 +17,10 @@ providing:
 This runner expects a `tc39/test262` checkout directory containing:
 
 - `test/` (the tests)
-- `harness/` (shared harness scripts like `assert.js`)
+
+Depending on `--harness`, it may also require:
+
+- `harness/` (shared harness scripts like `assert.js`, `sta.js`)
 
 The full corpus is large, so it is intended to be kept as an **optional
 submodule** at:
@@ -53,6 +56,24 @@ Alternatively, you can clone `test262` anywhere and pass `--test262-dir`:
 ```bash
 git clone --depth=1 https://github.com/tc39/test262.git /path/to/test262
 ```
+
+## Harness modes (`--harness`)
+
+Most test262 tests depend on harness files under `harness/` (either implicitly via the standard
+`assert.js` / `sta.js` pair, or explicitly via the frontmatter `includes` list).
+
+The runner supports multiple harness strategies:
+
+- `--harness test262` (default): prepend `assert.js`, `sta.js`, then frontmatter `includes`.
+  - Requires a `harness/` directory.
+- `--harness includes`: prepend only frontmatter `includes` (no implicit `assert.js`/`sta.js`).
+  - Requires a `harness/` directory.
+- `--harness none`: prepend no harness files.
+  - Does not require a `harness/` directory.
+  - Many tests will fail due to missing harness globals; intended for early engine bring-up.
+
+Note: strict-mode variants still begin with `'use strict';` before any included harness code so the
+directive prologue isn't terminated by prepended scripts.
 
 ## Test IDs
 
