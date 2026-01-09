@@ -51,6 +51,41 @@ impl VmJobContext for TestContext {
   }
 }
 
+struct RootingContext {
+  heap: Heap,
+}
+
+impl Default for RootingContext {
+  fn default() -> Self {
+    Self {
+      heap: Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024)),
+    }
+  }
+}
+
+impl VmJobContext for RootingContext {
+  fn call(&mut self, _callee: Value, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("RootingContext::call"))
+  }
+
+  fn construct(
+    &mut self,
+    _callee: Value,
+    _args: &[Value],
+    _new_target: Value,
+  ) -> Result<Value, VmError> {
+    Err(VmError::Unimplemented("RootingContext::construct"))
+  }
+
+  fn add_root(&mut self, value: Value) -> RootId {
+    self.heap.add_root(value)
+  }
+
+  fn remove_root(&mut self, id: RootId) {
+    self.heap.remove_root(id)
+  }
+}
+
 fn enqueue_three_jobs(host: &mut dyn VmHostHooks, sink: Arc<Mutex<Vec<u8>>>) {
   for i in 1..=3u8 {
     let sink = sink.clone();
@@ -78,6 +113,125 @@ fn promise_jobs_can_be_run_in_fifo_order() {
   }
 
   assert_eq!(&*sink.lock().unwrap(), &[1, 2, 3]);
+}
+
+#[test]
+fn unrooted_job_captures_can_be_collected_before_run() -> Result<(), VmError> {
+  let mut ctx = RootingContext::default();
+  let mut host = TestHost::default();
+
+  let obj;
+  {
+    let mut scope = ctx.heap.scope();
+    obj = scope.alloc_object()?;
+    host.host_enqueue_promise_job(
+      Job::new(JobKind::Promise, move |_ctx, _host| {
+        // If this job attempted to use `obj` after a GC, it could observe a stale handle.
+        let _ = obj;
+        Ok(())
+      }),
+      None,
+    );
+  }
+
+  ctx.heap.collect_garbage();
+  assert!(
+    !ctx.heap.is_valid_object(obj),
+    "captured values are not traced by the GC; unrooted jobs can observe stale handles"
+  );
+
+  Ok(())
+}
+
+#[test]
+fn rooted_job_keeps_values_alive_until_run_and_then_allows_collection() -> Result<(), VmError> {
+  let mut ctx = RootingContext::default();
+  let mut host = TestHost::default();
+
+  let obj;
+  {
+    let mut scope = ctx.heap.scope();
+    obj = scope.alloc_object()?;
+  }
+  let mut job = Job::new(JobKind::Promise, move |_ctx, _host| Ok(()));
+  job.add_root(&mut ctx, Value::Object(obj));
+  host.host_enqueue_promise_job(job, None);
+
+  ctx.heap.collect_garbage();
+  assert!(ctx.heap.is_valid_object(obj));
+
+  let job = host.queue.pop_front().expect("job should be enqueued");
+  job.run(&mut ctx, &mut host)?;
+
+  ctx.heap.collect_garbage();
+  assert!(
+    !ctx.heap.is_valid_object(obj),
+    "Job::run should remove persistent roots"
+  );
+
+  Ok(())
+}
+
+#[test]
+fn job_discard_removes_roots_without_running() -> Result<(), VmError> {
+  let mut ctx = RootingContext::default();
+  let mut host = TestHost::default();
+
+  let obj;
+  {
+    let mut scope = ctx.heap.scope();
+    obj = scope.alloc_object()?;
+  }
+  let mut job = Job::new(JobKind::Promise, move |_ctx, _host| Ok(()));
+  job.add_root(&mut ctx, Value::Object(obj));
+  host.host_enqueue_promise_job(job, None);
+
+  ctx.heap.collect_garbage();
+  assert!(ctx.heap.is_valid_object(obj));
+
+  let job = host.queue.pop_front().expect("job should be enqueued");
+  job.discard(&mut ctx);
+
+  ctx.heap.collect_garbage();
+  assert!(
+    !ctx.heap.is_valid_object(obj),
+    "Job::discard should remove persistent roots"
+  );
+
+  Ok(())
+}
+
+#[test]
+fn job_run_removes_roots_even_on_error() -> Result<(), VmError> {
+  let mut ctx = RootingContext::default();
+  let mut host = TestHost::default();
+
+  let obj;
+  {
+    let mut scope = ctx.heap.scope();
+    obj = scope.alloc_object()?;
+  }
+  let mut job =
+    Job::new(JobKind::Promise, move |_ctx, _host| Err(VmError::Unimplemented("job failed")));
+  job.add_root(&mut ctx, Value::Object(obj));
+  host.host_enqueue_promise_job(job, None);
+
+  ctx.heap.collect_garbage();
+  assert!(ctx.heap.is_valid_object(obj));
+
+  let job = host.queue.pop_front().expect("job should be enqueued");
+  assert!(matches!(
+    job.run(&mut ctx, &mut host),
+    Err(VmError::Unimplemented("job failed"))
+  ));
+
+  ctx.heap.collect_garbage();
+  assert!(
+    !ctx.heap.is_valid_object(obj),
+    "Job::run should remove persistent roots even when it returns an error"
+  );
+
+  Ok(())
 }
 
 #[test]
