@@ -449,8 +449,30 @@ impl<'a> Parser<'a> {
   }
 
   pub fn since_checkpoint(&self, checkpoint: &ParserCheckpoint) -> Loc {
-    let start = self.buf[checkpoint.next_tok_i].token.loc.0;
-    Loc(start, self.lexer.next())
+    // `Lexer::next()` tracks the end of the **furthest lexed** token, not the end of the
+    // **furthest consumed** token. Many parser routines use lookahead (`peek`, `peek_n`) which
+    // lexes tokens into `buf` without advancing `next_tok_i`; using `lexer.next()` would
+    // incorrectly widen node spans to include unconsumed terminators (e.g. `)` that ends the
+    // surrounding call expression).
+    //
+    // For accurate node locations (and correct downstream source slicing, e.g. in `vm-js` lazy
+    // function parsing), compute the span based on the last token actually consumed since the
+    // checkpoint.
+    let start = self
+      .buf
+      .get(checkpoint.next_tok_i)
+      .map(|tok| tok.token.loc.0)
+      .unwrap_or_else(|| self.lexer.next());
+    let end = if self.next_tok_i > checkpoint.next_tok_i {
+      self
+        .buf
+        .get(self.next_tok_i.saturating_sub(1))
+        .map(|tok| tok.token.loc.1)
+        .unwrap_or(start)
+    } else {
+      start
+    };
+    Loc(start, end)
   }
 
   pub fn restore_checkpoint(&mut self, checkpoint: ParserCheckpoint) {
