@@ -20,6 +20,8 @@
 //! Scopes are hierarchical and stored in [`JsSemantics`] with stable indices:
 //! - [`ScopeKind::Global`]: top-level in `"global"` [`TopLevelMode`]; top-level
 //!   declarations are intentionally skipped so hosts can map globals separately.
+//!   In `"script"` mode, the same scope kind is used but top-level declarations
+//!   are bound/hoisted like a normal script environment.
 //! - [`ScopeKind::Module`]: top-level in `"module"` [`TopLevelMode`]; acts as a
 //!   closure for `var` declarations.
 //! - [`ScopeKind::Class`]: class bodies.
@@ -82,6 +84,11 @@ pub use resolve::JsResolution;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopLevelMode {
   Global,
+  /// Script mode that binds top-level declarations into the global scope.
+  ///
+  /// This is intended for runtimes/VMs that need `SymbolId`-based resolution for
+  /// top-level script bindings.
+  Script,
   Module,
 }
 
@@ -91,6 +98,7 @@ impl FromStr for TopLevelMode {
   fn from_str(s: &str) -> Result<Self, Self::Err> {
     match s {
       "global" | "Global" => Ok(TopLevelMode::Global),
+      "script" | "Script" => Ok(TopLevelMode::Script),
       "module" | "Module" => Ok(TopLevelMode::Module),
       _ => Err(()),
     }

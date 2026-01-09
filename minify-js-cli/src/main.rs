@@ -120,6 +120,7 @@ impl<'a> SourceProvider for SingleFileSource<'a> {
 fn mode_str(mode: TopLevelMode) -> &'static str {
   match mode {
     TopLevelMode::Global => "global",
+    TopLevelMode::Script => "script",
     TopLevelMode::Module => "module",
   }
 }

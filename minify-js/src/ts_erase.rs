@@ -352,7 +352,7 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
     | TT::KeywordUsing => true,
 
     // `await` is reserved in modules, but allowed as an identifier in scripts.
-    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global),
+    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global | TopLevelMode::Script),
 
     // Strict-mode reserved words (allowed in non-strict scripts).
     TT::KeywordImplements
@@ -362,7 +362,7 @@ fn is_valid_binding_identifier(name: &str, top_level_mode: TopLevelMode) -> bool
     | TT::KeywordProtected
     | TT::KeywordPublic
     | TT::KeywordStatic
-    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global),
+    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global | TopLevelMode::Script),
 
     // TypeScript keywords that are not reserved in JS.
     TT::KeywordAbstract
@@ -419,7 +419,7 @@ fn is_valid_identifier_reference(name: &str, top_level_mode: TopLevelMode) -> bo
     | TT::KeywordUsing => true,
 
     // `await` is reserved in modules, but allowed as an identifier in scripts.
-    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global),
+    TT::KeywordAwait => matches!(top_level_mode, TopLevelMode::Global | TopLevelMode::Script),
 
     // Strict-mode reserved words (allowed in non-strict scripts).
     TT::KeywordImplements
@@ -429,7 +429,7 @@ fn is_valid_identifier_reference(name: &str, top_level_mode: TopLevelMode) -> bo
     | TT::KeywordProtected
     | TT::KeywordPublic
     | TT::KeywordStatic
-    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global),
+    | TT::KeywordYield => matches!(top_level_mode, TopLevelMode::Global | TopLevelMode::Script),
 
     // All remaining keywords are not valid identifier references.
     _ => false,
@@ -924,7 +924,7 @@ fn lower_import_equals_decl(
     export: decl.stx.export,
     mode: match ctx.top_level_mode {
       TopLevelMode::Module => VarDeclMode::Const,
-      TopLevelMode::Global => VarDeclMode::Var,
+      TopLevelMode::Global | TopLevelMode::Script => VarDeclMode::Var,
     },
     declarators: vec![declarator],
   };

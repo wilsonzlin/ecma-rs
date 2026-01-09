@@ -207,7 +207,7 @@ pub fn minify_with_options(
     let parse_opts = ParseOptions {
       dialect,
       source_type: match options.top_level_mode {
-        TopLevelMode::Global => SourceType::Script,
+        TopLevelMode::Global | TopLevelMode::Script => SourceType::Script,
         TopLevelMode::Module => SourceType::Module,
       },
     };

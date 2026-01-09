@@ -12,7 +12,7 @@ struct ProgramCase {
 
 fn source_type(mode: TopLevelMode) -> SourceType {
   match mode {
-    TopLevelMode::Global => SourceType::Script,
+    TopLevelMode::Global | TopLevelMode::Script => SourceType::Script,
     TopLevelMode::Module => SourceType::Module,
   }
 }

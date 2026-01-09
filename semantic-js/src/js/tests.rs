@@ -1514,6 +1514,31 @@ fn runtime_binding_attaches_resolved_symbols() {
 }
 
 #[test]
+fn runtime_binding_resolves_top_level_script_bindings() {
+  let mut ast = parse_js_script("var x = 1; x;");
+  let (_sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, FileId(133));
+  assert!(diagnostics.is_empty());
+
+  let mut collect = Collect::default();
+  ast.drive_mut(&mut collect);
+
+  let decl_symbol = collect
+    .id_pats
+    .iter()
+    .find(|(name, _, is_decl)| name == "x" && *is_decl)
+    .and_then(|(_, sym, _)| *sym)
+    .expect("expected `x` declaration symbol");
+  let use_symbol = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "x")
+    .and_then(|(_, sym)| *sym)
+    .expect("expected `x` to resolve");
+
+  assert_eq!(use_symbol, decl_symbol);
+}
+
+#[test]
 fn lexical_declaration_in_if_body_is_reported() {
   let source = "if(true) let x = 1;";
   let mut ast = parse(source).unwrap();

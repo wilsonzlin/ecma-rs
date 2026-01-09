@@ -60,7 +60,7 @@ impl DecompileOptions {
         TempDeclScope::Function => ResolvedTempDeclStyle::Var,
         TempDeclScope::TopLevel(mode) => match mode {
           TopLevelMode::Module => ResolvedTempDeclStyle::Var,
-          TopLevelMode::Global => ResolvedTempDeclStyle::LetWithVoidInit,
+          TopLevelMode::Global | TopLevelMode::Script => ResolvedTempDeclStyle::LetWithVoidInit,
         },
       },
     }

@@ -231,7 +231,7 @@ struct SemanticsBuilder {
 impl SemanticsBuilder {
   fn new(mode: TopLevelMode, file: FileId, span: TextRange) -> Self {
     let kind = match mode {
-      TopLevelMode::Global => ScopeKind::Global,
+      TopLevelMode::Global | TopLevelMode::Script => ScopeKind::Global,
       TopLevelMode::Module => ScopeKind::Module,
     };
     let mut scopes = BTreeMap::new();
@@ -1076,7 +1076,11 @@ impl DeclareVisitor {
       .iter()
       .rev()
       .copied()
-      .find(|id| self.builder.scope_kind(*id).is_var_scope())
+      .find(|id| {
+        let kind = self.builder.scope_kind(*id);
+        kind.is_var_scope()
+          || (self.top_level_mode == TopLevelMode::Script && kind == ScopeKind::Global)
+      })
   }
 
   fn declare_with_target(
@@ -1127,7 +1131,9 @@ impl DeclareVisitor {
     let (symbol, scope) = match ctx.target {
       DeclTarget::IfNotGlobal => {
         let scope = self.current_scope();
-        if self.builder.scope_kind(scope) == ScopeKind::Global {
+        if self.top_level_mode == TopLevelMode::Global
+          && self.builder.scope_kind(scope) == ScopeKind::Global
+        {
           None
         } else {
           Some((
@@ -2181,6 +2187,39 @@ mod tests {
     let func_scope = semantics.scope(func_scope);
     assert!(func_scope.symbols.contains_key(&c));
     assert!(func_scope.symbols.contains_key(&d));
+  }
+
+  #[test]
+  fn script_mode_binds_top_level_symbols() {
+    let mut top = parse("var a = 1; let b = 2; function f(c) {} class C {}").unwrap();
+    let semantics = declare(&mut top, TopLevelMode::Script, FileId(104));
+    let root = semantics.top_scope();
+    let root_scope = semantics.scope(root);
+
+    let a = semantics.name_id("a").unwrap();
+    let b = semantics.name_id("b").unwrap();
+    let f = semantics.name_id("f").unwrap();
+    let class_c = semantics.name_id("C").unwrap();
+
+    assert!(root_scope.symbols.contains_key(&a));
+    assert!(root_scope.symbols.contains_key(&b));
+    assert!(root_scope.symbols.contains_key(&f));
+    assert!(root_scope.symbols.contains_key(&class_c));
+
+    let a_sym = root_scope.get(a).unwrap();
+    let b_sym = root_scope.get(b).unwrap();
+    let f_sym = root_scope.get(f).unwrap();
+    let c_sym = root_scope.get(class_c).unwrap();
+
+    assert!(root_scope.hoisted_bindings.contains(&a_sym));
+    assert!(root_scope.hoisted_bindings.contains(&f_sym));
+    assert!(!root_scope.hoisted_bindings.contains(&b_sym));
+    assert!(!root_scope.hoisted_bindings.contains(&c_sym));
+
+    assert!(root_scope.tdz_bindings.contains(&b_sym));
+    assert!(root_scope.tdz_bindings.contains(&c_sym));
+    assert!(!root_scope.tdz_bindings.contains(&a_sym));
+    assert!(!root_scope.tdz_bindings.contains(&f_sym));
   }
 
   #[test]
