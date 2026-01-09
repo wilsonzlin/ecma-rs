@@ -46,6 +46,7 @@ mod handle;
 mod heap;
 mod interrupt;
 mod intrinsics;
+pub mod module_graph_loader;
 mod jobs;
 mod module_loading;
 mod native;

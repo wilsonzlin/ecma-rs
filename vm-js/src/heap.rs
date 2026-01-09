@@ -1594,29 +1594,6 @@ impl<'a> Scope<'a> {
     Ok(arr)
   }
 
-  /// ECMAScript `CreateDataPropertyOrThrow`.
-  ///
-  /// For now, this always defines/replaces the property as:
-  /// - writable: true
-  /// - enumerable: true
-  /// - configurable: true
-  pub fn create_data_property_or_throw(
-    &mut self,
-    obj: GcObject,
-    key: PropertyKey,
-    value: Value,
-  ) -> Result<(), VmError> {
-    let desc = PropertyDescriptor {
-      enumerable: true,
-      configurable: true,
-      kind: PropertyKind::Data {
-        value,
-        writable: true,
-      },
-    };
-    self.define_property(obj, key, desc)
-  }
-
   /// Defines (adds or replaces) an own property on `obj`.
   pub fn define_property(
     &mut self,
