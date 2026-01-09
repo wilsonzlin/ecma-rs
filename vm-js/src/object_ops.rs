@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
-use crate::{GcObject, Scope, Value, VmError};
+use crate::{GcObject, Scope, Value, Vm, VmError};
 
 impl<'a> Scope<'a> {
   pub fn object_get_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
@@ -65,6 +65,7 @@ impl<'a> Scope<'a> {
   /// ECMAScript `[[Get]]` for ordinary objects.
   pub fn ordinary_get(
     &mut self,
+    vm: &mut Vm,
     mut obj: GcObject,
     key: PropertyKey,
     receiver: Value,
@@ -87,11 +88,12 @@ impl<'a> Scope<'a> {
           if matches!(get, Value::Undefined) {
             Ok(Value::Undefined)
           } else {
-            // TODO: once function calling exists, invoke the getter with `receiver` as `this`.
-            let _ = receiver;
-            Err(VmError::Unimplemented(
-              "OrdinaryGet: calling accessor getter requires function calling",
-            ))
+            if !self.heap().is_callable(get)? {
+              return Err(VmError::Unimplemented(
+                "TypeError: accessor getter is not callable",
+              ));
+            }
+            vm.call(self, get, receiver, &[])
           }
         }
       };
@@ -101,6 +103,7 @@ impl<'a> Scope<'a> {
   /// ECMAScript `[[Set]]` for ordinary objects.
   pub fn ordinary_set(
     &mut self,
+    vm: &mut Vm,
     obj: GcObject,
     key: PropertyKey,
     value: Value,
@@ -112,7 +115,7 @@ impl<'a> Scope<'a> {
     self.push_root(receiver);
 
     let own_desc = self.ordinary_get_own_property(obj, key)?;
-    ordinary_set_with_own_descriptor(self, obj, key, value, receiver, own_desc)
+    ordinary_set_with_own_descriptor(vm, self, obj, key, value, receiver, own_desc)
   }
 
   /// ECMAScript `[[Delete]]` for ordinary objects.
@@ -368,6 +371,7 @@ fn apply_descriptor_patch(current: PropertyDescriptor, desc: PropertyDescriptorP
 }
 
 fn ordinary_set_with_own_descriptor(
+  vm: &mut Vm,
   scope: &mut Scope<'_>,
   obj: GcObject,
   key: PropertyKey,
@@ -379,7 +383,7 @@ fn ordinary_set_with_own_descriptor(
 
   if own_desc.is_none() {
     match scope.object_get_prototype(obj)? {
-      Some(parent) => return scope.ordinary_set(parent, key, value, receiver),
+      Some(parent) => return scope.ordinary_set(vm, parent, key, value, receiver),
       None => {
         own_desc = Some(PropertyDescriptor {
           enumerable: true,
@@ -436,10 +440,13 @@ fn ordinary_set_with_own_descriptor(
       if matches!(set, Value::Undefined) {
         return Ok(false);
       }
-      // TODO: once function calling exists, invoke the setter with `receiver` as `this`.
-      Err(VmError::Unimplemented(
-        "OrdinarySetWithOwnDescriptor: calling accessor setter requires function calling",
-      ))
+      if !scope.heap().is_callable(set)? {
+        return Err(VmError::Unimplemented(
+          "TypeError: accessor setter is not callable",
+        ));
+      }
+      let _ = vm.call(scope, set, receiver, &[value])?;
+      Ok(true)
     }
   }
 }

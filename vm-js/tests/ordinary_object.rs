@@ -1,4 +1,4 @@
-use vm_js::{Heap, HeapLimits, PropertyDescriptorPatch, PropertyKey, Value, VmError};
+use vm_js::{Heap, HeapLimits, PropertyDescriptorPatch, PropertyKey, Value, Vm, VmError, VmOptions};
 
 #[test]
 fn define_own_property_respects_extensible() -> Result<(), VmError> {
@@ -227,6 +227,7 @@ fn data_accessor_conversion_requires_configurable() -> Result<(), VmError> {
 #[test]
 fn ordinary_get_traverses_prototype_chain() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
   let mut scope = heap.scope();
 
   let parent = scope.alloc_object()?;
@@ -238,7 +239,7 @@ fn ordinary_get_traverses_prototype_chain() -> Result<(), VmError> {
   scope.object_set_prototype(child, Some(parent))?;
 
   assert!(scope.ordinary_has_property(child, k_p)?);
-  let v = scope.ordinary_get(child, k_p, Value::Object(child))?;
+  let v = scope.ordinary_get(&mut vm, child, k_p, Value::Object(child))?;
   assert_eq!(v, Value::Number(42.0));
 
   Ok(())
@@ -247,6 +248,7 @@ fn ordinary_get_traverses_prototype_chain() -> Result<(), VmError> {
 #[test]
 fn ordinary_set_creates_own_property_on_receiver_when_writable_in_prototype() -> Result<(), VmError> {
   let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut vm = Vm::new(VmOptions::default());
   let mut scope = heap.scope();
 
   let parent = scope.alloc_object()?;
@@ -268,6 +270,7 @@ fn ordinary_set_creates_own_property_on_receiver_when_writable_in_prototype() ->
   scope.object_set_prototype(child, Some(parent))?;
 
   assert!(scope.ordinary_set(
+    &mut vm,
     child,
     k_x,
     Value::Number(2.0),
@@ -275,11 +278,11 @@ fn ordinary_set_creates_own_property_on_receiver_when_writable_in_prototype() ->
   )?);
 
   assert_eq!(
-    scope.ordinary_get(child, k_x, Value::Object(child))?,
+    scope.ordinary_get(&mut vm, child, k_x, Value::Object(child))?,
     Value::Number(2.0)
   );
   assert_eq!(
-    scope.ordinary_get(parent, k_x, Value::Object(parent))?,
+    scope.ordinary_get(&mut vm, parent, k_x, Value::Object(parent))?,
     Value::Number(1.0)
   );
 
@@ -342,4 +345,3 @@ fn ordinary_own_property_keys_orders_indices_then_strings_then_symbols() -> Resu
 
   Ok(())
 }
-
