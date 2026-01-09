@@ -10,7 +10,9 @@ use crate::function::NativeFunctionId;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
+use crate::GcObject;
 use crate::Intrinsics;
+use crate::PropertyKey;
 use crate::RealmId;
 use crate::Scope;
 use crate::Value;
@@ -457,6 +459,39 @@ impl Vm {
       CallHandler::Native(call_id) => self.dispatch_native_call(call_id, &mut scope, this, args),
       CallHandler::EcmaScript => self.call_ecma_function(&mut scope, callee_obj, this, args),
     }
+  }
+
+  /// ECMAScript `Get(O, P)` for ordinary objects.
+  pub fn get(
+    &mut self,
+    scope: &mut Scope<'_>,
+    obj: GcObject,
+    key: PropertyKey,
+  ) -> Result<Value, VmError> {
+    // Delegate to the ordinary object internal-method implementation. `Get(O, P)` uses
+    // `receiver = O`.
+    scope.ordinary_get(self, obj, key, Value::Object(obj))
+  }
+
+  /// ECMAScript `GetMethod(O, P)` for ordinary objects.
+  pub fn get_method(
+    &mut self,
+    scope: &mut Scope<'_>,
+    obj: GcObject,
+    key: PropertyKey,
+  ) -> Result<Option<Value>, VmError> {
+    let value = self.get(scope, obj, key)?;
+    if matches!(value, Value::Undefined | Value::Null) {
+      return Ok(None);
+    }
+
+    let Value::Object(func) = value else {
+      return Err(VmError::NotCallable);
+    };
+    // Validate callability. `get_function_call_handler` returns `VmError::NotCallable` if not
+    // callable.
+    let _ = scope.heap().get_function_call_handler(func)?;
+    Ok(Some(value))
   }
 
   /// Constructs `callee` with the provided arguments and `new_target`.

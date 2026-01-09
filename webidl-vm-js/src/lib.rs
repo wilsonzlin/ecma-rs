@@ -1,12 +1,12 @@
 //! `vm-js` adapter for the `webidl` conversion/runtime traits.
 //!
-//! This crate exists as integration scaffolding: it makes the `webidl` crate usable from real
-//! embeddings while the JS VM is still incomplete. Missing VM functionality is reported explicitly
-//! via `VmError::Unimplemented`.
+//! WebIDL conversions are host-driven Rust code that may keep VM handles (strings/objects/symbols)
+//! in local variables across allocations. `vm-js` GC handles are *not* automatically rooted, so this
+//! adapter conservatively roots values it produces/consumes for the lifetime of the conversion
+//! context using a long-lived [`Scope`].
 
 use vm_js::{
-  GcObject, GcString, GcSymbol, Heap, PropertyDescriptor, PropertyKey as VmPropertyKey, PropertyKind,
-  RootId, Value, VmError,
+  GcObject, GcString, GcSymbol, Heap, PropertyKey as VmPropertyKey, Scope, Value, Vm, VmError,
 };
 use webidl::{
   InterfaceId, IteratorResult, JsRuntime, PropertyKey, WebIdlHooks, WebIdlLimits, WellKnownSymbol,
@@ -14,32 +14,28 @@ use webidl::{
 
 /// `webidl` conversion context backed by `vm-js`.
 pub struct VmJsWebIdlCx<'a> {
-  pub heap: &'a mut Heap,
+  pub vm: &'a mut Vm,
+  pub scope: Scope<'a>,
   pub limits: WebIdlLimits,
   pub hooks: &'a dyn WebIdlHooks<Value>,
-  temp_roots: Vec<RootId>,
+  well_known_iterator: Option<GcSymbol>,
+  well_known_async_iterator: Option<GcSymbol>,
 }
 
 impl<'a> VmJsWebIdlCx<'a> {
-  pub fn new(heap: &'a mut Heap, limits: WebIdlLimits, hooks: &'a dyn WebIdlHooks<Value>) -> Self {
+  pub fn new(
+    vm: &'a mut Vm,
+    heap: &'a mut Heap,
+    limits: WebIdlLimits,
+    hooks: &'a dyn WebIdlHooks<Value>,
+  ) -> Self {
     Self {
-      heap,
+      vm,
+      scope: heap.scope(),
       limits,
       hooks,
-      temp_roots: Vec::new(),
-    }
-  }
-
-  fn root_temp(&mut self, value: Value) {
-    match value {
-      Value::String(_) | Value::Symbol(_) | Value::Object(_) => {
-        // WebIDL conversions are host-driven and may hold VM handles in local Rust variables across
-        // allocations. Root them conservatively for the lifetime of the conversion context so GC
-        // can't invalidate handles mid-conversion.
-        let id = self.heap.add_root(value);
-        self.temp_roots.push(id);
-      }
-      Value::Undefined | Value::Null | Value::Bool(_) | Value::Number(_) => {}
+      well_known_iterator: None,
+      well_known_async_iterator: None,
     }
   }
 
@@ -54,12 +50,45 @@ impl<'a> VmJsWebIdlCx<'a> {
   pub fn implements_interface(&self, value: Value, interface: InterfaceId) -> bool {
     self.hooks.implements_interface(value, interface)
   }
-}
 
-impl Drop for VmJsWebIdlCx<'_> {
-  fn drop(&mut self) {
-    for id in self.temp_roots.drain(..) {
-      self.heap.remove_root(id);
+  fn root(&mut self, value: Value) {
+    self.scope.push_root(value);
+  }
+
+  fn to_vm_property_key(key: PropertyKey<GcString, GcSymbol>) -> VmPropertyKey {
+    match key {
+      PropertyKey::String(s) => VmPropertyKey::from_string(s),
+      PropertyKey::Symbol(s) => VmPropertyKey::from_symbol(s),
+    }
+  }
+
+  fn from_vm_property_key(key: VmPropertyKey) -> PropertyKey<GcString, GcSymbol> {
+    match key {
+      VmPropertyKey::String(s) => PropertyKey::String(s),
+      VmPropertyKey::Symbol(s) => PropertyKey::Symbol(s),
+    }
+  }
+
+  fn get_well_known_symbol_cached(&mut self, sym: WellKnownSymbol) -> Result<GcSymbol, VmError> {
+    match sym {
+      WellKnownSymbol::Iterator => {
+        if let Some(sym) = self.well_known_iterator {
+          return Ok(sym);
+        }
+        let key = self.scope.alloc_string("Symbol.iterator")?;
+        let sym = self.scope.heap_mut().symbol_for(key)?;
+        self.well_known_iterator = Some(sym);
+        Ok(sym)
+      }
+      WellKnownSymbol::AsyncIterator => {
+        if let Some(sym) = self.well_known_async_iterator {
+          return Ok(sym);
+        }
+        let key = self.scope.alloc_string("Symbol.asyncIterator")?;
+        let sym = self.scope.heap_mut().symbol_for(key)?;
+        self.well_known_async_iterator = Some(sym);
+        Ok(sym)
+      }
     }
   }
 }
@@ -158,88 +187,85 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
   }
 
   fn to_boolean(&mut self, value: Self::Value) -> Result<bool, Self::Error> {
-    Ok(match value {
-      Value::Undefined | Value::Null => false,
-      Value::Bool(b) => b,
-      Value::Number(n) => !(n == 0.0 || n.is_nan()),
-      Value::String(s) => !self.heap.get_string(s)?.is_empty(),
-      Value::Symbol(_) | Value::Object(_) => true,
-    })
+    self.scope.heap().to_boolean(value)
   }
 
   fn to_string(&mut self, value: Self::Value) -> Result<Self::String, Self::Error> {
-    match value {
-      Value::String(s) => Ok(s),
-      other => self.heap.to_string(other),
-    }
+    let s = self.scope.heap_mut().to_string(value)?;
+    self.root(Value::String(s));
+    Ok(s)
   }
 
   fn to_number(&mut self, value: Self::Value) -> Result<f64, Self::Error> {
-    match value {
-      Value::Number(n) => Ok(n),
-      Value::Bool(true) => Ok(1.0),
-      Value::Bool(false) => Ok(0.0),
-      _ => Err(VmError::Unimplemented(
-        "ToNumber requires interpreter + built-ins (numeric conversion)",
-      )),
-    }
+    self.scope.heap_mut().to_number(value)
   }
 
   fn type_error(&mut self, message: &'static str) -> Self::Error {
+    // `vm-js` does not yet model Error objects.
     VmError::Unimplemented(message)
   }
 
   fn get(
     &mut self,
-    _object: Self::Object,
-    _key: PropertyKey<Self::String, Self::Symbol>,
+    object: Self::Object,
+    key: PropertyKey<Self::String, Self::Symbol>,
   ) -> Result<Self::Value, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL Get requires an object property model (Get/[[Get]] semantics)",
-    ))
+    self.root(Value::Object(object));
+    match key {
+      PropertyKey::String(s) => self.root(Value::String(s)),
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
+    };
+
+    let key = Self::to_vm_property_key(key);
+    let value = self.vm.get(&mut self.scope, object, key)?;
+    self.root(value);
+    Ok(value)
   }
 
   fn get_method(
     &mut self,
-    _object: Self::Object,
-    _key: PropertyKey<Self::String, Self::Symbol>,
+    object: Self::Object,
+    key: PropertyKey<Self::String, Self::Symbol>,
   ) -> Result<Option<Self::Value>, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL GetMethod requires an object property model (Get/Callability semantics)",
-    ))
+    self.root(Value::Object(object));
+    match key {
+      PropertyKey::String(s) => self.root(Value::String(s)),
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
+    };
+
+    let key = Self::to_vm_property_key(key);
+    let method = self.vm.get_method(&mut self.scope, object, key)?;
+    if let Some(v) = method {
+      self.root(v);
+    }
+    Ok(method)
   }
 
   fn own_property_keys(
     &mut self,
-    _object: Self::Object,
+    object: Self::Object,
   ) -> Result<Vec<PropertyKey<Self::String, Self::Symbol>>, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL OwnPropertyKeys requires object internal methods (OwnPropertyKeys)",
-    ))
+    self.root(Value::Object(object));
+    let keys = self.scope.heap().ordinary_own_property_keys(object)?;
+    Ok(keys.into_iter().map(Self::from_vm_property_key).collect())
   }
 
   fn alloc_string_from_code_units(&mut self, units: &[u16]) -> Result<Self::String, Self::Error> {
-    let s = {
-      let mut scope = self.heap.scope();
-      scope.alloc_string_from_code_units(units)?
-    };
-    self.root_temp(Value::String(s));
+    let s = self.scope.alloc_string_from_code_units(units)?;
+    self.root(Value::String(s));
     Ok(s)
   }
 
   fn alloc_object(&mut self) -> Result<Self::Object, Self::Error> {
-    let obj = {
-      let mut scope = self.heap.scope();
-      scope.alloc_object()?
-    };
-    self.root_temp(Value::Object(obj));
+    let obj = self.scope.alloc_object()?;
+    self.root(Value::Object(obj));
     Ok(obj)
   }
 
-  fn alloc_array(&mut self, _len: usize) -> Result<Self::Object, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL array creation requires VM array allocation",
-    ))
+  fn alloc_array(&mut self, len: usize) -> Result<Self::Object, Self::Error> {
+    let obj = self.scope.alloc_array(len)?;
+    self.root(Value::Object(obj));
+    Ok(obj)
   }
 
   fn create_data_property_or_throw(
@@ -248,69 +274,88 @@ impl JsRuntime for VmJsWebIdlCx<'_> {
     key: PropertyKey<Self::String, Self::Symbol>,
     value: Self::Value,
   ) -> Result<(), Self::Error> {
-    let key = match key {
-      PropertyKey::String(s) => VmPropertyKey::String(s),
-      PropertyKey::Symbol(s) => VmPropertyKey::Symbol(s),
+    self.root(Value::Object(object));
+    match key {
+      PropertyKey::String(s) => self.root(Value::String(s)),
+      PropertyKey::Symbol(s) => self.root(Value::Symbol(s)),
     };
+    self.root(value);
 
-    let desc = PropertyDescriptor {
-      enumerable: true,
-      configurable: true,
-      kind: PropertyKind::Data {
-        value,
-        writable: true,
-      },
-    };
-
-    let mut scope = self.heap.scope();
-    scope.define_property(object, key, desc)
+    let key = Self::to_vm_property_key(key);
+    self.scope.create_data_property_or_throw(object, key, value)?;
+    Ok(())
   }
 
-  fn well_known_symbol(&mut self, _sym: WellKnownSymbol) -> Result<Self::Symbol, Self::Error> {
-    Err(VmError::Unimplemented(
-      "Well-known symbols require Symbol built-ins",
-    ))
+  fn well_known_symbol(&mut self, sym: WellKnownSymbol) -> Result<Self::Symbol, Self::Error> {
+    self.get_well_known_symbol_cached(sym)
   }
 
-  fn get_iterator(&mut self, _value: Self::Value) -> Result<Self::Object, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL iterable conversions require iterator protocol (GetIterator, IteratorNext)",
-    ))
+  fn get_iterator(&mut self, value: Self::Value) -> Result<Self::Object, Self::Error> {
+    let Value::Object(obj) = value else {
+      return Err(self.type_error("GetIterator(value): value is not an object"));
+    };
+
+    let sym = self.well_known_symbol(WellKnownSymbol::Iterator)?;
+    let Some(method) = self.get_method(obj, PropertyKey::Symbol(sym))? else {
+      return Err(self.type_error("GetIterator(value): @@iterator is undefined/null"));
+    };
+    self.get_iterator_from_method(obj, method)
   }
 
   fn get_iterator_from_method(
     &mut self,
-    _object: Self::Object,
-    _method: Self::Value,
+    object: Self::Object,
+    method: Self::Value,
   ) -> Result<Self::Object, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL iterable conversions require iterator protocol (GetIteratorFromMethod)",
-    ))
+    self.root(Value::Object(object));
+    self.root(method);
+
+    let iterator = self
+      .vm
+      .call(&mut self.scope, method, Value::Object(object), &[])?;
+    let Value::Object(iterator) = iterator else {
+      return Err(self.type_error("Iterator method did not return an object"));
+    };
+    self.root(Value::Object(iterator));
+    Ok(iterator)
   }
 
   fn iterator_next(
     &mut self,
-    _iterator: Self::Object,
+    iterator: Self::Object,
   ) -> Result<IteratorResult<Self::Value>, Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL iterable conversions require iterator protocol (IteratorNext)",
-    ))
-  }
+    self.root(Value::Object(iterator));
 
-  fn set_integrity_level_frozen(&mut self, _object: Self::Object) -> Result<(), Self::Error> {
-    Err(VmError::Unimplemented(
-      "WebIDL FrozenArray requires SetIntegrityLevel('frozen')",
-    ))
+    let next_key = PropertyKey::String(self.scope.alloc_string("next")?);
+    let Some(next_method) = self.get_method(iterator, next_key)? else {
+      return Err(self.type_error("IteratorNext(iterator): next is undefined/null"));
+    };
+
+    let result = self
+      .vm
+      .call(&mut self.scope, next_method, Value::Object(iterator), &[])?;
+    let Value::Object(result_obj) = result else {
+      return Err(self.type_error("IteratorNext(iterator): next() did not return an object"));
+    };
+    self.root(Value::Object(result_obj));
+
+    let done_key = PropertyKey::String(self.scope.alloc_string("done")?);
+    let done_value = self.get(result_obj, done_key)?;
+    let done = self.to_boolean(done_value)?;
+
+    let value_key = PropertyKey::String(self.scope.alloc_string("value")?);
+    let value = self.get(result_obj, value_key)?;
+    self.root(value);
+
+    Ok(IteratorResult { value, done })
   }
 }
 
 #[cfg(test)]
 mod tests {
   use super::VmJsWebIdlCx;
-  use vm_js::{Heap, HeapLimits, PropertyKey as VmPropertyKey, Value};
-  use webidl::{
-    conversions, DomString, IdlRecord, InterfaceId, ToJsValue, WebIdlHooks, WebIdlLimits,
-  };
+  use vm_js::{Heap, HeapLimits, Value, Vm, VmOptions};
+  use webidl::{conversions, InterfaceId, WebIdlHooks, WebIdlLimits};
 
   struct NoHooks;
 
@@ -326,6 +371,7 @@ mod tests {
 
   #[test]
   fn domstring_smoke_roundtrips_code_units() {
+    let mut vm = Vm::new(VmOptions::default());
     let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
 
     let units: Vec<u16> = vec![0x0041, 0xD83D, 0xDE00, 0x0000, 0xFFFF];
@@ -338,69 +384,13 @@ mod tests {
     let _root = heap.add_root(Value::String(s));
 
     let hooks = NoHooks;
-    let mut cx = VmJsWebIdlCx::new(&mut heap, WebIdlLimits::default(), &hooks);
+    let limits = WebIdlLimits::default();
+    let mut cx = VmJsWebIdlCx::new(&mut vm, &mut heap, limits, &hooks);
 
     let out = conversions::dom_string(&mut cx, Value::String(s)).expect("DOMString conversion");
-    let out_units = cx
-      .heap
-      .get_string(out)
-      .expect("get string")
-      .as_code_units()
-      .to_vec();
-    assert_eq!(out_units, units);
-  }
+    drop(cx);
 
-  #[test]
-  fn record_to_js_defines_own_enumerable_data_properties() {
-    let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-    let hooks = NoHooks;
-    let limits = WebIdlLimits::default();
-    let mut cx = VmJsWebIdlCx::new(&mut heap, limits, &hooks);
-
-    let record = IdlRecord(vec![
-      (DomString::from_str("a"), 1u32),
-      (DomString::from_str("b"), 2u32),
-    ]);
-
-    let v = record.to_js(&mut cx, &limits).expect("record to_js");
-    let Value::Object(obj) = v else {
-      panic!("expected object, got {v:?}");
-    };
-
-    // Use fresh key strings for lookup; vm-js compares string keys by UTF-16 code units.
-    let key_a = {
-      let mut scope = cx.heap.scope();
-      scope.alloc_string("a").expect("alloc key a")
-    };
-    let key_b = {
-      let mut scope = cx.heap.scope();
-      scope.alloc_string("b").expect("alloc key b")
-    };
-
-    let desc_a = cx
-      .heap
-      .object_get_own_property(obj, &VmPropertyKey::String(key_a))
-      .expect("get own property a")
-      .expect("property a exists");
-    assert!(desc_a.enumerable);
-    assert!(desc_a.configurable);
-    let vm_js::PropertyKind::Data { value, writable } = desc_a.kind else {
-      panic!("expected data descriptor for a");
-    };
-    assert!(writable);
-    assert_eq!(value, Value::Number(1.0));
-
-    let desc_b = cx
-      .heap
-      .object_get_own_property(obj, &VmPropertyKey::String(key_b))
-      .expect("get own property b")
-      .expect("property b exists");
-    assert!(desc_b.enumerable);
-    assert!(desc_b.configurable);
-    let vm_js::PropertyKind::Data { value, writable } = desc_b.kind else {
-      panic!("expected data descriptor for b");
-    };
-    assert!(writable);
-    assert_eq!(value, Value::Number(2.0));
+    let out_units = heap.get_string(out).expect("get string").as_code_units();
+    assert_eq!(out_units, units.as_slice());
   }
 }

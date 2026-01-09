@@ -203,9 +203,9 @@ impl Heap {
 
   /// Convert a value to a property key.
   ///
-  /// This is a minimal implementation (sufficient for early scaffolding):
+  /// This is a minimal implementation of the `ToPropertyKey` shape from ECMA-262:
   /// - `String`/`Symbol` values are returned directly.
-  /// - All other values go through a partial `ToPropertyKey` (`ToString` for now).
+  /// - All other values currently go through `ToString`.
   pub fn to_property_key(&mut self, value: Value) -> Result<PropertyKey, VmError> {
     match value {
       Value::String(s) => Ok(PropertyKey::String(s)),
@@ -214,10 +214,14 @@ impl Heap {
     }
   }
 
-  /// Minimal ECMAScript `ToString`.
+  /// ECMAScript `ToString` (minimal).
   ///
-  /// This is intentionally small (sufficient for early interpreter scaffolding):
-  /// - Objects stringify to `"[object Object]"` for now (no `ToPrimitive` / user `toString` yet).
+  /// This covers the primitive cases needed by WebIDL conversions:
+  /// - `undefined`, `null`, booleans, numbers, strings.
+  ///
+  /// For `Object`, this currently returns the placeholder `"[object Object]"`.
+  ///
+  /// For `Symbol`, this throws a TypeError.
   pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
     // Fast path: no allocation.
     if let Value::String(s) = value {
@@ -267,4 +271,68 @@ impl Heap {
       Value::Symbol(_) | Value::Object(_) => true,
     })
   }
+
+  /// ECMAScript `ToNumber` (minimal).
+  ///
+  /// This covers the primitive cases needed by WebIDL conversions:
+  /// - `undefined`, `null`, booleans, numbers, strings.
+  ///
+  /// For `Object`/`Symbol`, this currently returns [`VmError::Unimplemented`].
+  pub fn to_number(&mut self, value: Value) -> Result<f64, VmError> {
+    Ok(match value {
+      Value::Number(n) => n,
+      Value::Bool(true) => 1.0,
+      Value::Bool(false) => 0.0,
+      Value::Null => 0.0,
+      Value::Undefined => f64::NAN,
+      Value::String(s) => string_to_number(self, s)?,
+      Value::Symbol(_) => return Err(VmError::Unimplemented("ToNumber(Symbol)")),
+      Value::Object(_) => return Err(VmError::Unimplemented("ToNumber(Object)")),
+    })
+  }
+}
+
+fn string_to_number(heap: &Heap, s: GcString) -> Result<f64, VmError> {
+  let js = heap.get_string(s)?;
+  let text = js.to_utf8_lossy();
+  let trimmed = text.trim();
+  if trimmed.is_empty() {
+    return Ok(0.0);
+  }
+
+  // `Infinity` (and signed variants).
+  if trimmed == "Infinity" || trimmed == "+Infinity" {
+    return Ok(f64::INFINITY);
+  }
+  if trimmed == "-Infinity" {
+    return Ok(f64::NEG_INFINITY);
+  }
+
+  // `0x...`, `0b...`, `0o...` integer forms (no sign per `StringToNumber` grammar).
+  if let Some(rest) = trimmed.strip_prefix("0x").or_else(|| trimmed.strip_prefix("0X")) {
+    return Ok(parse_radix_integer_to_f64(rest, 16).unwrap_or(f64::NAN));
+  }
+  if let Some(rest) = trimmed.strip_prefix("0b").or_else(|| trimmed.strip_prefix("0B")) {
+    return Ok(parse_radix_integer_to_f64(rest, 2).unwrap_or(f64::NAN));
+  }
+  if let Some(rest) = trimmed.strip_prefix("0o").or_else(|| trimmed.strip_prefix("0O")) {
+    return Ok(parse_radix_integer_to_f64(rest, 8).unwrap_or(f64::NAN));
+  }
+
+  match trimmed.parse::<f64>() {
+    Ok(v) => Ok(v),
+    Err(_) => Ok(f64::NAN),
+  }
+}
+
+fn parse_radix_integer_to_f64(digits: &str, radix: u32) -> Option<f64> {
+  if digits.is_empty() {
+    return None;
+  }
+  let mut value: f64 = 0.0;
+  for ch in digits.chars() {
+    let digit = ch.to_digit(radix)?;
+    value = value * (radix as f64) + (digit as f64);
+  }
+  Some(value)
 }

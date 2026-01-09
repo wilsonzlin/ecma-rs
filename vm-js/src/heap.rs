@@ -469,8 +469,8 @@ impl Heap {
   /// Gets an object's `[[Prototype]]`.
   pub fn object_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
     match self.get_heap_object(obj.0)? {
-      HeapObject::Object(o) => Ok(o.prototype),
-      HeapObject::Function(f) => Ok(f.prototype),
+      HeapObject::Object(obj) => Ok(obj.prototype),
+      HeapObject::Function(func) => Ok(func.prototype),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -548,8 +548,8 @@ impl Heap {
 
   pub(crate) fn object_is_extensible(&self, obj: GcObject) -> Result<bool, VmError> {
     match self.get_heap_object(obj.0)? {
-      HeapObject::Object(o) => Ok(o.extensible),
-      HeapObject::Function(f) => Ok(f.extensible),
+      HeapObject::Object(obj) => Ok(obj.extensible),
+      HeapObject::Function(func) => Ok(func.extensible),
       _ => Err(VmError::InvalidHandle),
     }
   }
@@ -560,8 +560,12 @@ impl Heap {
     extensible: bool,
   ) -> Result<(), VmError> {
     match self.get_heap_object_mut(obj.0)? {
-      HeapObject::Object(o) => o.extensible = extensible,
-      HeapObject::Function(f) => f.extensible = extensible,
+      HeapObject::Object(obj) => {
+        obj.extensible = extensible;
+      }
+      HeapObject::Function(func) => {
+        func.extensible = extensible;
+      }
       _ => return Err(VmError::InvalidHandle),
     }
     Ok(())
@@ -1638,6 +1642,53 @@ impl<'a> Scope<'a> {
     prototype: Option<GcObject>,
   ) -> Result<GcObject, VmError> {
     self.alloc_object_with_properties(prototype, &[])
+  }
+
+  /// Allocates a new JavaScript Array object on the heap.
+  ///
+  /// This is a minimal stub for WebIDL conversions. The returned object is an ordinary object with
+  /// an own `length` data property.
+  pub fn alloc_array(&mut self, len: usize) -> Result<GcObject, VmError> {
+    // Root the array object while creating the `length` property so that intermediate allocations
+    // (creating the key string, growing the property table) cannot collect it.
+    let arr = self.alloc_object()?;
+    let mut scope = self.reborrow();
+    scope.push_root(Value::Object(arr));
+
+    let length_key = scope.alloc_string("length")?;
+    let desc = PropertyDescriptor {
+      enumerable: false,
+      configurable: false,
+      kind: PropertyKind::Data {
+        value: Value::Number(len as f64),
+        writable: true,
+      },
+    };
+    scope.define_property(arr, PropertyKey::from_string(length_key), desc)?;
+    Ok(arr)
+  }
+
+  /// ECMAScript `CreateDataPropertyOrThrow`.
+  ///
+  /// For now, this always defines/replaces the property as:
+  /// - writable: true
+  /// - enumerable: true
+  /// - configurable: true
+  pub fn create_data_property_or_throw(
+    &mut self,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+  ) -> Result<(), VmError> {
+    let desc = PropertyDescriptor {
+      enumerable: true,
+      configurable: true,
+      kind: PropertyKind::Data {
+        value,
+        writable: true,
+      },
+    };
+    self.define_property(obj, key, desc)
   }
 
   /// Defines (adds or replaces) an own property on `obj`.
