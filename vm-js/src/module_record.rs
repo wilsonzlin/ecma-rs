@@ -1,6 +1,7 @@
 use crate::execution_context::ModuleId;
 use crate::module_graph::ModuleGraph;
 use crate::ModuleRequest;
+use crate::RootId;
 use crate::VmError;
 use diagnostics::FileId;
 use parse_js::ast::expr::pat::Pat;
@@ -52,6 +53,13 @@ pub enum ResolveExportResult {
   Ambiguous,
 }
 
+/// Cached data for a module's namespace object (`module.[[Namespace]]` in ECMA-262).
+#[derive(Clone, Debug)]
+pub(crate) struct ModuleNamespaceCache {
+  pub object: RootId,
+  pub exports: Vec<String>,
+}
+
 /// Source Text Module Record (ECMA-262).
 #[derive(Clone, Debug, Default)]
 pub struct SourceTextModuleRecord {
@@ -62,9 +70,20 @@ pub struct SourceTextModuleRecord {
 
   /// `[[LoadedModules]]` – a host-populated mapping from module requests to resolved module ids.
   pub loaded_modules: Vec<(ModuleRequest, ModuleId)>,
+
+  /// `[[Namespace]]` – cached module namespace object + sorted `[[Exports]]` list.
+  ///
+  /// Note: the namespace object is rooted in the heap via a persistent [`RootId`] so it survives GC.
+  pub(crate) namespace: Option<ModuleNamespaceCache>,
 }
 
 impl SourceTextModuleRecord {
+  /// Returns the cached namespace export list (`[[Exports]]`) if a namespace object has been
+  /// created.
+  pub fn namespace_exports(&self) -> Option<&[String]> {
+    self.namespace.as_ref().map(|ns| ns.exports.as_slice())
+  }
+
   /// Parses a source text module using the `parse-js` front-end and extracts the module record
   /// fields needed by `GetExportedNames` and `ResolveExport`.
   ///
