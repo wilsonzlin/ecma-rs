@@ -26,8 +26,6 @@
 //! queue is **host-owned**; this crate only provides the job representation.
 
 use crate::GcObject;
-use crate::PromiseHandle;
-use crate::PromiseRejectionOperation;
 use crate::Value;
 use crate::VmError;
 use std::fmt;
@@ -174,6 +172,37 @@ impl fmt::Debug for JobCallback {
   }
 }
 
+/// Opaque handle to a promise object passed to [`VmHostHooks::host_promise_rejection_tracker`].
+///
+/// At this layer, promises are represented as ordinary JavaScript objects (in HTML, they are
+/// surfaced as an `object` on `PromiseRejectionEvent`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[repr(transparent)]
+pub struct PromiseHandle(pub GcObject);
+
+impl From<GcObject> for PromiseHandle {
+  fn from(value: GcObject) -> Self {
+    Self(value)
+  }
+}
+
+impl From<PromiseHandle> for GcObject {
+  fn from(value: PromiseHandle) -> Self {
+    value.0
+  }
+}
+
+/// The operation passed to [`VmHostHooks::host_promise_rejection_tracker`].
+///
+/// Mirrors the `operation` string argument in the ECMAScript spec.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum PromiseRejectionOperation {
+  /// A promise became rejected while having no rejection handlers.
+  Reject,
+  /// A rejection handler was added to a previously-unhandled rejected promise.
+  Handle,
+}
+
 /// Host hooks required by the ECMAScript specification (and refined by HTML for browsers).
 ///
 /// The VM/evaluator calls into this trait; the embedding provides the implementation.
@@ -240,6 +269,13 @@ pub trait VmHostHooks {
   /// Stub hook for ECMA-262's `HostPromiseRejectionTracker`:
   /// <https://tc39.es/ecma262/#sec-host-promise-rejection-tracker>.
   ///
+  /// HTML's host implementation uses:
+  /// - an "about-to-be-notified rejected promises list", and
+  /// - an "outstanding rejected promises weak set"
+  ///
+  /// to later report `unhandledrejection`/`rejectionhandled` events at microtask checkpoints. See:
+  /// <https://html.spec.whatwg.org/multipage/webappapis.html#the-hostpromiserejectiontracker-implementation>.
+  ///
   /// This default implementation does nothing.
   fn host_promise_rejection_tracker(
     &mut self,
@@ -248,4 +284,3 @@ pub trait VmHostHooks {
   ) {
   }
 }
-

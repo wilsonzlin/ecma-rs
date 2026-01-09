@@ -1,17 +1,16 @@
 use vm_js::Heap;
 use vm_js::HeapLimits;
-use vm_js::JobQueue;
-use vm_js::MicrotaskJob;
 use vm_js::PromiseHandle;
 use vm_js::PromiseRejectionOperation;
+use vm_js::VmHostHooks;
 
 #[derive(Default)]
 struct RecordingHost {
   calls: Vec<(PromiseHandle, PromiseRejectionOperation)>,
 }
 
-impl JobQueue<()> for RecordingHost {
-  fn enqueue_microtask(&mut self, _job: MicrotaskJob<()>) {
+impl VmHostHooks for RecordingHost {
+  fn host_enqueue_promise_job(&mut self, _job: vm_js::Job, _realm: Option<vm_js::RealmId>) {
     // Not needed for this test.
   }
 
@@ -47,4 +46,3 @@ fn promise_rejection_tracker_api_surface_is_usable() {
     ]
   );
 }
-
