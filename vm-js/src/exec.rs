@@ -6,7 +6,7 @@ use crate::{
   PropertyKey, PropertyKind, Realm, RootId, Scope, SourceText, StackFrame, Value, Vm, VmError,
   NativeCall, VmHostHooks, VmJobContext,
 };
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr,
@@ -157,6 +157,11 @@ fn throw_reference_error(vm: &Vm, scope: &mut Scope<'_>, message: &str) -> Resul
     message,
   )?;
   Ok(VmError::Throw(value))
+}
+
+fn syntax_error(loc: parse_js::loc::Loc, message: impl Into<String>) -> VmError {
+  let span = loc.to_diagnostics_span(FileId(0));
+  VmError::Syntax(vec![Diagnostic::error("VMJS0002", message, span)])
 }
  
 #[derive(Clone, Copy, Debug)]
@@ -570,10 +575,7 @@ impl JsRuntime {
       new_target: Value::Undefined,
     };
 
-    evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
-    let global_lex = evaluator.env.lexical_env;
-    evaluator.hoist_lexical_decls_in_stmt_list(&mut scope, global_lex, &top.stx.body)?;
-    evaluator.hoist_function_decls_in_stmt_list(&mut scope, &top.stx.body)?;
+    evaluator.instantiate_script(&mut scope, &top.stx.body)?;
 
     let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
     match completion {
@@ -688,7 +690,150 @@ impl<'a> Evaluator<'a> {
     self.vm.tick()
   }
 
-  fn hoist_var_decls(
+  fn instantiate_script(&mut self, scope: &mut Scope<'_>, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
+    self.instantiate_stmt_list(scope, stmts)
+  }
+
+  fn instantiate_function(
+    &mut self,
+    scope: &mut Scope<'_>,
+    func: &Node<Func>,
+    args: &[Value],
+  ) -> Result<(), VmError> {
+    // Bind parameters.
+    for (idx, param) in func.stx.parameters.iter().enumerate() {
+      if param.stx.rest || param.stx.default_value.is_some() {
+        return Err(VmError::Unimplemented("non-simple function parameters"));
+      }
+      let value = args.get(idx).copied().unwrap_or(Value::Undefined);
+      bind_pattern(
+        self.vm,
+        scope,
+        self.env,
+        &param.stx.pattern.stx.pat.stx,
+        value,
+        BindingKind::Let,
+        self.strict,
+        self.this,
+      )?;
+    }
+
+    // Create a minimal `arguments` object for non-arrow functions.
+    //
+    // test262's harness expects `arguments` to exist and be array-like (`length`, indexed elements).
+    // We do not implement mapped arguments objects yet.
+    if !func.stx.arrow && !scope.heap().env_has_binding(self.env.lexical_env, "arguments")? {
+      let intr = self
+        .vm
+        .intrinsics()
+        .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
+
+      let args_obj = scope.alloc_object()?;
+      scope.push_root(Value::Object(args_obj))?;
+      scope
+        .heap_mut()
+        .object_set_prototype(args_obj, Some(intr.object_prototype()))?;
+
+      let len = args.len() as f64;
+      let len_key = PropertyKey::from_string(scope.alloc_string("length")?);
+      scope.define_property(
+        args_obj,
+        len_key,
+        PropertyDescriptor {
+          enumerable: false,
+          configurable: true,
+          kind: PropertyKind::Data {
+            value: Value::Number(len),
+            writable: true,
+          },
+        },
+      )?;
+
+      for (i, v) in args.iter().copied().enumerate() {
+        let mut idx_scope = scope.reborrow();
+        idx_scope.push_root(Value::Object(args_obj))?;
+        idx_scope.push_root(v)?;
+        let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
+        idx_scope.define_property(args_obj, key, global_var_desc(v))?;
+      }
+
+      scope.env_create_mutable_binding(self.env.lexical_env, "arguments")?;
+      scope
+        .heap_mut()
+        .env_initialize_binding(self.env.lexical_env, "arguments", Value::Object(args_obj))?;
+    }
+
+    if let Some(FuncBody::Block(stmts)) = &func.stx.body {
+      self.instantiate_stmt_list(scope, stmts)?;
+    }
+    Ok(())
+  }
+
+  fn instantiate_stmt_list(
+    &mut self,
+    scope: &mut Scope<'_>,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
+    // Minimal early error checks:
+    // - Duplicate lexical declarations (let/const) in the same statement list.
+    // - Lexical declarations may not collide with var-scoped names (var + function declarations).
+    let mut var_names = HashSet::<String>::new();
+    for stmt in stmts {
+      self.collect_var_names(&stmt.stx, &mut var_names)?;
+    }
+
+    if self.strict {
+      // Strict mode: only top-level function declarations are var-scoped; block function
+      // declarations are instantiated at block entry.
+      for stmt in stmts {
+        let Stmt::FunctionDecl(decl) = &*stmt.stx else {
+          continue;
+        };
+        let Some(name) = &decl.stx.name else {
+          return Err(VmError::Unimplemented("anonymous function declaration"));
+        };
+        var_names.insert(name.stx.name.clone());
+      }
+    } else {
+      // Non-strict mode: treat block function declarations as var-scoped (Annex B-ish).
+      for stmt in stmts {
+        self.collect_sloppy_function_decl_names(&stmt.stx, &mut var_names)?;
+      }
+    }
+
+    let mut lexical_seen = HashSet::<String>::new();
+    let mut lexical_bindings: Vec<(String, parse_js::loc::Loc)> = Vec::new();
+    for stmt in stmts {
+      let Stmt::VarDecl(var) = &*stmt.stx else {
+        continue;
+      };
+      if var.stx.mode != VarDeclMode::Let && var.stx.mode != VarDeclMode::Const {
+        continue;
+      }
+      for declarator in &var.stx.declarators {
+        self.collect_lexical_decl_names_from_pat(
+          &declarator.pattern.stx.pat.stx,
+          stmt.loc,
+          &mut lexical_seen,
+          &mut lexical_bindings,
+        )?;
+      }
+    }
+
+    for (name, loc) in &lexical_bindings {
+      if var_names.contains(name) {
+        return Err(syntax_error(*loc, format!("Identifier '{name}' has already been declared")));
+      }
+    }
+
+    self.instantiate_var_decls(scope, stmts)?;
+    let lex = self.env.lexical_env;
+    self.instantiate_lexical_decls_in_stmt_list(scope, lex, stmts)?;
+    self.instantiate_var_scoped_function_decls_in_stmt_list(scope, stmts)?;
+    Ok(())
+  }
+
+  fn instantiate_var_decls(
     &mut self,
     scope: &mut Scope<'_>,
     stmts: &[Node<Stmt>],
@@ -703,55 +848,184 @@ impl<'a> Evaluator<'a> {
     Ok(())
   }
 
-  fn hoist_function_decls_in_stmt_list(
+  fn instantiate_var_scoped_function_decls_in_stmt_list(
     &mut self,
     scope: &mut Scope<'_>,
     stmts: &[Node<Stmt>],
   ) -> Result<(), VmError> {
+    if self.strict {
+      for stmt in stmts {
+        let Stmt::FunctionDecl(decl) = &*stmt.stx else {
+          continue;
+        };
+        self.instantiate_function_decl(scope, decl)?;
+      }
+      return Ok(());
+    }
+
     for stmt in stmts {
-      self.hoist_function_decls_in_stmt(scope, &stmt.stx)?;
+      self.instantiate_var_scoped_function_decls_in_stmt(scope, &stmt.stx)?;
     }
     Ok(())
   }
 
-  fn hoist_function_decls_in_stmt(
+  fn instantiate_var_scoped_function_decls_in_stmt(
     &mut self,
     scope: &mut Scope<'_>,
     stmt: &Stmt,
   ) -> Result<(), VmError> {
     match stmt {
       Stmt::FunctionDecl(decl) => self.instantiate_function_decl(scope, decl),
-      Stmt::Block(block) => self.hoist_function_decls_in_stmt_list(scope, &block.stx.body),
+      Stmt::Block(block) => self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &block.stx.body),
       Stmt::If(stmt) => {
-        self.hoist_function_decls_in_stmt(scope, &stmt.stx.consequent.stx)?;
+        self.instantiate_var_scoped_function_decls_in_stmt(scope, &stmt.stx.consequent.stx)?;
         if let Some(alt) = &stmt.stx.alternate {
-          self.hoist_function_decls_in_stmt(scope, &alt.stx)?;
+          self.instantiate_var_scoped_function_decls_in_stmt(scope, &alt.stx)?;
         }
         Ok(())
       }
       Stmt::Try(stmt) => {
-        self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.wrapped.stx.body)?;
+        self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &stmt.stx.wrapped.stx.body)?;
         if let Some(catch) = &stmt.stx.catch {
-          self.hoist_function_decls_in_stmt_list(scope, &catch.stx.body)?;
+          self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &catch.stx.body)?;
         }
         if let Some(finally) = &stmt.stx.finally {
-          self.hoist_function_decls_in_stmt_list(scope, &finally.stx.body)?;
+          self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &finally.stx.body)?;
         }
         Ok(())
       }
-      Stmt::While(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.body.stx),
-      Stmt::DoWhile(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.body.stx),
-      Stmt::ForTriple(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
-      Stmt::ForIn(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
-      Stmt::ForOf(stmt) => self.hoist_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
-      Stmt::Label(stmt) => self.hoist_function_decls_in_stmt(scope, &stmt.stx.statement.stx),
+      Stmt::While(stmt) => self.instantiate_var_scoped_function_decls_in_stmt(scope, &stmt.stx.body.stx),
+      Stmt::DoWhile(stmt) => self.instantiate_var_scoped_function_decls_in_stmt(scope, &stmt.stx.body.stx),
+      Stmt::ForTriple(stmt) => self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
+      Stmt::ForIn(stmt) => self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
+      Stmt::ForOf(stmt) => self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &stmt.stx.body.stx.body),
+      Stmt::Label(stmt) => self.instantiate_var_scoped_function_decls_in_stmt(scope, &stmt.stx.statement.stx),
       Stmt::Switch(stmt) => {
         for branch in &stmt.stx.branches {
-          self.hoist_function_decls_in_stmt_list(scope, &branch.stx.body)?;
+          self.instantiate_var_scoped_function_decls_in_stmt_list(scope, &branch.stx.body)?;
         }
         Ok(())
       }
       _ => Ok(()),
+    }
+  }
+
+  fn collect_sloppy_function_decl_names(
+    &self,
+    stmt: &Stmt,
+    out: &mut HashSet<String>,
+  ) -> Result<(), VmError> {
+    match stmt {
+      Stmt::FunctionDecl(decl) => {
+        let Some(name) = &decl.stx.name else {
+          return Err(VmError::Unimplemented("anonymous function declaration"));
+        };
+        out.insert(name.stx.name.clone());
+        Ok(())
+      }
+      Stmt::Block(block) => {
+        for stmt in &block.stx.body {
+          self.collect_sloppy_function_decl_names(&stmt.stx, out)?;
+        }
+        Ok(())
+      }
+      Stmt::If(stmt) => {
+        self.collect_sloppy_function_decl_names(&stmt.stx.consequent.stx, out)?;
+        if let Some(alt) = &stmt.stx.alternate {
+          self.collect_sloppy_function_decl_names(&alt.stx, out)?;
+        }
+        Ok(())
+      }
+      Stmt::Try(stmt) => {
+        for s in &stmt.stx.wrapped.stx.body {
+          self.collect_sloppy_function_decl_names(&s.stx, out)?;
+        }
+        if let Some(catch) = &stmt.stx.catch {
+          for s in &catch.stx.body {
+            self.collect_sloppy_function_decl_names(&s.stx, out)?;
+          }
+        }
+        if let Some(finally) = &stmt.stx.finally {
+          for s in &finally.stx.body {
+            self.collect_sloppy_function_decl_names(&s.stx, out)?;
+          }
+        }
+        Ok(())
+      }
+      Stmt::While(stmt) => self.collect_sloppy_function_decl_names(&stmt.stx.body.stx, out),
+      Stmt::DoWhile(stmt) => self.collect_sloppy_function_decl_names(&stmt.stx.body.stx, out),
+      Stmt::ForTriple(stmt) => {
+        for s in &stmt.stx.body.stx.body {
+          self.collect_sloppy_function_decl_names(&s.stx, out)?;
+        }
+        Ok(())
+      }
+      Stmt::ForIn(stmt) => {
+        for s in &stmt.stx.body.stx.body {
+          self.collect_sloppy_function_decl_names(&s.stx, out)?;
+        }
+        Ok(())
+      }
+      Stmt::ForOf(stmt) => {
+        for s in &stmt.stx.body.stx.body {
+          self.collect_sloppy_function_decl_names(&s.stx, out)?;
+        }
+        Ok(())
+      }
+      Stmt::Label(stmt) => self.collect_sloppy_function_decl_names(&stmt.stx.statement.stx, out),
+      Stmt::Switch(stmt) => {
+        for branch in &stmt.stx.branches {
+          for s in &branch.stx.body {
+            self.collect_sloppy_function_decl_names(&s.stx, out)?;
+          }
+        }
+        Ok(())
+      }
+      _ => Ok(()),
+    }
+  }
+
+  fn collect_lexical_decl_names_from_pat(
+    &self,
+    pat: &Pat,
+    loc: parse_js::loc::Loc,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<(String, parse_js::loc::Loc)>,
+  ) -> Result<(), VmError> {
+    match pat {
+      Pat::Id(id) => {
+        if !seen.insert(id.stx.name.clone()) {
+          return Err(syntax_error(
+            loc,
+            format!("Identifier '{}' has already been declared", id.stx.name),
+          ));
+        }
+        out.push((id.stx.name.clone(), loc));
+        Ok(())
+      }
+      Pat::Obj(obj) => {
+        for prop in &obj.stx.properties {
+          self.collect_lexical_decl_names_from_pat(&prop.stx.target.stx, loc, seen, out)?;
+        }
+        if let Some(rest) = &obj.stx.rest {
+          self.collect_lexical_decl_names_from_pat(&rest.stx, loc, seen, out)?;
+        }
+        Ok(())
+      }
+      Pat::Arr(arr) => {
+        for elem in &arr.stx.elements {
+          if let Some(elem) = elem {
+            self.collect_lexical_decl_names_from_pat(&elem.target.stx, loc, seen, out)?;
+          }
+        }
+        if let Some(rest) = &arr.stx.rest {
+          self.collect_lexical_decl_names_from_pat(&rest.stx, loc, seen, out)?;
+        }
+        Ok(())
+      }
+      Pat::AssignTarget(_) => Err(VmError::Unimplemented(
+        "lexical declaration assignment targets",
+      )),
     }
   }
 
@@ -760,12 +1034,28 @@ impl<'a> Evaluator<'a> {
     scope: &mut Scope<'_>,
     decl: &Node<FuncDecl>,
   ) -> Result<(), VmError> {
-    use crate::function::ThisMode;
-    use crate::vm::EcmaFunctionKind;
-
     let Some(name) = &decl.stx.name else {
       return Err(VmError::Unimplemented("anonymous function declaration"));
     };
+
+    let func_obj = self.create_function_object_for_decl(scope, decl, &name.stx.name)?;
+
+    let mut assign_scope = scope.reborrow();
+    assign_scope.push_root(Value::Object(func_obj))?;
+    self
+      .env
+      .set_var(&mut assign_scope, &name.stx.name, Value::Object(func_obj))?;
+    Ok(())
+  }
+
+  fn create_function_object_for_decl(
+    &mut self,
+    scope: &mut Scope<'_>,
+    decl: &Node<FuncDecl>,
+    name: &str,
+  ) -> Result<GcObject, VmError> {
+    use crate::function::ThisMode;
+    use crate::vm::EcmaFunctionKind;
 
     let func = &decl.stx.function.stx;
     if func.async_ || func.generator {
@@ -786,7 +1076,7 @@ impl<'a> Evaluator<'a> {
       ThisMode::Global
     };
 
-    let name_s = scope.alloc_string(&name.stx.name)?;
+    let name_s = scope.alloc_string(name)?;
     let length = function_length(func);
 
     let rel_start = decl.loc.start_u32().saturating_sub(self.env.prefix_len());
@@ -794,7 +1084,10 @@ impl<'a> Evaluator<'a> {
     let span_start = self.env.base_offset().saturating_add(rel_start);
     let span_end = self.env.base_offset().saturating_add(rel_end);
 
-    let code_id = self.vm.register_ecma_function(self.env.source(), span_start, span_end, EcmaFunctionKind::Decl)?;
+    let code_id =
+      self
+        .vm
+        .register_ecma_function(self.env.source(), span_start, span_end, EcmaFunctionKind::Decl)?;
     let func_obj = scope.alloc_ecma_function(
       code_id,
       true,
@@ -817,16 +1110,101 @@ impl<'a> Evaluator<'a> {
     if let Some(realm) = self.vm.current_realm() {
       scope.heap_mut().set_function_job_realm(func_obj, realm)?;
     }
+    Ok(func_obj)
+  }
 
-    let mut assign_scope = scope.reborrow();
-    assign_scope.push_root(Value::Object(func_obj))?;
-    self
-      .env
-      .set_var(&mut assign_scope, &name.stx.name, Value::Object(func_obj))?;
+  fn instantiate_block_decls_in_stmt_list(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcEnv,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
+    // Duplicate block-scoped declarations are early errors.
+    //
+    // Note: switch/catch share this helper even though their scope isn't a syntactic `{}` block.
+    let mut seen = HashSet::<String>::new();
+    for stmt in stmts {
+      match &*stmt.stx {
+        Stmt::VarDecl(var) if var.stx.mode == VarDeclMode::Let || var.stx.mode == VarDeclMode::Const => {
+          for declarator in &var.stx.declarators {
+            // Reuse lexical declaration collection logic to detect duplicates across complex patterns.
+            let mut tmp = Vec::new();
+            self.collect_lexical_decl_names_from_pat(
+              &declarator.pattern.stx.pat.stx,
+              stmt.loc,
+              &mut seen,
+              &mut tmp,
+            )?;
+          }
+        }
+        Stmt::FunctionDecl(decl) if self.strict => {
+          let Some(name) = &decl.stx.name else {
+            return Err(VmError::Unimplemented("anonymous function declaration"));
+          };
+          if !seen.insert(name.stx.name.clone()) {
+            return Err(syntax_error(
+              stmt.loc,
+              format!("Identifier '{}' has already been declared", name.stx.name),
+            ));
+          }
+        }
+        _ => {}
+      }
+    }
+
+    self.instantiate_lexical_decls_in_stmt_list(scope, env, stmts)?;
+    if self.strict {
+      self.instantiate_block_scoped_function_decls_in_stmt_list(scope, env, stmts)?;
+    }
     Ok(())
   }
 
-  fn hoist_lexical_decls_in_stmt_list(
+  fn instantiate_block_scoped_function_decls_in_stmt_list(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcEnv,
+    stmts: &[Node<Stmt>],
+  ) -> Result<(), VmError> {
+    for stmt in stmts {
+      let Stmt::FunctionDecl(decl) = &*stmt.stx else {
+        continue;
+      };
+      self.instantiate_block_scoped_function_decl(scope, env, decl)?;
+    }
+    Ok(())
+  }
+
+  fn instantiate_block_scoped_function_decl(
+    &mut self,
+    scope: &mut Scope<'_>,
+    env: GcEnv,
+    decl: &Node<FuncDecl>,
+  ) -> Result<(), VmError> {
+    let Some(name) = &decl.stx.name else {
+      return Err(VmError::Unimplemented("anonymous function declaration"));
+    };
+
+    // Block-scoped functions are lexically scoped in strict mode.
+    if scope.heap().env_has_binding(env, &name.stx.name)? {
+      return Err(syntax_error(
+        decl.loc,
+        format!("Identifier '{}' has already been declared", name.stx.name),
+      ));
+    }
+
+    scope.env_create_mutable_binding(env, &name.stx.name)?;
+
+    let func_obj = self.create_function_object_for_decl(scope, decl, &name.stx.name)?;
+
+    let mut init_scope = scope.reborrow();
+    init_scope.push_root(Value::Object(func_obj))?;
+    init_scope
+      .heap_mut()
+      .env_initialize_binding(env, &name.stx.name, Value::Object(func_obj))?;
+    Ok(())
+  }
+
+  fn instantiate_lexical_decls_in_stmt_list(
     &mut self,
     scope: &mut Scope<'_>,
     env: GcEnv,
@@ -840,12 +1218,24 @@ impl<'a> Evaluator<'a> {
       match var.stx.mode {
         VarDeclMode::Let => {
           for declarator in &var.stx.declarators {
-            self.hoist_lexical_names_from_pat(scope, env, &declarator.pattern.stx.pat.stx, true)?;
+            self.instantiate_lexical_names_from_pat(
+              scope,
+              env,
+              &declarator.pattern.stx.pat.stx,
+              stmt.loc,
+              true,
+            )?;
           }
         }
         VarDeclMode::Const => {
           for declarator in &var.stx.declarators {
-            self.hoist_lexical_names_from_pat(scope, env, &declarator.pattern.stx.pat.stx, false)?;
+            self.instantiate_lexical_names_from_pat(
+              scope,
+              env,
+              &declarator.pattern.stx.pat.stx,
+              stmt.loc,
+              false,
+            )?;
           }
         }
         _ => {}
@@ -854,15 +1244,22 @@ impl<'a> Evaluator<'a> {
     Ok(())
   }
 
-  fn hoist_lexical_names_from_pat(
+  fn instantiate_lexical_names_from_pat(
     &mut self,
     scope: &mut Scope<'_>,
     env: GcEnv,
     pat: &Pat,
+    loc: parse_js::loc::Loc,
     mutable: bool,
   ) -> Result<(), VmError> {
     match pat {
       Pat::Id(id) => {
+        if scope.heap().env_has_binding(env, &id.stx.name)? {
+          return Err(syntax_error(
+            loc,
+            format!("Identifier '{}' has already been declared", id.stx.name),
+          ));
+        }
         if mutable {
           scope.env_create_mutable_binding(env, &id.stx.name)?;
         } else {
@@ -872,21 +1269,21 @@ impl<'a> Evaluator<'a> {
       }
       Pat::Obj(obj) => {
         for prop in &obj.stx.properties {
-          self.hoist_lexical_names_from_pat(scope, env, &prop.stx.target.stx, mutable)?;
+          self.instantiate_lexical_names_from_pat(scope, env, &prop.stx.target.stx, loc, mutable)?;
         }
         if let Some(rest) = &obj.stx.rest {
-          self.hoist_lexical_names_from_pat(scope, env, &rest.stx, mutable)?;
+          self.instantiate_lexical_names_from_pat(scope, env, &rest.stx, loc, mutable)?;
         }
         Ok(())
       }
       Pat::Arr(arr) => {
         for elem in &arr.stx.elements {
           if let Some(elem) = elem {
-            self.hoist_lexical_names_from_pat(scope, env, &elem.target.stx, mutable)?;
+            self.instantiate_lexical_names_from_pat(scope, env, &elem.target.stx, loc, mutable)?;
           }
         }
         if let Some(rest) = &arr.stx.rest {
-          self.hoist_lexical_names_from_pat(scope, env, &rest.stx, mutable)?;
+          self.instantiate_lexical_names_from_pat(scope, env, &rest.stx, loc, mutable)?;
         }
         Ok(())
       }
@@ -1072,7 +1469,7 @@ impl<'a> Evaluator<'a> {
     self.env.set_lexical_env(scope.heap_mut(), block_env);
 
     let result = self
-      .hoist_lexical_decls_in_stmt_list(scope, block_env, &block.body)
+      .instantiate_block_decls_in_stmt_list(scope, block_env, &block.body)
       .and_then(|_| self.eval_stmt_list(scope, &block.body));
 
     self.env.set_lexical_env(scope.heap_mut(), outer);
@@ -1371,7 +1768,7 @@ impl<'a> Evaluator<'a> {
       catch_scope.push_root(thrown)?;
 
       self
-        .hoist_lexical_decls_in_stmt_list(&mut catch_scope, catch_env, &catch.body)
+        .instantiate_block_decls_in_stmt_list(&mut catch_scope, catch_env, &catch.body)
         .and_then(|_| {
           if let Some(param) = &catch.parameter {
             self.bind_catch_param(&mut catch_scope, &param.stx, thrown, catch_env)?;
@@ -1939,7 +2336,7 @@ impl<'a> Evaluator<'a> {
     let result = (|| -> Result<Completion, VmError> {
       // `switch` shares one lexical scope across all case clauses.
       for branch in &stmt.branches {
-        self.hoist_lexical_decls_in_stmt_list(&mut switch_scope, switch_env, &branch.stx.body)?;
+        self.instantiate_block_decls_in_stmt_list(&mut switch_scope, switch_env, &branch.stx.body)?;
       }
 
       // ECMA-262 `CaseBlockEvaluation`: `V` starts as `undefined` and is never ~empty~ for normal
@@ -3504,10 +3901,7 @@ impl<'a> Evaluator<'a> {
     self.strict = strict;
 
     let result = (|| {
-      self.hoist_var_decls(scope, &top.stx.body)?;
-      let lex = self.env.lexical_env;
-      self.hoist_lexical_decls_in_stmt_list(scope, lex, &top.stx.body)?;
-      self.hoist_function_decls_in_stmt_list(scope, &top.stx.body)?;
+      self.instantiate_script(scope, &top.stx.body)?;
 
       let completion = self.eval_stmt_list(scope, &top.stx.body)?;
       match completion {
@@ -4121,69 +4515,7 @@ pub(crate) fn run_ecma_function(
     this,
     new_target,
   };
-
-  // Bind parameters.
-  for (idx, param) in func.stx.parameters.iter().enumerate() {
-    if param.stx.rest || param.stx.default_value.is_some() {
-      return Err(VmError::Unimplemented("non-simple function parameters"));
-    }
-    let value = args.get(idx).copied().unwrap_or(Value::Undefined);
-    bind_pattern(
-      evaluator.vm,
-      scope,
-      evaluator.env,
-      &param.stx.pattern.stx.pat.stx,
-      value,
-      BindingKind::Let,
-      evaluator.strict,
-      evaluator.this,
-    )?;
-  }
-
-  // Create a minimal `arguments` object for non-arrow functions.
-  //
-  // test262's harness expects `arguments` to exist and be array-like (`length`, indexed elements).
-  // We do not implement mapped arguments objects yet.
-  if !func.stx.arrow && !scope.heap().env_has_binding(evaluator.env.lexical_env, "arguments")? {
-    let intr = evaluator
-      .vm
-      .intrinsics()
-      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?;
-
-    let args_obj = scope.alloc_object()?;
-    scope.push_root(Value::Object(args_obj))?;
-    scope
-      .heap_mut()
-      .object_set_prototype(args_obj, Some(intr.object_prototype()))?;
-
-    let len = args.len() as f64;
-    let len_key = PropertyKey::from_string(scope.alloc_string("length")?);
-    scope.define_property(
-      args_obj,
-      len_key,
-      PropertyDescriptor {
-        enumerable: false,
-        configurable: true,
-        kind: PropertyKind::Data {
-          value: Value::Number(len),
-          writable: true,
-        },
-      },
-    )?;
-
-    for (i, v) in args.iter().copied().enumerate() {
-      let mut idx_scope = scope.reborrow();
-      idx_scope.push_root(Value::Object(args_obj))?;
-      idx_scope.push_root(v)?;
-      let key = PropertyKey::from_string(idx_scope.alloc_string(&i.to_string())?);
-      idx_scope.define_property(args_obj, key, global_var_desc(v))?;
-    }
-
-    scope.env_create_mutable_binding(evaluator.env.lexical_env, "arguments")?;
-    scope
-      .heap_mut()
-      .env_initialize_binding(evaluator.env.lexical_env, "arguments", Value::Object(args_obj))?;
-  }
+  evaluator.instantiate_function(scope, func, args)?;
 
   match body {
     FuncBody::Expression(expr) => match evaluator.eval_expr(scope, expr) {
@@ -4215,11 +4547,6 @@ pub(crate) fn run_ecma_function(
       other => other,
     },
     FuncBody::Block(stmts) => {
-      evaluator.hoist_var_decls(scope, stmts)?;
-      let func_env = evaluator.env.lexical_env;
-      evaluator.hoist_lexical_decls_in_stmt_list(scope, func_env, stmts)?;
-      evaluator.hoist_function_decls_in_stmt_list(scope, stmts)?;
-
       let completion = evaluator.eval_stmt_list(scope, stmts)?;
       match completion {
         Completion::Normal(_) => Ok(Value::Undefined),
