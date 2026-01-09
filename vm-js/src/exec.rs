@@ -3,7 +3,7 @@ use diagnostics::FileId;
 use parse_js::ast::expr::lit::{LitBoolExpr, LitNumExpr, LitStrExpr};
 use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::node::Node;
+use parse_js::ast::node::{literal_string_code_units, Node};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
   BlockStmt, CatchBlock, DoWhileStmt, ExprStmt, ForBody, ForTripleStmt, IfStmt, ReturnStmt, Stmt,
@@ -618,7 +618,7 @@ impl<'a> Evaluator<'a> {
 
   fn eval_expr(&mut self, scope: &mut Scope<'_>, expr: &Node<Expr>) -> Result<Value, VmError> {
     match &*expr.stx {
-      Expr::LitStr(node) => self.eval_lit_str(scope, &node.stx),
+      Expr::LitStr(node) => self.eval_lit_str(scope, node),
       Expr::LitNum(node) => self.eval_lit_num(&node.stx),
       Expr::LitBool(node) => self.eval_lit_bool(&node.stx),
       Expr::LitNull(_) => Ok(Value::Null),
@@ -633,8 +633,18 @@ impl<'a> Evaluator<'a> {
     }
   }
 
-  fn eval_lit_str(&mut self, scope: &mut Scope<'_>, expr: &LitStrExpr) -> Result<Value, VmError> {
-    let s = scope.alloc_string(&expr.value)?;
+  fn eval_lit_str(
+    &mut self,
+    scope: &mut Scope<'_>,
+    node: &Node<LitStrExpr>,
+  ) -> Result<Value, VmError> {
+    let s = if let Some(units) = literal_string_code_units(&node.assoc) {
+      // Preserve exact UTF-16 code units from the parser so lone surrogates survive.
+      scope.alloc_string_from_code_units(units)?
+    } else {
+      // Fallback for nodes that don't carry the association marker (should be rare).
+      scope.alloc_string(&node.stx.value)?
+    };
     Ok(Value::String(s))
   }
 

@@ -172,11 +172,9 @@ impl Heap {
 
   /// Convert a value to a property key.
   ///
-  /// This is a minimal stub (sufficient for early scaffolding):
+  /// This is a minimal implementation (sufficient for early scaffolding):
   /// - `String`/`Symbol` values are returned directly.
-  /// - All other values will eventually go through `ToPropertyKey` (ToPrimitive + ToString).
-  ///   For now, we call the `to_string` placeholder which returns
-  ///   [`VmError::Unimplemented`].
+  /// - All other values go through a partial `ToPropertyKey` (`ToString` for now).
   pub fn to_property_key(&mut self, value: Value) -> Result<PropertyKey, VmError> {
     match value {
       Value::String(s) => Ok(PropertyKey::String(s)),
@@ -185,13 +183,64 @@ impl Heap {
     }
   }
 
-  /// Placeholder for ECMAScript `ToString`.
+  /// Minimal ECMAScript `ToString`.
   ///
-  /// Full `ToString` / `ToPropertyKey` semantics will be implemented once the interpreter and
-  /// built-ins exist.
-  pub fn to_string(&mut self, _value: Value) -> Result<GcString, VmError> {
-    Err(VmError::Unimplemented(
-      "ToString / ToPropertyKey requires interpreter + built-ins",
-    ))
+  /// This is intentionally small (sufficient for early interpreter scaffolding):
+  /// - Objects stringify to `"[object Object]"` (no `ToPrimitive` / user `toString` invocation yet).
+  pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
+    // Fast path: no allocation.
+    if let Value::String(s) = value {
+      return Ok(s);
+    }
+
+    // Allocate via a scope so we can root `value` across a GC triggered by the string allocation.
+    let mut scope = self.scope();
+    scope.push_root(value);
+
+    match value {
+      Value::Undefined => scope.alloc_string("undefined"),
+      Value::Null => scope.alloc_string("null"),
+      Value::Bool(true) => scope.alloc_string("true"),
+      Value::Bool(false) => scope.alloc_string("false"),
+      Value::Number(n) => {
+        if n.is_nan() {
+          scope.alloc_string("NaN")
+        } else if n.is_infinite() {
+          if n.is_sign_negative() {
+            scope.alloc_string("-Infinity")
+          } else {
+            scope.alloc_string("Infinity")
+          }
+        } else if n == 0.0 {
+          // `ToString(-0)` is `"0"` in ECMAScript.
+          scope.alloc_string("0")
+        } else {
+          let mut buf = ryu::Buffer::new();
+          let formatted = buf.format(n);
+          // `ryu` formats `1.0` as `"1.0"`, but ECMAScript `ToString(1)` is `"1"`.
+          let formatted = formatted.strip_suffix(".0").unwrap_or(formatted);
+          scope.alloc_string(formatted)
+        }
+      }
+      Value::String(_) => unreachable!(),
+      Value::Symbol(_) => {
+        // Per ECMA-262, `ToString(Symbol)` throws a TypeError. We don't have real Error objects
+        // yet, so throw a string placeholder.
+        let msg = scope.alloc_string("TypeError: Cannot convert a Symbol value to a string")?;
+        Err(VmError::Throw(Value::String(msg)))
+      }
+      Value::Object(_) => scope.alloc_string("[object Object]"),
+    }
+  }
+
+  /// Minimal ECMAScript `ToBoolean`.
+  pub fn to_boolean(&self, value: Value) -> Result<bool, VmError> {
+    Ok(match value {
+      Value::Undefined | Value::Null => false,
+      Value::Bool(b) => b,
+      Value::Number(n) => n != 0.0 && !n.is_nan(),
+      Value::String(s) => !self.get_string(s)?.as_code_units().is_empty(),
+      Value::Symbol(_) | Value::Object(_) => true,
+    })
   }
 }
