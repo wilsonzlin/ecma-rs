@@ -113,6 +113,7 @@ pub use crate::handle::WeakGcObject;
 pub use crate::env::EnvBinding;
 pub use crate::heap::Heap;
 pub use crate::heap::HeapLimits;
+pub use crate::heap::HostSlots;
 pub use crate::heap::MAX_PROTOTYPE_CHAIN;
 pub use crate::heap::PersistentRoot;
 pub use crate::heap::Scope;

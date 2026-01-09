@@ -25,6 +25,18 @@ pub const MAX_PROTOTYPE_CHAIN: usize = 10_000;
 /// about over-allocation.
 const MIN_VEC_CAPACITY: usize = 1;
 
+/// Per-object host slots for embeddings (e.g. DOM/WebIDL bindings).
+///
+/// This is deliberately:
+/// - **JS-unobservable** (not stored as a property)
+/// - **Copy** (small, inline payload)
+/// - **Non-GC-traced** (must not contain `Gc*` handles)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HostSlots {
+  pub a: u64,
+  pub b: u64,
+}
+
 /// Heap configuration and memory limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HeapLimits {
@@ -421,6 +433,7 @@ impl Heap {
       self.used_bytes = self.used_bytes.saturating_sub(slot.bytes);
       slot.value = None;
       slot.bytes = 0;
+      slot.host_slots = None;
       slot.generation = slot.generation.wrapping_add(1);
       self.free_list.push(idx as u32);
     }
@@ -593,6 +606,7 @@ impl Heap {
     )
   }
 
+<<<<<<< HEAD
   /// Returns `true` if `obj` currently points to a live Promise object allocation.
   ///
   /// This is the spec-shaped "brand check" used by `IsPromise`: an object is a Promise if it has
@@ -604,6 +618,45 @@ impl Heap {
   /// Alias for [`Heap::is_promise_object`].
   pub fn is_promise(&self, obj: GcObject) -> bool {
     self.is_promise_object(obj)
+=======
+  /// Sets a host-only internal slot payload on an object.
+  ///
+  /// This is intended for platform bindings (e.g. DOM wrappers) to attach small metadata
+  /// such as a `NodeId` or wrapper kind to a `GcObject` without exposing it to JS.
+  pub fn object_set_host_slots(&mut self, obj: GcObject, slots: HostSlots) -> Result<(), VmError> {
+    let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
+
+    match self.slots[idx].value {
+      Some(HeapObject::Object(_) | HeapObject::Function(_)) => {
+        self.slots[idx].host_slots = Some(slots);
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Gets a host-only internal slot payload from an object, if set.
+  pub fn object_host_slots(&self, obj: GcObject) -> Result<Option<HostSlots>, VmError> {
+    let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
+
+    match self.slots[idx].value {
+      Some(HeapObject::Object(_) | HeapObject::Function(_)) => Ok(self.slots[idx].host_slots),
+      _ => Err(VmError::InvalidHandle),
+    }
+  }
+
+  /// Clears any host-only internal slot payload from an object.
+  pub fn object_clear_host_slots(&mut self, obj: GcObject) -> Result<(), VmError> {
+    let idx = self.validate(obj.0).ok_or(VmError::InvalidHandle)?;
+
+    match self.slots[idx].value {
+      Some(HeapObject::Object(_) | HeapObject::Function(_)) => {
+        self.slots[idx].host_slots = None;
+        Ok(())
+      }
+      _ => Err(VmError::InvalidHandle),
+    }
+>>>>>>> 8e34efc (feat(vm-js): add per-object host slots for bindings)
   }
 
   /// Returns `true` if `s` currently points to a live string allocation.
@@ -2374,6 +2427,7 @@ impl Heap {
     debug_assert!(slot.value.is_none(), "free list returned an occupied slot");
 
     slot.value = Some(obj);
+    slot.host_slots = None;
     slot.bytes = new_bytes;
     self.used_bytes = self.used_bytes.saturating_add(new_bytes);
 
@@ -3474,6 +3528,7 @@ impl<'a> Scope<'a> {
 struct Slot {
   generation: u32,
   value: Option<HeapObject>,
+  host_slots: Option<HostSlots>,
   bytes: usize,
 }
 
@@ -3482,6 +3537,7 @@ impl Slot {
     Self {
       generation: 0,
       value: None,
+      host_slots: None,
       bytes: 0,
     }
   }
