@@ -543,6 +543,19 @@ impl JsRuntime {
     self.exec_script_source(Arc::new(SourceText::new("<inline>", source)))
   }
 
+  /// Parse and execute a classic script, using a custom host hook implementation.
+  ///
+  /// This is intended for embeddings that need Promise jobs enqueued by the script to be routed via
+  /// `VmHostHooks::host_enqueue_promise_job` (for example, an HTML microtask queue) instead of the
+  /// VM-owned microtask queue used by [`JsRuntime::exec_script`].
+  pub fn exec_script_with_host(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    source: &str,
+  ) -> Result<Value, VmError> {
+    self.exec_script_source_with_host(host, Arc::new(SourceText::new("<inline>", source)))
+  }
+
   /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
   pub fn exec_script_source(&mut self, source: Arc<SourceText>) -> Result<Value, VmError> {
     let opts = ParseOptions {
@@ -588,6 +601,77 @@ impl JsRuntime {
       Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
       Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
     }
+  }
+
+  /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`) using a custom
+  /// host hook implementation.
+  pub fn exec_script_source_with_host(
+    &mut self,
+    host: &mut dyn VmHostHooks,
+    source: Arc<SourceText>,
+  ) -> Result<Value, VmError> {
+    let opts = ParseOptions {
+      dialect: Dialect::Ecma,
+      source_type: SourceType::Script,
+    };
+    let top = parse_with_options(&source.text, opts)
+      .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+    let strict = detect_use_strict_directive(&top.stx.body);
+
+    let global_object = self.realm.global_object();
+    self.env.set_source_info(source.clone(), 0, 0);
+
+    let (line, col) = source.line_col(0);
+    let frame = StackFrame {
+      function: None,
+      source: source.name.clone(),
+      line,
+      col,
+    };
+
+    let exec_ctx = crate::ExecutionContext {
+      realm: self.realm.id(),
+      script_or_module: None,
+    };
+    self.vm.push_execution_context(exec_ctx);
+
+    let result = (|| {
+      let mut vm_frame = self.vm.enter_frame(frame)?;
+
+      let mut scope = self.heap.scope();
+      let global_this = Value::Object(global_object);
+      let mut evaluator = Evaluator {
+        vm: &mut *vm_frame,
+        hooks: host,
+        env: &mut self.env,
+        strict,
+        this: global_this,
+        new_target: Value::Undefined,
+      };
+
+      evaluator.hoist_var_decls(&mut scope, &top.stx.body)?;
+      let global_lex = evaluator.env.lexical_env;
+      evaluator.hoist_lexical_decls_in_stmt_list(&mut scope, global_lex, &top.stx.body)?;
+      evaluator.hoist_function_decls_in_stmt_list(&mut scope, &top.stx.body)?;
+
+      let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
+      match completion {
+        Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+        Completion::Throw(v) => Err(VmError::Throw(v)),
+        Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
+        Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
+        Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
+      }
+    })();
+
+    let popped = self.vm.pop_execution_context();
+    debug_assert_eq!(
+      popped,
+      Some(exec_ctx),
+      "execution context stack mismatch in JsRuntime::exec_script_source_with_host"
+    );
+
+    result
   }
 }
 
