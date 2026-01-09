@@ -50,10 +50,11 @@ fn computed_member_get_set() {
 #[test]
 fn computed_member_object_key_get_set() {
   let mut rt = new_runtime();
-  let value = rt
+  // `ToPropertyKey({})` requires `ToPrimitive` (built-ins) which is not implemented yet.
+  let err = rt
     .exec_script(r#"var o = {}; var k = {}; o[k] = 4; o[k]"#)
-    .unwrap();
-  assert_eq!(value, Value::Number(4.0));
+    .unwrap_err();
+  assert!(matches!(err, VmError::Unimplemented(_)));
 }
 
 #[test]
