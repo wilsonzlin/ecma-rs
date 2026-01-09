@@ -1312,7 +1312,7 @@ pub fn promise_species_get(
 pub fn promise_capability_executor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHost,
+  _host: &mut dyn VmHost,
   hooks: &mut dyn VmHostHooks,
   callee: GcObject,
   _this: Value,
@@ -1416,17 +1416,17 @@ pub fn promise_resolve(
 pub fn promise_reject(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHost,
-  hooks: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHost,
+  host: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let reason = args.get(0).copied().unwrap_or(Value::Undefined);
-  let capability = new_promise_capability(vm, scope, host, hooks, this)?;
+  let capability = new_promise_capability(vm, scope, host, this)?;
   scope.push_root(capability.promise)?;
   scope.push_root(capability.reject)?;
-  let _ = vm.call_with_host(scope, hooks, capability.reject, Value::Undefined, &[reason])?;
+  let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[reason])?;
   Ok(capability.promise)
 }
 
