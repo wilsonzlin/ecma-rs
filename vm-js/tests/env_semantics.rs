@@ -79,7 +79,7 @@ fn tdz_binding_errors_until_initialized() -> Result<(), VmError> {
 
     assert!(matches!(
       scope.heap().env_get_symbol_binding_value(env, sym),
-      Err(VmError::Unimplemented("tdz"))
+      Err(VmError::Throw(Value::Null))
     ));
 
     scope
@@ -124,7 +124,7 @@ fn immutable_binding_rejects_assignment() -> Result<(), VmError> {
       scope
         .heap_mut()
         .env_set_mutable_symbol_binding(env, sym, Value::Number(2.0)),
-      Err(VmError::Unimplemented("assignment to const"))
+      Err(VmError::Throw(Value::Undefined))
     ));
   }
 

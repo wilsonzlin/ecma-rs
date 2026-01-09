@@ -69,7 +69,12 @@ impl DeclarativeEnvRecord {
         "environment record binding index out of bounds",
       ))?;
     if !binding.initialized {
-      return Err(VmError::Unimplemented("tdz"));
+      // TDZ.
+      //
+      // EnvRecords do not have access to a Realm to construct a `ReferenceError` object, so we use
+      // the same sentinel throw value as the name-based binding API (`Heap::env_get_binding_value`)
+      // and rely on higher-level execution code to convert it.
+      return Err(VmError::Throw(Value::Null));
     }
     Ok(binding.value)
   }
@@ -111,10 +116,12 @@ impl DeclarativeEnvRecord {
         "environment record binding index out of bounds",
       ))?;
     if !binding.initialized {
-      return Err(VmError::Unimplemented("tdz"));
+      // TDZ sentinel; see `get_symbol_binding_value`.
+      return Err(VmError::Throw(Value::Null));
     }
     if !binding.mutable {
-      return Err(VmError::Unimplemented("assignment to const"));
+      // Assignment to const sentinel; higher-level execution code maps this to a `TypeError`.
+      return Err(VmError::Throw(Value::Undefined));
     }
     binding.value = value;
     Ok(())
