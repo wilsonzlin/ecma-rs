@@ -81,14 +81,7 @@ impl Realm {
         },
       )?;
 
-      // Install the standard native Error constructors as non-enumerable global properties.
-      let global_this_key = PropertyKey::from_string(scope.alloc_string("globalThis")?);
-      scope.define_property(
-        global_object,
-        global_this_key,
-        global_data_desc(Value::Object(global_object)),
-      )?;
-
+      // Install baseline global bindings as non-enumerable global properties.
       let object_key = PropertyKey::from_string(scope.alloc_string("Object")?);
       scope.define_property(
         global_object,
