@@ -70,7 +70,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
-use parse_js::parse;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::js::ScopeKind;
 pub use semantic_js::js::TopLevelMode;
 use ssa::ssa_deconstruct::deconstruct_ssa;
@@ -92,6 +92,20 @@ pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 const SOURCE_FILE: FileId = FileId(0);
 
 pub type OptimizeResult<T> = Result<T, Vec<Diagnostic>>;
+
+fn parse_source(source: &str, file: FileId, mode: TopLevelMode) -> OptimizeResult<Node<TopLevel>> {
+  let source_type = match mode {
+    TopLevelMode::Module => SourceType::Module,
+    TopLevelMode::Global | TopLevelMode::Script => SourceType::Script,
+  };
+  let opts = ParseOptions {
+    // `optimize-js` uses the TypeScript parser dialect by default because it must accept TS syntax
+    // for typed pipelines (and most TS syntax is also valid JS).
+    dialect: Dialect::Ts,
+    source_type,
+  };
+  parse_with_options(source, opts).map_err(|err| vec![err.to_diagnostic(file)])
+}
 
 fn diagnostic_with_span(
   file: FileId,
@@ -589,7 +603,7 @@ pub struct Program {
 /// operate on UTF-8 byte offsets. Validate and convert any raw byte buffers at
 /// the I/O boundary before calling this helper.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
-  let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+  let top_level_node = parse_source(source, SOURCE_FILE, mode)?;
   Program::compile(top_level_node, mode, debug)
 }
 
@@ -616,7 +630,7 @@ pub fn compile_source_with_typecheck(
     return compile_file_with_typecheck(type_program, type_file, mode, debug);
   }
 
-  let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+  let top_level_node = parse_source(source, SOURCE_FILE, mode)?;
   Program::compile(top_level_node, mode, debug)
 }
 
@@ -640,7 +654,7 @@ pub fn compile_file_with_typecheck(
       Span::new(file, TextRange::new(0, 0)),
     )]
   })?;
-  let top_level_node = parse(&source).map_err(|err| vec![err.to_diagnostic(file)])?;
+  let top_level_node = parse_source(&source, file, mode)?;
 
   if let Some(lowered) = program.hir_lowered(file) {
     let types = crate::types::TypeContext::from_typecheck_program_aligned(
@@ -866,7 +880,7 @@ impl Program {
     debug: bool,
   ) -> OptimizeResult<Self> {
     let source_file = lower.hir.file;
-    let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(source_file)])?;
+    let top_level_node = parse_source(source, source_file, top_level_mode)?;
     Self::compile_with_lower(
       top_level_node,
       Arc::new(lower),
@@ -921,7 +935,7 @@ mod tests {
   }
 
   fn compile_with_mode(source: &str, mode: TopLevelMode) -> Program {
-    let top_level_node = parse(source).expect("parse input");
+    let top_level_node = super::parse_source(source, SOURCE_FILE, mode).expect("parse input");
     Program::compile(top_level_node, mode, false).expect("compile input")
   }
 
@@ -929,6 +943,21 @@ mod tests {
   fn program_records_top_level_mode() {
     let program = compile_source("var x = 1;", TopLevelMode::Global, false).expect("compile");
     assert_eq!(program.top_level_mode, TopLevelMode::Global);
+  }
+
+  #[test]
+  fn global_mode_rejects_module_syntax() {
+    // Ensure `TopLevelMode` drives the parser source type selection so global/script programs do
+    // not accept module-only constructs.
+    let err = super::parse_source("export {};", SOURCE_FILE, TopLevelMode::Global)
+      .expect_err("export should not be allowed in global scripts");
+    assert!(
+      err.iter().any(|diag| diag.message.contains("export not allowed in scripts")),
+      "expected parse diagnostic about export not allowed in scripts, got {err:?}"
+    );
+
+    super::parse_source("export {};", SOURCE_FILE, TopLevelMode::Module)
+      .expect("module export should parse");
   }
 
   #[test]

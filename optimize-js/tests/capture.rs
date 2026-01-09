@@ -8,7 +8,7 @@ use optimize_js::symbol::var_analysis::VarAnalysis;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
 use optimize_js::TopLevelMode;
-use parse_js::parse;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::collections::HashMap;
 use std::collections::HashSet;
 
@@ -31,7 +31,17 @@ fn compile_with_symbols(
   source: &str,
   mode: TopLevelMode,
 ) -> (Program, VarAnalysis, HashMap<SymbolId, String>) {
-  let mut node = parse(source).expect("parse source");
+  let mut node = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: match mode {
+        TopLevelMode::Module => SourceType::Module,
+        TopLevelMode::Global | TopLevelMode::Script => SourceType::Script,
+      },
+    },
+  )
+  .expect("parse source");
   let (symbols, _diagnostics) = JsSymbols::bind(&mut node, mode, FileId(0));
   let names = collect_symbol_names(&symbols);
   let analysis = VarAnalysis::analyze(&mut node, &symbols);

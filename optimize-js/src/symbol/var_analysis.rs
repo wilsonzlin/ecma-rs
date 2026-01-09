@@ -143,13 +143,23 @@ mod tests {
   use ahash::HashMap;
   use ahash::HashSet;
   use diagnostics::FileId;
-  use parse_js::parse;
+  use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
   use semantic_js::js::TopLevelMode;
 
   use crate::symbol::semantics::{JsSymbols, ScopeId, ScopeKind, SymbolId};
 
   fn parse_and_visit_with_mode(source: &str, mode: TopLevelMode) -> (VarAnalysis, JsSymbols) {
-    let mut parsed = parse(source).unwrap();
+    let mut parsed = parse_with_options(
+      source,
+      ParseOptions {
+        dialect: Dialect::Ts,
+        source_type: match mode {
+          TopLevelMode::Module => SourceType::Module,
+          TopLevelMode::Global | TopLevelMode::Script => SourceType::Script,
+        },
+      },
+    )
+    .unwrap();
     let (symbols, _diagnostics) = JsSymbols::bind(&mut parsed, mode, FileId(0));
     let analysis = VarAnalysis::analyze(&mut parsed, &symbols);
     (analysis, symbols)
