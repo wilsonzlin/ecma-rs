@@ -628,31 +628,6 @@ pub fn error_constructor_construct(
   Ok(Value::Object(obj))
 }
 
-fn create_type_error(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
-  message: &str,
-) -> Result<Value, VmError> {
-  let intr = require_intrinsics(vm)?;
-  let ctor = intr.type_error();
-
-  let msg = scope.alloc_string(message)?;
-  scope.push_root(Value::String(msg))?;
-
-  error_constructor_construct(vm, scope, host, ctor, &[Value::String(msg)], Value::Object(ctor))
-}
-
-fn throw_type_error(
-  vm: &mut Vm,
-  scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
-  message: &str,
-) -> Result<Value, VmError> {
-  let err = create_type_error(vm, scope, host, message)?;
-  Err(VmError::Throw(err))
-}
-
 fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> {
   let intr = require_intrinsics(vm)?;
   scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))
@@ -661,22 +636,17 @@ fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> 
 fn new_promise_capability(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHostHooks,
   constructor: Value,
 ) -> Result<PromiseCapability, VmError> {
   let intr = require_intrinsics(vm)?;
 
   let Value::Object(c) = constructor else {
-    // `throw_type_error` always returns `Err(VmError::Throw(_))`, but avoid relying on that
-    // implementation detail to keep this path panic-free if it ever changes.
-    match throw_type_error(vm, scope, host, "Promise capability constructor must be an object") {
-      Ok(_) => {
-        return Err(VmError::InvariantViolation(
-          "throw_type_error unexpectedly returned Ok",
-        ));
-      }
-      Err(err) => return Err(err),
-    }
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise capability constructor must be an object",
+    ));
   };
 
   // Temporary `%Promise%`-only fallback: the VM does not yet support Promise subclassing /
@@ -716,7 +686,12 @@ fn get_property_value_with_host(
         Ok(Value::Undefined)
       } else {
         if !scope.heap().is_callable(get)? {
-          return Err(VmError::TypeError("accessor getter is not callable"));
+          let intr = require_intrinsics(vm)?;
+          return Err(crate::throw_type_error(
+            scope,
+            intr,
+            "accessor getter is not callable",
+          ));
         }
         vm.call_with_host(scope, host, get, receiver, &[])
       }
@@ -979,10 +954,12 @@ fn resolve_promise(
   promise: GcObject,
   resolution: Value,
 ) -> Result<(), VmError> {
+  let intr = require_intrinsics(vm)?;
+
   // 27.2.1.3.2 `Promise Resolve Functions`: self-resolution is a TypeError rejection.
   if let Value::Object(obj) = resolution {
     if obj == promise {
-      let err = create_type_error(vm, scope, host, "Promise cannot resolve itself")?;
+      let err = crate::new_type_error(scope, intr, "Promise cannot resolve itself")?;
       return reject_promise(host, scope, promise, err);
     }
   }
@@ -1009,17 +986,21 @@ fn resolve_promise(
       None => Ok(Value::Undefined),
       Some(desc) => match desc.kind {
         PropertyKind::Data { value, .. } => Ok(value),
-        PropertyKind::Accessor { get, .. } => {
-          if matches!(get, Value::Undefined) {
-            Ok(Value::Undefined)
-          } else {
-            if !key_scope.heap().is_callable(get)? {
-              return Err(VmError::TypeError("accessor getter is not callable"));
-            }
-            vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
-          }
-        }
-      },
+         PropertyKind::Accessor { get, .. } => {
+           if matches!(get, Value::Undefined) {
+             Ok(Value::Undefined)
+           } else {
+             if !key_scope.heap().is_callable(get)? {
+              return Err(crate::throw_type_error(
+                &mut key_scope,
+                intr,
+                "accessor getter is not callable",
+              ));
+             }
+             vm.call_with_host(&mut key_scope, host, get, Value::Object(thenable_obj), &[])
+           }
+         }
+       },
     }
   };
 
@@ -1091,12 +1072,17 @@ fn resolve_promise(
 pub fn promise_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  _host: &mut dyn VmHostHooks,
   _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
-  throw_type_error(vm, scope, host, "Promise constructor must be called with new")
+  let intr = require_intrinsics(vm)?;
+  Err(crate::throw_type_error(
+    scope,
+    intr,
+    "Promise constructor must be called with new",
+  ))
 }
 
 pub fn promise_constructor_construct(
@@ -1107,9 +1093,14 @@ pub fn promise_constructor_construct(
   args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
   let executor = args.get(0).copied().unwrap_or(Value::Undefined);
   if !scope.heap().is_callable(executor)? {
-    return throw_type_error(vm, scope, host, "Promise executor is not callable");
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise executor is not callable",
+    ));
   }
 
   let promise = new_promise(vm, scope)?;
@@ -1193,7 +1184,12 @@ pub fn promise_resolve(
 ) -> Result<Value, VmError> {
   let x = args.get(0).copied().unwrap_or(Value::Undefined);
   if !matches!(this, Value::Object(_)) {
-    return throw_type_error(vm, scope, host, "Promise.resolve called on non-object");
+    let intr = require_intrinsics(vm)?;
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise.resolve called on non-object",
+    ));
   }
 
   let p = promise_resolve_abstract(vm, scope, host, this, x)?;
@@ -1225,20 +1221,18 @@ fn promise_then_impl(
   let intr = require_intrinsics(vm)?;
 
   let Value::Object(promise) = this else {
-    return throw_type_error(
-      vm,
+    return Err(crate::throw_type_error(
       scope,
-      host,
+      intr,
       "Promise.prototype.then called on non-object",
-    );
+    ));
   };
   if !scope.heap().is_promise_object(promise) {
-    return throw_type_error(
-      vm,
+    return Err(crate::throw_type_error(
       scope,
-      host,
+      intr,
       "Promise.prototype.then called on non-promise",
-    );
+    ));
   }
 
   // `PerformPromiseThen`: unhandled rejection tracking.
@@ -1319,8 +1313,9 @@ fn invoke_then(
   on_rejected: Value,
   non_object_message: &'static str,
 ) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
   let Value::Object(obj) = receiver else {
-    return throw_type_error(vm, scope, host, non_object_message);
+    return Err(crate::throw_type_error(scope, intr, non_object_message));
   };
 
   // Root inputs: `Get` and `Call` can allocate/GC.
@@ -1334,7 +1329,11 @@ fn invoke_then(
   let then_key = PropertyKey::from_string(then_key_s);
   let then = get_property_value_with_host(vm, &mut scope, host, obj, then_key, receiver)?;
   if !scope.heap().is_callable(then)? {
-    return throw_type_error(vm, &mut scope, host, "then is not callable");
+    return Err(crate::throw_type_error(
+      &mut scope,
+      intr,
+      "then is not callable",
+    ));
   }
 
   vm.call_with_host(&mut scope, host, then, receiver, &[on_fulfilled, on_rejected])
@@ -1400,12 +1399,11 @@ pub fn promise_prototype_finally(
   let constructor = Value::Object(intr.promise());
 
   let Value::Object(promise) = this else {
-    return throw_type_error(
-      vm,
+    return Err(crate::throw_type_error(
       scope,
-      host,
+      intr,
       "Promise.prototype.finally called on non-object",
-    );
+    ));
   };
 
   scope.push_root(Value::Object(promise))?;
@@ -1548,9 +1546,14 @@ pub fn promise_try(
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
   let callback = args.get(0).copied().unwrap_or(Value::Undefined);
   if !scope.heap().is_callable(callback)? {
-    return throw_type_error(vm, scope, host, "Promise.try callback is not callable");
+    return Err(crate::throw_type_error(
+      scope,
+      intr,
+      "Promise.try callback is not callable",
+    ));
   }
 
   let capability = new_promise_capability(vm, scope, host, this)?;

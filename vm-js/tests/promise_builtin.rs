@@ -1,8 +1,8 @@
 use std::cell::Cell;
 
 use vm_js::{
-  GcObject, Heap, HeapLimits, PropertyKey, Realm, Scope, Value, Vm, VmError, VmHostHooks,
-  VmOptions,
+  GcObject, Heap, HeapLimits, PromiseState, PropertyKey, Realm, RootId, Scope, Value, Vm, VmError,
+  VmHostHooks, VmOptions,
 };
 
 thread_local! {
@@ -215,6 +215,120 @@ fn promise_resolve_and_then_schedule_microtasks() -> Result<(), VmError> {
   assert_eq!(vm.microtask_queue().len(), 0);
   assert_eq!(THEN1_CALLS.with(|c| c.get()), 1);
   assert_eq!(THEN2_ARG.with(|c| c.get()), Some(2.0));
+
+  realm.teardown(&mut heap);
+  Ok(())
+}
+
+#[test]
+fn promise_constructor_throws_type_error_when_executor_not_callable() -> Result<(), VmError> {
+  let mut vm = Vm::new(VmOptions::default());
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut realm = Realm::new(&mut vm, &mut heap)?;
+
+  let promise = realm.intrinsics().promise();
+
+  {
+    let mut scope = heap.scope();
+    let err = vm.construct(
+      &mut scope,
+      Value::Object(promise),
+      &[Value::Number(1.0)],
+      Value::Object(promise),
+    );
+ 
+    let thrown = match err {
+      Ok(v) => panic!("expected Promise constructor to throw, got {v:?}"),
+      Err(VmError::Throw(v)) => v,
+      Err(e) => return Err(e),
+    };
+ 
+    let Value::Object(obj) = thrown else {
+      panic!("expected thrown object, got {thrown:?}");
+    };
+ 
+    assert_eq!(
+      scope.heap().object_prototype(obj)?,
+      Some(realm.intrinsics().type_error_prototype())
+    );
+  }
+
+  realm.teardown(&mut heap);
+  Ok(())
+}
+
+#[test]
+fn promise_self_resolution_rejects_with_type_error_object() -> Result<(), VmError> {
+  let mut vm = Vm::new(VmOptions::default());
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+  let mut realm = Realm::new(&mut vm, &mut heap)?;
+
+  let promise_ctor = realm.intrinsics().promise();
+  let promise_with_resolvers = get_own_data_function(&mut heap, promise_ctor, "withResolvers")?;
+
+  let (promise_obj, promise_root): (GcObject, RootId) = {
+    let mut scope = heap.scope();
+
+    // Promise.withResolvers()
+    let res = vm.call(
+      &mut scope,
+      Value::Object(promise_with_resolvers),
+      Value::Object(promise_ctor),
+      &[],
+    )?;
+    let Value::Object(res_obj) = res else {
+      panic!("expected withResolvers result object, got {res:?}");
+    };
+
+    // Root the result record while extracting its fields.
+    scope.push_root(res)?;
+
+    let promise_key = PropertyKey::from_string(scope.alloc_string("promise")?);
+    let resolve_key = PropertyKey::from_string(scope.alloc_string("resolve")?);
+
+    let promise_val = scope
+      .heap()
+      .object_get_own_data_property_value(res_obj, &promise_key)?
+      .expect("withResolvers result missing promise property");
+    let resolve_val = scope
+      .heap()
+      .object_get_own_data_property_value(res_obj, &resolve_key)?
+      .expect("withResolvers result missing resolve property");
+
+    let Value::Object(promise_obj) = promise_val else {
+      panic!("expected promise object, got {promise_val:?}");
+    };
+
+    // Resolve the promise with itself.
+    vm.call(
+      &mut scope,
+      resolve_val,
+      Value::Undefined,
+      &[Value::Object(promise_obj)],
+    )?;
+
+    // Keep the promise alive across the microtask checkpoint.
+    let root = scope.heap_mut().add_root(Value::Object(promise_obj))?;
+
+    (promise_obj, root)
+  };
+
+  // Drain jobs (should be a no-op for self-resolution, but exercise the microtask checkpoint).
+  vm.perform_microtask_checkpoint(&mut heap)?;
+
+  assert_eq!(heap.promise_state(promise_obj)?, PromiseState::Rejected);
+  let reason = heap
+    .promise_result(promise_obj)?
+    .expect("rejected promise missing result");
+  let Value::Object(reason_obj) = reason else {
+    panic!("expected rejection reason object, got {reason:?}");
+  };
+  assert_eq!(
+    heap.object_prototype(reason_obj)?,
+    Some(realm.intrinsics().type_error_prototype())
+  );
+
+  heap.remove_root(promise_root);
 
   realm.teardown(&mut heap);
   Ok(())

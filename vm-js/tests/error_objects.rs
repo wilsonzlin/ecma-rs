@@ -28,21 +28,16 @@ impl Drop for TestRealm {
 }
 
 #[test]
-fn type_error_helper_creates_error_object_with_intrinsic_prototype_and_properties(
-) -> Result<(), VmError> {
+fn type_error_instance_has_correct_prototype() -> Result<(), VmError> {
   let mut rt = TestRealm::new(HeapLimits::new(1024 * 1024, 1024 * 1024))?;
 
   let mut scope = rt.heap.scope();
-  let err = new_type_error(&mut scope, &rt.realm, "boom")?;
-
-  let VmError::Throw(value) = err else {
-    panic!("expected VmError::Throw, got {err:?}");
-  };
+  let value = new_type_error(&mut scope, *rt.realm.intrinsics(), "boom")?;
   let Value::Object(obj) = value else {
-    panic!("expected thrown object, got {value:?}");
+    panic!("expected error object, got {value:?}");
   };
 
-  // Root the thrown value while allocating property keys below.
+  // Root the value while allocating property keys below.
   scope.push_root(value)?;
 
   assert_eq!(

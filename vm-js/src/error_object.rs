@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Intrinsics, Realm, Scope, Value, VmError};
+use crate::{GcObject, Intrinsics, Scope, Value, VmError};
 
 fn data_desc(value: Value) -> PropertyDescriptor {
   PropertyDescriptor {
@@ -84,37 +84,36 @@ pub fn new_syntax_error_object(
 
 pub fn new_type_error(
   scope: &mut Scope<'_>,
-  realm: &Realm,
+  intr: Intrinsics,
   message: &str,
-) -> Result<VmError, VmError> {
-  let value = new_type_error_object(scope, realm.intrinsics(), message)?;
-  Ok(VmError::Throw(value))
+) -> Result<Value, VmError> {
+  new_type_error_object(scope, &intr, message)
+}
+
+pub fn throw_type_error(scope: &mut Scope<'_>, intr: Intrinsics, message: &str) -> VmError {
+  match new_type_error(scope, intr, message) {
+    Ok(value) => VmError::Throw(value),
+    Err(err) => err,
+  }
 }
 
 pub fn new_reference_error(
   scope: &mut Scope<'_>,
-  realm: &Realm,
+  intr: Intrinsics,
   message: &str,
-) -> Result<VmError, VmError> {
-  let value = new_error(
+) -> Result<Value, VmError> {
+  new_error(
     scope,
-    realm.intrinsics().reference_error_prototype(),
+    intr.reference_error_prototype(),
     "ReferenceError",
     message,
-  )?;
-  Ok(VmError::Throw(value))
+  )
 }
 
 pub fn new_range_error(
   scope: &mut Scope<'_>,
-  realm: &Realm,
+  intr: Intrinsics,
   message: &str,
-) -> Result<VmError, VmError> {
-  let value = new_error(
-    scope,
-    realm.intrinsics().range_error_prototype(),
-    "RangeError",
-    message,
-  )?;
-  Ok(VmError::Throw(value))
+) -> Result<Value, VmError> {
+  new_error(scope, intr.range_error_prototype(), "RangeError", message)
 }
