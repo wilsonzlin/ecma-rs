@@ -1,10 +1,11 @@
 use crate::destructure::{bind_assignment_target, bind_pattern, BindingKind};
 use crate::iterator;
 use crate::ops::{add_operator, abstract_equality, to_number};
-use crate::function::{CallHandler, EcmaFunctionId, ThisMode};
+use crate::function::{CallHandler, ConstructHandler, EcmaFunctionId, ThisMode};
 use crate::{
-  new_reference_error, new_type_error, EnvRootId, GcEnv, GcObject, GcString, Heap, PropertyDescriptor,
-  PropertyDescriptorPatch, PropertyKey, PropertyKind, Realm, RootId, Scope, Value, Vm, VmError,
+  new_reference_error, new_type_error, EnvRootId, GcEnv, GcObject, GcString, Heap,
+  PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind, Realm, RootId, Scope,
+  SourceText, StackFrame, Value, Vm, VmError,
   VmJobContext,
 };
 use diagnostics::FileId;
@@ -14,7 +15,8 @@ use parse_js::ast::expr::lit::{
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
-  BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr, UnaryExpr,
+  ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, CondExpr, Expr, FuncExpr,
+  IdExpr, MemberExpr, UnaryExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
@@ -29,6 +31,9 @@ use parse_js::token::TT;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::collections::HashSet;
 use std::sync::Arc;
+
+#[derive(Clone, Debug)]
+struct ScriptSourceText(Arc<SourceText>);
 
 /// An ECMAScript completion record (ECMA-262).
 ///
@@ -125,7 +130,7 @@ fn detect_use_strict_directive(stmts: &[Node<Stmt>]) -> bool {
 #[derive(Debug, Clone)]
 pub(crate) struct InterpretedEcmaFunction {
   script: Arc<Node<TopLevel>>,
-  func: *const Func,
+  func: *const Node<Func>,
 }
 
 #[derive(Debug)]
@@ -400,12 +405,18 @@ impl JsRuntime {
 
   /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
   pub fn exec_script(&mut self, source: &str) -> Result<Value, VmError> {
+    let source_text = Arc::new(SourceText::new("<inline>", source));
     let opts = ParseOptions {
       dialect: Dialect::Ecma,
       source_type: SourceType::Script,
     };
-    let top = parse_with_options(source, opts)
+    let mut top = parse_with_options(source_text.text.as_ref(), opts)
       .map_err(|err| VmError::Syntax(vec![err.to_diagnostic(FileId(0))]))?;
+
+    // Attach the script's source mapping so interpreted functions can report line/col stack frames
+    // and function objects can outlive this `exec_script` call.
+    top.assoc.set(ScriptSourceText(source_text));
+
     let top = Arc::new(top);
     let strict = detect_use_strict_directive(&top.stx.body);
 
@@ -489,6 +500,21 @@ struct Evaluator<'a> {
 enum Reference<'a> {
   Binding(&'a str),
   Property { object: GcObject, key: PropertyKey },
+}
+
+/// A lightweight stack-frame guard that doesn't borrow `Vm` for its entire lifetime.
+///
+/// `VmFrameGuard` borrows `&mut Vm`, which doesn't compose well with the self-referential borrow
+/// patterns inside the AST evaluator. This guard uses a raw pointer instead, relying on the
+/// evaluator's existing exclusive access to `Vm`.
+struct FramePopGuard(*mut Vm);
+
+impl Drop for FramePopGuard {
+  fn drop(&mut self) {
+    // Safety: `FramePopGuard` is only constructed while the evaluator holds `&mut Vm`, so the raw
+    // pointer remains valid for the guard's lifetime.
+    unsafe { &mut *self.0 }.pop_frame();
+  }
 }
 
 impl<'a> Evaluator<'a> {
@@ -937,21 +963,7 @@ impl<'a> Evaluator<'a> {
     let name = name_node.stx.name.as_str();
 
     let func_node = &decl.function;
-    let func_ptr: *const Func = &*func_node.stx;
-
-    // Allocate a stable `EcmaFunctionId` and store the interpreted body in the runtime's code
-    // table. This allows function objects to outlive a single `exec_script` call.
-    let code_u32 = u32::try_from(self.ecma_functions.len())
-      .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
-    self
-      .ecma_functions
-      .try_reserve_exact(1)
-      .map_err(|_| VmError::OutOfMemory)?;
-    self.ecma_functions.push(InterpretedEcmaFunction {
-      script: self.script.clone(),
-      func: func_ptr,
-    });
-    let code = EcmaFunctionId(code_u32);
+    let code = self.register_ecma_function(func_node)?;
 
     let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
     let arrow = func_node.stx.arrow;
@@ -989,6 +1001,89 @@ impl<'a> Evaluator<'a> {
     self.env.set_var(scope, name, Value::Object(func_obj))?;
 
     Ok(Completion::empty())
+  }
+
+  fn register_ecma_function(&mut self, func_node: &Node<Func>) -> Result<EcmaFunctionId, VmError> {
+    let func_ptr: *const Node<Func> = func_node;
+
+    // Allocate a stable `EcmaFunctionId` and store the interpreted body in the runtime's code
+    // table. This allows function objects to outlive a single `exec_script` call.
+    let code_u32 = u32::try_from(self.ecma_functions.len())
+      .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
+    self
+      .ecma_functions
+      .try_reserve_exact(1)
+      .map_err(|_| VmError::OutOfMemory)?;
+    self.ecma_functions.push(InterpretedEcmaFunction {
+      script: self.script.clone(),
+      func: func_ptr,
+    });
+    Ok(EcmaFunctionId(code_u32))
+  }
+
+  fn eval_func_expr(&mut self, scope: &mut Scope<'_>, expr: &FuncExpr) -> Result<Value, VmError> {
+    let name = expr
+      .name
+      .as_ref()
+      .map(|n| n.stx.name.as_str())
+      .unwrap_or("");
+    self.eval_function_object(scope, &expr.func, name)
+  }
+
+  fn eval_arrow_func_expr(
+    &mut self,
+    scope: &mut Scope<'_>,
+    expr: &ArrowFuncExpr,
+  ) -> Result<Value, VmError> {
+    // Arrow function names are computed from their syntactic context (assignment, etc). We
+    // currently treat them as anonymous.
+    self.eval_function_object(scope, &expr.func, "")
+  }
+
+  fn eval_function_object(
+    &mut self,
+    scope: &mut Scope<'_>,
+    func_node: &Node<Func>,
+    name: &str,
+  ) -> Result<Value, VmError> {
+    if func_node.stx.async_ || func_node.stx.generator {
+      return Err(VmError::Unimplemented("async/generator functions"));
+    }
+
+    let code = self.register_ecma_function(func_node)?;
+
+    let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
+    let arrow = func_node.stx.arrow;
+
+    let is_strict = self.strict
+      || match &func_node.stx.body {
+        Some(FuncBody::Block(stmts)) => detect_use_strict_directive(stmts),
+        Some(FuncBody::Expression(_)) => false,
+        None => return Err(VmError::Unimplemented("function without body")),
+      };
+
+    let this_mode = if arrow {
+      ThisMode::Lexical
+    } else if is_strict {
+      ThisMode::Strict
+    } else {
+      ThisMode::Global
+    };
+
+    let closure_env = Some(self.env.lexical_env);
+
+    let name_string = scope.alloc_string(name)?;
+    let func_obj = scope.alloc_ecma_function(
+      code,
+      /* is_constructable */ !arrow,
+      name_string,
+      length,
+      this_mode,
+      is_strict,
+      closure_env,
+    )?;
+
+    Ok(Value::Object(func_obj))
   }
 
   fn eval_if(&mut self, scope: &mut Scope<'_>, stmt: &IfStmt) -> Result<Completion, VmError> {
@@ -1481,6 +1576,8 @@ impl<'a> Evaluator<'a> {
       Expr::Unary(node) => self.eval_unary(scope, &node.stx),
       Expr::Binary(node) => self.eval_binary(scope, &node.stx),
       Expr::Cond(node) => self.eval_cond(scope, &node.stx),
+      Expr::Func(node) => self.eval_func_expr(scope, &node.stx),
+      Expr::ArrowFunc(node) => self.eval_arrow_func_expr(scope, &node.stx),
 
       // Patterns sometimes show up in expression position (e.g. assignment targets). We only
       // support simple identifier patterns for now.
@@ -1679,6 +1776,7 @@ impl<'a> Evaluator<'a> {
       CallHandler::Native(_) => self.vm.call(&mut call_scope, callee, this_arg, args),
       CallHandler::Ecma(code) => self.call_ecma_function(
         &mut call_scope,
+        callee_obj,
         code,
         this_mode,
         is_strict,
@@ -1988,19 +2086,7 @@ impl<'a> Evaluator<'a> {
             }
             ClassOrObjVal::Method(method) => {
               let func_node = &method.stx.func;
-              let func_ptr: *const Func = &*func_node.stx;
-
-              let code_u32 = u32::try_from(self.ecma_functions.len())
-                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
-              self
-                .ecma_functions
-                .try_reserve_exact(1)
-                .map_err(|_| VmError::OutOfMemory)?;
-              self.ecma_functions.push(InterpretedEcmaFunction {
-                script: self.script.clone(),
-                func: func_ptr,
-              });
-              let code = EcmaFunctionId(code_u32);
+              let code = self.register_ecma_function(func_node)?;
 
               let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
               let arrow = func_node.stx.arrow;
@@ -2055,19 +2141,7 @@ impl<'a> Evaluator<'a> {
             }
             ClassOrObjVal::Getter(getter) => {
               let func_node = &getter.stx.func;
-              let func_ptr: *const Func = &*func_node.stx;
-
-              let code_u32 = u32::try_from(self.ecma_functions.len())
-                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
-              self
-                .ecma_functions
-                .try_reserve_exact(1)
-                .map_err(|_| VmError::OutOfMemory)?;
-              self.ecma_functions.push(InterpretedEcmaFunction {
-                script: self.script.clone(),
-                func: func_ptr,
-              });
-              let code = EcmaFunctionId(code_u32);
+              let code = self.register_ecma_function(func_node)?;
 
               let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
               let arrow = func_node.stx.arrow;
@@ -2118,19 +2192,7 @@ impl<'a> Evaluator<'a> {
             }
             ClassOrObjVal::Setter(setter) => {
               let func_node = &setter.stx.func;
-              let func_ptr: *const Func = &*func_node.stx;
-
-              let code_u32 = u32::try_from(self.ecma_functions.len())
-                .map_err(|_| VmError::Unimplemented("too many ECMAScript functions"))?;
-              self
-                .ecma_functions
-                .try_reserve_exact(1)
-                .map_err(|_| VmError::OutOfMemory)?;
-              self.ecma_functions.push(InterpretedEcmaFunction {
-                script: self.script.clone(),
-                func: func_ptr,
-              });
-              let code = EcmaFunctionId(code_u32);
+              let code = self.register_ecma_function(func_node)?;
 
               let length = u32::try_from(func_node.stx.parameters.len()).unwrap_or(u32::MAX);
               let arrow = func_node.stx.arrow;
@@ -2355,7 +2417,85 @@ impl<'a> Evaluator<'a> {
         let _ = self.eval_expr(scope, &expr.argument)?;
         Ok(Value::Undefined)
       }
+      OperatorName::New => self.eval_new(scope, &expr.argument),
       _ => Err(VmError::Unimplemented("unary operator")),
+    }
+  }
+
+  fn eval_new(&mut self, scope: &mut Scope<'_>, argument: &Node<Expr>) -> Result<Value, VmError> {
+    // `parse-js` represents `new C(args)` as `Unary(New, Call(C, args))`.
+    let (callee_expr, arguments): (&Node<Expr>, &[Node<CallArg>]) = match &*argument.stx {
+      Expr::Call(call) => {
+        if call.stx.optional_chaining {
+          return Err(VmError::Unimplemented("optional chaining call"));
+        }
+        (&call.stx.callee, call.stx.arguments.as_slice())
+      }
+      _ => (argument, &[]),
+    };
+
+    let callee_value = self.eval_expr(scope, callee_expr)?;
+
+    // Root the callee and arguments for the duration of construction.
+    let mut construct_scope = scope.reborrow();
+    let callee_value = construct_scope.push_root(callee_value)?;
+
+    let mut args: Vec<Value> = Vec::new();
+    args
+      .try_reserve_exact(arguments.len())
+      .map_err(|_| VmError::OutOfMemory)?;
+    for arg in arguments {
+      if arg.stx.spread {
+        let spread_value = self.eval_expr(&mut construct_scope, &arg.stx.value)?;
+        construct_scope.push_root(spread_value)?;
+
+        let mut iter = iterator::get_iterator(self.vm, &mut construct_scope, spread_value)?;
+        construct_scope.push_root(iter.iterator)?;
+        construct_scope.push_root(iter.next_method)?;
+
+        while let Some(value) =
+          iterator::iterator_step_value(self.vm, &mut construct_scope, &mut iter)?
+        {
+          construct_scope.push_root(value)?;
+          args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
+          args.push(value);
+        }
+      } else {
+        let value = self.eval_expr(&mut construct_scope, &arg.stx.value)?;
+        construct_scope.push_root(value)?;
+        args.push(value);
+      }
+    }
+
+    let callee_obj = match callee_value {
+      Value::Object(obj) => obj,
+      _ => return Err(VmError::NotConstructable),
+    };
+
+    // Extract function metadata without holding a heap borrow across allocations.
+    let (construct_handler, this_mode, is_strict, closure_env) = {
+      let f = construct_scope.heap().get_function(callee_obj)?;
+      (f.construct, f.this_mode, f.is_strict, f.closure_env)
+    };
+    let Some(construct_handler) = construct_handler else {
+      return Err(VmError::NotConstructable);
+    };
+
+    match construct_handler {
+      ConstructHandler::Native(_) => {
+        self
+          .vm
+          .construct(&mut construct_scope, callee_value, &args, callee_value)
+      }
+      ConstructHandler::Ecma(code) => self.construct_ecma_function(
+        &mut construct_scope,
+        callee_obj,
+        code,
+        this_mode,
+        is_strict,
+        closure_env,
+        &args,
+      ),
     }
   }
 
@@ -2481,6 +2621,7 @@ impl<'a> Evaluator<'a> {
       CallHandler::Native(_) => self.vm.call(&mut call_scope, callee_value, this_arg, &args),
       CallHandler::Ecma(code) => self.call_ecma_function(
         &mut call_scope,
+        callee_obj,
         code,
         this_mode,
         is_strict,
@@ -2494,6 +2635,7 @@ impl<'a> Evaluator<'a> {
   fn call_ecma_function(
     &mut self,
     scope: &mut Scope<'_>,
+    callee: GcObject,
     code: EcmaFunctionId,
     this_mode: ThisMode,
     is_strict: bool,
@@ -2506,6 +2648,40 @@ impl<'a> Evaluator<'a> {
       .get(code.0 as usize)
       .cloned()
       .ok_or(VmError::Unimplemented("unknown ECMAScript function"))?;
+
+    let function_name = scope
+      .heap()
+      .get_function_name(callee)
+      .ok()
+      .and_then(|name| scope.heap().get_string(name).ok())
+      .map(|name| name.to_utf8_lossy())
+      .filter(|name| !name.is_empty())
+      .map(Arc::<str>::from);
+
+    let source_text = interpreted
+      .script
+      .assoc
+      .get::<ScriptSourceText>()
+      .ok_or(VmError::InvariantViolation(
+        "internal error: script missing SourceText association",
+      ))?;
+
+    // `func` points into `script` (see `InterpretedEcmaFunction` safety docs).
+    let func_node = unsafe { &*interpreted.func };
+    let start = func_node.loc.start_u32();
+    let (line, col) = source_text.0.line_col(start);
+
+    let frame = StackFrame {
+      function: function_name,
+      source: source_text.0.name.clone(),
+      line,
+      col,
+    };
+    self.vm.push_frame(frame)?;
+    let _frame_guard = FramePopGuard(self.vm);
+
+    // Charge one tick per call entry, matching `Vm::call` tick policy for native functions.
+    self.vm.tick()?;
 
     let outer_lex = self.env.lexical_env;
     let outer_strict = self.strict;
@@ -2525,7 +2701,8 @@ impl<'a> Evaluator<'a> {
       let func_env = scope.env_create(Some(outer_env))?;
       self.env.set_lexical_env(scope.heap_mut(), func_env);
 
-      let func = unsafe { &*interpreted.func };
+      let func_node = unsafe { &*interpreted.func };
+      let func = &*func_node.stx;
       if func.async_ || func.generator {
         return Err(VmError::Unimplemented("async/generator functions"));
       }
@@ -2588,6 +2765,53 @@ impl<'a> Evaluator<'a> {
     self.script = outer_script;
 
     result
+  }
+
+  fn construct_ecma_function(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: GcObject,
+    code: EcmaFunctionId,
+    this_mode: ThisMode,
+    is_strict: bool,
+    closure_env: Option<GcEnv>,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let mut scope = scope.reborrow();
+    scope.push_root(Value::Object(callee))?;
+    for &arg in args {
+      scope.push_root(arg)?;
+    }
+
+    let prototype_key_s = scope.alloc_string("prototype")?;
+    scope.push_root(Value::String(prototype_key_s))?;
+    let prototype_key = PropertyKey::from_string(prototype_key_s);
+    let prototype_value = self.vm.get(&mut scope, callee, prototype_key)?;
+
+    let fallback_proto = scope.object_get_prototype(self.env.global_object)?;
+    let instance_proto = match prototype_value {
+      Value::Object(obj) => Some(obj),
+      _ => fallback_proto,
+    };
+
+    let instance = scope.alloc_object_with_prototype(instance_proto)?;
+    scope.push_root(Value::Object(instance))?;
+
+    let return_value = self.call_ecma_function(
+      &mut scope,
+      callee,
+      code,
+      this_mode,
+      is_strict,
+      closure_env,
+      Value::Object(instance),
+      args,
+    )?;
+
+    Ok(match return_value {
+      Value::Object(_) => return_value,
+      _ => Value::Object(instance),
+    })
   }
 
   fn eval_cond(&mut self, scope: &mut Scope<'_>, expr: &CondExpr) -> Result<Value, VmError> {
