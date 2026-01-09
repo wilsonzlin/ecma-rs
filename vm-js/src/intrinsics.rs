@@ -69,6 +69,7 @@ pub struct Intrinsics {
 
   promise: GcObject,
   promise_prototype: GcObject,
+  promise_capability_executor_call: NativeFunctionId,
   promise_resolving_function_call: NativeFunctionId,
   promise_finally_handler_call: NativeFunctionId,
   promise_finally_thunk_call: NativeFunctionId,
@@ -1122,6 +1123,8 @@ impl Intrinsics {
       .heap_mut()
       .object_set_prototype(promise_prototype, Some(object_prototype))?;
 
+    let promise_capability_executor_call =
+      vm.register_native_call(builtins::promise_capability_executor_call)?;
     let promise_resolving_function_call =
       vm.register_native_call(builtins::promise_resolving_function_call)?;
     let promise_finally_handler_call =
@@ -1360,6 +1363,7 @@ impl Intrinsics {
 
       promise,
       promise_prototype,
+      promise_capability_executor_call,
       promise_resolving_function_call,
       promise_finally_handler_call,
       promise_finally_thunk_call,
@@ -1518,6 +1522,10 @@ impl Intrinsics {
 
   pub fn promise_prototype(&self) -> GcObject {
     self.promise_prototype
+  }
+
+  pub(crate) fn promise_capability_executor_call(&self) -> NativeFunctionId {
+    self.promise_capability_executor_call
   }
 
   pub(crate) fn promise_resolving_function_call(&self) -> NativeFunctionId {

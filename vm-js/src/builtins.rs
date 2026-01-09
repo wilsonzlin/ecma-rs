@@ -721,32 +721,93 @@ pub(crate) fn new_promise_capability(
 ) -> Result<PromiseCapability, VmError> {
   let intr = require_intrinsics(vm)?;
 
-  let Value::Object(c) = constructor else {
-    // `throw_type_error` always returns `Err(VmError::Throw(_))`, but avoid relying on that
-    // implementation detail to keep this path panic-free if it ever changes.
-    match throw_type_error(vm, scope, host, "Promise capability constructor must be an object") {
-      Ok(_) => {
-        return Err(VmError::InvariantViolation(
-          "throw_type_error unexpectedly returned Ok",
-        ));
-      }
-      Err(err) => return Err(err),
-    }
+  let Value::Object(_) = constructor else {
+    let err = create_type_error(vm, scope, host, "Promise capability constructor must be an object")?;
+    return Err(VmError::Throw(err));
   };
 
-  // Temporary `%Promise%`-only fallback: the VM does not yet support Promise subclassing /
-  // `NewPromiseCapability` calling user-defined constructors.
-  if c != intr.promise() {
-    return Err(VmError::Unimplemented(
-      "NewPromiseCapability for non-%Promise% constructors is not implemented",
-    ));
+  if !scope.heap().is_constructor(constructor)? {
+    let err =
+      create_type_error(vm, scope, host, "Promise capability constructor is not a constructor")?;
+    return Err(VmError::Throw(err));
   }
 
-  let promise_obj = new_promise(vm, scope)?;
-  scope.push_root(Value::Object(promise_obj))?;
-  let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise_obj)?;
+  // Root the constructor across allocations/GC while wiring the capability and constructing the
+  // Promise.
+  scope.push_root(constructor)?;
+
+  // --- NewPromiseCapability(C) ---
+  // Spec: https://tc39.es/ecma262/#sec-newpromisecapability
+
+  // resolvingFunctions = { resolve: undefined, reject: undefined }
+  //
+  // Represent the record as a closure environment with two mutable bindings.
+  let resolving_env = scope.env_create(None)?;
+  scope.push_env_root(resolving_env)?;
+  scope.env_create_mutable_binding(resolving_env, "resolve")?;
+  scope.env_create_mutable_binding(resolving_env, "reject")?;
+  scope
+    .heap_mut()
+    .env_initialize_binding(resolving_env, "resolve", Value::Undefined)?;
+  scope
+    .heap_mut()
+    .env_initialize_binding(resolving_env, "reject", Value::Undefined)?;
+
+  // executor = CreateBuiltinFunction(...)
+  let executor_name = scope.alloc_string("executor")?;
+  let executor = scope.alloc_native_function(
+    intr.promise_capability_executor_call(),
+    None,
+    executor_name,
+    2,
+  )?;
+  set_function_job_realm_to_current(vm, scope, executor)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(executor, Some(intr.function_prototype()))?;
+  scope
+    .heap_mut()
+    .set_function_data(executor, FunctionData::PromiseCapabilityExecutor)?;
+  scope
+    .heap_mut()
+    .set_function_closure_env(executor, Some(resolving_env))?;
+
+  // promise = ? Construct(C, « executor »)
+  let promise = vm.construct_with_host(
+    scope,
+    host,
+    constructor,
+    &[Value::Object(executor)],
+    constructor,
+  )?;
+
+  // Per spec, `Construct` returns an Object. `vm-js` native constructors can return non-objects, so
+  // validate this to preserve the PromiseCapability invariants used throughout the VM.
+  if !matches!(promise, Value::Object(_)) {
+    let err = create_type_error(vm, scope, host, "Promise capability promise is not an object")?;
+    return Err(VmError::Throw(err));
+  }
+
+  // If IsCallable(resolve) is false, throw a TypeError exception.
+  let resolve = scope
+    .heap()
+    .env_get_binding_value(resolving_env, "resolve", false)?;
+  if !scope.heap().is_callable(resolve)? {
+    let err = create_type_error(vm, scope, host, "Promise capability resolve is not callable")?;
+    return Err(VmError::Throw(err));
+  }
+
+  // If IsCallable(reject) is false, throw a TypeError exception.
+  let reject = scope
+    .heap()
+    .env_get_binding_value(resolving_env, "reject", false)?;
+  if !scope.heap().is_callable(reject)? {
+    let err = create_type_error(vm, scope, host, "Promise capability reject is not callable")?;
+    return Err(VmError::Throw(err));
+  }
+
   Ok(PromiseCapability {
-    promise: Value::Object(promise_obj),
+    promise,
     resolve,
     reject,
   })
@@ -1248,6 +1309,50 @@ pub fn promise_species_get(
   Ok(this)
 }
 
+pub fn promise_capability_executor_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  // `GetCapabilitiesExecutor` created by `NewPromiseCapability(C)` (ECMA-262).
+  //
+  // Captures a record `{ resolve: undefined, reject: undefined }` and stores the resolving
+  // functions provided by the Promise constructor into that record.
+  let data = scope.heap().get_function_data(callee)?;
+  let FunctionData::PromiseCapabilityExecutor = data else {
+    return Err(VmError::Unimplemented(
+      "promise capability executor missing internal slots",
+    ));
+  };
+
+  let Some(env) = scope.heap().get_function_closure_env(callee)? else {
+    return Err(VmError::Unimplemented(
+      "promise capability executor missing closure env",
+    ));
+  };
+
+  let resolve = args.get(0).copied().unwrap_or(Value::Undefined);
+  let reject = args.get(1).copied().unwrap_or(Value::Undefined);
+
+  let existing_resolve = scope.heap().env_get_binding_value(env, "resolve", false)?;
+  let existing_reject = scope.heap().env_get_binding_value(env, "reject", false)?;
+  if !matches!(existing_resolve, Value::Undefined) || !matches!(existing_reject, Value::Undefined) {
+    return throw_type_error(vm, scope, hooks, "Promise capability executor already called");
+  }
+
+  scope
+    .heap_mut()
+    .env_set_mutable_binding(env, "resolve", resolve, false)?;
+  scope
+    .heap_mut()
+    .env_set_mutable_binding(env, "reject", reject, false)?;
+  Ok(Value::Undefined)
+}
+
 pub fn promise_resolving_function_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
@@ -1311,16 +1416,18 @@ pub fn promise_resolve(
 pub fn promise_reject(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHost,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
-  _this: Value,
+  this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   let reason = args.get(0).copied().unwrap_or(Value::Undefined);
-  let p = new_promise(vm, scope)?;
-  reject_promise(host, scope, p, reason, vm.current_realm())?;
-  Ok(Value::Object(p))
+  let capability = new_promise_capability(vm, scope, host, hooks, this)?;
+  scope.push_root(capability.promise)?;
+  scope.push_root(capability.reject)?;
+  let _ = vm.call_with_host(scope, hooks, capability.reject, Value::Undefined, &[reason])?;
+  Ok(capability.promise)
 }
 
 pub(crate) fn perform_promise_then(

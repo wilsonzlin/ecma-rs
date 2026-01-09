@@ -55,6 +55,12 @@ pub(crate) enum ConstructHandler {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FunctionData {
   None,
+  /// Executor function created by `NewPromiseCapability(C)`.
+  ///
+  /// This is a builtin closure that captures a shared record with `resolve`/`reject` fields
+  /// (represented as a closure environment). When invoked by a Promise constructor, it stores the
+  /// resolving functions into that record and throws if called more than once.
+  PromiseCapabilityExecutor,
   /// Promise resolving function created by `CreateResolvingFunctions`.
   PromiseResolvingFunction { promise: GcObject, is_reject: bool },
   /// Closure function created by `Promise.prototype.finally` when `onFinally` is callable.
@@ -276,6 +282,7 @@ impl Trace for JsFunction {
 
     match self.data {
       FunctionData::None => {}
+      FunctionData::PromiseCapabilityExecutor => {}
       FunctionData::PromiseResolvingFunction { promise, .. } => {
         tracer.trace_value(Value::Object(promise));
       }
