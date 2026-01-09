@@ -1,6 +1,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use vm_js::Budget;
@@ -114,4 +115,57 @@ fn shared_interrupt_flag_is_toggled_by_vm_interrupt_handle() {
 
   vm.interrupt_handle().interrupt();
   assert!(flag.load(Ordering::Relaxed));
+}
+
+#[test]
+fn reset_budget_to_default_recomputes_deadline_relative_to_now() {
+  let mut vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: Some(Duration::from_millis(50)),
+    check_time_every: 1,
+    interrupt_flag: None,
+  });
+
+  thread::sleep(Duration::from_millis(100));
+
+  let err = vm.tick().unwrap_err();
+  match err {
+    VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::DeadlineExceeded),
+    other => panic!("expected termination, got {other:?}"),
+  }
+
+  vm.reset_budget_to_default();
+  assert!(vm.tick().is_ok());
+}
+
+#[test]
+fn budget_guard_restores_previous_budget_state() {
+  let mut vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: None,
+    check_time_every: 1,
+    interrupt_flag: None,
+  });
+
+  vm.set_budget(Budget::unlimited(1));
+
+  {
+    let mut vm = vm.push_budget(Budget {
+      fuel: Some(1),
+      deadline: None,
+      check_time_every: 1,
+    });
+
+    assert!(vm.tick().is_ok());
+
+    let err = vm.tick().unwrap_err();
+    match err {
+      VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::OutOfFuel),
+      other => panic!("expected termination, got {other:?}"),
+    }
+  }
+
+  assert!(vm.tick().is_ok());
 }
