@@ -219,7 +219,7 @@ impl Heap {
   /// This covers the primitive cases needed by WebIDL conversions:
   /// - `undefined`, `null`, booleans, numbers, strings.
   ///
-  /// For `Object`, this currently returns the placeholder `"[object Object]"`.
+  /// For `Object`, this is not implemented yet (requires `ToPrimitive`).
   ///
   /// For `Symbol`, this throws a TypeError.
   pub fn to_string(&mut self, value: Value) -> Result<GcString, VmError> {
@@ -240,7 +240,7 @@ impl Heap {
       Value::Number(n) => scope.alloc_string(&number_to_string(n)),
       Value::String(_) => unreachable!(),
       Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
-      Value::Object(_) => scope.alloc_string("[object Object]"),
+      Value::Object(_) => Err(VmError::Unimplemented("ToString for Object (ToPrimitive)")),
     }
   }
 
