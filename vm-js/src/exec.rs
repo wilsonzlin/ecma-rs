@@ -13,7 +13,9 @@ use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitStrExpr,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
-use parse_js::ast::expr::{BinaryExpr, CallExpr, CondExpr, Expr, IdExpr, UnaryExpr};
+use parse_js::ast::expr::{
+  BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr, UnaryExpr,
+};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{literal_string_code_units, Node, ParenthesizedExpr};
 use parse_js::ast::stmt::decl::{FuncDecl, PatDecl, VarDecl, VarDeclMode};
@@ -1474,10 +1476,8 @@ impl<'a> Evaluator<'a> {
       Expr::This(_) => Ok(self.this),
       Expr::Id(node) => self.eval_id(scope, &node.stx),
       Expr::Call(node) => self.eval_call(scope, &node.stx),
-      Expr::Member(_) | Expr::ComputedMember(_) => {
-        let reference = self.eval_reference(scope, expr)?;
-        self.get_value_from_reference(scope, &reference)
-      }
+      Expr::Member(node) => self.eval_member(scope, &node.stx),
+      Expr::ComputedMember(node) => self.eval_computed_member(scope, &node.stx),
       Expr::Unary(node) => self.eval_unary(scope, &node.stx),
       Expr::Binary(node) => self.eval_binary(scope, &node.stx),
       Expr::Cond(node) => self.eval_cond(scope, &node.stx),
@@ -1488,6 +1488,51 @@ impl<'a> Evaluator<'a> {
 
       _ => Err(VmError::Unimplemented("expression type")),
     }
+  }
+
+  fn eval_member(&mut self, scope: &mut Scope<'_>, expr: &MemberExpr) -> Result<Value, VmError> {
+    let base = self.eval_expr(scope, &expr.left)?;
+    if expr.optional_chaining && is_nullish(base) {
+      return Ok(Value::Undefined);
+    }
+
+    let Value::Object(object) = base else {
+      return Err(VmError::Unimplemented("member access on non-object"));
+    };
+
+    // Root `object` across property-key allocation in case it triggers GC.
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(object))?;
+    let key_s = key_scope.alloc_string(&expr.right)?;
+    let reference = Reference::Property {
+      object,
+      key: PropertyKey::from_string(key_s),
+    };
+    self.get_value_from_reference(&mut key_scope, &reference)
+  }
+
+  fn eval_computed_member(
+    &mut self,
+    scope: &mut Scope<'_>,
+    expr: &ComputedMemberExpr,
+  ) -> Result<Value, VmError> {
+    let base = self.eval_expr(scope, &expr.object)?;
+    if expr.optional_chaining && is_nullish(base) {
+      return Ok(Value::Undefined);
+    }
+
+    let Value::Object(object) = base else {
+      return Err(VmError::Unimplemented("computed member access on non-object"));
+    };
+
+    // Root `object` across key evaluation + `ToPropertyKey`, which may allocate and trigger GC.
+    let mut key_scope = scope.reborrow();
+    key_scope.push_root(Value::Object(object))?;
+    let member_value = self.eval_expr(&mut key_scope, &expr.member)?;
+    key_scope.push_root(member_value)?;
+    let key = key_scope.heap_mut().to_property_key(member_value)?;
+    let reference = Reference::Property { object, key };
+    self.get_value_from_reference(&mut key_scope, &reference)
   }
 
   fn eval_reference<'b>(
@@ -2315,12 +2360,48 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_call(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
-    if expr.optional_chaining {
-      return Err(VmError::Unimplemented("optional chaining call"));
-    }
-
     // Evaluate the callee and compute the `this` value for the call.
     let (callee_value, this_value) = match &*expr.callee.stx {
+      Expr::Member(member) if member.stx.optional_chaining => {
+        let base = self.eval_expr(scope, &member.stx.left)?;
+        if is_nullish(base) {
+          // Optional chaining short-circuit on the base value.
+          return Ok(Value::Undefined);
+        }
+        let Value::Object(object) = base else {
+          return Err(VmError::Unimplemented("member access on non-object"));
+        };
+
+        // Root `object` across property-key allocation in case it triggers GC.
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object))?;
+        let key_s = key_scope.alloc_string(&member.stx.right)?;
+        let reference = Reference::Property {
+          object,
+          key: PropertyKey::from_string(key_s),
+        };
+        let callee_value = self.get_value_from_reference(&mut key_scope, &reference)?;
+        (callee_value, Value::Object(object))
+      }
+      Expr::ComputedMember(member) if member.stx.optional_chaining => {
+        let base = self.eval_expr(scope, &member.stx.object)?;
+        if is_nullish(base) {
+          return Ok(Value::Undefined);
+        }
+        let Value::Object(object) = base else {
+          return Err(VmError::Unimplemented("computed member access on non-object"));
+        };
+
+        // Root `object` across key evaluation + `ToPropertyKey`, which may allocate and trigger GC.
+        let mut key_scope = scope.reborrow();
+        key_scope.push_root(Value::Object(object))?;
+        let member_value = self.eval_expr(&mut key_scope, &member.stx.member)?;
+        key_scope.push_root(member_value)?;
+        let key = key_scope.heap_mut().to_property_key(member_value)?;
+        let reference = Reference::Property { object, key };
+        let callee_value = self.get_value_from_reference(&mut key_scope, &reference)?;
+        (callee_value, Value::Object(object))
+      }
       Expr::Member(_) | Expr::ComputedMember(_) | Expr::Id(_) | Expr::IdPat(_) => {
         let reference = self.eval_reference(scope, &expr.callee)?;
         let this_value = match reference {
@@ -2338,6 +2419,11 @@ impl<'a> Evaluator<'a> {
         (callee_value, Value::Undefined)
       }
     };
+
+    // Optional call: if the callee is nullish, return `undefined` without evaluating args.
+    if expr.optional_chaining && is_nullish(callee_value) {
+      return Ok(Value::Undefined);
+    }
 
     // Root callee/this/args for the duration of the call.
     let mut call_scope = scope.reborrow();
