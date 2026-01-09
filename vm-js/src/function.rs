@@ -50,11 +50,20 @@ pub(crate) enum ConstructHandler {
 }
 
 /// Extra per-function internal-slot-like data used by certain built-ins.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) enum FunctionData {
   None,
   /// Promise resolving function created by `CreateResolvingFunctions`.
   PromiseResolvingFunction { promise: GcObject, is_reject: bool },
+  /// Closure function created by `Promise.prototype.finally` when `onFinally` is callable.
+  ///
+  /// - When `is_reject` is `false`, this is `thenFinally(value)`.
+  /// - When `is_reject` is `true`, this is `catchFinally(reason)`.
+  PromiseFinallyHandler { on_finally: Value, is_reject: bool },
+  /// Closure function created by `Promise.prototype.finally`:
+  /// - `valueThunk()` returns the captured fulfillment value.
+  /// - `thrower()` throws the captured rejection reason.
+  PromiseFinallyThunk { value: Value, is_throw: bool },
 }
 
 /// A JavaScript function object.
@@ -176,6 +185,12 @@ impl Trace for JsFunction {
       FunctionData::None => {}
       FunctionData::PromiseResolvingFunction { promise, .. } => {
         tracer.trace_value(Value::Object(promise));
+      }
+      FunctionData::PromiseFinallyHandler { on_finally, .. } => {
+        tracer.trace_value(on_finally);
+      }
+      FunctionData::PromiseFinallyThunk { value, .. } => {
+        tracer.trace_value(value);
       }
     }
 

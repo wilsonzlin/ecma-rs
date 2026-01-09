@@ -62,6 +62,8 @@ pub struct Intrinsics {
   promise: GcObject,
   promise_prototype: GcObject,
   promise_resolving_function_call: NativeFunctionId,
+  promise_finally_handler_call: NativeFunctionId,
+  promise_finally_thunk_call: NativeFunctionId,
 }
 
 #[derive(Clone, Copy)]
@@ -794,6 +796,10 @@ impl Intrinsics {
 
     let promise_resolving_function_call =
       vm.register_native_call(builtins::promise_resolving_function_call)?;
+    let promise_finally_handler_call =
+      vm.register_native_call(builtins::promise_finally_handler_call)?;
+    let promise_finally_thunk_call =
+      vm.register_native_call(builtins::promise_finally_thunk_call)?;
 
     let promise_call = vm.register_native_call(builtins::promise_constructor_call)?;
     let promise_construct = vm.register_native_construct(builtins::promise_constructor_construct)?;
@@ -867,7 +873,39 @@ impl Intrinsics {
       )?;
     }
 
-    // Promise.prototype.then / Promise.prototype.catch / @@toStringTag
+    // Promise.try / Promise.withResolvers
+    {
+      let try_call = vm.register_native_call(builtins::promise_try)?;
+      let try_name = scope.alloc_string("try")?;
+      let try_ = alloc_rooted_native_function(scope, roots, try_call, None, try_name, 1)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(try_, Some(function_prototype))?;
+      let key = PropertyKey::from_string(scope.alloc_string("try")?);
+      scope.define_property(promise, key, data_desc(Value::Object(try_), true, false, true))?;
+
+      let with_resolvers_call = vm.register_native_call(builtins::promise_with_resolvers)?;
+      let with_resolvers_name = scope.alloc_string("withResolvers")?;
+      let with_resolvers = alloc_rooted_native_function(
+        scope,
+        roots,
+        with_resolvers_call,
+        None,
+        with_resolvers_name,
+        0,
+      )?;
+      scope
+        .heap_mut()
+        .object_set_prototype(with_resolvers, Some(function_prototype))?;
+      let key = PropertyKey::from_string(scope.alloc_string("withResolvers")?);
+      scope.define_property(
+        promise,
+        key,
+        data_desc(Value::Object(with_resolvers), true, false, true),
+      )?;
+    }
+
+    // Promise.prototype.then / Promise.prototype.catch / Promise.prototype.finally / @@toStringTag
     {
       let then_call = vm.register_native_call(builtins::promise_prototype_then)?;
       let then_name = scope.alloc_string("then")?;
@@ -895,6 +933,19 @@ impl Intrinsics {
         promise_prototype,
         key,
         data_desc(Value::Object(catch_), true, false, true),
+      )?;
+
+      let finally_call = vm.register_native_call(builtins::promise_prototype_finally)?;
+      let finally_name = scope.alloc_string("finally")?;
+      let finally_ = alloc_rooted_native_function(scope, roots, finally_call, None, finally_name, 1)?;
+      scope
+        .heap_mut()
+        .object_set_prototype(finally_, Some(function_prototype))?;
+      let key = PropertyKey::from_string(scope.alloc_string("finally")?);
+      scope.define_property(
+        promise_prototype,
+        key,
+        data_desc(Value::Object(finally_), true, false, true),
       )?;
 
       let to_string_tag_value = scope.alloc_string("Promise")?;
@@ -937,6 +988,8 @@ impl Intrinsics {
       promise,
       promise_prototype,
       promise_resolving_function_call,
+      promise_finally_handler_call,
+      promise_finally_thunk_call,
     })
   }
 
@@ -1061,6 +1114,14 @@ impl Intrinsics {
 
   pub(crate) fn promise_resolving_function_call(&self) -> NativeFunctionId {
     self.promise_resolving_function_call
+  }
+
+  pub(crate) fn promise_finally_handler_call(&self) -> NativeFunctionId {
+    self.promise_finally_handler_call
+  }
+
+  pub(crate) fn promise_finally_thunk_call(&self) -> NativeFunctionId {
+    self.promise_finally_thunk_call
   }
 }
 

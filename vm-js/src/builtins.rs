@@ -496,9 +496,56 @@ fn throw_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result
   Err(VmError::Throw(err))
 }
 
+fn create_type_error(vm: &mut Vm, scope: &mut Scope<'_>, message: &str) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let ctor = intr.type_error();
+
+  let msg = scope.alloc_string(message)?;
+  scope.push_root(Value::String(msg));
+
+  let err = error_constructor_construct(
+    vm,
+    scope,
+    ctor,
+    &[Value::String(msg)],
+    Value::Object(ctor),
+  )?;
+  Ok(err)
+}
+
 fn new_promise(vm: &mut Vm, scope: &mut Scope<'_>) -> Result<GcObject, VmError> {
   let intr = require_intrinsics(vm)?;
   scope.alloc_promise_with_prototype(Some(intr.promise_prototype()))
+}
+
+fn new_promise_capability(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  constructor: Value,
+) -> Result<PromiseCapability, VmError> {
+  let intr = require_intrinsics(vm)?;
+
+  let Value::Object(c) = constructor else {
+    throw_type_error(vm, scope, "Promise capability constructor must be an object")?;
+    unreachable!("throw_type_error always throws");
+  };
+
+  // Temporary `%Promise%`-only fallback: the VM does not yet support Promise subclassing /
+  // `NewPromiseCapability` calling user-defined constructors.
+  if c != intr.promise() {
+    return Err(VmError::Unimplemented(
+      "NewPromiseCapability for non-%Promise% constructors is not implemented",
+    ));
+  }
+
+  let promise = new_promise(vm, scope)?;
+  scope.push_root(Value::Object(promise));
+  let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
+  Ok(PromiseCapability {
+    promise,
+    resolve,
+    reject,
+  })
 }
 
 fn create_promise_resolving_functions(
@@ -705,6 +752,62 @@ pub fn promise_resolving_function_call(
   if is_reject {
     reject_promise(vm, scope, promise, resolution)?;
   } else {
+    // Minimal Promise resolution procedure:
+    // - adopt Promise resolution (Promise-to-Promise), needed for `then`/`finally` chaining;
+    // - otherwise, fulfill with the provided value.
+    if let Value::Object(resolution_obj) = resolution {
+      if scope.heap().is_promise_object(resolution_obj) {
+        if resolution_obj == promise {
+          let err = create_type_error(vm, scope, "Cannot resolve a promise with itself")?;
+          scope.push_root(err);
+          reject_promise(vm, scope, promise, err)?;
+          return Ok(Value::Undefined);
+        }
+
+        match scope.heap().promise_state(resolution_obj)? {
+          PromiseState::Pending => {
+            // Attach reactions that settle `promise` once `resolution_obj` settles.
+            scope.push_root(Value::Object(promise));
+            let (resolve, reject) = create_promise_resolving_functions(vm, scope, promise)?;
+            let capability = PromiseCapability {
+              promise,
+              resolve,
+              reject,
+            };
+            let fulfill_reaction = PromiseReaction {
+              capability: Some(capability),
+              type_: PromiseReactionType::Fulfill,
+              handler: None,
+            };
+            let reject_reaction = PromiseReaction {
+              capability: Some(capability),
+              type_: PromiseReactionType::Reject,
+              handler: None,
+            };
+
+            scope.promise_append_fulfill_reaction(resolution_obj, fulfill_reaction)?;
+            scope.promise_append_reject_reaction(resolution_obj, reject_reaction)?;
+          }
+          PromiseState::Fulfilled => {
+            let value = scope
+              .heap()
+              .promise_result(resolution_obj)?
+              .unwrap_or(Value::Undefined);
+            fulfill_promise(vm, scope, promise, value)?;
+          }
+          PromiseState::Rejected => {
+            let reason = scope
+              .heap()
+              .promise_result(resolution_obj)?
+              .unwrap_or(Value::Undefined);
+            reject_promise(vm, scope, promise, reason)?;
+          }
+        }
+
+        return Ok(Value::Undefined);
+      }
+    }
+
     fulfill_promise(vm, scope, promise, resolution)?;
   }
   Ok(Value::Undefined)
@@ -845,6 +948,221 @@ pub fn promise_prototype_catch(
 ) -> Result<Value, VmError> {
   let on_rejected = args.get(0).copied().unwrap_or(Value::Undefined);
   promise_then_impl(vm, scope, this, Value::Undefined, on_rejected)
+}
+
+pub fn promise_prototype_finally(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+  let on_finally = args.get(0).copied().unwrap_or(Value::Undefined);
+
+  let Value::Object(promise) = this else {
+    return throw_type_error(vm, scope, "Promise.prototype.finally called on non-object");
+  };
+  if !scope.heap().is_promise_object(promise) {
+    return throw_type_error(vm, scope, "Promise.prototype.finally called on non-promise");
+  }
+
+  if !scope.heap().is_callable(on_finally)? {
+    return promise_then_impl(vm, scope, this, on_finally, on_finally);
+  }
+
+  scope.push_root(Value::Object(promise));
+  scope.push_root(on_finally);
+
+  let call_id = intr.promise_finally_handler_call();
+
+  let then_finally_name = scope.alloc_string("thenFinally")?;
+  let then_finally = scope.alloc_native_function(call_id, None, then_finally_name, 1)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(then_finally, Some(intr.function_prototype()))?;
+  scope.heap_mut().set_function_data(
+    then_finally,
+    FunctionData::PromiseFinallyHandler {
+      on_finally,
+      is_reject: false,
+    },
+  )?;
+
+  let catch_finally_name = scope.alloc_string("catchFinally")?;
+  let catch_finally = scope.alloc_native_function(call_id, None, catch_finally_name, 1)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(catch_finally, Some(intr.function_prototype()))?;
+  scope.heap_mut().set_function_data(
+    catch_finally,
+    FunctionData::PromiseFinallyHandler {
+      on_finally,
+      is_reject: true,
+    },
+  )?;
+
+  // Root the closure functions before calling `promise_then_impl`, which may allocate/GC.
+  scope.push_root(Value::Object(then_finally));
+  scope.push_root(Value::Object(catch_finally));
+
+  promise_then_impl(
+    vm,
+    scope,
+    this,
+    Value::Object(then_finally),
+    Value::Object(catch_finally),
+  )
+}
+
+pub fn promise_finally_handler_call(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  callee: GcObject,
+  _this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+
+  let data = scope.heap().get_function_data(callee)?;
+  let FunctionData::PromiseFinallyHandler { on_finally, is_reject } = data else {
+    return Err(VmError::Unimplemented(
+      "Promise finally handler missing internal slots",
+    ));
+  };
+
+  let captured = args.get(0).copied().unwrap_or(Value::Undefined);
+
+  // Call onFinally() with no arguments.
+  let result = vm.call(scope, on_finally, Value::Undefined, &[])?;
+  let result = scope.push_root(result);
+
+  // `PromiseResolve(%Promise%, result)`
+  let promise_ctor = intr.promise();
+  let p = promise_resolve(vm, scope, promise_ctor, Value::Object(promise_ctor), &[result])?;
+  let Value::Object(promise_obj) = p else {
+    return Err(VmError::Unimplemented("Promise.resolve did not return an object"));
+  };
+
+  // Create `valueThunk` or `thrower`.
+  scope.push_root(Value::Object(promise_obj));
+  scope.push_root(captured);
+  let thunk_call = intr.promise_finally_thunk_call();
+  let thunk_name = if is_reject { "thrower" } else { "valueThunk" };
+  let thunk_name = scope.alloc_string(thunk_name)?;
+  let thunk = scope.alloc_native_function(thunk_call, None, thunk_name, 0)?;
+  scope
+    .heap_mut()
+    .object_set_prototype(thunk, Some(intr.function_prototype()))?;
+  scope.heap_mut().set_function_data(
+    thunk,
+    FunctionData::PromiseFinallyThunk {
+      value: captured,
+      is_throw: is_reject,
+    },
+  )?;
+
+  // Return `p.then(valueThunk)` / `p.then(thrower)`.
+  scope.push_root(Value::Object(thunk));
+  promise_then_impl(vm, scope, Value::Object(promise_obj), Value::Object(thunk), Value::Undefined)
+}
+
+pub fn promise_finally_thunk_call(
+  _vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let data = scope.heap().get_function_data(callee)?;
+  let FunctionData::PromiseFinallyThunk { value, is_throw } = data else {
+    return Err(VmError::Unimplemented(
+      "Promise finally thunk missing internal slots",
+    ));
+  };
+  if is_throw {
+    Err(VmError::Throw(value))
+  } else {
+    Ok(value)
+  }
+}
+
+pub fn promise_try(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  args: &[Value],
+) -> Result<Value, VmError> {
+  let callback = args.get(0).copied().unwrap_or(Value::Undefined);
+  if !scope.heap().is_callable(callback)? {
+    return throw_type_error(vm, scope, "Promise.try callback is not callable");
+  }
+
+  let capability = new_promise_capability(vm, scope, this)?;
+
+  // Root the promise + resolving functions for the duration of the callback call.
+  scope.push_root(Value::Object(capability.promise));
+  scope.push_root(capability.resolve);
+  scope.push_root(capability.reject);
+
+  let callback_args = args.get(1..).unwrap_or(&[]);
+  match vm.call(scope, callback, Value::Undefined, callback_args) {
+    Ok(v) => {
+      let _ = vm.call(scope, capability.resolve, Value::Undefined, &[v])?;
+    }
+    Err(VmError::Throw(e)) => {
+      let _ = vm.call(scope, capability.reject, Value::Undefined, &[e])?;
+    }
+    Err(e) => return Err(e),
+  }
+
+  Ok(Value::Object(capability.promise))
+}
+
+pub fn promise_with_resolvers(
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  _callee: GcObject,
+  this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
+  let intr = require_intrinsics(vm)?;
+
+  let capability = new_promise_capability(vm, scope, this)?;
+  // Root the new promise and resolving functions before allocating the result object.
+  scope.push_root(Value::Object(capability.promise));
+  scope.push_root(capability.resolve);
+  scope.push_root(capability.reject);
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+  scope
+    .heap_mut()
+    .object_set_prototype(obj, Some(intr.object_prototype()))?;
+
+  let promise_key = PropertyKey::from_string(scope.alloc_string("promise")?);
+  scope.define_property(
+    obj,
+    promise_key,
+    data_desc(Value::Object(capability.promise), true, true, true),
+  )?;
+
+  let resolve_key = PropertyKey::from_string(scope.alloc_string("resolve")?);
+  scope.define_property(
+    obj,
+    resolve_key,
+    data_desc(capability.resolve, true, true, true),
+  )?;
+
+  let reject_key = PropertyKey::from_string(scope.alloc_string("reject")?);
+  scope.define_property(
+    obj,
+    reject_key,
+    data_desc(capability.reject, true, true, true),
+  )?;
+
+  Ok(Value::Object(obj))
 }
 
 fn string_key(scope: &mut Scope<'_>, s: &str) -> Result<PropertyKey, VmError> {
