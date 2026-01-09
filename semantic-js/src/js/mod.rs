@@ -18,10 +18,11 @@
 //! ## Scope kinds
 //!
 //! Scopes are hierarchical and stored in [`JsSemantics`] with stable indices:
-//! - [`ScopeKind::Global`]: top-level in `"global"` [`TopLevelMode`]; top-level
-//!   declarations are intentionally skipped so hosts can map globals separately.
-//!   In `"script"` mode, the same scope kind is used but top-level declarations
-//!   are bound/hoisted like a normal script environment.
+//! - [`ScopeKind::Global`]: script top-level (both `TopLevelMode::Global` and
+//!   `TopLevelMode::Script`). Whether top-level declarations are recorded as
+//!   bindable symbols depends on [`TopLevelMode`]:
+//!   - `TopLevelMode::Global`: skip binding (tooling/minifiers can model globals externally).
+//!   - `TopLevelMode::Script`: bind top-level declarations (runtime/VM embedding).
 //! - [`ScopeKind::Module`]: top-level in `"module"` [`TopLevelMode`]; acts as a
 //!   closure for `var` declarations.
 //! - [`ScopeKind::Class`]: class bodies.
@@ -81,6 +82,16 @@ pub use declare::declare;
 pub use resolve::resolve;
 pub use resolve::JsResolution;
 
+/// Controls how the binder treats top-level code.
+///
+/// In addition to `Module` mode, JS binding supports two *script-oriented* modes
+/// that share the same [`ScopeKind::Global`] top scope but differ in whether
+/// top-level declarations are recorded as bindable symbols:
+///
+/// - `TopLevelMode::Global`: intentionally skips binding top-level declarations.
+///   This is useful for tooling/minifiers where the host maps globals separately.
+/// - `TopLevelMode::Script`: binds top-level declarations and is intended for
+///   runtimes/VMs that need to resolve references to top-level symbols.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopLevelMode {
   Global,

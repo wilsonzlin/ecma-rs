@@ -53,6 +53,14 @@ handles and avoid mutating the underlying collections after construction.
   iterate deterministically with [`js::JsSemantics::scope_symbols`]. A complete
   example lives in `examples/semantic-js/README.md` and is mirrored as a
   doctest in `semantic-js`'s crate docs.
+- When embedding `semantic-js` into a runtime / VM, prefer the runtime entry
+  point and a script-friendly top-level mode so top-level declarations are
+  bound and can be resolved:
+  ```rust
+  use semantic_js::js::{bind_js_for_runtime, TopLevelMode};
+
+  let (sem, diagnostics) = bind_js_for_runtime(&mut ast, TopLevelMode::Script, file);
+  ```
 - TS mode expects one `HirFile` per source file, typically produced by `hir-js`
   (or another frontend). The caller supplies a `Resolver` to turn module
   specifiers into `FileId`s; the binder does not implement Node/TS resolution
@@ -74,8 +82,11 @@ on `symbol-js`'s map ordering, and downstream crates have been migrated to it.
 - JS mode emits basic deterministic diagnostics for common binding errors such as
   lexical redeclarations and TDZ violations via `BIND####` codes. It still:
   - models runtime `with`/`eval` name resolution only via hazard flags, and
-  - skips binding top-level globals in `TopLevelMode::Global` (top-level
-    declarations are intentionally skipped so hosts can map globals separately).
+  - supports multiple script-oriented top-level modes:
+    - `TopLevelMode::Global` intentionally **skips** binding top-level
+      declarations for tooling/minifiers so the host can map globals separately.
+    - `TopLevelMode::Script` **binds** top-level declarations and should be used
+      by executing runtimes/VMs that need resolvable top-level symbols.
 - TS mode does not bind inside statement bodies, nor does it track locals or
   statement-level scopes. It focuses on module-level declaration merging and
   import/export maps:
