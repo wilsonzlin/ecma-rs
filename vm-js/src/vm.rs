@@ -1018,6 +1018,21 @@ impl Vm {
     result
   }
 
+  /// Alias for [`Vm::call`].
+  ///
+  /// Some embeddings keep their own host hook implementation separate from the VM's internal
+  /// microtask queue and need an explicit "no host hooks" call entry point.
+  #[inline]
+  pub fn call_without_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    self.call(scope, callee, this, args)
+  }
+
   /// Calls `callee` with the provided `this` value and arguments, using a custom host hook
   /// implementation.
   pub fn call_with_host(
