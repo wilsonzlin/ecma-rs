@@ -33,10 +33,10 @@ fn arrow_function_top_level_this_sloppy_is_global_object() {
 }
 
 #[test]
-fn arrow_function_top_level_this_strict_is_undefined() {
+fn arrow_function_top_level_this_strict_is_global_object() {
   let mut rt = new_runtime();
   let value = rt
-    .exec_script(r#""use strict"; (() => this).call(globalThis) === undefined"#)
+    .exec_script(r#""use strict"; (() => this)() === globalThis"#)
     .unwrap();
   assert_eq!(value, Value::Bool(true));
 }

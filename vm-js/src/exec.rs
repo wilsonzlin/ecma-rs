@@ -579,14 +579,8 @@ impl JsRuntime {
     let mut vm_frame = self.vm.enter_frame(frame)?;
 
     let mut scope = self.heap.scope();
-    // Strict-mode scripts evaluate with `this === undefined` (unlike sloppy scripts where `this`
-    // is the global object). This affects arrow-function lexical `this` capture at script top
-    // level.
-    let global_this = if strict {
-      Value::Undefined
-    } else {
-      Value::Object(global_object)
-    };
+    // In classic scripts, top-level `this` is the global object (even in strict mode).
+    let global_this = Value::Object(global_object);
     let mut evaluator = Evaluator {
       vm: &mut *vm_frame,
       env: &mut self.env,
@@ -648,14 +642,8 @@ impl JsRuntime {
       let mut vm_frame = vm_ctx.enter_frame(frame)?;
 
       let mut scope = self.heap.scope();
-      // Strict-mode scripts evaluate with `this === undefined` (unlike sloppy scripts where `this`
-      // is the global object). This affects arrow-function lexical `this` capture at script top
-      // level.
-      let global_this = if strict {
-        Value::Undefined
-      } else {
-        Value::Object(global_object)
-      };
+      // In classic scripts, top-level `this` is the global object (even in strict mode).
+      let global_this = Value::Object(global_object);
       let mut evaluator = Evaluator {
         vm: &mut *vm_frame,
         env: &mut self.env,
