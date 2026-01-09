@@ -93,7 +93,7 @@ fn function_prototype_call_apply_bind() -> Result<(), VmError> {
     let add = scope.alloc_native_function(call_id, None, add_name, 2)?;
 
     // add.call(undefined, 1, 2) === 3
-    let result = vm.call(
+    let result = vm.call_without_host(
       &mut scope,
       call_builtin,
       Value::Object(add),
@@ -111,7 +111,7 @@ fn function_prototype_call_apply_bind() -> Result<(), VmError> {
     scope.define_property(arg_array, k1, data_desc(Value::Number(2.0)))?;
     scope.define_property(arg_array, klen, data_desc(Value::Number(2.0)))?;
 
-    let result = vm.call(
+    let result = vm.call_without_host(
       &mut scope,
       apply_builtin,
       Value::Object(add),
@@ -120,14 +120,14 @@ fn function_prototype_call_apply_bind() -> Result<(), VmError> {
     assert_eq!(result, Value::Number(3.0));
 
     // var add1 = add.bind(undefined, 1); add1(2) === 3
-    let add1 = vm.call(
+    let add1 = vm.call_without_host(
       &mut scope,
       bind_builtin,
       Value::Object(add),
       &[Value::Undefined, Value::Number(1.0)],
     )?;
     scope.push_root(add1)?;
-    let result = vm.call(&mut scope, add1, Value::Undefined, &[Value::Number(2.0)])?;
+    let result = vm.call_without_host(&mut scope, add1, Value::Undefined, &[Value::Number(2.0)])?;
     assert_eq!(result, Value::Number(3.0));
 
     // var o={x:2, f:function(){return this.x;}}; var g=o.f.bind({x:5}); g()===5
@@ -140,14 +140,14 @@ fn function_prototype_call_apply_bind() -> Result<(), VmError> {
     let kx = PropertyKey::from_string(scope.alloc_string("x")?);
     scope.define_property(bound_this, kx, data_desc(Value::Number(5.0)))?;
 
-    let g = vm.call(
+    let g = vm.call_without_host(
       &mut scope,
       bind_builtin,
       Value::Object(get_x),
       &[Value::Object(bound_this)],
     )?;
     scope.push_root(g)?;
-    let result = vm.call(&mut scope, g, Value::Undefined, &[])?;
+    let result = vm.call_without_host(&mut scope, g, Value::Undefined, &[])?;
     assert_eq!(result, Value::Number(5.0));
   }
 

@@ -130,7 +130,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     let mut scope = heap.scope();
 
     // `%Object%` call
-    let obj_value = vm.call(
+    let obj_value = vm.call_without_host(
       &mut scope,
       Value::Object(intr.object_constructor()),
       Value::Undefined,
@@ -143,7 +143,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     assert_eq!(scope.heap().object_prototype(obj)?, Some(intr.object_prototype()));
 
     // `%Object%` construct
-    let obj_value = vm.construct(
+    let obj_value = vm.construct_without_host(
       &mut scope,
       Value::Object(intr.object_constructor()),
       &[],
@@ -158,7 +158,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     // `%Object%` called with an object returns the same object.
     let arg_obj = scope.alloc_object()?;
     scope.push_root(Value::Object(arg_obj))?;
-    let out = vm.call(
+    let out = vm.call_without_host(
       &mut scope,
       Value::Object(intr.object_constructor()),
       Value::Undefined,
@@ -167,7 +167,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     assert_eq!(out, Value::Object(arg_obj));
 
     // `%Object%` called with a primitive returns a boxed wrapper object.
-    let out = vm.call(
+    let out = vm.call_without_host(
       &mut scope,
       Value::Object(intr.object_constructor()),
       Value::Undefined,
@@ -183,7 +183,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     );
 
     // `%Array%` call
-    let arr_value = vm.call(
+    let arr_value = vm.call_without_host(
       &mut scope,
       Value::Object(intr.array_constructor()),
       Value::Undefined,
@@ -196,7 +196,7 @@ fn object_and_array_constructors_are_callable_and_constructable() -> Result<(), 
     assert_eq!(scope.heap().object_prototype(arr)?, Some(intr.array_prototype()));
 
     // `%Array%` construct
-    let arr_value = vm.construct(
+    let arr_value = vm.construct_without_host(
       &mut scope,
       Value::Object(intr.array_constructor()),
       &[],
@@ -224,7 +224,7 @@ fn array_get_and_own_property_keys_are_sufficient_for_webidl_sequences() -> Resu
     let mut scope = heap.scope();
 
     // Create an array of length 3 (minimal `Array(len)` support).
-    let arr_value = vm.call(
+    let arr_value = vm.call_without_host(
       &mut scope,
       Value::Object(intr.array_constructor()),
       Value::Undefined,

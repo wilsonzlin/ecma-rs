@@ -25,7 +25,7 @@ fn promise_species_getter_returns_this() -> Result<(), VmError> {
     let mut scope = heap.scope();
 
     // The getter is specified as `return this`.
-    let result = vm.call(&mut scope, get, Value::Object(promise_ctor), &[])?;
+    let result = vm.call_without_host(&mut scope, get, Value::Object(promise_ctor), &[])?;
     assert_eq!(result, Value::Object(promise_ctor));
 
     // It should return the exact receiver even when called with a different `this` value.
@@ -34,7 +34,7 @@ fn promise_species_getter_returns_this() -> Result<(), VmError> {
       .heap_mut()
       .object_set_prototype(other_ctor, Some(realm.intrinsics().function_prototype()))?;
 
-    let result = vm.call(&mut scope, get, Value::Object(other_ctor), &[])?;
+    let result = vm.call_without_host(&mut scope, get, Value::Object(other_ctor), &[])?;
     assert_eq!(result, Value::Object(other_ctor));
   }
 

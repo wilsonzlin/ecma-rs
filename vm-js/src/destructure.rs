@@ -1,6 +1,6 @@
 use crate::exec::{eval_expr, RuntimeEnv};
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{GcObject, Scope, Value, Vm, VmError};
+use crate::{GcObject, Scope, Value, Vm, VmError, VmHost, VmHostHooks};
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat};
 use parse_js::ast::expr::{ComputedMemberExpr, Expr, MemberExpr};
@@ -30,6 +30,8 @@ pub(crate) enum BindingKind {
 
 pub(crate) fn bind_pattern(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   pat: &Pat,
@@ -47,6 +49,8 @@ pub(crate) fn bind_pattern(
     Pat::Id(id) => bind_identifier(vm, env, &mut scope, &id.stx.name, value, kind, strict),
     Pat::Obj(obj) => bind_object_pattern(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &obj.stx,
@@ -57,6 +61,8 @@ pub(crate) fn bind_pattern(
     ),
     Pat::Arr(arr) => bind_array_pattern(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &arr.stx,
@@ -73,6 +79,8 @@ pub(crate) fn bind_pattern(
       }
       bind_assignment_target(
         vm,
+        host,
+        hooks,
         &mut scope,
         env,
         expr,
@@ -86,6 +94,8 @@ pub(crate) fn bind_pattern(
 
 pub(crate) fn bind_assignment_target(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   target: &Node<Expr>,
@@ -118,6 +128,8 @@ pub(crate) fn bind_assignment_target(
     ),
     Expr::ObjPat(obj) => bind_object_pattern(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &obj.stx,
@@ -128,6 +140,8 @@ pub(crate) fn bind_assignment_target(
     ),
     Expr::ArrPat(arr) => bind_array_pattern(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &arr.stx,
@@ -138,6 +152,8 @@ pub(crate) fn bind_assignment_target(
     ),
     Expr::Member(member) => assign_to_member(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &member.stx,
@@ -147,6 +163,8 @@ pub(crate) fn bind_assignment_target(
     ),
     Expr::ComputedMember(member) => assign_to_computed_member(
       vm,
+      host,
+      hooks,
       &mut scope,
       env,
       &member.stx,
@@ -191,6 +209,8 @@ fn bind_identifier(
 
 fn bind_object_pattern(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   pat: &ObjPat,
@@ -212,6 +232,8 @@ fn bind_object_pattern(
   for prop in &pat.properties {
     let key = resolve_obj_pat_key(
       vm,
+      host,
+      hooks,
       scope,
       env,
       &prop.stx.key,
@@ -221,15 +243,18 @@ fn bind_object_pattern(
     root_property_key(scope, key)?;
     excluded.push(key);
 
-    let mut prop_value = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
+    let mut prop_value =
+      scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, key, Value::Object(obj))?;
     if matches!(prop_value, Value::Undefined) {
       if let Some(default_expr) = &prop.stx.default_value {
-        prop_value = eval_expr(vm, env, strict, this, scope, default_expr)?;
+        prop_value = eval_expr(vm, host, hooks, env, strict, this, scope, default_expr)?;
       }
     }
 
     bind_pattern(
       vm,
+      host,
+      hooks,
       scope,
       env,
       &prop.stx.target.stx,
@@ -264,12 +289,14 @@ fn bind_object_pattern(
     }
 
     // `CopyDataProperties` uses `Get` even though we already have the descriptor.
-    let v = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
+    let v = scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, key, Value::Object(obj))?;
     let _ = scope.create_data_property(rest_obj, key, v)?;
   }
 
   bind_pattern(
     vm,
+    host,
+    hooks,
     scope,
     env,
     &rest_pat.stx,
@@ -282,6 +309,8 @@ fn bind_object_pattern(
 
 fn bind_array_pattern(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   pat: &ArrPat,
@@ -295,7 +324,7 @@ fn bind_array_pattern(
   };
   scope.push_root(Value::Object(obj))?;
 
-  let len = array_like_length(vm, scope, obj)?;
+  let len = array_like_length(vm, host, hooks, scope, obj)?;
   let mut idx: u32 = 0;
 
   for elem in &pat.elements {
@@ -305,19 +334,21 @@ fn bind_array_pattern(
     };
 
     let mut item = if idx < len {
-      array_like_get(vm, scope, obj, idx)?
+      array_like_get(vm, host, hooks, scope, obj, idx)?
     } else {
       Value::Undefined
     };
 
     if matches!(item, Value::Undefined) {
       if let Some(default_expr) = &elem.default_value {
-        item = eval_expr(vm, env, strict, this, scope, default_expr)?;
+        item = eval_expr(vm, host, hooks, env, strict, this, scope, default_expr)?;
       }
     }
 
     bind_pattern(
       vm,
+      host,
+      hooks,
       scope,
       env,
       &elem.target.stx,
@@ -338,7 +369,7 @@ fn bind_array_pattern(
 
   let mut rest_idx: u32 = 0;
   while idx < len {
-    let v = array_like_get(vm, scope, obj, idx)?;
+    let v = array_like_get(vm, host, hooks, scope, obj, idx)?;
     {
       // Root the element value while allocating the property key and defining the property:
       // `array_like_get` can invoke getters which may return newly-allocated objects that are not
@@ -369,6 +400,8 @@ fn bind_array_pattern(
 
   bind_pattern(
     vm,
+    host,
+    hooks,
     scope,
     env,
     &rest_pat.stx,
@@ -381,6 +414,8 @@ fn bind_array_pattern(
 
 fn resolve_obj_pat_key(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   key: &ClassOrObjKey,
@@ -404,7 +439,7 @@ fn resolve_obj_pat_key(
       Ok(PropertyKey::from_string(s))
     }
     ClassOrObjKey::Computed(expr) => {
-      let value = eval_expr(vm, env, strict, this, scope, expr)?;
+      let value = eval_expr(vm, host, hooks, env, strict, this, scope, expr)?;
       // Root the computed value until `to_property_key` completes.
       let value = scope.push_root(value)?;
       let key = scope.heap_mut().to_property_key(value)?;
@@ -413,10 +448,16 @@ fn resolve_obj_pat_key(
   }
 }
 
-fn array_like_length(vm: &mut Vm, scope: &mut Scope<'_>, obj: GcObject) -> Result<u32, VmError> {
+fn array_like_length(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+) -> Result<u32, VmError> {
   let key_s = scope.alloc_string("length")?;
   let key = PropertyKey::from_string(key_s);
-  let v = scope.ordinary_get(vm, obj, key, Value::Object(obj))?;
+  let v = scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, key, Value::Object(obj))?;
   match v {
     Value::Number(n) if n.is_finite() && n >= 0.0 => Ok(n as u32),
     Value::Undefined => Ok(0),
@@ -424,15 +465,24 @@ fn array_like_length(vm: &mut Vm, scope: &mut Scope<'_>, obj: GcObject) -> Resul
   }
 }
 
-fn array_like_get(vm: &mut Vm, scope: &mut Scope<'_>, obj: GcObject, idx: u32) -> Result<Value, VmError> {
+fn array_like_get(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  obj: GcObject,
+  idx: u32,
+) -> Result<Value, VmError> {
   let key_str = idx.to_string();
   let key_s = scope.alloc_string(&key_str)?;
   let key = PropertyKey::from_string(key_s);
-  scope.ordinary_get(vm, obj, key, Value::Object(obj))
+  scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, key, Value::Object(obj))
 }
 
 fn assign_to_member(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   member: &MemberExpr,
@@ -447,7 +497,7 @@ fn assign_to_member(
   // Root the RHS across evaluation of the LHS object.
   let mut rhs_scope = scope.reborrow();
   rhs_scope.push_root(value)?;
-  let obj_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.left)?;
+  let obj_value = eval_expr(vm, host, hooks, env, strict, this, &mut rhs_scope, &member.left)?;
 
   let Value::Object(obj) = obj_value else {
     return Err(throw_type_error(
@@ -459,7 +509,8 @@ fn assign_to_member(
 
   let key_s = rhs_scope.alloc_string(&member.right)?;
   let key = PropertyKey::from_string(key_s);
-  let ok = rhs_scope.ordinary_set(vm, obj, key, value, Value::Object(obj))?;
+  let ok =
+    rhs_scope.ordinary_set_with_host_and_hooks(vm, host, hooks, obj, key, value, Value::Object(obj))?;
   if ok {
     Ok(())
   } else if strict {
@@ -472,6 +523,8 @@ fn assign_to_member(
 
 fn assign_to_computed_member(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   env: &mut RuntimeEnv,
   member: &ComputedMemberExpr,
@@ -487,7 +540,7 @@ fn assign_to_computed_member(
   let mut rhs_scope = scope.reborrow();
   rhs_scope.push_root(value)?;
 
-  let obj_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.object)?;
+  let obj_value = eval_expr(vm, host, hooks, env, strict, this, &mut rhs_scope, &member.object)?;
   let Value::Object(obj) = obj_value else {
     return Err(throw_type_error(
       vm,
@@ -496,11 +549,12 @@ fn assign_to_computed_member(
     )?);
   };
 
-  let key_value = eval_expr(vm, env, strict, this, &mut rhs_scope, &member.member)?;
+  let key_value = eval_expr(vm, host, hooks, env, strict, this, &mut rhs_scope, &member.member)?;
   let key_value = rhs_scope.push_root(key_value)?;
   let key = rhs_scope.heap_mut().to_property_key(key_value)?;
 
-  let ok = rhs_scope.ordinary_set(vm, obj, key, value, Value::Object(obj))?;
+  let ok =
+    rhs_scope.ordinary_set_with_host_and_hooks(vm, host, hooks, obj, key, value, Value::Object(obj))?;
   if ok {
     Ok(())
   } else if strict {

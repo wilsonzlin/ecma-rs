@@ -59,8 +59,8 @@ fn native_call_can_mutate_user_data() -> Result<(), VmError> {
     let name = scope.alloc_string("inc")?;
     let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    vm.call(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
-    vm.call(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
+    vm.call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
+    vm.call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
   }
 
   assert_eq!(vm.user_data::<Counter>().unwrap().0, 2);

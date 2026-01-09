@@ -80,7 +80,7 @@ fn arrow_captures_lexical_this_across_calls_and_gc() -> Result<(), VmError> {
       .expect("makeArrow root missing");
     let arrow = rt
       .vm
-      .call(&mut scope, make_arrow, Value::Object(this_obj), &[])?;
+      .call_without_host(&mut scope, make_arrow, Value::Object(this_obj), &[])?;
     let arrow_root = scope.heap_mut().add_root(arrow)?;
     (this_obj, arrow_root)
   };
@@ -95,7 +95,7 @@ fn arrow_captures_lexical_this_across_calls_and_gc() -> Result<(), VmError> {
   {
     let arrow = rt.heap.get_root(arrow_root).expect("arrow root missing");
     let mut scope = rt.heap.scope();
-    let value = rt.vm.call(&mut scope, arrow, Value::Undefined, &[])?;
+    let value = rt.vm.call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
     assert_eq!(value, Value::Object(this_obj));
   }
 
@@ -131,7 +131,9 @@ fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError
       .heap()
       .get_root(new_target_root)
       .expect("new_target root missing");
-    let arrow = rt.vm.construct(&mut scope, outer, &[], new_target)?;
+    let arrow = rt
+      .vm
+      .construct_without_host(&mut scope, outer, &[], new_target)?;
     scope.heap_mut().add_root(arrow)?
   };
 
@@ -148,7 +150,7 @@ fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError
   {
     let arrow = rt.heap.get_root(arrow_root).expect("arrow root missing");
     let mut scope = rt.heap.scope();
-    let value = rt.vm.call(&mut scope, arrow, Value::Undefined, &[])?;
+    let value = rt.vm.call_without_host(&mut scope, arrow, Value::Undefined, &[])?;
     assert_eq!(value, Value::Object(new_target_obj));
   }
 
@@ -157,12 +159,21 @@ fn arrow_captures_lexical_new_target_across_calls_and_gc() -> Result<(), VmError
 }
 
 #[test]
-fn arrow_functions_are_not_constructable() {
+fn arrow_functions_are_not_constructable() -> Result<(), VmError> {
   let mut rt = new_runtime();
   let err = rt
     .exec_script(r#"new ((x) => x)"#)
     .expect_err("constructing an arrow function should fail");
-  assert!(matches!(err, VmError::NotConstructable));
+  let thrown = match err {
+    VmError::Throw(value) | VmError::ThrowWithStack { value, .. } => value,
+    other => panic!("expected throw, got {other:?}"),
+  };
+  let Value::Object(obj) = thrown else {
+    panic!("expected thrown object, got {thrown:?}");
+  };
+  let type_error_proto = rt.realm().intrinsics().type_error_prototype();
+  assert_eq!(rt.heap.object_prototype(obj)?, Some(type_error_proto));
+  Ok(())
 }
 
 #[test]

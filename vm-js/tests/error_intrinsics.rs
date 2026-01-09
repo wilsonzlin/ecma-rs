@@ -75,12 +75,9 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
   {
     let mut scope = rt.heap.scope();
     let message = scope.alloc_string("boom")?;
-    let result = rt.vm.call(
-      &mut scope,
-      Value::Object(error),
-      Value::Undefined,
-      &[Value::String(message)],
-    )?;
+    let result = rt
+      .vm
+      .call_without_host(&mut scope, Value::Object(error), Value::Undefined, &[Value::String(message)])?;
     let Value::Object(obj) = result else {
       panic!("Error() should return an object");
     };
@@ -115,7 +112,7 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
   {
     let mut scope = rt.heap.scope();
     let message = scope.alloc_string("bad")?;
-    let result = rt.vm.construct(
+    let result = rt.vm.construct_without_host(
       &mut scope,
       Value::Object(type_error),
       &[Value::String(message)],

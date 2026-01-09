@@ -81,7 +81,7 @@ fn promise_finally_on_fulfill_runs_callback_and_preserves_value() -> Result<(), 
   // Promise.resolve(1)
   let p = {
     let mut scope = heap.scope();
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_resolve),
       Value::Object(promise),
@@ -100,7 +100,7 @@ fn promise_finally_on_fulfill_runs_callback_and_preserves_value() -> Result<(), 
     let name = scope.alloc_string("onFinally")?;
     let on_finally = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_finally),
       Value::Object(p),
@@ -141,7 +141,7 @@ fn promise_finally_on_reject_runs_callback_and_preserves_reason() -> Result<(), 
   // Promise.reject(1)
   let p = {
     let mut scope = heap.scope();
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_reject),
       Value::Object(promise),
@@ -160,7 +160,7 @@ fn promise_finally_on_reject_runs_callback_and_preserves_reason() -> Result<(), 
     let name = scope.alloc_string("onFinally")?;
     let on_finally = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_finally),
       Value::Object(p),
@@ -201,7 +201,7 @@ fn promise_try_resolves_or_rejects_based_on_callback_completion() -> Result<(), 
     let name = scope.alloc_string("tryReturnsValue")?;
     let cb = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_try),
       Value::Object(promise),
@@ -222,7 +222,7 @@ fn promise_try_resolves_or_rejects_based_on_callback_completion() -> Result<(), 
     let name = scope.alloc_string("tryThrows")?;
     let cb = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_try),
       Value::Object(promise),
@@ -251,7 +251,7 @@ fn promise_with_resolvers_returns_object_with_callable_resolve_reject() -> Resul
 
   let record = {
     let mut scope = heap.scope();
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(with_resolvers),
       Value::Object(promise),
@@ -283,7 +283,7 @@ fn promise_with_resolvers_returns_object_with_callable_resolve_reject() -> Resul
   // resolve(1) fulfills promise.
   {
     let mut scope = heap.scope();
-    let _ = vm.call(
+    let _ = vm.call_without_host(
       &mut scope,
       Value::Object(record_resolve),
       Value::Undefined,

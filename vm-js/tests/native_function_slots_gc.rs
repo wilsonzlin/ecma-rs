@@ -74,7 +74,7 @@ fn native_handler_can_read_its_own_slots_via_callee_handle() -> Result<(), VmErr
     &[Value::Object(captured)],
   )?;
 
-  let result = vm.call(&mut scope, Value::Object(func), Value::Undefined, &[])?;
+  let result = vm.call_without_host(&mut scope, Value::Object(func), Value::Undefined, &[])?;
   assert_eq!(result, Value::Object(captured));
   Ok(())
 }

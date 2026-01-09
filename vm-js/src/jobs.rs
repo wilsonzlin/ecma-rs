@@ -38,20 +38,22 @@ use std::sync::Mutex;
 /// This is intentionally minimal and primarily exists so embeddings can thread arbitrary state
 /// through VM-to-host call boundaries without using globals.
 pub trait VmHost {
-  /// Returns this host value as a mutable [`Any`] reference for downcasting.
-  ///
-  /// By default this returns `None`. Embeddings that want downcasting support should rely on the
-  /// blanket impl for `T: Any` (most host types) or provide their own implementation.
-  #[inline]
-  fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
-    None
-  }
+  /// Returns `self` as [`Any`] for embedder-side downcasting.
+  fn as_any(&self) -> &dyn Any;
+
+  /// Returns `self` as [`Any`] for embedder-side downcasting.
+  fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<T: Any> VmHost for T {
   #[inline]
-  fn as_any_mut(&mut self) -> Option<&mut dyn Any> {
-    Some(self)
+  fn as_any(&self) -> &dyn Any {
+    self
+  }
+
+  #[inline]
+  fn as_any_mut(&mut self) -> &mut dyn Any {
+    self
   }
 }
 

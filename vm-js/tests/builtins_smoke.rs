@@ -47,7 +47,7 @@ fn array_map_join_and_string_conversion_work() -> Result<(), VmError> {
   let array_ctor = Value::Object(intr.array_constructor());
   let array = rt
     .vm
-    .construct(&mut scope, array_ctor, &[Value::Number(1.0), Value::Number(2.0)], array_ctor)?;
+    .construct_without_host(&mut scope, array_ctor, &[Value::Number(1.0), Value::Number(2.0)], array_ctor)?;
   let Value::Object(array_obj) = array else {
     return Err(VmError::Unimplemented("Array constructor did not return object"));
   };
@@ -55,7 +55,7 @@ fn array_map_join_and_string_conversion_work() -> Result<(), VmError> {
   // array.map(String)
   let map = get_data_property(&mut scope, array_obj, "map")?.unwrap();
   let string_ctor = Value::Object(intr.string_constructor());
-  let mapped = rt.vm.call(&mut scope, map, array, &[string_ctor])?;
+  let mapped = rt.vm.call_without_host(&mut scope, map, array, &[string_ctor])?;
   let Value::Object(mapped_obj) = mapped else {
     return Err(VmError::Unimplemented("Array.prototype.map did not return object"));
   };
@@ -63,7 +63,7 @@ fn array_map_join_and_string_conversion_work() -> Result<(), VmError> {
   // mapped.join(',')
   let join = get_data_property(&mut scope, mapped_obj, "join")?.unwrap();
   let comma = Value::String(scope.alloc_string(",")?);
-  let joined = rt.vm.call(&mut scope, join, mapped, &[comma])?;
+  let joined = rt.vm.call_without_host(&mut scope, join, mapped, &[comma])?;
   let Value::String(s) = joined else {
     return Err(VmError::Unimplemented("Array.prototype.join did not return string"));
   };
@@ -85,7 +85,7 @@ fn object_prototype_to_string_works_via_function_call() -> Result<(), VmError> {
   let call = get_data_property(&mut scope, function_proto, "call")?.unwrap();
   let out = rt
     .vm
-    .call(&mut scope, call, to_string, &[Value::Number(1.0)])?;
+    .call_without_host(&mut scope, call, to_string, &[Value::Number(1.0)])?;
   let Value::String(s) = out else {
     return Err(VmError::Unimplemented("Object.prototype.toString.call did not return string"));
   };
@@ -103,7 +103,7 @@ fn error_construction_sets_message() -> Result<(), VmError> {
   let msg = Value::String(scope.alloc_string("x")?);
   let err = rt
     .vm
-    .construct(&mut scope, error_ctor, &[msg], error_ctor)?;
+    .construct_without_host(&mut scope, error_ctor, &[msg], error_ctor)?;
   let Value::Object(err_obj) = err else {
     return Err(VmError::Unimplemented("Error constructor did not return object"));
   };
@@ -124,7 +124,9 @@ fn json_stringify_string_does_not_crash() -> Result<(), VmError> {
   let mut scope = rt.heap.scope();
   let stringify = get_data_property(&mut scope, json, "stringify")?.unwrap();
   let x = Value::String(scope.alloc_string("x")?);
-  let out = rt.vm.call(&mut scope, stringify, Value::Object(json), &[x])?;
+  let out = rt
+    .vm
+    .call_without_host(&mut scope, stringify, Value::Object(json), &[x])?;
   let Value::String(s) = out else {
     return Err(VmError::Unimplemented("JSON.stringify did not return string"));
   };

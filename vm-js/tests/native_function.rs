@@ -29,7 +29,8 @@ fn native_function_can_be_allocated_and_called() -> Result<(), VmError> {
 
   assert!(heap.is_callable(Value::Object(func))?);
 
-  let result = heap.call(&mut vm, Value::Object(func), Value::Undefined, &[])?;
+  let mut host = ();
+  let result = heap.call(&mut vm, &mut host, Value::Object(func), Value::Undefined, &[])?;
   assert_eq!(result, Value::Number(42.0));
   Ok(())
 }
@@ -49,8 +50,9 @@ fn calling_collected_native_function_returns_invalid_handle() -> Result<(), VmEr
   // The function is unreachable once the scope ends; a GC cycle should free it.
   heap.collect_garbage();
 
+  let mut host = ();
   let err = heap
-    .call(&mut vm, Value::Object(func), Value::Undefined, &[])
+    .call(&mut vm, &mut host, Value::Object(func), Value::Undefined, &[])
     .unwrap_err();
   assert!(matches!(err, VmError::InvalidHandle));
   Ok(())
@@ -100,11 +102,12 @@ fn property_descriptor_tracing_keeps_native_functions_alive() -> Result<(), VmEr
   assert!(!heap.is_valid_object(func_dead));
   assert!(heap.is_callable(Value::Object(func_alive))?);
 
-  let result = heap.call(&mut vm, Value::Object(func_alive), Value::Undefined, &[])?;
+  let mut host = ();
+  let result = heap.call(&mut vm, &mut host, Value::Object(func_alive), Value::Undefined, &[])?;
   assert_eq!(result, Value::Number(42.0));
 
   let err = heap
-    .call(&mut vm, Value::Object(func_dead), Value::Undefined, &[])
+    .call(&mut vm, &mut host, Value::Object(func_dead), Value::Undefined, &[])
     .unwrap_err();
   assert!(matches!(err, VmError::InvalidHandle));
 

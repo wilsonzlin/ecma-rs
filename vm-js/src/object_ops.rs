@@ -1,5 +1,5 @@
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
-use crate::{GcObject, Scope, Value, Vm, VmError, VmHostHooks};
+use crate::{GcObject, Scope, Value, Vm, VmError, VmHost, VmHostHooks};
 
 impl<'a> Scope<'a> {
   pub fn object_get_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
@@ -162,7 +162,37 @@ impl<'a> Scope<'a> {
           if !self.heap().is_callable(get)? {
             return Err(VmError::TypeError("accessor getter is not callable"));
           }
-          vm.call(self, get, receiver, &[])
+          vm.call_without_host(self, get, receiver, &[])
+        }
+      }
+    }
+  }
+
+  /// ECMAScript `[[Get]]` for ordinary objects, using an explicit embedder host context and host
+  /// hook implementation.
+  pub fn ordinary_get_with_host_and_hooks(
+    &mut self,
+    vm: &mut Vm,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
+    obj: GcObject,
+    key: PropertyKey,
+    receiver: Value,
+  ) -> Result<Value, VmError> {
+    let Some(desc) = self.heap().get_property(obj, &key)? else {
+      return Ok(Value::Undefined);
+    };
+
+    match desc.kind {
+      PropertyKind::Data { value, .. } => Ok(value),
+      PropertyKind::Accessor { get, .. } => {
+        if matches!(get, Value::Undefined) {
+          Ok(Value::Undefined)
+        } else {
+          if !self.heap().is_callable(get)? {
+            return Err(VmError::TypeError("accessor getter is not callable"));
+          }
+          vm.call_with_host_and_hooks(host, self, hooks, get, receiver, &[])
         }
       }
     }
@@ -281,7 +311,97 @@ impl<'a> Scope<'a> {
         if !self.heap().is_callable(set)? {
           return Err(VmError::TypeError("accessor setter is not callable"));
         }
-        let _ = vm.call(self, set, receiver, &[value])?;
+        let _ = vm.call_without_host(self, set, receiver, &[value])?;
+        Ok(true)
+      }
+    }
+  }
+
+  /// ECMAScript `[[Set]]` for ordinary objects, using an explicit embedder host context and host
+  /// hook implementation.
+  pub fn ordinary_set_with_host_and_hooks(
+    &mut self,
+    vm: &mut Vm,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
+    obj: GcObject,
+    key: PropertyKey,
+    value: Value,
+    receiver: Value,
+  ) -> Result<bool, VmError> {
+    // Root inputs together so GC can't collect `key`/`value`/`receiver` while growing the root
+    // stack.
+    let roots = [
+      Value::Object(obj),
+      match key {
+        PropertyKey::String(s) => Value::String(s),
+        PropertyKey::Symbol(s) => Value::Symbol(s),
+      },
+      value,
+      receiver,
+    ];
+    self.push_roots(&roots)?;
+
+    let mut desc = self.heap().get_property(obj, &key)?;
+    if desc.is_none() {
+      desc = Some(PropertyDescriptor {
+        enumerable: true,
+        configurable: true,
+        kind: PropertyKind::Data {
+          value: Value::Undefined,
+          writable: true,
+        },
+      });
+    }
+
+    let Some(desc) = desc else {
+      return Err(VmError::InvariantViolation(
+        "ordinary_set: internal error: missing property descriptor",
+      ));
+    };
+
+    match desc.kind {
+      PropertyKind::Data { writable, .. } => {
+        if !writable {
+          return Ok(false);
+        }
+        let Value::Object(receiver_obj) = receiver else {
+          return Ok(false);
+        };
+
+        let existing_desc = self.ordinary_get_own_property(receiver_obj, key)?;
+        if let Some(existing_desc) = existing_desc {
+          if existing_desc.is_accessor_descriptor() {
+            return Ok(false);
+          }
+          let receiver_writable = match existing_desc.kind {
+            PropertyKind::Data { writable, .. } => writable,
+            PropertyKind::Accessor { .. } => return Ok(false),
+          };
+          if !receiver_writable {
+            return Ok(false);
+          }
+
+          return self.define_own_property(
+            receiver_obj,
+            key,
+            PropertyDescriptorPatch {
+              value: Some(value),
+              ..Default::default()
+            },
+          );
+        }
+
+        self.create_data_property(receiver_obj, key, value)
+      }
+      PropertyKind::Accessor { set, .. } => {
+        if matches!(set, Value::Undefined) {
+          return Ok(false);
+        }
+        if !self.heap().is_callable(set)? {
+          return Err(VmError::TypeError("accessor setter is not callable"));
+        }
+        let _ = vm.call_with_host_and_hooks(host, self, hooks, set, receiver, &[value])?;
         Ok(true)
       }
     }

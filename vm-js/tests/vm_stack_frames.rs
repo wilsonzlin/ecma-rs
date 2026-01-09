@@ -30,7 +30,7 @@ fn vm_call_pushes_and_pops_stack_frame_even_on_error() -> Result<(), VmError> {
   let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
   let err = vm
-    .call(&mut scope, Value::Object(callee), Value::Undefined, &[])
+    .call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])
     .unwrap_err();
   assert!(matches!(err, VmError::Unimplemented("x")));
 
@@ -67,7 +67,7 @@ fn vm_stack_overflow_on_deep_manual_frames() -> Result<(), VmError> {
 
   let args = [Value::Object(callee)];
   let err = vm
-    .call(&mut scope, Value::Object(callee), Value::Undefined, &args)
+    .call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &args)
     .unwrap_err();
 
   let VmError::Termination(term) = err else {

@@ -50,7 +50,7 @@ fn call_return_value_is_not_rooted_by_default() -> Result<(), VmError> {
     let name = scope.alloc_string("f")?;
     let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let result = vm.call(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
+    let result = vm.call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
     let Value::Object(obj) = result else {
       panic!("native function should return an object");
     };
@@ -76,7 +76,7 @@ fn call_return_value_survives_when_rooted_by_caller() -> Result<(), VmError> {
     let name = scope.alloc_string("f")?;
     let callee = scope.alloc_native_function(call_id, None, name, 0)?;
 
-    let result = vm.call(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
+    let result = vm.call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])?;
     let Value::Object(obj) = result else {
       panic!("native function should return an object");
     };
@@ -105,12 +105,8 @@ fn construct_return_value_is_not_rooted_by_default() -> Result<(), VmError> {
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 
-    let result = vm.construct(
-      &mut scope,
-      Value::Object(callee),
-      &[],
-      Value::Object(callee),
-    )?;
+    let result =
+      vm.construct_without_host(&mut scope, Value::Object(callee), &[], Value::Object(callee))?;
     let Value::Object(obj) = result else {
       panic!("native constructor should return an object");
     };
@@ -137,12 +133,8 @@ fn construct_return_value_survives_when_rooted_by_caller() -> Result<(), VmError
     let name = scope.alloc_string("F")?;
     let callee = scope.alloc_native_function(call_id, Some(construct_id), name, 0)?;
 
-    let result = vm.construct(
-      &mut scope,
-      Value::Object(callee),
-      &[],
-      Value::Object(callee),
-    )?;
+    let result =
+      vm.construct_without_host(&mut scope, Value::Object(callee), &[], Value::Object(callee))?;
     let Value::Object(obj) = result else {
       panic!("native constructor should return an object");
     };

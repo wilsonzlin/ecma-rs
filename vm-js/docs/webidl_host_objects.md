@@ -138,27 +138,37 @@ The snippet below is **pseudo-code** that demonstrates the full flow:
 - store/retrieve wrappers via `HashMap<NodeId, WeakGcObject>`
 
 ```rust,ignore
-use std::collections::HashMap;
-use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, VmError,
-  WeakGcObject,
-};
+ use std::collections::HashMap;
+ use vm_js::{
+  GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
+  VmError, VmHost, VmHostHooks, WeakGcObject,
+ };
 
 /// Host identity for a DOM node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct NodeId(u32);
 
-/// Embedding state: wrapper identity cache (weak).
-struct HostState {
-  node_wrappers: HashMap<NodeId, WeakGcObject>,
-}
-
-// A "native" function entry point.
-// (Exact signature depends on the vm-js native-function API surface.)
-fn native_alert(_scope: &mut Scope<'_>, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
-  // In a real embedder, this would surface to the browser UI / console.
-  Ok(Value::Undefined)
-}
+ /// Embedding state: wrapper identity cache (weak).
+ struct HostState {
+   node_wrappers: HashMap<NodeId, WeakGcObject>,
+ }
+ 
+ // A "native" function entry point.
+ // Native handlers receive `host: &mut dyn VmHost`, which an embedding can downcast to access
+ // embedder state (DOM, event loop, wrapper caches, etc) without globals.
+ fn native_alert(
+   _vm: &mut Vm,
+   _scope: &mut Scope<'_>,
+   host: &mut dyn VmHost,
+   _hooks: &mut dyn VmHostHooks,
+   _callee: GcObject,
+   _this: Value,
+   _args: &[Value],
+ ) -> Result<Value, VmError> {
+   let _host_state = host.as_any().downcast_ref::<HostState>().unwrap();
+   // In a real embedder, this would surface to the browser UI / console, schedule tasks, etc.
+   Ok(Value::Undefined)
+ }
 
 fn init_window_bindings(scope: &mut Scope<'_>) -> Result<(Value, Value), VmError> {
   // 1) Create Window.prototype
@@ -272,4 +282,3 @@ fn main() -> Result<(), VmError> {
   Ok(())
 }
 ```
-

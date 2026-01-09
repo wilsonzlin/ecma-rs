@@ -1,5 +1,5 @@
 use crate::property::PropertyKey;
-use crate::{GcObject, GcSymbol, Scope, Value, Vm, VmError};
+use crate::{GcObject, GcSymbol, Scope, Value, Vm, VmError, VmHost, VmHostHooks};
 
 /// ECMAScript "IteratorRecord" (ECMA-262).
 ///
@@ -43,13 +43,42 @@ fn is_array(scope: &mut Scope<'_>, value: Value) -> Result<Option<GcObject>, VmE
   Ok(None)
 }
 
-fn array_length(vm: &mut Vm, scope: &mut Scope<'_>, array: GcObject) -> Result<u32, VmError> {
+fn array_length(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  array: GcObject,
+) -> Result<u32, VmError> {
   let length_key = string_key(scope, "length")?;
-  let len_value = scope.ordinary_get(vm, array, length_key, Value::Object(array))?;
+  let len_value =
+    scope.ordinary_get_with_host_and_hooks(vm, host, hooks, array, length_key, Value::Object(array))?;
   match len_value {
     Value::Number(n) if n.is_finite() && n >= 0.0 => Ok(n as u32),
     _ => Err(VmError::Unimplemented("Array length is not a uint32 Number")),
   }
+}
+
+fn get_method(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  obj: Value,
+  key: PropertyKey,
+) -> Result<Option<Value>, VmError> {
+  let Value::Object(obj) = obj else {
+    return Err(VmError::Unimplemented("GetMethod on non-object"));
+  };
+
+  let func = scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, key, Value::Object(obj))?;
+  if matches!(func, Value::Undefined | Value::Null) {
+    return Ok(None);
+  }
+  if !scope.heap().is_callable(func)? {
+    return Err(VmError::NotCallable);
+  }
+  Ok(Some(func))
 }
 
 /// `GetIterator` (ECMA-262).
@@ -58,9 +87,15 @@ fn array_length(vm: &mut Vm, scope: &mut Scope<'_>, array: GcObject) -> Result<u
 /// - A fast path for Array exotic objects.
 /// - A minimal iterator-protocol path via `@@iterator` for objects with native-callable iterator
 ///   methods.
-pub fn get_iterator(vm: &mut Vm, scope: &mut Scope<'_>, iterable: Value) -> Result<IteratorRecord, VmError> {
+pub fn get_iterator(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  iterable: Value,
+) -> Result<IteratorRecord, VmError> {
   if let Some(array) = is_array(scope, iterable)? {
-    let length = array_length(vm, scope, array)?;
+    let length = array_length(vm, host, hooks, scope, array)?;
     return Ok(IteratorRecord {
       iterator: Value::Object(array),
       next_method: Value::Undefined,
@@ -75,19 +110,21 @@ pub fn get_iterator(vm: &mut Vm, scope: &mut Scope<'_>, iterable: Value) -> Resu
 
   // Fall back to iterator protocol: `GetMethod(iterable, @@iterator)`.
   let iterator_sym = symbol_for(scope, "Symbol.iterator")?;
-  let method = vm.get_method(scope, iterable, PropertyKey::from_symbol(iterator_sym))?
+  let method = get_method(vm, host, hooks, scope, iterable, PropertyKey::from_symbol(iterator_sym))?
     .ok_or(VmError::Unimplemented("GetIterator: missing @@iterator method"))?;
-  get_iterator_from_method(vm, scope, iterable, method)
+  get_iterator_from_method(vm, host, hooks, scope, iterable, method)
 }
 
 /// `GetIteratorFromMethod` (ECMA-262).
 pub fn get_iterator_from_method(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   iterable: Value,
   method: Value,
 ) -> Result<IteratorRecord, VmError> {
-  let iterator = vm.call(scope, method, iterable, &[])?;
+  let iterator = vm.call_with_host_and_hooks(host, scope, hooks, method, iterable, &[])?;
   let Value::Object(iterator_obj) = iterator else {
     return Err(VmError::Unimplemented(
       "GetIteratorFromMethod: iterator method did not return an object",
@@ -100,7 +137,14 @@ pub fn get_iterator_from_method(
   next_scope.push_root(iterator)?;
 
   let next_key = string_key(&mut next_scope, "next")?;
-  let next = next_scope.ordinary_get(vm, iterator_obj, next_key, Value::Object(iterator_obj))?;
+  let next = next_scope.ordinary_get_with_host_and_hooks(
+    vm,
+    host,
+    hooks,
+    iterator_obj,
+    next_key,
+    Value::Object(iterator_obj),
+  )?;
   if !next_scope.heap().is_callable(next)? {
     return Err(VmError::NotCallable);
   }
@@ -116,11 +160,15 @@ pub fn get_iterator_from_method(
 /// `IteratorNext` (ECMA-262).
 pub fn iterator_next(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   record: &IteratorRecord,
 ) -> Result<Value, VmError> {
   match record.kind {
-    IteratorKind::Protocol => vm.call(scope, record.next_method, record.iterator, &[]),
+    IteratorKind::Protocol => {
+      vm.call_with_host_and_hooks(host, scope, hooks, record.next_method, record.iterator, &[])
+    }
     IteratorKind::Array { .. } => Err(VmError::Unimplemented(
       "IteratorNext is not used for Array fast-path iterators",
     )),
@@ -128,26 +176,38 @@ pub fn iterator_next(
 }
 
 /// `IteratorComplete` (ECMA-262).
-pub fn iterator_complete(vm: &mut Vm, scope: &mut Scope<'_>, iter_result: Value) -> Result<bool, VmError> {
+pub fn iterator_complete(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  iter_result: Value,
+) -> Result<bool, VmError> {
   let Value::Object(obj) = iter_result else {
     return Err(VmError::Unimplemented(
       "IteratorComplete: iterator result is not an object",
     ));
   };
   let done_key = string_key(scope, "done")?;
-  let done = scope.ordinary_get(vm, obj, done_key, iter_result)?;
+  let done = scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, done_key, iter_result)?;
   scope.heap().to_boolean(done)
 }
 
 /// `IteratorValue` (ECMA-262).
-pub fn iterator_value(vm: &mut Vm, scope: &mut Scope<'_>, iter_result: Value) -> Result<Value, VmError> {
+pub fn iterator_value(
+  vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
+  scope: &mut Scope<'_>,
+  iter_result: Value,
+) -> Result<Value, VmError> {
   let Value::Object(obj) = iter_result else {
     return Err(VmError::Unimplemented(
       "IteratorValue: iterator result is not an object",
     ));
   };
   let value_key = string_key(scope, "value")?;
-  scope.ordinary_get(vm, obj, value_key, iter_result)
+  scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, value_key, iter_result)
 }
 
 /// `IteratorStepValue` (ECMA-262).
@@ -155,6 +215,8 @@ pub fn iterator_value(vm: &mut Vm, scope: &mut Scope<'_>, iter_result: Value) ->
 /// Returns `Ok(None)` when iteration is complete.
 pub fn iterator_step_value(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   record: &mut IteratorRecord,
 ) -> Result<Option<Value>, VmError> {
@@ -177,16 +239,16 @@ pub fn iterator_step_value(
       *next_index = next_index.saturating_add(1);
 
       let key = string_key(scope, &idx.to_string())?;
-      let value = scope.ordinary_get(vm, *array, key, Value::Object(*array))?;
+      let value = scope.ordinary_get_with_host_and_hooks(vm, host, hooks, *array, key, Value::Object(*array))?;
       Ok(Some(value))
     }
     IteratorKind::Protocol => {
-      let result = iterator_next(vm, scope, record)?;
-      if iterator_complete(vm, scope, result)? {
+      let result = iterator_next(vm, host, hooks, scope, record)?;
+      if iterator_complete(vm, host, hooks, scope, result)? {
         record.done = true;
         return Ok(None);
       }
-      Ok(Some(iterator_value(vm, scope, result)?))
+      Ok(Some(iterator_value(vm, host, hooks, scope, result)?))
     }
   }
 }
@@ -198,6 +260,8 @@ pub fn iterator_step_value(
 /// full exception model.
 pub fn iterator_close(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   scope: &mut Scope<'_>,
   record: &IteratorRecord,
 ) -> Result<(), VmError> {
@@ -206,12 +270,12 @@ pub fn iterator_close(
   }
 
   let return_key = string_key(scope, "return")?;
-  let Some(return_method) = vm.get_method(scope, record.iterator, return_key)? else {
+  let Some(return_method) = get_method(vm, host, hooks, scope, record.iterator, return_key)? else {
     return Ok(());
   };
 
   // Best-effort: ignore errors.
-  let _ = vm.call(scope, return_method, record.iterator, &[]);
+  let _ = vm.call_with_host_and_hooks(host, scope, hooks, return_method, record.iterator, &[]);
   Ok(())
 }
 

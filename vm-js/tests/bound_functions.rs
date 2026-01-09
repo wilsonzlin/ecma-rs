@@ -73,7 +73,7 @@ fn bound_function_call_binds_this_and_prepends_args() -> Result<(), VmError> {
     0,
   )?;
 
-  let result = vm.call(
+  let result = vm.call_without_host(
     &mut scope,
     Value::Object(bound),
     Value::Object(obj_b),
@@ -99,7 +99,8 @@ fn bound_function_construct_forwards_new_target() -> Result<(), VmError> {
   let bound_name = scope.alloc_string("bound")?;
   let bound = scope.alloc_bound_function(target, Value::Undefined, &[], bound_name, 0)?;
 
-  let result = vm.construct(&mut scope, Value::Object(bound), &[], Value::Object(bound))?;
+  let result =
+    vm.construct_without_host(&mut scope, Value::Object(bound), &[], Value::Object(bound))?;
   assert_eq!(result, Value::Object(target));
   Ok(())
 }

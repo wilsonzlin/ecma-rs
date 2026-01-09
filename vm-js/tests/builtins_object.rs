@@ -85,7 +85,7 @@ fn object_constructor_is_callable() -> Result<(), VmError> {
   // `typeof Object === "function"` (approximated by "call doesn't error").
   let _ = rt
     .vm
-    .call(&mut scope, Value::Object(object), Value::Undefined, &[])?;
+    .call_without_host(&mut scope, Value::Object(object), Value::Undefined, &[])?;
 
   Ok(())
 }
@@ -114,12 +114,9 @@ fn object_define_property_defines_value() -> Result<(), VmError> {
   let x = scope.alloc_string("x")?;
   let args = [Value::Object(o), Value::String(x), Value::Object(desc)];
 
-  let _ = rt.vm.call(
-    &mut scope,
-    Value::Object(define_property),
-    Value::Object(object),
-    &args,
-  )?;
+  let _ = rt
+    .vm
+    .call_without_host(&mut scope, Value::Object(define_property), Value::Object(object), &args)?;
 
   let x_key = PropertyKey::from_string(x);
   assert_eq!(
@@ -150,12 +147,9 @@ fn object_create_sets_prototype() -> Result<(), VmError> {
   let y_key = PropertyKey::from_string(scope.alloc_string("y")?);
 
   let args = [Value::Object(p)];
-  let o = rt.vm.call(
-    &mut scope,
-    Value::Object(create),
-    Value::Object(object),
-    &args,
-  )?;
+  let o = rt
+    .vm
+    .call_without_host(&mut scope, Value::Object(create), Value::Object(object), &args)?;
   let Value::Object(o) = o else {
     panic!("Object.create should return an object");
   };
@@ -190,12 +184,9 @@ fn object_keys_returns_enumerable_string_keys() -> Result<(), VmError> {
   define_enumerable_data_property(&mut scope, o, "b", Value::Number(2.0))?;
 
   let args = [Value::Object(o)];
-  let result = rt.vm.call(
-    &mut scope,
-    Value::Object(keys),
-    Value::Object(object),
-    &args,
-  )?;
+  let result = rt
+    .vm
+    .call_without_host(&mut scope, Value::Object(keys), Value::Object(object), &args)?;
   let Value::Object(arr) = result else {
     panic!("Object.keys should return an object");
   };
@@ -247,12 +238,9 @@ fn object_assign_copies_enumerable_properties_and_invokes_getters() -> Result<()
   )?;
 
   let args = [Value::Object(target), Value::Object(source)];
-  let out = rt.vm.call(
-    &mut scope,
-    Value::Object(assign),
-    Value::Object(object),
-    &args,
-  )?;
+  let out = rt
+    .vm
+    .call_without_host(&mut scope, Value::Object(assign), Value::Object(object), &args)?;
   assert_eq!(out, Value::Object(target));
 
   assert_eq!(
@@ -305,12 +293,7 @@ fn object_assign_throws_when_setting_non_writable_target_property() -> Result<()
   let args = [Value::Object(target), Value::Object(source)];
   let err = rt
     .vm
-    .call(
-      &mut scope,
-      Value::Object(assign),
-      Value::Object(object),
-      &args,
-    )
+    .call_without_host(&mut scope, Value::Object(assign), Value::Object(object), &args)
     .unwrap_err();
   assert!(matches!(err, VmError::TypeError(_)));
 

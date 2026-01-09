@@ -585,14 +585,17 @@ impl Vm {
     self.interrupt_handle.reset();
   }
 
-  /// Attach arbitrary host/embedding state to this VM.
+  /// Attach arbitrary embedding state to this VM.
   ///
-  /// This is intended for native (host-implemented) call/construct handlers, whose signature only
-  /// gives access to `&mut Vm`, to reach shared embedding state (DOM, wrapper caches, etc.) without
-  /// closures.
+  /// Native (host-implemented) call/construct handlers receive both:
+  /// - `&mut Vm` (engine state), and
+  /// - `&mut dyn VmHost` (embedder-provided host context).
   ///
-  /// Native handlers are expected to downcast the stored value to their embedding type via
-  /// [`Vm::user_data`] / [`Vm::user_data_mut`].
+  /// Most host embeddings should thread shared state (DOM, event loop, wrapper caches, etc.) via
+  /// [`VmHost`]. `Vm::user_data` is provided as a convenience for state that is logically owned by
+  /// the VM itself, or when a host does not have access to a host-context object.
+  ///
+  /// The stored value can be downcast via [`Vm::user_data`] / [`Vm::user_data_mut`].
   pub fn set_user_data<T: Any>(&mut self, data: T) {
     self.user_data = Some(Box::new(data));
   }
@@ -966,6 +969,7 @@ impl Vm {
   fn dispatch_native_call(
     &mut self,
     call_id: NativeFunctionId,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
     hooks: &mut dyn VmHostHooks,
     callee: GcObject,
@@ -977,15 +981,13 @@ impl Vm {
       .get(call_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native function id"))?;
-    // `Vm` does not currently thread embedder state through calls. Provide an empty host object so
-    // native call handlers have a stable `VmHost` parameter for future use.
-    let mut host = ();
-    f(self, scope, &mut host, hooks, callee, this, args)
+    f(self, scope, host, hooks, callee, this, args)
   }
 
   fn dispatch_native_construct(
     &mut self,
     construct_id: NativeConstructId,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
     hooks: &mut dyn VmHostHooks,
     callee: GcObject,
@@ -997,8 +999,7 @@ impl Vm {
       .get(construct_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
-    let mut host = ();
-    construct(self, scope, &mut host, hooks, callee, args, new_target)
+    construct(self, scope, host, hooks, callee, args, new_target)
   }
 
   /// Pushes a stack frame and returns an RAII guard that will pop it on drop.
@@ -1123,6 +1124,8 @@ impl Vm {
 
   /// Calls `callee` with the provided `this` value and arguments.
   ///
+  /// `host` is embedder-provided context (DOM/event loop/etc) forwarded to native call handlers.
+  ///
   /// # Rooting
   ///
   /// The returned [`Value`] is **not automatically rooted**. If the caller will perform any
@@ -1133,32 +1136,36 @@ impl Vm {
   /// child [`Scope`].
   pub fn call(
     &mut self,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
     callee: Value,
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    if let Some(host_ptr) = self.host_hooks_override {
-      // SAFETY: `host_hooks_override` is only set by `with_host_hooks_override`, which borrows the
-      // host hook implementation mutably for the duration of its closure. This is treated as a
-      // reborrow of that original `&mut dyn VmHostHooks`.
-      let host = unsafe { &mut *host_ptr };
-      return self.call_with_host(scope, host, callee, this, args);
+    if let Some(hooks_ptr) = self.host_hooks_override {
+      // SAFETY: `host_hooks_override` is only set while a host hooks implementation is mutably
+      // borrowed by an embedder entry point (for example `Vm::call_with_host_and_hooks` or
+      // `JsRuntime::exec_script_source_with_hooks`).
+      let hooks = unsafe { &mut *hooks_ptr };
+      return self.call_impl(host, scope, hooks, callee, this, args);
     }
 
-    // `call_with_host` requires `&mut self` plus an independent `&mut host`, but `Vm` stores a
-    // default microtask queue inside itself. Temporarily move it out so it can serve as the host
-    // hook implementation for this call.
-    let mut host = mem::take(&mut self.microtasks);
-    let result = self.call_with_host(scope, &mut host, callee, this, args);
-    self.microtasks = host;
+    // `call_with_host_and_hooks` requires `&mut self` plus an independent `&mut hooks`, but `Vm`
+    // stores a default microtask queue inside itself. Temporarily move it out so it can serve as
+    // the host hook implementation for this call.
+    let mut hooks = mem::take(&mut self.microtasks);
+    let prev_hooks = self.push_active_host_hooks(&mut hooks);
+    let result = self.call_impl(host, scope, &mut hooks, callee, this, args);
+    self.pop_active_host_hooks(prev_hooks);
+    self.microtasks = hooks;
     result
   }
 
-  /// Alias for [`Vm::call`].
+  /// Convenience wrapper around [`Vm::call`] that passes a dummy host context (`()`) and uses the
+  /// VM-owned microtask queue.
   ///
-  /// Some embeddings keep their own host hook implementation separate from the VM's internal
-  /// microtask queue and need an explicit "no host hooks" call entry point.
+  /// This exists for internal engine/tests that do not have embedder state available. Host
+  /// embeddings should prefer [`Vm::call`] so native handlers can access real host context.
   #[inline]
   pub fn call_without_host(
     &mut self,
@@ -1167,9 +1174,9 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    let mut host = mem::take(&mut self.microtasks);
-    let result = self.call_with_host(scope, &mut host, callee, this, args);
-    self.microtasks = host;
+    let mut hooks = mem::take(&mut self.microtasks);
+    let result = self.call_with_host(scope, &mut hooks, callee, this, args);
+    self.microtasks = hooks;
     result
   }
 
@@ -1183,17 +1190,33 @@ impl Vm {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    let prev_host = self.host_hooks_override;
-    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
-    let result = self.call_with_host_inner(scope, host, callee, this, args);
-    self.host_hooks_override = prev_host;
+    let mut dummy_host = ();
+    self.call_with_host_and_hooks(&mut dummy_host, scope, host, callee, this, args)
+  }
+
+  /// Calls `callee` with the provided `this` value and arguments, using an explicit embedder host
+  /// context and host hook implementation.
+  #[inline]
+  pub fn call_with_host_and_hooks(
+    &mut self,
+    host: &mut dyn VmHost,
+    scope: &mut Scope<'_>,
+    hooks: &mut dyn VmHostHooks,
+    callee: Value,
+    this: Value,
+    args: &[Value],
+  ) -> Result<Value, VmError> {
+    let prev_hooks = self.push_active_host_hooks(hooks);
+    let result = self.call_impl(host, scope, hooks, callee, this, args);
+    self.pop_active_host_hooks(prev_hooks);
     result
   }
 
-  fn call_with_host_inner(
+  fn call_impl(
     &mut self,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    hooks: &mut dyn VmHostHooks,
     callee: Value,
     this: Value,
     args: &[Value],
@@ -1229,9 +1252,13 @@ impl Vm {
         combined.extend_from_slice(bound_args);
         combined.extend_from_slice(args);
 
-        return self.call_with_host(
-          &mut scope,
+        // Root the concatenated list for the duration of the forwarding call.
+        scope.push_roots(&combined)?;
+
+        return self.call_impl(
           host,
+          &mut scope,
+          hooks,
           Value::Object(bound_target),
           bound_this,
           &combined,
@@ -1268,9 +1295,11 @@ impl Vm {
 
     let result = match call_handler {
       CallHandler::Native(call_id) => {
-        vm.dispatch_native_call(call_id, &mut scope, host, callee_obj, this, args)
+        vm.dispatch_native_call(call_id, host, &mut scope, hooks, callee_obj, this, args)
       }
-      CallHandler::Ecma(code_id) => vm.call_ecma_function(&mut scope, host, code_id, callee_obj, this, args),
+      CallHandler::Ecma(code_id) => {
+        vm.call_ecma_function(&mut scope, host, hooks, code_id, callee_obj, this, args)
+      }
       CallHandler::User(func) => {
         drop(func);
         Err(VmError::Unimplemented("user-defined function call"))
@@ -1336,6 +1365,9 @@ impl Vm {
 
   /// Constructs `callee` with the provided arguments and `new_target`.
   ///
+  /// `host` is embedder-provided context (DOM/event loop/etc) forwarded to native constructor
+  /// handlers.
+  ///
   /// # Rooting
   ///
   /// The returned [`Value`] is **not automatically rooted**. If the caller will perform any
@@ -1346,19 +1378,38 @@ impl Vm {
   /// temporary child [`Scope`].
   pub fn construct(
     &mut self,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
     callee: Value,
     args: &[Value],
     new_target: Value,
   ) -> Result<Value, VmError> {
-    if let Some(host_ptr) = self.host_hooks_override {
-      // SAFETY: see `Vm::call`.
-      let host = unsafe { &mut *host_ptr };
-      return self.construct_with_host(scope, host, callee, args, new_target);
+    if let Some(hooks_ptr) = self.host_hooks_override {
+      // SAFETY: see `Vm::call` for the safety contract of `host_hooks_override`.
+      let hooks = unsafe { &mut *hooks_ptr };
+      return self.construct_impl(host, scope, hooks, callee, args, new_target);
     }
-    let mut host = mem::take(&mut self.microtasks);
-    let result = self.construct_with_host(scope, &mut host, callee, args, new_target);
-    self.microtasks = host;
+
+    let mut hooks = mem::take(&mut self.microtasks);
+    let prev_hooks = self.push_active_host_hooks(&mut hooks);
+    let result = self.construct_impl(host, scope, &mut hooks, callee, args, new_target);
+    self.pop_active_host_hooks(prev_hooks);
+    self.microtasks = hooks;
+    result
+  }
+
+  /// Convenience wrapper around [`Vm::construct`] that passes a dummy host context (`()`) and uses
+  /// the VM-owned microtask queue.
+  pub fn construct_without_host(
+    &mut self,
+    scope: &mut Scope<'_>,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let mut hooks = mem::take(&mut self.microtasks);
+    let result = self.construct_with_host(scope, &mut hooks, callee, args, new_target);
+    self.microtasks = hooks;
     result
   }
 
@@ -1372,17 +1423,33 @@ impl Vm {
     args: &[Value],
     new_target: Value,
   ) -> Result<Value, VmError> {
-    let prev_host = self.host_hooks_override;
-    self.host_hooks_override = Some(Self::erase_host_hooks_lifetime(host));
-    let result = self.construct_with_host_inner(scope, host, callee, args, new_target);
-    self.host_hooks_override = prev_host;
+    let mut dummy_host = ();
+    self.construct_with_host_and_hooks(&mut dummy_host, scope, host, callee, args, new_target)
+  }
+
+  /// Constructs `callee` with the provided arguments and `new_target`, using an explicit embedder
+  /// host context and host hook implementation.
+  #[inline]
+  pub fn construct_with_host_and_hooks(
+    &mut self,
+    host: &mut dyn VmHost,
+    scope: &mut Scope<'_>,
+    hooks: &mut dyn VmHostHooks,
+    callee: Value,
+    args: &[Value],
+    new_target: Value,
+  ) -> Result<Value, VmError> {
+    let prev_hooks = self.push_active_host_hooks(hooks);
+    let result = self.construct_impl(host, scope, hooks, callee, args, new_target);
+    self.pop_active_host_hooks(prev_hooks);
     result
   }
 
-  fn construct_with_host_inner(
+  fn construct_impl(
     &mut self,
+    host: &mut dyn VmHost,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    hooks: &mut dyn VmHostHooks,
     callee: Value,
     args: &[Value],
     new_target: Value,
@@ -1423,9 +1490,13 @@ impl Vm {
           new_target
         };
 
-        return self.construct_with_host(
-          &mut scope,
+        // Root the concatenated list for the duration of the forwarding call.
+        scope.push_roots(&combined)?;
+
+        return self.construct_impl(
           host,
+          &mut scope,
+          hooks,
           Value::Object(bound_target),
           &combined,
           forwarded_new_target,
@@ -1464,10 +1535,24 @@ impl Vm {
     vm.tick()?;
 
     let result = match construct_handler {
-      ConstructHandler::Native(construct_id) => {
-        vm.dispatch_native_construct(construct_id, &mut scope, host, callee_obj, args, new_target)
-      }
-      ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(&mut scope, host, code_id, callee_obj, args, new_target),
+      ConstructHandler::Native(construct_id) => vm.dispatch_native_construct(
+        construct_id,
+        host,
+        &mut scope,
+        hooks,
+        callee_obj,
+        args,
+        new_target,
+      ),
+      ConstructHandler::Ecma(code_id) => vm.construct_ecma_function(
+        &mut scope,
+        host,
+        hooks,
+        code_id,
+        callee_obj,
+        args,
+        new_target,
+      ),
     };
 
     // Capture a stack trace for thrown exceptions before the current frame is popped.
@@ -1483,7 +1568,8 @@ impl Vm {
   fn call_ecma_function(
     &mut self,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
     code_id: EcmaFunctionId,
     callee: crate::GcObject,
     this: Value,
@@ -1540,6 +1626,7 @@ impl Vm {
       self,
       scope,
       host,
+      hooks,
       &mut env,
       code_meta.source.clone(),
       code_meta.span_start,
@@ -1558,7 +1645,8 @@ impl Vm {
   fn construct_ecma_function(
     &mut self,
     scope: &mut Scope<'_>,
-    host: &mut dyn VmHostHooks,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
     code_id: EcmaFunctionId,
     callee: crate::GcObject,
     args: &[Value],
@@ -1575,24 +1663,25 @@ impl Vm {
     };
 
     // GetPrototypeFromConstructor(newTarget, %Object.prototype%).
+    let default_proto = self
+      .intrinsics()
+      .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
+      .object_prototype();
     let proto = match new_target {
       Value::Object(nt) => {
         let mut proto_scope = scope.reborrow();
         proto_scope.push_root(Value::Object(nt))?;
-        let key = PropertyKey::from_string(proto_scope.alloc_string("prototype")?);
-        let value = proto_scope.ordinary_get(self, nt, key, Value::Object(nt))?;
+        let key_s = proto_scope.alloc_string("prototype")?;
+        proto_scope.push_root(Value::String(key_s))?;
+        let key = PropertyKey::from_string(key_s);
+        let value =
+          proto_scope.ordinary_get_with_host_and_hooks(self, host, hooks, nt, key, Value::Object(nt))?;
         match value {
           Value::Object(o) => o,
-          _ => self
-            .intrinsics()
-            .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
-            .object_prototype(),
+          _ => default_proto,
         }
       }
-      _ => self
-        .intrinsics()
-        .ok_or(VmError::Unimplemented("intrinsics not initialized"))?
-        .object_prototype(),
+      _ => default_proto,
     };
 
     let mut this_scope = scope.reborrow();
@@ -1612,6 +1701,7 @@ impl Vm {
       self,
       &mut this_scope,
       host,
+      hooks,
       &mut env,
       code_meta.source.clone(),
       code_meta.span_start,

@@ -10,6 +10,7 @@ use crate::symbol::JsSymbol;
 use crate::CompiledFunctionRef;
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, GcSymbol, HeapId, RealmId, RootId, Value, Vm, VmError,
+  VmHost,
 };
 use core::mem;
 use semantic_js::js::SymbolId;
@@ -708,6 +709,7 @@ impl Heap {
   pub fn call(
     &mut self,
     vm: &mut Vm,
+    host: &mut dyn VmHost,
     callee: Value,
     this: Value,
     args: &[Value],
@@ -725,7 +727,7 @@ impl Heap {
     }
 
     let mut scope = self.scope();
-    vm.call(&mut scope, callee, this, args)
+    vm.call(host, &mut scope, callee, this, args)
   }
 
   /// Gets the string contents for `s`.

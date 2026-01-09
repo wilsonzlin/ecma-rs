@@ -1925,7 +1925,8 @@ fn write_internal_record_value(
 fn invoke_thenable_then(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   next_promise: Value,
   on_fulfilled: Value,
   on_rejected: Value,
@@ -1938,31 +1939,30 @@ fn invoke_thenable_then(
   invoke_scope.push_roots(&[next_promise, on_fulfilled, on_rejected])?;
 
   let Value::Object(obj) = next_promise else {
-    let err = create_type_error(vm, &mut invoke_scope, host, "Promise thenable is not an object")?;
+    let err = create_type_error(vm, &mut invoke_scope, hooks, "Promise thenable is not an object")?;
     return Err(VmError::Throw(err));
   };
 
   let then_key = PropertyKey::from_string(invoke_scope.alloc_string("then")?);
-  let then = invoke_scope.ordinary_get(vm, obj, then_key, next_promise)?;
+  let then =
+    invoke_scope.ordinary_get_with_host_and_hooks(vm, host, hooks, obj, then_key, next_promise)?;
   if !invoke_scope.heap().is_callable(then)? {
-    let err = create_type_error(vm, &mut invoke_scope, host, "Promise then is not callable")?;
+    let err = create_type_error(vm, &mut invoke_scope, hooks, "Promise then is not callable")?;
     return Err(VmError::Throw(err));
   }
 
-  let _ = vm.call_with_host(
-    &mut invoke_scope,
-    host,
-    then,
-    next_promise,
-    &[on_fulfilled, on_rejected],
-  )?;
+  let _ = vm.call_with_host_and_hooks(host, &mut invoke_scope, hooks, then, next_promise, &[
+    on_fulfilled,
+    on_rejected,
+  ])?;
   Ok(())
 }
 
 fn if_abrupt_reject_promise(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   capability: PromiseCapability,
   completion: VmError,
 ) -> Result<Value, VmError> {
@@ -1971,14 +1971,15 @@ fn if_abrupt_reject_promise(
   let Some(reason) = completion.thrown_value() else {
     return Err(completion);
   };
-  let _ = vm.call_with_host(scope, host, capability.reject, Value::Undefined, &[reason])?;
+  let _ = vm.call_with_host_and_hooks(host, scope, hooks, capability.reject, Value::Undefined, &[reason])?;
   Ok(capability.promise)
 }
 
 fn perform_promise_all(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   iterator_record: &mut crate::iterator::IteratorRecord,
   constructor: Value,
   capability: PromiseCapability,
@@ -2002,7 +2003,7 @@ fn perform_promise_all(
   let mut index: u32 = 0;
 
   loop {
-    let next_value = crate::iterator::iterator_step_value(vm, scope, iterator_record)?;
+    let next_value = crate::iterator::iterator_step_value(vm, host, hooks, scope, iterator_record)?;
     let Some(next_value) = next_value else {
       // Done: decrement initial 1.
       let remaining_value = read_internal_record_value(scope, remaining)?;
@@ -2014,9 +2015,10 @@ fn perform_promise_all(
       let new_remaining = n - 1.0;
       write_internal_record_value(scope, remaining, Value::Number(new_remaining))?;
       if new_remaining == 0.0 {
-        let _ = vm.call_with_host(
-          scope,
+        let _ = vm.call_with_host_and_hooks(
           host,
+          scope,
+          hooks,
           capability.resolve,
           Value::Undefined,
           &[Value::Object(values)],
@@ -2041,7 +2043,7 @@ fn perform_promise_all(
 
     // nextPromise = ? Call(promiseResolve, constructor, « nextValue »).
     let next_promise =
-      vm.call_with_host(&mut step_scope, host, promise_resolve, constructor, &[next_value])?;
+      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
     step_scope.push_root(next_promise)?;
 
     // Create per-element alreadyCalled record.
@@ -2083,6 +2085,7 @@ fn perform_promise_all(
       vm,
       &mut step_scope,
       host,
+      hooks,
       next_promise,
       Value::Object(resolve_element),
       capability.reject,
@@ -2095,15 +2098,15 @@ fn perform_promise_all(
 pub fn promise_all(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHost,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   // `Promise.all(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
-  let capability = new_promise_capability(vm, scope, host, this)?;
+  let capability = new_promise_capability(vm, scope, hooks, this)?;
 
   // Root the resulting promise and resolving functions so `IfAbruptRejectPromise` can call them
   // even if the iterator acquisition/loop allocates and triggers GC.
@@ -2111,14 +2114,14 @@ pub fn promise_all(
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
-  let promise_resolve = match get_promise_resolve(vm, scope, host, this) {
+  let promise_resolve = match get_promise_resolve(vm, scope, hooks, this) {
     Ok(v) => v,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
 
-  let mut iterator_record = match crate::iterator::get_iterator(vm, scope, iterable) {
+  let mut iterator_record = match crate::iterator::get_iterator(vm, host, hooks, scope, iterable) {
     Ok(r) => r,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
   scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
@@ -2126,6 +2129,7 @@ pub fn promise_all(
     vm,
     scope,
     host,
+    hooks,
     &mut iterator_record,
     this,
     capability,
@@ -2136,9 +2140,9 @@ pub fn promise_all(
     Ok(v) => Ok(v),
     Err(err) => {
       if !iterator_record.done {
-        let _ = crate::iterator::iterator_close(vm, scope, &iterator_record);
+        let _ = crate::iterator::iterator_close(vm, host, hooks, scope, &iterator_record);
       }
-      if_abrupt_reject_promise(vm, scope, host, capability, err)
+      if_abrupt_reject_promise(vm, scope, host, hooks, capability, err)
     }
   }
 }
@@ -2146,7 +2150,8 @@ pub fn promise_all(
 fn perform_promise_race(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   iterator_record: &mut crate::iterator::IteratorRecord,
   constructor: Value,
   capability: PromiseCapability,
@@ -2154,40 +2159,41 @@ fn perform_promise_race(
 ) -> Result<Value, VmError> {
   // `PerformPromiseRace` (ECMA-262).
   loop {
-    let next_value = crate::iterator::iterator_step_value(vm, scope, iterator_record)?;
+    let next_value = crate::iterator::iterator_step_value(vm, host, hooks, scope, iterator_record)?;
     let Some(next_value) = next_value else {
       return Ok(capability.promise);
     };
 
-    let next_promise = vm.call_with_host(scope, host, promise_resolve, constructor, &[next_value])?;
-    invoke_thenable_then(vm, scope, host, next_promise, capability.resolve, capability.reject)?;
+    let next_promise =
+      vm.call_with_host_and_hooks(host, scope, hooks, promise_resolve, constructor, &[next_value])?;
+    invoke_thenable_then(vm, scope, host, hooks, next_promise, capability.resolve, capability.reject)?;
   }
 }
 
 pub fn promise_race(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHost,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   // `Promise.race(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
-  let capability = new_promise_capability(vm, scope, host, this)?;
+  let capability = new_promise_capability(vm, scope, hooks, this)?;
   scope.push_root(capability.promise)?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
-  let promise_resolve = match get_promise_resolve(vm, scope, host, this) {
+  let promise_resolve = match get_promise_resolve(vm, scope, hooks, this) {
     Ok(v) => v,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
 
-  let mut iterator_record = match crate::iterator::get_iterator(vm, scope, iterable) {
+  let mut iterator_record = match crate::iterator::get_iterator(vm, host, hooks, scope, iterable) {
     Ok(r) => r,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
   scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
@@ -2195,6 +2201,7 @@ pub fn promise_race(
     vm,
     scope,
     host,
+    hooks,
     &mut iterator_record,
     this,
     capability,
@@ -2205,9 +2212,9 @@ pub fn promise_race(
     Ok(v) => Ok(v),
     Err(err) => {
       if !iterator_record.done {
-        let _ = crate::iterator::iterator_close(vm, scope, &iterator_record);
+        let _ = crate::iterator::iterator_close(vm, host, hooks, scope, &iterator_record);
       }
-      if_abrupt_reject_promise(vm, scope, host, capability, err)
+      if_abrupt_reject_promise(vm, scope, host, hooks, capability, err)
     }
   }
 }
@@ -2215,7 +2222,8 @@ pub fn promise_race(
 fn perform_promise_all_settled(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   iterator_record: &mut crate::iterator::IteratorRecord,
   constructor: Value,
   capability: PromiseCapability,
@@ -2237,7 +2245,7 @@ fn perform_promise_all_settled(
   let mut index: u32 = 0;
 
   loop {
-    let next_value = crate::iterator::iterator_step_value(vm, scope, iterator_record)?;
+    let next_value = crate::iterator::iterator_step_value(vm, host, hooks, scope, iterator_record)?;
     let Some(next_value) = next_value else {
       let remaining_value = read_internal_record_value(scope, remaining)?;
       let Value::Number(n) = remaining_value else {
@@ -2248,9 +2256,10 @@ fn perform_promise_all_settled(
       let new_remaining = n - 1.0;
       write_internal_record_value(scope, remaining, Value::Number(new_remaining))?;
       if new_remaining == 0.0 {
-        let _ = vm.call_with_host(
-          scope,
+        let _ = vm.call_with_host_and_hooks(
           host,
+          scope,
+          hooks,
           capability.resolve,
           Value::Undefined,
           &[Value::Object(values)],
@@ -2274,7 +2283,7 @@ fn perform_promise_all_settled(
     }
 
     let next_promise =
-      vm.call_with_host(&mut step_scope, host, promise_resolve, constructor, &[next_value])?;
+      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
     step_scope.push_root(next_promise)?;
 
     // Shared alreadyCalled record for the pair of element functions.
@@ -2338,6 +2347,7 @@ fn perform_promise_all_settled(
       vm,
       &mut step_scope,
       host,
+      hooks,
       next_promise,
       Value::Object(on_fulfilled),
       Value::Object(on_rejected),
@@ -2350,27 +2360,27 @@ fn perform_promise_all_settled(
 pub fn promise_all_settled(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHost,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   // `Promise.allSettled(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
-  let capability = new_promise_capability(vm, scope, host, this)?;
+  let capability = new_promise_capability(vm, scope, hooks, this)?;
   scope.push_root(capability.promise)?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
-  let promise_resolve = match get_promise_resolve(vm, scope, host, this) {
+  let promise_resolve = match get_promise_resolve(vm, scope, hooks, this) {
     Ok(v) => v,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
 
-  let mut iterator_record = match crate::iterator::get_iterator(vm, scope, iterable) {
+  let mut iterator_record = match crate::iterator::get_iterator(vm, host, hooks, scope, iterable) {
     Ok(r) => r,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
   scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
@@ -2378,6 +2388,7 @@ pub fn promise_all_settled(
     vm,
     scope,
     host,
+    hooks,
     &mut iterator_record,
     this,
     capability,
@@ -2388,9 +2399,9 @@ pub fn promise_all_settled(
     Ok(v) => Ok(v),
     Err(err) => {
       if !iterator_record.done {
-        let _ = crate::iterator::iterator_close(vm, scope, &iterator_record);
+        let _ = crate::iterator::iterator_close(vm, host, hooks, scope, &iterator_record);
       }
-      if_abrupt_reject_promise(vm, scope, host, capability, err)
+      if_abrupt_reject_promise(vm, scope, host, hooks, capability, err)
     }
   }
 }
@@ -2398,7 +2409,8 @@ pub fn promise_all_settled(
 fn perform_promise_any(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   iterator_record: &mut crate::iterator::IteratorRecord,
   constructor: Value,
   capability: PromiseCapability,
@@ -2420,7 +2432,7 @@ fn perform_promise_any(
   let mut index: u32 = 0;
 
   loop {
-    let next_value = crate::iterator::iterator_step_value(vm, scope, iterator_record)?;
+    let next_value = crate::iterator::iterator_step_value(vm, host, hooks, scope, iterator_record)?;
     let Some(next_value) = next_value else {
       let remaining_value = read_internal_record_value(scope, remaining)?;
       let Value::Number(n) = remaining_value else {
@@ -2432,16 +2444,18 @@ fn perform_promise_any(
       write_internal_record_value(scope, remaining, Value::Number(new_remaining))?;
       if new_remaining == 0.0 {
         let message = scope.alloc_string("All promises were rejected")?;
-        let aggregate = vm.construct_with_host(
-          scope,
+        let aggregate = vm.construct_with_host_and_hooks(
           host,
+          scope,
+          hooks,
           Value::Object(intr.aggregate_error()),
           &[Value::Object(errors), Value::String(message)],
           Value::Object(intr.aggregate_error()),
         )?;
-        let _ = vm.call_with_host(
-          scope,
+        let _ = vm.call_with_host_and_hooks(
           host,
+          scope,
+          hooks,
           capability.reject,
           Value::Undefined,
           &[aggregate],
@@ -2464,7 +2478,7 @@ fn perform_promise_any(
     }
 
     let next_promise =
-      vm.call_with_host(&mut step_scope, host, promise_resolve, constructor, &[next_value])?;
+      vm.call_with_host_and_hooks(host, &mut step_scope, hooks, promise_resolve, constructor, &[next_value])?;
     step_scope.push_root(next_promise)?;
 
     let already_called =
@@ -2504,6 +2518,7 @@ fn perform_promise_any(
       vm,
       &mut step_scope,
       host,
+      hooks,
       next_promise,
       capability.resolve,
       Value::Object(reject_element),
@@ -2516,27 +2531,27 @@ fn perform_promise_any(
 pub fn promise_any(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  _host: &mut dyn VmHost,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
   // `Promise.any(iterable)` (ECMA-262).
   let iterable = args.get(0).copied().unwrap_or(Value::Undefined);
-  let capability = new_promise_capability(vm, scope, host, this)?;
+  let capability = new_promise_capability(vm, scope, hooks, this)?;
   scope.push_root(capability.promise)?;
   scope.push_root(capability.resolve)?;
   scope.push_root(capability.reject)?;
 
-  let promise_resolve = match get_promise_resolve(vm, scope, host, this) {
+  let promise_resolve = match get_promise_resolve(vm, scope, hooks, this) {
     Ok(v) => v,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
 
-  let mut iterator_record = match crate::iterator::get_iterator(vm, scope, iterable) {
+  let mut iterator_record = match crate::iterator::get_iterator(vm, host, hooks, scope, iterable) {
     Ok(r) => r,
-    Err(err) => return if_abrupt_reject_promise(vm, scope, host, capability, err),
+    Err(err) => return if_abrupt_reject_promise(vm, scope, host, hooks, capability, err),
   };
   scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
@@ -2544,6 +2559,7 @@ pub fn promise_any(
     vm,
     scope,
     host,
+    hooks,
     &mut iterator_record,
     this,
     capability,
@@ -2554,9 +2570,9 @@ pub fn promise_any(
     Ok(v) => Ok(v),
     Err(err) => {
       if !iterator_record.done {
-        let _ = crate::iterator::iterator_close(vm, scope, &iterator_record);
+        let _ = crate::iterator::iterator_close(vm, host, hooks, scope, &iterator_record);
       }
-      if_abrupt_reject_promise(vm, scope, host, capability, err)
+      if_abrupt_reject_promise(vm, scope, host, hooks, capability, err)
     }
   }
 }

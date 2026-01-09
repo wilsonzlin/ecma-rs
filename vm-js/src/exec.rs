@@ -4,7 +4,7 @@ use crate::ops::{abstract_equality, to_number};
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, JsBigInt, PropertyDescriptor, PropertyDescriptorPatch,
   PropertyKey, PropertyKind, Realm, RootId, Scope, SourceText, StackFrame, Value, Vm, VmError,
-  NativeCall, VmHostHooks, VmJobContext,
+  NativeCall, VmHost, VmHostHooks, VmJobContext,
 };
 use diagnostics::{Diagnostic, FileId};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
@@ -312,6 +312,8 @@ impl RuntimeEnv {
   fn get(
     &self,
     vm: &mut Vm,
+    host: &mut dyn VmHost,
+    hooks: &mut dyn VmHostHooks,
     scope: &mut Scope<'_>,
     name: &str,
   ) -> Result<Option<Value>, VmError> {
@@ -342,7 +344,7 @@ impl RuntimeEnv {
     }
 
     let receiver = Value::Object(global_object);
-    Ok(Some(key_scope.ordinary_get(vm, global_object, key, receiver)?))
+    Ok(Some(key_scope.ordinary_get_with_host_and_hooks(vm, host, hooks, global_object, key, receiver)?))
   }
 
   pub(crate) fn set(
@@ -540,7 +542,8 @@ impl JsRuntime {
 
   /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
   pub fn exec_script(&mut self, source: &str) -> Result<Value, VmError> {
-    self.exec_script_source(Arc::new(SourceText::new("<inline>", source)))
+    let mut host = ();
+    self.exec_script_with_host(&mut host, source)
   }
 
   /// Parse and execute a classic script, using a custom host hook implementation.
@@ -548,16 +551,37 @@ impl JsRuntime {
   /// This is intended for embeddings that need Promise jobs enqueued by the script to be routed via
   /// `VmHostHooks::host_enqueue_promise_job` (for example, an HTML microtask queue) instead of the
   /// VM-owned microtask queue used by [`JsRuntime::exec_script`].
+  pub fn exec_script_with_hooks(
+    &mut self,
+    hooks: &mut dyn VmHostHooks,
+    source: &str,
+  ) -> Result<Value, VmError> {
+    self.exec_script_source_with_hooks(hooks, Arc::new(SourceText::new("<inline>", source)))
+  }
+
+  /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
+  pub fn exec_script_source(&mut self, source: Arc<SourceText>) -> Result<Value, VmError> {
+    let mut host = ();
+    self.exec_script_source_with_host(&mut host, source)
+  }
+
+  /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`) with an explicit
+  /// embedder host context.
   pub fn exec_script_with_host(
     &mut self,
-    host: &mut dyn VmHostHooks,
+    host: &mut dyn VmHost,
     source: &str,
   ) -> Result<Value, VmError> {
     self.exec_script_source_with_host(host, Arc::new(SourceText::new("<inline>", source)))
   }
 
-  /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
-  pub fn exec_script_source(&mut self, source: Arc<SourceText>) -> Result<Value, VmError> {
+  /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`) with an explicit
+  /// embedder host context.
+  pub fn exec_script_source_with_host(
+    &mut self,
+    host: &mut dyn VmHost,
+    source: Arc<SourceText>,
+  ) -> Result<Value, VmError> {
     let opts = ParseOptions {
       dialect: Dialect::Ecma,
       source_type: SourceType::Script,
@@ -576,6 +600,11 @@ impl JsRuntime {
       line,
       col,
     };
+    // Script evaluation needs a host hook implementation for Promise jobs. `Vm` stores a default
+    // microtask queue inside itself, but we need to hold `&mut Vm` and `&mut dyn VmHostHooks`
+    // simultaneously. Temporarily move the queue out so it can be passed as `hooks`.
+    let mut hooks = std::mem::take(self.vm.microtask_queue_mut());
+
     let mut vm_frame = self.vm.enter_frame(frame)?;
 
     let mut scope = self.heap.scope();
@@ -583,33 +612,41 @@ impl JsRuntime {
     let global_this = Value::Object(global_object);
     let mut evaluator = Evaluator {
       vm: &mut *vm_frame,
+      host,
+      hooks: &mut hooks,
       env: &mut self.env,
       strict,
       this: global_this,
       new_target: Value::Undefined,
-      hooks: None,
     };
 
-    evaluator.instantiate_script(&mut scope, &top.stx.body)?;
+    let result: Result<Value, VmError> = (|| {
+      evaluator.instantiate_script(&mut scope, &top.stx.body)?;
 
-    let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
-    match completion {
-      Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
-      Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
-        value: thrown.value,
-        stack: thrown.stack,
-      }),
-      Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
-      Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
-      Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
-    }
+      let completion = evaluator.eval_stmt_list(&mut scope, &top.stx.body)?;
+      match completion {
+        Completion::Normal(v) => Ok(v.unwrap_or(Value::Undefined)),
+        Completion::Throw(thrown) => Err(VmError::ThrowWithStack {
+          value: thrown.value,
+          stack: thrown.stack,
+        }),
+        Completion::Return(_) => Err(VmError::Unimplemented("return outside of function")),
+        Completion::Break(..) => Err(VmError::Unimplemented("break outside of loop")),
+        Completion::Continue(..) => Err(VmError::Unimplemented("continue outside of loop")),
+      }
+    })();
+
+    // Restore the VM's microtask queue so the embedding can run a microtask checkpoint later.
+    *vm_frame.microtask_queue_mut() = hooks;
+
+    result
   }
 
   /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`) using a custom
   /// host hook implementation.
-  pub fn exec_script_source_with_host(
+  pub fn exec_script_source_with_hooks(
     &mut self,
-    host: &mut dyn VmHostHooks,
+    hooks: &mut dyn VmHostHooks,
     source: Arc<SourceText>,
   ) -> Result<Value, VmError> {
     let opts = ParseOptions {
@@ -636,21 +673,24 @@ impl JsRuntime {
       script_or_module: None,
     };
     let mut vm_ctx = self.vm.execution_context_guard(exec_ctx);
-    let prev_host = vm_ctx.push_active_host_hooks(host);
+    let prev_host = vm_ctx.push_active_host_hooks(hooks);
 
     let result = (|| {
       let mut vm_frame = vm_ctx.enter_frame(frame)?;
+
+      let mut dummy_host = ();
 
       let mut scope = self.heap.scope();
       // In classic scripts, top-level `this` is the global object (even in strict mode).
       let global_this = Value::Object(global_object);
       let mut evaluator = Evaluator {
         vm: &mut *vm_frame,
+        host: &mut dummy_host,
+        hooks,
         env: &mut self.env,
         strict,
         this: global_this,
         new_target: Value::Undefined,
-        hooks: None,
       };
 
       evaluator.instantiate_script(&mut scope, &top.stx.body)?;
@@ -669,10 +709,12 @@ impl JsRuntime {
     })();
 
     vm_ctx.pop_active_host_hooks(prev_host);
+    drop(vm_ctx);
+
     // As a safety net, drain any Promise jobs that were enqueued onto the VM-owned microtask queue
     // into the embedding's host hook implementation.
-    while let Some((realm, job)) = vm_ctx.microtask_queue_mut().pop_front() {
-      host.host_enqueue_promise_job(job, realm);
+    while let Some((realm, job)) = self.vm.microtask_queue_mut().pop_front() {
+      hooks.host_enqueue_promise_job(job, realm);
     }
 
     result
@@ -727,11 +769,12 @@ impl VmJobContext for JsRuntime {
 
 struct Evaluator<'a> {
   vm: &'a mut Vm,
+  host: &'a mut dyn VmHost,
+  hooks: &'a mut dyn VmHostHooks,
   env: &'a mut RuntimeEnv,
   strict: bool,
   this: Value,
   new_target: Value,
-  hooks: Option<&'a mut dyn VmHostHooks>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -787,10 +830,9 @@ impl<'a> Evaluator<'a> {
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
-    match self.hooks.as_deref_mut() {
-      Some(host) => self.vm.call_with_host(scope, host, callee, this, args),
-      None => self.vm.call(scope, callee, this, args),
-    }
+    self
+      .vm
+      .call_with_host_and_hooks(&mut *self.host, scope, &mut *self.hooks, callee, this, args)
   }
 
   #[inline]
@@ -801,10 +843,14 @@ impl<'a> Evaluator<'a> {
     args: &[Value],
     new_target: Value,
   ) -> Result<Value, VmError> {
-    match self.hooks.as_deref_mut() {
-      Some(host) => self.vm.construct_with_host(scope, host, callee, args, new_target),
-      None => self.vm.construct(scope, callee, args, new_target),
-    }
+    self.vm.construct_with_host_and_hooks(
+      &mut *self.host,
+      scope,
+      &mut *self.hooks,
+      callee,
+      args,
+      new_target,
+    )
   }
 
   fn instantiate_script(&mut self, scope: &mut Scope<'_>, stmts: &[Node<Stmt>]) -> Result<(), VmError> {
@@ -909,6 +955,8 @@ impl<'a> Evaluator<'a> {
 
         bind_pattern(
           self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
           &mut rest_scope,
           self.env,
           &param.stx.pattern.stx.pat.stx,
@@ -933,6 +981,8 @@ impl<'a> Evaluator<'a> {
 
       bind_pattern(
         self.vm,
+        &mut *self.host,
+        &mut *self.hooks,
         scope,
         self.env,
         &param.stx.pattern.stx.pat.stx,
@@ -1765,6 +1815,8 @@ impl<'a> Evaluator<'a> {
           let value = self.eval_expr(scope, init)?;
           bind_pattern(
             self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
             scope,
             self.env,
             &declarator.pattern.stx.pat.stx,
@@ -1785,6 +1837,8 @@ impl<'a> Evaluator<'a> {
             let value = self.eval_expr(scope, init)?;
             bind_pattern(
               self.vm,
+              &mut *self.host,
+              &mut *self.hooks,
               scope,
               self.env,
               &declarator.pattern.stx.pat.stx,
@@ -1823,6 +1877,8 @@ impl<'a> Evaluator<'a> {
           if !matches!(&*declarator.pattern.stx.pat.stx, Pat::Id(_)) {
             bind_pattern(
               self.vm,
+              &mut *self.host,
+              &mut *self.hooks,
               scope,
               self.env,
               &declarator.pattern.stx.pat.stx,
@@ -1970,6 +2026,8 @@ impl<'a> Evaluator<'a> {
     let _ = env;
     bind_pattern(
       self.vm,
+      &mut *self.host,
+      &mut *self.hooks,
       scope,
       self.env,
       &param.pat.stx,
@@ -2202,8 +2260,7 @@ impl<'a> Evaluator<'a> {
         to_obj_scope.push_root(other)?;
         to_obj_scope.push_root(object_ctor)?;
         let args = [other];
-        let value = self
-          .call(&mut to_obj_scope, object_ctor, Value::Undefined, &args)?;
+        let value = self.call(&mut to_obj_scope, object_ctor, Value::Undefined, &args)?;
         match value {
           Value::Object(obj) => obj,
           _ => {
@@ -2296,6 +2353,8 @@ impl<'a> Evaluator<'a> {
           };
           bind_pattern(
             self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
             &mut iter_scope,
             self.env,
             &pat_decl.stx.pat.stx,
@@ -2307,6 +2366,8 @@ impl<'a> Evaluator<'a> {
         }
         ForInOfLhs::Assign(pat) => bind_pattern(
           self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
           &mut iter_scope,
           self.env,
           &pat.stx,
@@ -2378,7 +2439,13 @@ impl<'a> Evaluator<'a> {
     let mut iter_scope = scope.reborrow();
     iter_scope.push_root(iterable)?;
 
-    let mut iterator_record = iterator::get_iterator(self.vm, &mut iter_scope, iterable)?;
+    let mut iterator_record = iterator::get_iterator(
+      self.vm,
+      &mut *self.host,
+      &mut *self.hooks,
+      &mut iter_scope,
+      iterable,
+    )?;
     iter_scope.push_roots(&[iterator_record.iterator, iterator_record.next_method])?;
 
     // Root `V` across the loop so the value can't be collected between iterations.
@@ -2390,11 +2457,23 @@ impl<'a> Evaluator<'a> {
       // Tick once per iteration so `for (x of xs) {}` is budgeted even when the body is empty.
       self.tick()?;
 
-      let next_value = match iterator::iterator_step_value(self.vm, &mut iter_scope, &mut iterator_record)
+      let next_value = match iterator::iterator_step_value(
+        self.vm,
+        &mut *self.host,
+        &mut *self.hooks,
+        &mut iter_scope,
+        &mut iterator_record,
+      )
       {
         Ok(v) => v,
         Err(err) => {
-          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          let _ = iterator::iterator_close(
+            self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
+            &mut iter_scope,
+            &iterator_record,
+          );
           return Err(err);
         }
       };
@@ -2417,6 +2496,8 @@ impl<'a> Evaluator<'a> {
           };
           bind_pattern(
             self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
             &mut iter_scope,
             self.env,
             &pat_decl.stx.pat.stx,
@@ -2428,6 +2509,8 @@ impl<'a> Evaluator<'a> {
         }
         ForInOfLhs::Assign(pat) => bind_pattern(
           self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
           &mut iter_scope,
           self.env,
           &pat.stx,
@@ -2439,20 +2522,38 @@ impl<'a> Evaluator<'a> {
       };
 
       if let Err(err) = bind_res {
-        let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+        let _ = iterator::iterator_close(
+          self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
+          &mut iter_scope,
+          &iterator_record,
+        );
         return Err(err);
       }
 
       let body_completion = match self.eval_for_body(&mut iter_scope, &stmt.body.stx) {
         Ok(c) => c,
         Err(err) => {
-          let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+          let _ = iterator::iterator_close(
+            self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
+            &mut iter_scope,
+            &iterator_record,
+          );
           return Err(err);
         }
       };
 
       if !Self::loop_continues(&body_completion, label_set) {
-        let _ = iterator::iterator_close(self.vm, &mut iter_scope, &iterator_record);
+        let _ = iterator::iterator_close(
+          self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
+          &mut iter_scope,
+          &iterator_record,
+        );
         return Ok(body_completion.update_empty(Some(v)));
       }
 
@@ -2781,7 +2882,7 @@ impl<'a> Evaluator<'a> {
     reference: &Reference<'_>,
   ) -> Result<Value, VmError> {
     match *reference {
-      Reference::Binding(name) => match self.env.get(self.vm, scope, name)? {
+      Reference::Binding(name) => match self.env.get(self.vm, self.host, self.hooks, scope, name)? {
         Some(v) => Ok(v),
         None => {
           let msg = format!("{name} is not defined");
@@ -2791,7 +2892,7 @@ impl<'a> Evaluator<'a> {
       Reference::Property { object, key } => {
         let mut get_scope = scope.reborrow();
         self.root_reference(&mut get_scope, reference)?;
-        get_scope.ordinary_get(self.vm, object, key, Value::Object(object))
+        get_scope.ordinary_get_with_host_and_hooks(self.vm, self.host, self.hooks, object, key, Value::Object(object))
       }
     }
   }
@@ -2805,7 +2906,8 @@ impl<'a> Evaluator<'a> {
     match *reference {
       Reference::Binding(name) => self.env.set(self.vm, scope, name, value, self.strict),
       Reference::Property { object, key } => {
-        let ok = scope.ordinary_set(self.vm, object, key, value, Value::Object(object))?;
+        let ok =
+          scope.ordinary_set_with_host_and_hooks(self.vm, self.host, self.hooks, object, key, value, Value::Object(object))?;
         if ok {
           Ok(())
         } else if self.strict {
@@ -3223,11 +3325,17 @@ impl<'a> Evaluator<'a> {
           let spread_value = self.eval_expr(&mut spread_scope, rest_expr)?;
           spread_scope.push_root(spread_value)?;
 
-          let mut iter = iterator::get_iterator(self.vm, &mut spread_scope, spread_value)?;
+          let mut iter = iterator::get_iterator(
+            self.vm,
+            &mut *self.host,
+            &mut *self.hooks,
+            &mut spread_scope,
+            spread_value,
+          )?;
           spread_scope.push_roots(&[iter.iterator, iter.next_method])?;
 
           while let Some(value) =
-            iterator::iterator_step_value(self.vm, &mut spread_scope, &mut iter)?
+            iterator::iterator_step_value(self.vm, &mut *self.host, &mut *self.hooks, &mut spread_scope, &mut iter)?
           {
             let idx = next_index;
             next_index = next_index.saturating_add(1);
@@ -3634,7 +3742,8 @@ impl<'a> Evaluator<'a> {
               continue;
             }
 
-            let value = key_scope.ordinary_get(self.vm, src_obj, key, Value::Object(src_obj))?;
+            let value =
+              key_scope.ordinary_get_with_host_and_hooks(self.vm, &mut *self.host, &mut *self.hooks, src_obj, key, Value::Object(src_obj))?;
             key_scope.push_root(value)?;
             let ok = key_scope.create_data_property(obj, key, value)?;
             if !ok {
@@ -3649,7 +3758,7 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_id(&mut self, scope: &mut Scope<'_>, expr: &IdExpr) -> Result<Value, VmError> {
-    match self.env.get(self.vm, scope, &expr.name)? {
+    match self.env.get(self.vm, &mut *self.host, &mut *self.hooks, scope, &expr.name)? {
       Some(v) => Ok(v),
       None => {
         let msg = format!("{name} is not defined", name = expr.name);
@@ -3659,7 +3768,7 @@ impl<'a> Evaluator<'a> {
   }
 
   fn eval_id_pat(&mut self, scope: &mut Scope<'_>, expr: &IdPat) -> Result<Value, VmError> {
-    match self.env.get(self.vm, scope, &expr.name)? {
+    match self.env.get(self.vm, &mut *self.host, &mut *self.hooks, scope, &expr.name)? {
       Some(v) => Ok(v),
       None => {
         let msg = format!("{name} is not defined", name = expr.name);
@@ -3777,14 +3886,14 @@ impl<'a> Evaluator<'a> {
             self.tick()?;
             self
               .env
-              .get(self.vm, scope, &id.stx.name)?
+              .get(self.vm, &mut *self.host, &mut *self.hooks, scope, &id.stx.name)?
               .unwrap_or(Value::Undefined)
           }
           Expr::IdPat(id) => {
             self.tick()?;
             self
               .env
-              .get(self.vm, scope, &id.stx.name)?
+              .get(self.vm, &mut *self.host, &mut *self.hooks, scope, &id.stx.name)?
               .unwrap_or(Value::Undefined)
           }
           _ => self.eval_expr(scope, &expr.argument)?,
@@ -3815,12 +3924,18 @@ impl<'a> Evaluator<'a> {
               let spread_value = self.eval_expr(&mut new_scope, &arg.stx.value)?;
               new_scope.push_root(spread_value)?;
 
-              let mut iter = iterator::get_iterator(self.vm, &mut new_scope, spread_value)?;
+              let mut iter = iterator::get_iterator(
+                self.vm,
+                &mut *self.host,
+                &mut *self.hooks,
+                &mut new_scope,
+                spread_value,
+              )?;
               new_scope.push_root(iter.iterator)?;
               new_scope.push_root(iter.next_method)?;
 
               while let Some(value) =
-                iterator::iterator_step_value(self.vm, &mut new_scope, &mut iter)?
+                iterator::iterator_step_value(self.vm, &mut *self.host, &mut *self.hooks, &mut new_scope, &mut iter)?
               {
                 new_scope.push_root(value)?;
                 args.push(value);
@@ -3999,10 +4114,17 @@ impl<'a> Evaluator<'a> {
         let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
         call_scope.push_root(spread_value)?;
 
-        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
+        let mut iter = iterator::get_iterator(
+          self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
+          &mut call_scope,
+          spread_value,
+        )?;
         call_scope.push_roots(&[iter.iterator, iter.next_method])?;
 
-        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)?
+        while let Some(value) =
+          iterator::iterator_step_value(self.vm, &mut *self.host, &mut *self.hooks, &mut call_scope, &mut iter)?
         {
           call_scope.push_root(value)?;
           args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
@@ -4014,9 +4136,14 @@ impl<'a> Evaluator<'a> {
         args.push(value);
       }
     }
-    self
-      .vm
-      .call(&mut call_scope, callee_value, this_value, &args)
+    self.vm.call_with_host_and_hooks(
+      &mut *self.host,
+      &mut call_scope,
+      &mut *self.hooks,
+      callee_value,
+      this_value,
+      &args,
+    )
   }
 
   fn eval_direct_eval(&mut self, scope: &mut Scope<'_>, expr: &CallExpr) -> Result<Value, VmError> {
@@ -4031,10 +4158,18 @@ impl<'a> Evaluator<'a> {
         let spread_value = self.eval_expr(&mut call_scope, &arg.stx.value)?;
         call_scope.push_root(spread_value)?;
 
-        let mut iter = iterator::get_iterator(self.vm, &mut call_scope, spread_value)?;
+        let mut iter = iterator::get_iterator(
+          self.vm,
+          &mut *self.host,
+          &mut *self.hooks,
+          &mut call_scope,
+          spread_value,
+        )?;
         call_scope.push_roots(&[iter.iterator, iter.next_method])?;
 
-        while let Some(value) = iterator::iterator_step_value(self.vm, &mut call_scope, &mut iter)? {
+        while let Some(value) =
+          iterator::iterator_step_value(self.vm, &mut *self.host, &mut *self.hooks, &mut call_scope, &mut iter)?
+        {
           call_scope.push_root(value)?;
           args.try_reserve(1).map_err(|_| VmError::OutOfMemory)?;
           args.push(value);
@@ -4130,6 +4265,8 @@ impl<'a> Evaluator<'a> {
             let value = self.eval_expr(scope, &expr.right)?;
             bind_assignment_target(
               self.vm,
+              &mut *self.host,
+              &mut *self.hooks,
               scope,
               self.env,
               &expr.left,
@@ -4378,12 +4515,7 @@ impl<'a> Evaluator<'a> {
     };
 
     if let Some(method) = method {
-      let result = self.call(
-        &mut scope,
-        method,
-        Value::Object(constructor_obj),
-        &[object],
-      )?;
+      let result = self.call(&mut scope, method, Value::Object(constructor_obj), &[object])?;
       return Ok(to_boolean(scope.heap(), result)?);
     }
 
@@ -4477,7 +4609,8 @@ impl<'a> Evaluator<'a> {
       .well_known_symbols()
       .to_primitive;
     let to_prim_key = PropertyKey::from_symbol(to_prim_sym);
-    let exotic = prim_scope.ordinary_get(self.vm, obj, to_prim_key, Value::Object(obj))?;
+    let exotic =
+      prim_scope.ordinary_get_with_host_and_hooks(self.vm, &mut *self.host, &mut *self.hooks, obj, to_prim_key, Value::Object(obj))?;
 
     if !matches!(exotic, Value::Undefined | Value::Null) {
       if !prim_scope.heap().is_callable(exotic)? {
@@ -4486,8 +4619,7 @@ impl<'a> Evaluator<'a> {
 
       let hint_s = prim_scope.alloc_string(hint.as_str())?;
       prim_scope.push_root(Value::String(hint_s))?;
-      let out =
-        self.call(&mut prim_scope, exotic, Value::Object(obj), &[Value::String(hint_s)])?;
+      let out = self.call(&mut prim_scope, exotic, Value::Object(obj), &[Value::String(hint_s)])?;
       if self.is_primitive_value(out) {
         return Ok(out);
       }
@@ -4521,7 +4653,8 @@ impl<'a> Evaluator<'a> {
       let key_s = scope.alloc_string(name)?;
       scope.push_root(Value::String(key_s))?;
       let key = PropertyKey::from_string(key_s);
-      let method = scope.ordinary_get(self.vm, obj, key, Value::Object(obj))?;
+      let method =
+        scope.ordinary_get_with_host_and_hooks(self.vm, &mut *self.host, &mut *self.hooks, obj, key, Value::Object(obj))?;
 
       if matches!(method, Value::Undefined | Value::Null) {
         continue;
@@ -4675,7 +4808,8 @@ fn function_length(func: &parse_js::ast::func::Func) -> u32 {
 pub(crate) fn run_ecma_function(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
-  host: &mut dyn VmHostHooks,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   env: &mut RuntimeEnv,
   source: Arc<SourceText>,
   base_offset: u32,
@@ -4689,20 +4823,21 @@ pub(crate) fn run_ecma_function(
   if func.stx.async_ || func.stx.generator {
     return Err(VmError::Unimplemented("async/generator functions"));
   }
-  env.set_source_info(source, base_offset, prefix_len);
+    env.set_source_info(source, base_offset, prefix_len);
 
-  let Some(body) = &func.stx.body else {
-    return Err(VmError::Unimplemented("function without body"));
-  };
+    let Some(body) = &func.stx.body else {
+      return Err(VmError::Unimplemented("function without body"));
+    };
 
-  let mut evaluator = Evaluator {
-    vm,
-    env,
-    strict,
-    this,
-    new_target,
-    hooks: Some(host),
-  };
+    let mut evaluator = Evaluator {
+      vm,
+      host,
+      hooks,
+      env,
+      strict,
+      this,
+      new_target,
+    };
   evaluator.instantiate_function(scope, func, args)?;
 
   match body {
@@ -4752,6 +4887,8 @@ pub(crate) fn run_ecma_function(
 
 pub(crate) fn eval_expr(
   vm: &mut Vm,
+  host: &mut dyn VmHost,
+  hooks: &mut dyn VmHostHooks,
   env: &mut RuntimeEnv,
   strict: bool,
   this: Value,
@@ -4760,11 +4897,12 @@ pub(crate) fn eval_expr(
 ) -> Result<Value, VmError> {
   let mut evaluator = Evaluator {
     vm,
+    host,
+    hooks,
     env,
     strict,
     this,
     new_target: Value::Undefined,
-    hooks: None,
   };
   evaluator.eval_expr(scope, expr)
 }

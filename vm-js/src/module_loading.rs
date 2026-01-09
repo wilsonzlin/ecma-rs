@@ -252,7 +252,7 @@ impl GraphLoadingState {
     };
 
     scope.push_root(cap.resolve)?;
-    let _ = vm.call(scope, cap.resolve, Value::Undefined, &[Value::Undefined])?;
+    let _ = vm.call_without_host(scope, cap.resolve, Value::Undefined, &[Value::Undefined])?;
 
     scope.heap_mut().remove_root(roots.promise);
     scope.heap_mut().remove_root(roots.resolve);
@@ -274,7 +274,7 @@ impl GraphLoadingState {
 
     scope.push_root(cap.reject)?;
     scope.push_root(reason)?;
-    let _ = vm.call(scope, cap.reject, Value::Undefined, &[reason])?;
+    let _ = vm.call_without_host(scope, cap.reject, Value::Undefined, &[reason])?;
 
     scope.heap_mut().remove_root(roots.promise);
     scope.heap_mut().remove_root(roots.resolve);

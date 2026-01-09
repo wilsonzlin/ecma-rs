@@ -113,7 +113,7 @@ fn promise_is_installed_on_global_and_constructable() -> Result<(), VmError> {
       let executor_name = scope.alloc_string("executor")?;
       let executor = scope.alloc_native_function(call_id, None, executor_name, 1)?;
 
-    let value = vm.construct(
+    let value = vm.construct_without_host(
       &mut scope,
       Value::Object(promise),
       &[Value::Object(executor)],
@@ -148,7 +148,7 @@ fn promise_resolve_and_then_schedule_microtasks() -> Result<(), VmError> {
   // Promise.resolve(1) returns a fulfilled promise.
   let p = {
     let mut scope = heap.scope();
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_resolve),
       Value::Object(promise),
@@ -163,7 +163,7 @@ fn promise_resolve_and_then_schedule_microtasks() -> Result<(), VmError> {
   // Promise.resolve(p) returns `p` if it's already a promise of the same constructor.
   {
     let mut scope = heap.scope();
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_resolve),
       Value::Object(promise),
@@ -179,7 +179,7 @@ fn promise_resolve_and_then_schedule_microtasks() -> Result<(), VmError> {
     let then1_name = scope.alloc_string("then1")?;
     let then1 = scope.alloc_native_function(then1_call_id, None, then1_name, 1)?;
 
-    let v = vm.call(
+    let v = vm.call_without_host(
       &mut scope,
       Value::Object(promise_then),
       Value::Object(p),
@@ -204,7 +204,7 @@ fn promise_resolve_and_then_schedule_microtasks() -> Result<(), VmError> {
     let then2_name = scope.alloc_string("then2")?;
     let then2 = scope.alloc_native_function(then2_call_id, None, then2_name, 1)?;
 
-    let _ = vm.call(
+    let _ = vm.call_without_host(
       &mut scope,
       Value::Object(promise_then),
       Value::Object(derived),
@@ -233,7 +233,7 @@ fn promise_constructor_throws_type_error_when_executor_not_callable() -> Result<
 
   {
     let mut scope = heap.scope();
-    let err = vm.construct(
+    let err = vm.construct_without_host(
       &mut scope,
       Value::Object(promise),
       &[Value::Number(1.0)],
@@ -272,7 +272,7 @@ fn promise_self_resolution_rejects_with_type_error_object() -> Result<(), VmErro
     let mut scope = heap.scope();
 
     // Promise.withResolvers()
-    let res = vm.call(
+    let res = vm.call_without_host(
       &mut scope,
       Value::Object(promise_with_resolvers),
       Value::Object(promise_ctor),
@@ -302,7 +302,7 @@ fn promise_self_resolution_rejects_with_type_error_object() -> Result<(), VmErro
     };
 
     // Resolve the promise with itself.
-    vm.call(
+    vm.call_without_host(
       &mut scope,
       resolve_val,
       Value::Undefined,

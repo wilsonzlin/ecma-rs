@@ -97,7 +97,7 @@ fn native_call_consumes_tick() {
   });
 
   let err = vm
-    .call(&mut scope, Value::Object(callee), Value::Undefined, &[])
+    .call_without_host(&mut scope, Value::Object(callee), Value::Undefined, &[])
     .unwrap_err();
   assert_termination_reason(err, TerminationReason::OutOfFuel);
 }

@@ -67,7 +67,7 @@ fn thrown_exceptions_capture_nested_native_call_stack() -> Result<(), VmError> {
   let outer = scope.alloc_native_function(outer_id, None, outer_name, 2)?;
 
   let err = vm
-    .call(
+    .call_without_host(
       &mut scope,
       Value::Object(outer),
       Value::Undefined,

@@ -50,7 +50,7 @@ fn call_native_function_returns_value() -> Result<(), VmError> {
   };
 
   let mut scope = heap.scope();
-  let out = vm.call(&mut scope, Value::Object(func), Value::Undefined, &[])?;
+  let out = vm.call_without_host(&mut scope, Value::Object(func), Value::Undefined, &[])?;
   assert_eq!(out, Value::Number(123.0));
   Ok(())
 }
@@ -74,7 +74,7 @@ fn call_non_callable_returns_type_error_placeholder() -> Result<(), VmError> {
 
   let err = {
     let mut scope = heap.scope();
-    vm.call(&mut scope, Value::Object(obj), Value::Undefined, &[])
+    vm.call_without_host(&mut scope, Value::Object(obj), Value::Undefined, &[])
       .unwrap_err()
   };
 
@@ -115,7 +115,7 @@ fn call_ticks_budget_and_reports_stack_on_termination() -> Result<(), VmError> {
 
   let err = {
     let mut scope = heap.scope();
-    vm.call(&mut scope, Value::Object(func), Value::Undefined, &[])
+    vm.call_without_host(&mut scope, Value::Object(func), Value::Undefined, &[])
       .unwrap_err()
   };
 

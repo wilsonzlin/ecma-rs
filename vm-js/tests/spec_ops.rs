@@ -80,7 +80,7 @@ fn promise_constructor_sets_instance_prototype_from_new_target() -> Result<(), V
     let key = PropertyKey::from_string(scope.alloc_string("prototype")?);
     scope.define_property(new_target, key, data_desc(Value::Object(overridden_proto)))?;
 
-    let value = vm.construct(
+    let value = vm.construct_without_host(
       &mut scope,
       Value::Object(promise),
       &[Value::Object(executor)],
