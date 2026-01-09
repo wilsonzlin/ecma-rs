@@ -70,3 +70,18 @@ fn to_string_symbol_is_type_error() -> Result<(), VmError> {
 
   Ok(())
 }
+
+#[test]
+fn to_property_key_number_avoids_exponent_for_common_ranges() -> Result<(), VmError> {
+  let mut heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
+
+  // `ToString(1000000000)` is `"1000000000"` (not `"1e9"`).
+  let key = heap.to_property_key(Value::Number(1_000_000_000.0))?;
+  assert_string_key(&heap, key, "1000000000");
+
+  // `ToString(0.000001)` is `"0.000001"` (not `"1e-6"`).
+  let key = heap.to_property_key(Value::Number(0.000001))?;
+  assert_string_key(&heap, key, "0.000001");
+
+  Ok(())
+}

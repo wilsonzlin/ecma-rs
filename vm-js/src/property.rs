@@ -237,24 +237,7 @@ impl Heap {
       Value::Null => scope.alloc_string("null"),
       Value::Bool(true) => scope.alloc_string("true"),
       Value::Bool(false) => scope.alloc_string("false"),
-      Value::Number(n) => {
-        if n.is_nan() {
-          scope.alloc_string("NaN")
-        } else if n.is_infinite() {
-          if n.is_sign_negative() {
-            scope.alloc_string("-Infinity")
-          } else {
-            scope.alloc_string("Infinity")
-          }
-        } else if n == 0.0 {
-          // `ToString(-0)` is `"0"` in ECMAScript.
-          scope.alloc_string("0")
-        } else {
-          let mut buf = ryu::Buffer::new();
-          let s = buf.format(n);
-          scope.alloc_string(s.strip_suffix(".0").unwrap_or(s))
-        }
-      }
+      Value::Number(n) => scope.alloc_string(&number_to_string(n)),
       Value::String(_) => unreachable!(),
       Value::Symbol(_) => Err(VmError::TypeError("Cannot convert a Symbol value to a string")),
       Value::Object(_) => scope.alloc_string("[object Object]"),
@@ -335,4 +318,104 @@ fn parse_radix_integer_to_f64(digits: &str, radix: u32) -> Option<f64> {
     value = value * (radix as f64) + (digit as f64);
   }
   Some(value)
+}
+
+// https://tc39.es/ecma262/multipage/ecmascript-data-types-and-values.html#sec-numeric-types-number-tostring
+fn number_to_string(n: f64) -> String {
+  if n.is_nan() {
+    return "NaN".to_string();
+  }
+  if n == 0.0 {
+    // Covers both +0 and -0.
+    return "0".to_string();
+  }
+  if n.is_infinite() {
+    if n.is_sign_negative() {
+      return "-Infinity".to_string();
+    } else {
+      return "Infinity".to_string();
+    }
+  }
+
+  let sign = if n.is_sign_negative() { "-" } else { "" };
+  let abs = n.abs();
+
+  // Use `ryu` only to get the digit + exponent decomposition; the final formatting rules match
+  // ECMAScript `Number::toString()` (not Rust's float formatting).
+  let mut buffer = ryu::Buffer::new();
+  let raw = buffer.format_finite(abs);
+  // `ryu` formats `1.0` as `"1.0"`, but ECMAScript `ToString(1)` is `"1"`.
+  let raw = raw.strip_suffix(".0").unwrap_or(raw);
+  let (digits, exp) = parse_ryu_to_decimal(raw);
+  let k = exp + digits.len() as i32;
+
+  let mut out = String::new();
+  out.push_str(sign);
+
+  if k > 0 && k <= 21 {
+    let k = k as usize;
+    if k >= digits.len() {
+      out.push_str(&digits);
+      out.extend(std::iter::repeat('0').take(k - digits.len()));
+    } else {
+      out.push_str(&digits[..k]);
+      out.push('.');
+      out.push_str(&digits[k..]);
+    }
+    return out;
+  }
+
+  if k <= 0 && k > -6 {
+    out.push_str("0.");
+    out.extend(std::iter::repeat('0').take((-k) as usize));
+    out.push_str(&digits);
+    return out;
+  }
+
+  // Exponential form.
+  let first = digits.as_bytes()[0] as char;
+  out.push(first);
+  if digits.len() > 1 {
+    out.push('.');
+    out.push_str(&digits[1..]);
+  }
+  out.push('e');
+  let exp = k - 1;
+  if exp >= 0 {
+    out.push('+');
+    out.push_str(&exp.to_string());
+  } else {
+    out.push('-');
+    out.push_str(&(-exp).to_string());
+  }
+  out
+}
+
+fn parse_ryu_to_decimal(raw: &str) -> (String, i32) {
+  // `raw` is expected to be ASCII and contain either:
+  // - digits with optional decimal point
+  // - digits with optional decimal point and a trailing `e[+-]?\d+`
+  //
+  // Returns `(digits, exp)` such that `value = digits × 10^exp` and `digits`
+  // contains no leading zeros.
+  let (mantissa, exp_part) = match raw.split_once('e') {
+    Some((mantissa, exp)) => (mantissa, Some(exp)),
+    None => (raw, None),
+  };
+
+  let mut exp: i32 = exp_part.map_or(0, |e| e.parse().unwrap_or(0));
+
+  let mut digits = String::with_capacity(mantissa.len());
+  if let Some((int_part, frac_part)) = mantissa.split_once('.') {
+    digits.push_str(int_part);
+    digits.push_str(frac_part);
+    exp -= frac_part.len() as i32;
+  } else {
+    digits.push_str(mantissa);
+  }
+
+  // Strip leading zeros introduced by `0.xxx` forms.
+  let trimmed = digits.trim_start_matches('0');
+  // `raw` comes from a non-zero number, so we should always have digits.
+  (trimmed.to_string(), exp)
 }
