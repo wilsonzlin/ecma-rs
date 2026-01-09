@@ -413,6 +413,11 @@ impl Vm {
     self.interrupt_handle.clone()
   }
 
+  /// Clear the interrupt flag back to `false`.
+  pub fn reset_interrupt(&self) {
+    self.interrupt_handle.reset();
+  }
+
   /// Returns the current execution budget (including remaining fuel/deadline).
   #[inline]
   pub fn budget(&self) -> Budget {

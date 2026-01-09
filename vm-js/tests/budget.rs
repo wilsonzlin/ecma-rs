@@ -118,6 +118,55 @@ fn shared_interrupt_flag_is_toggled_by_vm_interrupt_handle() {
 }
 
 #[test]
+fn interrupt_handle_can_be_reset_to_reuse_vm() {
+  let mut vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: None,
+    check_time_every: 1,
+    interrupt_flag: None,
+  });
+  vm.set_budget(Budget::unlimited(1));
+
+  let handle = vm.interrupt_handle();
+  handle.interrupt();
+
+  let err = vm.tick().unwrap_err();
+  match err {
+    VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::Interrupted),
+    other => panic!("expected termination, got {other:?}"),
+  }
+
+  vm.reset_interrupt();
+  assert!(vm.tick().is_ok());
+}
+
+#[test]
+fn vm_reset_interrupt_clears_shared_interrupt_flag() {
+  let flag = Arc::new(AtomicBool::new(false));
+  let mut vm = Vm::new(VmOptions {
+    max_stack_depth: 16,
+    default_fuel: None,
+    default_deadline: None,
+    check_time_every: 1,
+    interrupt_flag: Some(flag.clone()),
+  });
+  vm.set_budget(Budget::unlimited(1));
+
+  flag.store(true, Ordering::Relaxed);
+
+  let err = vm.tick().unwrap_err();
+  match err {
+    VmError::Termination(term) => assert_eq!(term.reason, TerminationReason::Interrupted),
+    other => panic!("expected termination, got {other:?}"),
+  }
+
+  vm.reset_interrupt();
+  assert!(!flag.load(Ordering::Relaxed));
+  assert!(vm.tick().is_ok());
+}
+
+#[test]
 fn reset_budget_to_default_recomputes_deadline_relative_to_now() {
   let mut vm = Vm::new(VmOptions {
     max_stack_depth: 16,

@@ -37,6 +37,11 @@ impl InterruptToken {
   pub fn is_interrupted(&self) -> bool {
     self.interrupted.load(Ordering::Relaxed)
   }
+
+  /// Clear the interrupt flag back to `false`.
+  pub fn reset(&self) {
+    self.interrupted.store(false, Ordering::Relaxed);
+  }
 }
 
 /// A host handle used to request that the VM terminates execution.
@@ -49,5 +54,13 @@ impl InterruptHandle {
   /// Request that the VM cooperatively terminates at the next `Vm::tick()`.
   pub fn interrupt(&self) {
     self.interrupted.store(true, Ordering::Relaxed);
+  }
+
+  /// Clear the interrupt flag back to `false`.
+  ///
+  /// This enables reusing a long-lived VM across multiple tasks without reconstructing it solely to
+  /// clear an interrupt request.
+  pub fn reset(&self) {
+    self.interrupted.store(false, Ordering::Relaxed);
   }
 }
