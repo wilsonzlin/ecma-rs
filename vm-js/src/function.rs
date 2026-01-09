@@ -153,6 +153,32 @@ impl JsFunction {
     Self::new_native_with_slots_and_env(call, construct, name, length, None, None)
   }
 
+  pub(crate) fn new_with_handlers(
+    call: CallHandler,
+    construct: Option<ConstructHandler>,
+    name: GcString,
+    length: u32,
+  ) -> Self {
+    Self {
+      call,
+      construct,
+      name,
+      length,
+      this_mode: ThisMode::Global,
+      is_strict: false,
+      base: ObjectBase::new(None),
+      data: FunctionData::None,
+      bound_target: None,
+      bound_this: None,
+      bound_new_target: None,
+      bound_args: None,
+      native_slots: None,
+      realm: None,
+      job_realm: None,
+      closure_env: None,
+    }
+  }
+
   pub(crate) fn new_native_with_slots(
     call: NativeFunctionId,
     construct: Option<NativeConstructId>,

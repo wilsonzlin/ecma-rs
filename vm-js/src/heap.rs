@@ -3537,7 +3537,7 @@ impl<'a> Scope<'a> {
     Ok(func)
   }
 
-  /// Allocates a native JavaScript bound function object on the heap.
+  /// Allocates a JavaScript bound function object on the heap.
   ///
   /// This creates an ordinary function object with the `[[BoundTargetFunction]]`,
   /// `[[BoundThis]]`, and `[[BoundArguments]]` internal slots populated.
@@ -3546,8 +3546,8 @@ impl<'a> Scope<'a> {
   /// `prototype`) here; callers are expected to define `name`/`length` per ECMA-262 as needed.
   pub(crate) fn alloc_bound_function_raw(
     &mut self,
-    call: NativeFunctionId,
-    construct: Option<NativeConstructId>,
+    call: CallHandler,
+    construct: Option<ConstructHandler>,
     name: GcString,
     length: u32,
     bound_target: GcObject,
@@ -3570,7 +3570,7 @@ impl<'a> Scope<'a> {
     }
     scope.push_roots(&roots)?;
 
-    let mut func = JsFunction::new_native(call, construct, name, length);
+    let mut func = JsFunction::new_with_handlers(call, construct, name, length);
     func.bound_target = Some(bound_target);
     func.bound_this = Some(bound_this);
     func.bound_args = bound_args;
@@ -3620,28 +3620,11 @@ impl<'a> Scope<'a> {
     name: GcString,
     length: u32,
   ) -> Result<GcObject, VmError> {
-    // Extract the native call/construct handlers from `target` without holding a heap borrow across
+    // Extract call/construct handlers from `target` without holding a heap borrow across
     // allocations.
     let (target_call, target_construct) = {
       let f = self.heap().get_function(target)?;
-      let call = match &f.call {
-        CallHandler::Native(id) => *id,
-        CallHandler::Ecma(_) | CallHandler::User(_) => {
-          return Err(VmError::Unimplemented(
-            "Scope::alloc_bound_function: non-native target functions",
-          ));
-        }
-      };
-      let construct = match f.construct {
-        Some(ConstructHandler::Native(id)) => Some(id),
-        Some(ConstructHandler::Ecma(_)) => {
-          return Err(VmError::Unimplemented(
-            "Scope::alloc_bound_function: ECMAScript target constructors",
-          ));
-        }
-        None => None,
-      };
-      (call, construct)
+      (f.call.clone(), f.construct)
     };
 
     let bound_args_len = bound_args.len();

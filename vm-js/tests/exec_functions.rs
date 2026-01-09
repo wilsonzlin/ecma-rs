@@ -114,6 +114,38 @@ fn native_can_call_ecma_callback_via_vm_call() {
 }
 
 #[test]
+fn bind_on_ecma_function_prepends_args() {
+  let vm = Vm::new(VmOptions::default());
+  let mut rt = new_runtime_with_vm(vm);
+  let value = rt
+    .exec_script("function add(a,b){ return a+b; } var add1 = add.bind(undefined, 1); add1(2)")
+    .unwrap();
+  assert_eq!(value, Value::Number(3.0));
+}
+
+#[test]
+fn bind_on_ecma_constructor_forwards_new_target() {
+  let vm = Vm::new(VmOptions::default());
+  let mut rt = new_runtime_with_vm(vm);
+  let value = rt
+    .exec_script("function C(){ return new.target; } var D = C.bind(null); var x = new D(); x === C")
+    .unwrap();
+  assert_eq!(value, Value::Bool(true));
+}
+
+#[test]
+fn bind_on_ecma_constructor_prepends_args() {
+  let vm = Vm::new(VmOptions::default());
+  let mut rt = new_runtime_with_vm(vm);
+  let value = rt
+    .exec_script(
+      "function C(x,y){ this.x=x; this.y=y; } var D = C.bind(null, 1); var o = new D(2); o.x + o.y",
+    )
+    .unwrap();
+  assert_eq!(value, Value::Number(3.0));
+}
+
+#[test]
 fn constructor_new_sets_this_property() {
   let vm = Vm::new(VmOptions::default());
   let mut rt = new_runtime_with_vm(vm);

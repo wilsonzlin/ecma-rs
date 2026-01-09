@@ -1,4 +1,4 @@
-use crate::function::{CallHandler, ConstructHandler, FunctionData};
+use crate::function::FunctionData;
 use crate::property::{PropertyDescriptor, PropertyDescriptorPatch, PropertyKey, PropertyKind};
 use crate::string::JsString;
 use crate::{
@@ -38,19 +38,6 @@ fn require_callable(this: Value) -> Result<GcObject, VmError> {
     Value::Object(obj) => Ok(obj),
     _ => Err(VmError::NotCallable),
   }
-}
-
-fn make_value_vec(values: &[Value]) -> Result<Box<[Value]>, VmError> {
-  if values.is_empty() {
-    return Ok(Box::default());
-  }
-
-  let mut vec: Vec<Value> = Vec::new();
-  vec
-    .try_reserve_exact(values.len())
-    .map_err(|_| VmError::OutOfMemory)?;
-  vec.extend_from_slice(values);
-  Ok(vec.into_boxed_slice())
 }
 
 fn get_array_like_args(scope: &mut Scope<'_>, obj: GcObject) -> Result<Vec<Value>, VmError> {
@@ -2953,26 +2940,9 @@ pub fn function_prototype_bind(
   let target = require_callable(this)?;
 
   // Extract function metadata without holding a heap borrow across allocations.
-  let (target_call, target_construct, target_len, target_name) = {
+  let (target_len, target_name) = {
     let f = scope.heap().get_function(target)?;
-    let target_call = match &f.call {
-      CallHandler::Native(id) => *id,
-      CallHandler::Ecma(_) | CallHandler::User(_) => {
-        return Err(VmError::Unimplemented(
-          "Function.prototype.bind: non-native target functions",
-        ))
-      }
-    };
-    let target_construct = match f.construct {
-      Some(ConstructHandler::Native(id)) => Some(id),
-      Some(ConstructHandler::Ecma(_)) => {
-        return Err(VmError::Unimplemented(
-          "Function.prototype.bind: ECMAScript target constructors",
-        ))
-      }
-      None => None,
-    };
-    (target_call, target_construct, f.length, f.name)
+    (f.length, f.name)
   };
 
   let bound_this = args.first().copied().unwrap_or(Value::Undefined);
@@ -2982,22 +2952,7 @@ pub fn function_prototype_bind(
   let bound_len = target_len.saturating_sub(bound_args_len_u32);
 
   let name = scope.alloc_string("bound")?;
-  let bound_args = make_value_vec(bound_args)?;
-  let bound_args = if bound_args.is_empty() {
-    None
-  } else {
-    Some(bound_args)
-  };
-
-  let func = scope.alloc_bound_function_raw(
-    target_call,
-    target_construct,
-    name,
-    bound_len,
-    target,
-    bound_this,
-    bound_args,
-  )?;
+  let func = scope.alloc_bound_function(target, bound_this, bound_args, name, bound_len)?;
 
   // Bound functions are ordinary function objects: their `[[Prototype]]` is `%Function.prototype%`.
   scope
