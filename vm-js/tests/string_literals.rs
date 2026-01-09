@@ -3,7 +3,7 @@ use vm_js::{Heap, HeapLimits, JsRuntime, Value, Vm, VmOptions};
 fn new_runtime() -> JsRuntime {
   let vm = Vm::new(VmOptions::default());
   let heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
-  JsRuntime::new(vm, heap)
+  JsRuntime::new(vm, heap).unwrap()
 }
 
 fn assert_string_code_units(rt: &JsRuntime, value: Value, expected: &[u16]) {
@@ -31,4 +31,3 @@ fn mixed_string_bmp_astral_and_lone_surrogate_preserves_all_code_units() {
     &[0x0041, 0x2603, 0xD83D, 0xDE00, 0xD800, 0x0042],
   );
 }
-
