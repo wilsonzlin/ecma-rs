@@ -15,7 +15,13 @@ use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::VmOptions;
 
-fn noop(_vm: &mut Vm, _scope: &mut Scope<'_>, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+fn noop(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
   Ok(Value::Undefined)
 }
 
@@ -97,11 +103,11 @@ impl VmJobContext for TestContext {
   }
 
   fn add_root(&mut self, _value: Value) -> RootId {
-    panic!("TestContext::add_root should not be called in this test")
+    panic!("TestContext::add_root should not be called by these tests");
   }
 
   fn remove_root(&mut self, _id: RootId) {
-    panic!("TestContext::remove_root should not be called in this test")
+    panic!("TestContext::remove_root should not be called by these tests");
   }
 }
 

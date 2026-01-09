@@ -17,6 +17,7 @@ fn require_intrinsics(vm: &Vm) -> Result<crate::Intrinsics, VmError> {
 pub fn function_prototype_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -43,6 +44,7 @@ fn object_constructor_impl(vm: &mut Vm, scope: &mut Scope<'_>, args: &[Value]) -
 pub fn object_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
@@ -52,6 +54,7 @@ pub fn object_constructor_call(
 pub fn object_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {
@@ -109,6 +112,7 @@ fn array_constructor_impl(vm: &mut Vm, scope: &mut Scope<'_>, args: &[Value]) ->
 pub fn array_constructor_call(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
@@ -118,6 +122,7 @@ pub fn array_constructor_call(
 pub fn array_constructor_construct(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {
@@ -127,6 +132,7 @@ pub fn array_constructor_construct(
 pub fn function_constructor_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -136,6 +142,7 @@ pub fn function_constructor_call(
 pub fn function_constructor_construct(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {
@@ -143,20 +150,77 @@ pub fn function_constructor_construct(
 }
 
 pub fn error_constructor_call(
-  _vm: &mut Vm,
-  _scope: &mut Scope<'_>,
+  vm: &mut Vm,
+  scope: &mut Scope<'_>,
+  callee: GcObject,
   _this: Value,
-  _args: &[Value],
+  args: &[Value],
 ) -> Result<Value, VmError> {
-  Err(VmError::Unimplemented("Error constructor"))
+  error_constructor_construct(vm, scope, callee, args, Value::Object(callee))
 }
 
 pub fn error_constructor_construct(
   _vm: &mut Vm,
-  _scope: &mut Scope<'_>,
-  _args: &[Value],
-  _new_target: Value,
+  scope: &mut Scope<'_>,
+  callee: GcObject,
+  args: &[Value],
+  new_target: Value,
 ) -> Result<Value, VmError> {
-  Err(VmError::Unimplemented("Error constructor"))
-}
+  let name = scope.heap().get_function_name(callee)?;
 
+  // `new Error(message)` uses `GetPrototypeFromConstructor(newTarget, defaultProto)`.
+  // Approximate this by:
+  // 1. Reading `callee.prototype` as the default.
+  // 2. If `new_target` is an object, prefer `new_target.prototype` when it is an object.
+  let prototype_key = PropertyKey::from_string(scope.alloc_string("prototype")?);
+  let default_proto_value = scope
+    .heap()
+    .object_get_own_data_property_value(callee, &prototype_key)?
+    .ok_or(VmError::Unimplemented(
+      "Error constructor missing own prototype property",
+    ))?;
+  let Value::Object(default_prototype) = default_proto_value else {
+    return Err(VmError::Unimplemented(
+      "Error constructor prototype property is not an object",
+    ));
+  };
+
+  let instance_prototype = match new_target {
+    Value::Object(nt) => match scope.heap().get(nt, &prototype_key)? {
+      Value::Object(p) => p,
+      _ => default_prototype,
+    },
+    _ => default_prototype,
+  };
+
+  // Message argument: AggregateError(message is the second argument).
+  let message_arg = if scope.heap().get_string(name)?.to_utf8_lossy() == "AggregateError" {
+    args.get(1).copied().or_else(|| args.first().copied())
+  } else {
+    args.first().copied()
+  };
+
+  let message_string = match message_arg {
+    Some(Value::Undefined) | None => scope.alloc_string("")?,
+    Some(other) => scope.heap_mut().to_string(other)?,
+  };
+  scope.push_root(Value::String(message_string));
+
+  let obj = scope.alloc_object()?;
+  scope.push_root(Value::Object(obj));
+  scope
+    .heap_mut()
+    .object_set_prototype(obj, Some(instance_prototype))?;
+
+  let name_key = PropertyKey::from_string(scope.alloc_string("name")?);
+  scope.define_property(obj, name_key, data_desc(Value::String(name), true, false, true))?;
+
+  let message_key = PropertyKey::from_string(scope.alloc_string("message")?);
+  scope.define_property(
+    obj,
+    message_key,
+    data_desc(Value::String(message_string), true, false, true),
+  )?;
+
+  Ok(Value::Object(obj))
+}

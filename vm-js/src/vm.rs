@@ -4,10 +4,10 @@ use crate::error::VmError;
 use crate::execution_context::ExecutionContext;
 use crate::execution_context::ScriptOrModule;
 use crate::function::{CallHandler, ConstructHandler, NativeConstructId, NativeFunctionId};
+use crate::GcObject;
 use crate::interrupt::InterruptHandle;
 use crate::interrupt::InterruptToken;
 use crate::source::StackFrame;
-use crate::GcObject;
 use crate::Intrinsics;
 use crate::PropertyKey;
 use crate::RealmId;
@@ -21,12 +21,13 @@ use std::{mem, ops};
 
 /// A native (host-implemented) function call handler.
 pub type NativeCall =
-  for<'a> fn(&mut Vm, &mut Scope<'a>, this: Value, args: &[Value]) -> Result<Value, VmError>;
+  for<'a> fn(&mut Vm, &mut Scope<'a>, callee: GcObject, this: Value, args: &[Value]) -> Result<Value, VmError>;
 
 /// A native (host-implemented) function constructor handler.
 pub type NativeConstruct = for<'a> fn(
   &mut Vm,
   &mut Scope<'a>,
+  callee: GcObject,
   args: &[Value],
   new_target: Value,
 ) -> Result<Value, VmError>;
@@ -341,6 +342,7 @@ impl Vm {
     &mut self,
     call_id: NativeFunctionId,
     scope: &mut Scope<'_>,
+    callee: GcObject,
     this: Value,
     args: &[Value],
   ) -> Result<Value, VmError> {
@@ -349,13 +351,14 @@ impl Vm {
       .get(call_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native function id"))?;
-    f(self, scope, this, args)
+    f(self, scope, callee, this, args)
   }
 
   fn dispatch_native_construct(
     &mut self,
     construct_id: NativeConstructId,
     scope: &mut Scope<'_>,
+    callee: GcObject,
     args: &[Value],
     new_target: Value,
   ) -> Result<Value, VmError> {
@@ -364,7 +367,7 @@ impl Vm {
       .get(construct_id.0 as usize)
       .copied()
       .ok_or(VmError::Unimplemented("unknown native constructor id"))?;
-    construct(self, scope, args, new_target)
+    construct(self, scope, callee, args, new_target)
   }
 
   /// Pushes a stack frame and returns an RAII guard that will pop it on drop.
@@ -524,7 +527,9 @@ impl Vm {
     vm.tick()?;
 
     match call_handler {
-      CallHandler::Native(call_id) => vm.dispatch_native_call(call_id, &mut scope, this, args),
+      CallHandler::Native(call_id) => {
+        vm.dispatch_native_call(call_id, &mut scope, callee_obj, this, args)
+      }
       CallHandler::Ecma(_) => vm.call_ecma_function(&mut scope, callee_obj, this, args),
     }
   }
@@ -622,7 +627,7 @@ impl Vm {
 
     match construct_handler {
       ConstructHandler::Native(construct_id) => {
-        vm.dispatch_native_construct(construct_id, &mut scope, args, new_target)
+        vm.dispatch_native_construct(construct_id, &mut scope, callee_obj, args, new_target)
       }
       ConstructHandler::Ecma(_) => {
         vm.construct_ecma_function(&mut scope, callee_obj, args, new_target)

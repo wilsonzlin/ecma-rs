@@ -1,8 +1,9 @@
-use vm_js::{Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions};
+use vm_js::{GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions};
 
 fn native_error(
   vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -35,6 +36,7 @@ fn vm_call_pushes_and_pops_stack_frame_even_on_error() -> Result<(), VmError> {
 fn recursive(
   vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {

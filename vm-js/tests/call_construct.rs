@@ -1,8 +1,11 @@
-use vm_js::{Budget, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions};
+use vm_js::{
+  Budget, GcObject, Heap, HeapLimits, Scope, TerminationReason, Value, Vm, VmError, VmOptions,
+};
 
 fn return_123(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -12,6 +15,7 @@ fn return_123(
 fn noop_constructor(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {

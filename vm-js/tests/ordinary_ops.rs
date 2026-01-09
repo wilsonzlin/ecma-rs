@@ -11,6 +11,7 @@ thread_local! {
 fn getter(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: vm_js::GcObject,
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {

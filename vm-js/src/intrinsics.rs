@@ -1,5 +1,8 @@
 use crate::property::{PropertyDescriptor, PropertyKey, PropertyKind};
-use crate::{builtins, GcObject, GcSymbol, RootId, Scope, Value, Vm, VmError};
+use crate::{
+  builtins, GcObject, GcString, GcSymbol, NativeConstructId, NativeFunctionId, RootId, Scope, Value,
+  Vm, VmError,
+};
 
 /// ECMAScript well-known symbols (ECMA-262 "Well-known Symbols" table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -85,9 +88,9 @@ fn alloc_rooted_object(
 fn alloc_rooted_native_function(
   scope: &mut Scope<'_>,
   roots: &mut Vec<RootId>,
-  call: crate::NativeFunctionId,
-  construct: Option<crate::NativeConstructId>,
-  name: crate::GcString,
+  call: NativeFunctionId,
+  construct: Option<NativeConstructId>,
+  name: GcString,
   length: u32,
 ) -> Result<GcObject, VmError> {
   let func = scope.alloc_native_function(call, construct, name, length)?;
@@ -113,10 +116,10 @@ fn init_native_error(
   common: CommonKeys,
   function_prototype: GcObject,
   base_prototype: GcObject,
-  call: crate::NativeFunctionId,
-  construct: crate::NativeConstructId,
+  call: NativeFunctionId,
+  construct: NativeConstructId,
   name: &str,
-  length: f64,
+  length: u32,
 ) -> Result<(GcObject, GcObject), VmError> {
   // `%X.prototype%`
   let prototype = alloc_rooted_object(scope, roots)?;
@@ -124,7 +127,6 @@ fn init_native_error(
     .heap_mut()
     .object_set_prototype(prototype, Some(base_prototype))?;
 
-  // `%X%`
   // Create (and store) the name string early so it is kept alive by the rooted objects before any
   // subsequent allocations/GC.
   let name_string = scope.alloc_string(name)?;
@@ -135,7 +137,7 @@ fn init_native_error(
     call,
     Some(construct),
     name_string,
-    length as u32,
+    length,
   )?;
   scope
     .heap_mut()
@@ -170,7 +172,7 @@ fn init_native_error(
   scope.define_property(
     constructor,
     common.length,
-    data_desc(Value::Number(length), false, false, true),
+    data_desc(Value::Number(length as f64), false, false, true),
   )?;
 
   Ok((constructor, prototype))
@@ -348,7 +350,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "Error",
-      1.0,
+      1,
     )?;
 
     let (type_error, type_error_prototype) = init_native_error(
@@ -361,7 +363,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "TypeError",
-      1.0,
+      1,
     )?;
 
     let (range_error, range_error_prototype) = init_native_error(
@@ -374,7 +376,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "RangeError",
-      1.0,
+      1,
     )?;
 
     let (reference_error, reference_error_prototype) = init_native_error(
@@ -387,7 +389,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "ReferenceError",
-      1.0,
+      1,
     )?;
 
     let (syntax_error, syntax_error_prototype) = init_native_error(
@@ -400,7 +402,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "SyntaxError",
-      1.0,
+      1,
     )?;
 
     let (eval_error, eval_error_prototype) = init_native_error(
@@ -413,7 +415,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "EvalError",
-      1.0,
+      1,
     )?;
 
     let (uri_error, uri_error_prototype) = init_native_error(
@@ -426,7 +428,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "URIError",
-      1.0,
+      1,
     )?;
 
     let (aggregate_error, aggregate_error_prototype) = init_native_error(
@@ -439,7 +441,7 @@ impl Intrinsics {
       error_call,
       error_construct,
       "AggregateError",
-      2.0,
+      2,
     )?;
     Ok(Self {
       well_known_symbols,

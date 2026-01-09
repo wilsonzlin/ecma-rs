@@ -18,7 +18,13 @@ use vm_js::VmHostHooks;
 use vm_js::VmJobContext;
 use vm_js::VmOptions;
 
-fn noop(_vm: &mut Vm, _scope: &mut Scope<'_>, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+fn noop(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: vm_js::GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
   Ok(Value::Undefined)
 }
 

@@ -1,11 +1,12 @@
 use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm, VmError,
-  VmOptions,
+  GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
+  VmError, VmOptions,
 };
 
 fn return_undefined(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -70,4 +71,3 @@ fn native_function_can_define_and_get_own_property_via_object_get_own_data_prope
 
   Ok(())
 }
-

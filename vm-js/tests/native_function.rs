@@ -6,6 +6,7 @@ use vm_js::{
 fn return_42(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {

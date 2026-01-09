@@ -1,8 +1,9 @@
-use vm_js::{Heap, HeapLimits, Scope, Value, Vm, VmError, VmOptions};
+use vm_js::{GcObject, Heap, HeapLimits, Scope, Value, Vm, VmError, VmOptions};
 
 fn alloc_and_return_object(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -13,6 +14,7 @@ fn alloc_and_return_object(
 fn dummy_call(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -22,6 +24,7 @@ fn dummy_call(
 fn alloc_and_return_object_construct(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   _args: &[Value],
   _new_target: Value,
 ) -> Result<Value, VmError> {

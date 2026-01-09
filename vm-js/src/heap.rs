@@ -528,7 +528,6 @@ impl Heap {
       _ => Err(VmError::InvalidHandle),
     }
   }
-
   fn get_env(&self, env: GcEnv) -> Result<&EnvRecord, VmError> {
     match self.get_heap_object(env.0)? {
       HeapObject::Env(e) => Ok(e),
@@ -542,7 +541,6 @@ impl Heap {
       _ => Err(VmError::InvalidHandle),
     }
   }
-
   /// Gets an object's `[[Prototype]]`.
   pub fn object_prototype(&self, obj: GcObject) -> Result<Option<GcObject>, VmError> {
     Ok(self.get_object_base(obj)?.prototype)

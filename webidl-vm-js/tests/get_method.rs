@@ -27,6 +27,7 @@ thread_local! {
 fn method(
   _vm: &mut Vm,
   _scope: &mut Scope<'_>,
+  _callee: vm_js::GcObject,
   _this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -36,6 +37,7 @@ fn method(
 fn getter(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: vm_js::GcObject,
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -100,4 +102,3 @@ fn get_method_invokes_getter_once() -> Result<(), VmError> {
   assert_eq!(GETTER_CALLS.with(|c| c.get()), 1);
   Ok(())
 }
-

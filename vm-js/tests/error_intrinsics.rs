@@ -1,8 +1,8 @@
 use vm_js::{GcObject, Heap, HeapLimits, PropertyKey, Realm, Value, Vm, VmError, VmOptions};
 
 struct TestRealm {
-  _vm: Vm,
   heap: Heap,
+  vm: Vm,
   realm: Realm,
 }
 
@@ -11,7 +11,7 @@ impl TestRealm {
     let mut heap = Heap::new(limits);
     let mut vm = Vm::new(VmOptions::default());
     let realm = Realm::new(&mut vm, &mut heap)?;
-    Ok(Self { _vm: vm, heap, realm })
+    Ok(Self { heap, vm, realm })
   }
 }
 
@@ -70,6 +70,80 @@ fn error_subclass_intrinsics_exist_and_are_wired_correctly() -> Result<(), VmErr
     get_own_data_property(&mut rt.heap, global, "SyntaxError")?,
     Some(Value::Object(syntax_error))
   );
+
+  // --- Call / construct behaviour ---
+  {
+    let mut scope = rt.heap.scope();
+    let message = scope.alloc_string("boom")?;
+    let result = rt.vm.call(
+      &mut scope,
+      Value::Object(error),
+      Value::Undefined,
+      &[Value::String(message)],
+    )?;
+    let Value::Object(obj) = result else {
+      panic!("Error() should return an object");
+    };
+    scope.push_root(Value::Object(obj));
+
+    assert_eq!(scope.heap().object_prototype(obj)?, Some(error_prototype));
+
+    let name_key = PropertyKey::from_string(scope.alloc_string("name")?);
+    let name_value = scope
+      .heap()
+      .object_get_own_data_property_value(obj, &name_key)?
+      .expect("Error object should have own 'name' property");
+    let Value::String(name_string) = name_value else {
+      panic!("Error object 'name' should be a string");
+    };
+    assert_eq!(scope.heap().get_string(name_string)?.to_utf8_lossy(), "Error");
+
+    let message_key = PropertyKey::from_string(scope.alloc_string("message")?);
+    let message_value = scope
+      .heap()
+      .object_get_own_data_property_value(obj, &message_key)?
+      .expect("Error object should have own 'message' property");
+    let Value::String(message_string) = message_value else {
+      panic!("Error object 'message' should be a string");
+    };
+    assert_eq!(
+      scope.heap().get_string(message_string)?.to_utf8_lossy(),
+      "boom"
+    );
+  }
+
+  {
+    let mut scope = rt.heap.scope();
+    let message = scope.alloc_string("bad")?;
+    let result = rt.vm.construct(
+      &mut scope,
+      Value::Object(type_error),
+      &[Value::String(message)],
+      Value::Object(type_error),
+    )?;
+    let Value::Object(obj) = result else {
+      panic!("new TypeError() should return an object");
+    };
+    scope.push_root(Value::Object(obj));
+
+    assert_eq!(
+      scope.heap().object_prototype(obj)?,
+      Some(type_error_prototype)
+    );
+
+    let name_key = PropertyKey::from_string(scope.alloc_string("name")?);
+    let name_value = scope
+      .heap()
+      .object_get_own_data_property_value(obj, &name_key)?
+      .expect("TypeError object should have own 'name' property");
+    let Value::String(name_string) = name_value else {
+      panic!("TypeError object 'name' should be a string");
+    };
+    assert_eq!(
+      scope.heap().get_string(name_string)?.to_utf8_lossy(),
+      "TypeError"
+    );
+  }
 
   // --- Prototype chain ---
   assert_eq!(

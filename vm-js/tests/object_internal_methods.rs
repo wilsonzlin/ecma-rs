@@ -1,11 +1,12 @@
 use vm_js::{
-  Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm, VmError,
-  VmOptions,
+  GcObject, Heap, HeapLimits, PropertyDescriptor, PropertyKey, PropertyKind, Scope, Value, Vm,
+  VmError, VmOptions,
 };
 
 fn getter_returns_own_value(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   this: Value,
   _args: &[Value],
 ) -> Result<Value, VmError> {
@@ -24,6 +25,7 @@ fn getter_returns_own_value(
 fn setter_sets_seen(
   _vm: &mut Vm,
   scope: &mut Scope<'_>,
+  _callee: GcObject,
   this: Value,
   args: &[Value],
 ) -> Result<Value, VmError> {
@@ -186,4 +188,3 @@ fn ordinary_own_property_keys_orders_array_indices_strings_and_symbols() -> Resu
 
   Ok(())
 }
-

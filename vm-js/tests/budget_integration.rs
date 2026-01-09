@@ -1,7 +1,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use vm_js::{Budget, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError, VmOptions};
+use vm_js::{
+  Budget, GcObject, Heap, HeapLimits, JsRuntime, Scope, TerminationReason, Value, Vm, VmError,
+  VmOptions,
+};
 
 fn new_runtime_with_vm(vm: Vm) -> JsRuntime {
   let heap = Heap::new(HeapLimits::new(1024 * 1024, 1024 * 1024));
@@ -63,7 +66,13 @@ fn expression_evaluation_consumes_fuel() {
   assert_termination_reason(err, TerminationReason::OutOfFuel);
 }
 
-fn native_noop(_vm: &mut Vm, _scope: &mut Scope<'_>, _this: Value, _args: &[Value]) -> Result<Value, VmError> {
+fn native_noop(
+  _vm: &mut Vm,
+  _scope: &mut Scope<'_>,
+  _callee: GcObject,
+  _this: Value,
+  _args: &[Value],
+) -> Result<Value, VmError> {
   Ok(Value::Undefined)
 }
 
