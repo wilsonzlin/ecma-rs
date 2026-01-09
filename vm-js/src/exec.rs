@@ -4,7 +4,7 @@ use crate::ops::{abstract_equality, to_number};
 use crate::{
   EnvRootId, GcEnv, GcObject, GcString, Heap, JsBigInt, PropertyDescriptor, PropertyDescriptorPatch,
   PropertyKey, PropertyKind, Realm, RootId, Scope, SourceText, StackFrame, Value, Vm, VmError,
-  VmHostHooks, VmJobContext,
+  NativeCall, VmHostHooks, VmJobContext,
 };
 use diagnostics::FileId;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
@@ -484,6 +484,35 @@ impl JsRuntime {
 
   pub fn heap_mut(&mut self) -> &mut Heap {
     &mut self.heap
+  }
+
+  /// Registers a native call handler and exposes it as a global binding.
+  ///
+  /// This is a convenience API for embeddings (e.g. FastRender) that need to expose host functions
+  /// (`setTimeout`, DOM bindings, etc.) to interpreted scripts.
+  pub fn register_global_native_function(
+    &mut self,
+    name: &str,
+    call: NativeCall,
+    length: u32,
+  ) -> Result<GcObject, VmError> {
+    let call_id = self.vm.register_native_call(call)?;
+
+    let mut scope = self.heap.scope();
+    let func_name = scope.alloc_string(name)?;
+    let func = scope.alloc_native_function(call_id, None, func_name, length)?;
+
+    // Root the function object across allocations while defining it on the global object.
+    scope.push_root(Value::Object(func))?;
+
+    let key = PropertyKey::from_string(scope.alloc_string(name)?);
+    scope.define_property(
+      self.env.global_object(),
+      key,
+      global_var_desc(Value::Object(func)),
+    )?;
+
+    Ok(func)
   }
 
   /// Parse and execute a classic script (ECMAScript dialect, `SourceType::Script`).
