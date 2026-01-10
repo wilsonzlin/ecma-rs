@@ -16,3 +16,8 @@ typescript_conformance_failures.txt
 
 # Workspace lockfile is intentionally untracked
 Cargo.lock
+
+# Agent scratchpads (never commit)
+branch_cleanup_scratchpad.md
+scratchpad.md
+branch_cleanup/
